@@ -1,0 +1,16 @@
+name: claude review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    # Callers must grant explicitly: org default token permissions are
+    # read-only, and a called workflow can't exceed its caller's grant.
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    uses: konyklabs/.github/.github/workflows/claude-review.yml@main
+    secrets: inherit
