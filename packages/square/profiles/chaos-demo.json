@@ -1,0 +1,47 @@
+{
+  "name": "chaos-demo",
+  "summary": "Full surface with a preloaded fault set: rate limiting, mid-flow token expiry, duplicate and reordered webhook delivery.",
+  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "webhooks", "webhooks.chaos"],
+  "seed": "seed/default.seed.json",
+  "webhooks": { "retry": { "timeScale": 0.000167, "timeoutMs": 2000 } },
+  "clock": { "mode": "virtual", "start": "2026-08-24T12:00:00.000Z" },
+  "chaos": {
+    "seed": 20260824,
+    "rules": [
+      {
+        "id": "rate-limit-every-third-create",
+        "scope": "request",
+        "fault": "rate_limit",
+        "match": { "route": "POST /v2/orders" },
+        "when": { "every": 3 },
+        "params": { "retryAfterSeconds": 2 },
+        "note": "Every third CreateOrder is refused with 429 RATE_LIMITED."
+      },
+      {
+        "id": "token-expires-on-fourth-read",
+        "scope": "request",
+        "fault": "token_expiry",
+        "match": { "route": "GET /v2/orders/:order_id" },
+        "when": { "nth": [4] },
+        "note": "The fourth retrieve sees ACCESS_TOKEN_EXPIRED mid-flow without the stored token changing."
+      },
+      {
+        "id": "duplicate-order-created",
+        "scope": "webhook",
+        "fault": "webhook.duplicate",
+        "match": { "eventType": "order.created" },
+        "when": { "nth": [1] },
+        "params": { "copies": 1 },
+        "note": "The first order.created is delivered twice with the same event_id."
+      },
+      {
+        "id": "reorder-order-updated",
+        "scope": "webhook",
+        "fault": "webhook.out_of_order",
+        "match": { "eventType": "order.updated" },
+        "when": { "nth": [1] },
+        "note": "The first order.updated is held until the following event has been delivered."
+      }
+    ]
+  }
+}

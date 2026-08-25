@@ -1,0 +1,36 @@
+{
+  "name": "vendor-unit-template",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Template for stateful vendor mock units; packages/square is the worked reference fork.",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "packages/core",
+    "packages/square"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
+    "start": "node packages/square/dist/bin/serve.js",
+    "test": "npm run build && vitest run packages/square/test",
+    "test:integration": "npm run build && vitest run tests/vitest",
+    "test:py": "bash tests/pytest/run.sh",
+    "conformance": "node packages/square/dist/bin/conformance.js",
+    "template:check": "node tools/template-check.mjs",
+    "template:update": "node tools/template-check.mjs --update",
+    "spec:freshness": "node tools/spec-freshness.mjs",
+    "spec:pin": "node tools/spec-freshness.mjs --update",
+    "ci:self-test": "tools/self-test.sh",
+    "demo:chaos": "npm run build --silent && node tools/chaos-demo.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "testcontainers": "^12.1.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.11"
+  }
+}

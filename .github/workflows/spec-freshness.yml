@@ -1,0 +1,83 @@
+name: spec-freshness
+
+# Watches the vendor for changes that affect what this unit implements.
+#
+# Deliberately separate from self-test: this job depends on a third party being
+# reachable, so its failures mean something different from a test failure and
+# must not be able to redden the build for an unrelated reason. It reports drift
+# by opening (or updating) a single tracking issue rather than by failing
+# silently into an inbox nobody reads.
+
+on:
+  schedule:
+    # Daily, well after Square's usual release window.
+    - cron: '25 6 * * *'
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: 'Also fail when the vendor publishes a newer API version'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+
+      - name: Check the vendor spec and changelog for drift
+        id: freshness
+        run: |
+          set +e
+          node tools/spec-freshness.mjs ${{ inputs.strict && '--strict' || '' }} | tee freshness.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          node tools/spec-freshness.mjs --json > freshness.json 2>/dev/null || true
+          set -e
+
+      - name: Report
+        run: |
+          {
+            echo '### Square freshness'
+            echo ''
+            echo '```'
+            cat freshness.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: freshness-report
+          path: |
+            freshness.txt
+            freshness.json
+
+      - name: Open or update the drift issue
+        if: steps.freshness.outputs.exit_code != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: 'Square vendor drift detected'
+        run: |
+          BODY="$(printf 'The freshness job found drift between this unit and the published Square API.\n\n```\n%s\n```\n\nRun `npm run spec:freshness` locally, fix the surface, then `npm run spec:pin`.\n\nWorkflow run: %s/%s/actions/runs/%s\n' "$(cat freshness.txt)" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")"
+          EXISTING="$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number')"
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY" --label freshness
+          fi
+
+      - name: Fail the run when drift affects implemented operations
+        if: steps.freshness.outputs.exit_code != '0'
+        run: exit 1

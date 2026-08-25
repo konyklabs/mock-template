@@ -1,0 +1,7 @@
+{
+  "name": "orders-only",
+  "summary": "Orders plus the reference data they point at. No OAuth dance, no webhooks: authenticate with a seeded token.",
+  "capabilities": ["order-lifecycle", "merchant-directory"],
+  "seed": "seed/default.seed.json",
+  "chaos": { "seed": 20260824, "rules": [] }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@vendor-unit/square",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Square vendor surface for the vendor-unit template (fork-owned).",
+  "license": "Apache-2.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "bin": {
+    "square-unit": "./dist/bin/serve.js"
+  },
+  "files": ["dist", "profiles", "seed"],
+  "dependencies": {
+    "@vendor-unit/core": "^0.1.0"
+  }
+}

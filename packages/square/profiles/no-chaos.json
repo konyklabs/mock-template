@@ -1,0 +1,8 @@
+{
+  "name": "no-chaos",
+  "summary": "Full surface with fault injection switched off. What a CI suite that only wants happy paths should run.",
+  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "webhooks"],
+  "seed": "seed/default.seed.json",
+  "webhooks": { "retry": { "timeScale": 0.000167, "timeoutMs": 2000 } },
+  "chaos": { "seed": 20260824, "rules": [] }
+}

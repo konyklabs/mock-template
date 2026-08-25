@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.venv/
+__pycache__/
+.pytest_cache/
+.vitest/
+tools/.cache/
+*.log

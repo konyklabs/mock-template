@@ -1,0 +1,5 @@
+# Python consumer test dependencies.
+# testcontainers is a real dependency of the docker backend; the process
+# backend needs only pytest. Both are pinned so a run is reproducible.
+pytest==8.3.4
+testcontainers==4.9.0

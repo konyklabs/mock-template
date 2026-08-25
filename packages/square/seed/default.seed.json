@@ -1,0 +1,121 @@
+{
+  "_comment": [
+    "Seed scenario for the Square unit. Fork-owned data, not code.",
+    "Ids and example values are taken from Square's own documentation examples",
+    "so that a consumer reading the docs recognises what comes back:",
+    "  merchant/location/order  https://developer.squareup.com/reference/square/locations-api/list-locations",
+    "  catalog ITEM + variation https://developer.squareup.com/reference/square/catalog-api/retrieve-catalog-object",
+    "  order id shape           https://developer.squareup.com/reference/square/orders-api/create-order",
+    "Timestamps are fixed so that SearchOrders date filtering is reproducible."
+  ],
+  "merchant": {
+    "id": "MLQW2MYBY81PZ",
+    "businessName": "Jet Fuel Coffee",
+    "country": "US",
+    "languageCode": "en-US",
+    "currency": "USD"
+  },
+  "locations": [
+    {
+      "id": "18YC4JDH91E1H",
+      "name": "Grant Park",
+      "address": {
+        "address_line_1": "123 Main St",
+        "locality": "San Francisco",
+        "administrative_district_level_1": "CA",
+        "postal_code": "94114",
+        "country": "US"
+      },
+      "timezone": "America/Los_Angeles",
+      "capabilities": ["CREDIT_CARD_PROCESSING"],
+      "status": "ACTIVE",
+      "phoneNumber": "+1 650-354-7217",
+      "type": "PHYSICAL",
+      "createdAt": "2016-09-19T17:33:12.000Z"
+    },
+    {
+      "id": "057P5VYJ4A5X1",
+      "name": "Midtown Kiosk",
+      "address": {
+        "address_line_1": "500 Market St",
+        "locality": "San Francisco",
+        "administrative_district_level_1": "CA",
+        "postal_code": "94105",
+        "country": "US"
+      },
+      "timezone": "America/Los_Angeles",
+      "capabilities": ["CREDIT_CARD_PROCESSING"],
+      "status": "ACTIVE",
+      "type": "MOBILE",
+      "createdAt": "2018-02-01T09:00:00.000Z"
+    }
+  ],
+  "catalog": {
+    "items": [
+      {
+        "id": "W62UWFY35CWMYGVWK6TWJDNI",
+        "name": "Tea",
+        "description": "Hot Leaf Juice",
+        "updatedAt": "2016-11-16T22:25:24.878Z",
+        "catalogVersion": 1479335124878,
+        "variations": [
+          { "id": "2TZFAOHWGG7PAK2QEXWYPZSP", "name": "Mug", "priceMoney": { "amount": 150, "currency": "USD" } },
+          { "id": "QK5EVWFBUZTGXYVQJ4XLUIRZ", "name": "Pot", "priceMoney": { "amount": 400, "currency": "USD" } }
+        ]
+      },
+      {
+        "id": "BJNQCF2FJ6S6UIDT65ABHLRX",
+        "name": "Cold Brew",
+        "description": "Sixteen hours, no regrets",
+        "updatedAt": "2019-03-04T21:54:45.000Z",
+        "catalogVersion": 1551736485000,
+        "variations": [
+          { "id": "HURXQOOAIC4IZSI2BEXQRYFY", "name": "Small", "priceMoney": { "amount": 375, "currency": "USD" } },
+          { "id": "GXAQQ4EAXWLFRTLFRZLDWDBJ", "name": "Large", "priceMoney": { "amount": 525, "currency": "USD" } }
+        ]
+      }
+    ]
+  },
+  "orders": [
+    {
+      "id": "CAISENgvlJ6jLWAzERDzjyHVybY",
+      "locationId": "18YC4JDH91E1H",
+      "state": "OPEN",
+      "referenceId": "seed-open-order",
+      "sourceName": "Seed Scenario",
+      "ticketName": "Table 3",
+      "createdAt": "2026-08-01T10:15:00.000Z",
+      "updatedAt": "2026-08-01T10:15:00.000Z",
+      "version": 1,
+      "lineItems": [
+        { "uid": "seed_li_tea_mug", "catalogObjectId": "2TZFAOHWGG7PAK2QEXWYPZSP", "quantity": "2" },
+        { "uid": "seed_li_coldbrew_lg", "catalogObjectId": "GXAQQ4EAXWLFRTLFRZLDWDBJ", "quantity": "1" }
+      ]
+    },
+    {
+      "id": "CAISEM82RcpmcFBM0TfOyiHV3es",
+      "locationId": "057P5VYJ4A5X1",
+      "state": "COMPLETED",
+      "referenceId": "seed-completed-order",
+      "sourceName": "Seed Scenario",
+      "createdAt": "2026-07-15T08:00:00.000Z",
+      "updatedAt": "2026-07-15T08:05:00.000Z",
+      "version": 3,
+      "lineItems": [{ "uid": "seed_li_coldbrew_sm", "catalogObjectId": "HURXQOOAIC4IZSI2BEXQRYFY", "quantity": "3" }]
+    }
+  ],
+  "tokens": [
+    {
+      "id": "tok_seed_full",
+      "accessToken": "EAAAl-unit-seeded-access-token-full-scopes",
+      "refreshToken": "EQAAl-unit-seeded-refresh-token-full-scopes",
+      "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ORDERS_WRITE", "ITEMS_READ", "PAYMENTS_WRITE"]
+    },
+    {
+      "id": "tok_seed_readonly",
+      "accessToken": "EAAAl-unit-seeded-access-token-read-only",
+      "refreshToken": "EQAAl-unit-seeded-refresh-token-read-only",
+      "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ITEMS_READ"]
+    }
+  ]
+}

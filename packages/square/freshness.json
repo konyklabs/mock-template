@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "Fork-owned freshness configuration. The runner (tools/spec-freshness.mjs) is",
+    "template code and knows nothing about Square; everything vendor-specific is here.",
+    "Authoring a new fork's freshness job means writing this file, not a script."
+  ],
+  "vendor": "square",
+  "unitModule": "@vendor-unit/square",
+  "unitFactory": "createSquareUnit",
+  "profile": "full",
+  "declaredApiVersion": "2026-08-19",
+  "spec": {
+    "url": "https://raw.githubusercontent.com/square/connect-api-specification/master/api.json",
+    "repo": "https://github.com/square/connect-api-specification",
+    "license": "Apache-2.0",
+    "note": "Signal only. Nothing in this unit is generated from the spec; see README, 'Not spec-generation-reliant'."
+  },
+  "changelog": {
+    "url": "https://developer.squareup.com/docs/changelog/connect",
+    "versionPattern": "connect-logs/(\\d{4}-\\d{2}-\\d{2})",
+    "note": "Square publishes no RSS feed for the API changelog; the dated per-version links on the index are the machine-readable form."
+  },
+  "notInSpec": {
+    "GET /oauth2/authorize": "The authorization page is a browser redirect flow that Square documents in prose (developer.squareup.com/reference/square/oauth-api/authorize); it is not a REST operation in api.json, so its absence is expected rather than drift."
+  },
+  "pinFile": "spec-pin.json"
+}

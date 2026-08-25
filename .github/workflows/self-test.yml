@@ -1,0 +1,57 @@
+name: self-test
+
+# The nightly self-test. A vendor mock's failure mode is silence: nobody
+# notices it is wrong until a consumer's integration breaks in production
+# against the real vendor. This job runs the entire gate on a schedule so the
+# unit has to keep proving itself even in a week when nobody touched it.
+#
+# It runs tools/self-test.sh and nothing else, so CI cannot drift from what a
+# developer runs locally.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  schedule:
+    # 03:17 UTC — off the hour, so it does not queue behind everyone else's cron.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      skip_python:
+        description: 'Skip the pytest suite'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install uv (for the Python consumer tests)
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      # The runner has a Docker daemon, so self-test.sh takes its container
+      # path: a real `docker build` and Testcontainers-backed suites.
+      - name: Run the full self-test
+        run: bash tools/self-test.sh ${{ inputs.skip_python && '--skip-python' || '' }}
+
+      - name: Publish the image digest
+        if: success()
+        run: |
+          echo "### Image" >> "$GITHUB_STEP_SUMMARY"
+          docker images vendor-unit-square:test --format '`{{.Repository}}:{{.Tag}}` — {{.Size}} — {{.ID}}' >> "$GITHUB_STEP_SUMMARY"
