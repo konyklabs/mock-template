@@ -68,7 +68,7 @@ from vendorfake.core.kernel.types import (
     UnitError,
     UnitErrorKind,
 )
-from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION, Subscription
+from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION, Subscription, matches_event_type
 from vendorfake.square.events import ORDER_CREATED, SQUARE_EVENT_TYPES
 from vendorfake.square.model.common import validate_body
 from vendorfake.square.model.webhooks import (
@@ -283,7 +283,7 @@ class WebhooksSurface:
         before = len(ctx.webhooks.deliveries())
         event_id = f"evt_test_{before + 1}"
         created_at = ctx.clock.iso_ms()
-        ctx.webhooks.enqueue(
+        ctx.webhooks.enqueue_to(
             PreparedEvent(
                 type=event_type,
                 event_id=event_id,
@@ -296,10 +296,14 @@ class WebhooksSurface:
                     "created_at": created_at,
                     "data": {"type": "test", "id": subscription.id, "object": {"test": True}},
                 },
-            )
+            ),
+            subscription.id,
         )
         ctx.webhooks.drain(timeout_ms=float(ctx.webhooks.retry_policy.timeout_ms))
-        attempt = next((d for d in ctx.webhooks.deliveries() if d.event_id == event_id), None)
+        attempt = next(
+            (d for d in ctx.webhooks.deliveries() if d.event_id == event_id and d.subscription_id == subscription.id),
+            None,
+        )
         now = ctx.clock.iso_ms()
         return json_(
             {
@@ -325,12 +329,23 @@ def webhook_routes(deps: SquareDeps) -> tuple[Route, ...]:
 def _first_event_type(subscription: Subscription) -> str:
     """The type a test event takes when the caller names none.
 
-    The subscriber's own first type, so the test event actually reaches it --
-    sending ``order.created`` to a subscriber that asked only for
-    ``order.updated`` would be filtered out and reported as ``status_code: 0``,
-    which reads as "your endpoint is down".
+    A type the subscriber asked for, so a consumer handler dispatching on
+    ``body["type"]`` recognises the very event meant to prove its wiring works.
+
+    ``event_types`` holds *patterns*, not types: ``*`` and globs like
+    ``order.*`` are first-class entries. Returning the first entry verbatim
+    would put ``"type": "*"`` on the wire, which is not a Square event type and
+    which every consumer's dispatch falls through on. So a literal the
+    subscriber named is preferred, then the first advertised type their
+    patterns cover, and only then the fallback.
     """
-    return subscription.event_types[0] if subscription.event_types else ORDER_CREATED
+    for pattern in subscription.event_types:
+        if pattern in SQUARE_EVENT_TYPES:
+            return pattern
+    for event_type in SQUARE_EVENT_TYPES:
+        if matches_event_type(subscription.event_types, event_type):
+            return event_type
+    return ORDER_CREATED
 
 
 def _require_subscription(ctx: UnitContext, subscription_id: str) -> Mapping[str, Any]:
