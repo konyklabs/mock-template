@@ -17,12 +17,20 @@ classifiers = [
   "Topic :: Software Development :: Testing",
   "Typing :: Typed",
 ]
+# python-multipart is deliberately absent. D-002's original runtime list
+# carried it; nothing in this design needs it, and its absence is the
+# mechanical proof of the content-type-general invariant. FastAPI requires it
+# to read a body even when that body is plain application/x-www-form-urlencoded
+# -- a `Form(...)` parameter raises at import time without it and
+# `request.form()` raises at request time -- so with it installed a stray
+# `await request.form()` in the transport adapter would work perfectly, forever,
+# and no gate would notice. Without it, that mistake fails loudly the first time
+# it runs. `uv pip show python-multipart` returning non-zero is the check.
 dependencies = [
   "fastapi>=0.115",
   "uvicorn>=0.30",
   "pydantic>=2.7",
   "httpx>=0.27",
-  "python-multipart>=0.0.9",
 ]
 
 [project.urls]

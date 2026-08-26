@@ -30,9 +30,10 @@ error message listing a vendor that does not exist is worse than no message.
 
 from __future__ import annotations
 
+import functools
 import importlib
 import importlib.util
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from importlib.metadata import entry_points
 
 from vendorfake.core.config.profile import load_profile
@@ -138,6 +139,7 @@ def create_unit(
     env: Mapping[str, str] | None = None,
     sink: DeliverySink | None = None,
     logger: Logger | None = None,
+    framework_answered: Callable[[], int] | None = None,
 ) -> Unit:
     """Build and start a unit. The single constructor.
 
@@ -157,6 +159,15 @@ def create_unit(
 
     ``env`` is a plain mapping and defaults to empty. Pass ``os.environ``
     explicitly if that is what you mean.
+
+    ``framework_answered`` is the transport adapter's tripwire, reported by
+    ``GET /__unit/health``: a count of requests a web framework answered by
+    itself instead of handing to the unit. It is threaded through here rather
+    than read from a global because the counter has to exist *before* the unit
+    does -- the control plane closes over it at construction -- and because the
+    only process that can read it is the one serving, which is why the number
+    is on the wire at all. ``None``, the default, reports 0, which is the true
+    answer for a unit with no framework in front of it rather than a stub.
     """
     environ: Mapping[str, str] = {} if env is None else env
     definition = _pick(vendor, environ)
@@ -178,7 +189,7 @@ def create_unit(
         # a vendor surface and nothing else -- but a unit a *consumer* is given
         # without `/__unit/*` is a unit they cannot drive, and there is exactly
         # one place to decide that.
-        control_routes=control_plane_routes,
+        control_routes=functools.partial(control_plane_routes, framework_answered=framework_answered),
     )
     unit.start()
     return unit
