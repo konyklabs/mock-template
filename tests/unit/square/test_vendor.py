@@ -187,7 +187,7 @@ def test_an_unknown_key_in_the_vendor_block_is_refused_by_name() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_oauth_surface_is_wired_and_cached() -> None:
+def test_the_shipped_surfaces_are_wired_and_cached() -> None:
     """Cached, not rebuilt: the router, the capability index and the OpenAPI
     document each read this property, and three different route tuples holding
     three different bound methods would be three different surfaces."""
@@ -198,8 +198,22 @@ def test_the_oauth_surface_is_wired_and_cached() -> None:
         ("POST", "/oauth2/token"),
         ("POST", "/oauth2/revoke"),
         ("POST", "/oauth2/token/status"),
+        ("POST", "/v2/orders"),
+        ("POST", "/v2/orders/search"),
+        ("POST", "/v2/orders/batch-retrieve"),
+        ("GET", "/v2/orders/{order_id}"),
+        ("PUT", "/v2/orders/{order_id}"),
+        ("POST", "/v2/orders/{order_id}/pay"),
     ]
-    assert {route.capability for route in vendor.routes} == {"oauth"}
+    assert {route.capability for route in vendor.routes} == {"oauth", "order-lifecycle"}
+
+
+def test_every_route_template_uses_braces_never_colons() -> None:
+    """`{order_id}`, never `:order_id`. The router, the chaos `match.route`
+    key, the capability index and the generated OpenAPI document all read the
+    same template, and a colon path would match nothing in any of them."""
+    for route in create_square_vendor().routes:
+        assert ":" not in route.path
 
 
 def test_the_webhook_seams_are_still_open() -> None:
