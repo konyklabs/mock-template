@@ -8,8 +8,10 @@ import vendorfake.square as square
 from tests.unit.square.conftest import fake_ctx
 from vendorfake.core.capability.gates import CORE_GATED_CAPABILITIES, check_capability_declarations
 from vendorfake.core.kernel.types import MutableResponse, UnitError, UnitErrorKind, UnitRequest, VendorDefinition
+from vendorfake.square.events import SquareEventMapper
 from vendorfake.square.machine import ORDER_MACHINE
 from vendorfake.square.retry import SQUARE_RETRY_SCHEDULE_MS
+from vendorfake.square.signer import SquareWebhookSigner
 from vendorfake.square.vendor import SquareVendor, create_square_vendor
 
 
@@ -204,8 +206,34 @@ def test_the_shipped_surfaces_are_wired_and_cached() -> None:
         ("GET", "/v2/orders/{order_id}"),
         ("PUT", "/v2/orders/{order_id}"),
         ("POST", "/v2/orders/{order_id}/pay"),
+        ("GET", "/v2/locations"),
+        ("GET", "/v2/catalog/list"),
+        ("GET", "/v2/webhooks/event-types"),
+        ("POST", "/v2/webhooks/subscriptions"),
+        ("GET", "/v2/webhooks/subscriptions"),
+        ("GET", "/v2/webhooks/subscriptions/{subscription_id}"),
+        ("DELETE", "/v2/webhooks/subscriptions/{subscription_id}"),
+        ("POST", "/v2/webhooks/subscriptions/{subscription_id}/test"),
     ]
-    assert {route.capability for route in vendor.routes} == {"oauth", "order-lifecycle"}
+    assert {route.capability for route in vendor.routes} == {
+        "oauth",
+        "order-lifecycle",
+        "merchant-directory",
+        "webhooks",
+    }
+
+
+def test_every_surface_capability_owns_at_least_one_route() -> None:
+    """The conformance suite's C02 asserts this over the wire; asserting it
+    here as well is what makes a declared-but-unserved capability a red test in
+    the vendor's own suite rather than only in the cross-vendor one."""
+    vendor = create_square_vendor()
+    owned = {route.capability for route in vendor.routes}
+    for decl in vendor.capabilities:
+        if decl.kind == "surface":
+            assert decl.name in owned, f"{decl.name} is declared but owns no route"
+        else:
+            assert decl.name not in owned, f"{decl.name} is a behaviour and must own no route"
 
 
 def test_every_route_template_uses_braces_never_colons() -> None:
@@ -216,9 +244,22 @@ def test_every_route_template_uses_braces_never_colons() -> None:
         assert ":" not in route.path
 
 
-def test_the_webhook_seams_are_still_open() -> None:
-    assert create_square_vendor().signer is None
-    assert create_square_vendor().events is None
+def test_the_webhook_seams_are_filled() -> None:
+    """Both, or neither: the dispatcher refuses to deliver without a mapper AND
+    a signer, so a vendor that supplied one of the two would send nothing at
+    all rather than send something a consumer could not verify."""
+    vendor = create_square_vendor()
+    assert isinstance(vendor.signer, SquareWebhookSigner)
+    assert isinstance(vendor.events, SquareEventMapper)
+
+
+def test_only_the_test_route_opts_out_of_the_request_lock() -> None:
+    """`serialized=False` is not a style choice: the route blocks on the
+    delivery worker, which nothing inside its own request can advance. Any
+    other route declaring it would be running outside the lock that makes id
+    minting and journal ordering deterministic."""
+    unserialized = [route.key for route in create_square_vendor().routes if not route.serialized]
+    assert unserialized == ["POST /v2/webhooks/subscriptions/{subscription_id}/test"]
 
 
 def test_hydrate_refuses_a_missing_scenario_rather_than_leaving_an_empty_store() -> None:

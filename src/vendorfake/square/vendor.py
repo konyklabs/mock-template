@@ -36,14 +36,14 @@ a handler reads ``deps.config`` when it runs, so a profile that replaces the
 application secret is in force on the next request rather than on the next
 process.
 
-Not yet assembled
------------------
-``signer`` and ``events`` land with the webhook surface. Both are named here as
-the seams they are, and ``None`` is a legitimate answer for a vendor with no
-webhook scheme -- here it is a temporary one. ``merchant-directory`` and
-``webhooks`` are declared capabilities that own no routes yet, which the
-capability registry allows: adding a surface is appending it to
-:attr:`SquareVendor.routes` beside the two that are there.
+The webhook seams, and why they are two
+--------------------------------------
+``signer`` and ``events`` are separate properties because they answer separate
+questions: what a mutation *means* on the wire, and how a delivery is proven to
+have come from here. The dispatcher requires both before it will deliver
+anything, which is why a vendor that supplied only one would send nothing
+rather than send something unverifiable. ``None`` remains a legitimate answer
+for a vendor with no webhook scheme at all; this one has both.
 """
 
 from __future__ import annotations
@@ -71,12 +71,16 @@ from vendorfake.square.auth import SquareAuth
 from vendorfake.square.capabilities import SQUARE_CAPABILITIES, SQUARE_NOT_SUPPORTED
 from vendorfake.square.config import SquareConfig, resolve_square_config
 from vendorfake.square.errors import SquareErrorShaper
+from vendorfake.square.events import SquareEventMapper
 from vendorfake.square.ids import SquareIds
 from vendorfake.square.machine import ORDER_MACHINE, ORDER_MACHINE_NAME
 from vendorfake.square.retry import square_retry_defaults
 from vendorfake.square.seed.hydrate import hydrate_square
+from vendorfake.square.signer import SquareWebhookSigner
+from vendorfake.square.surface.directory import directory_routes
 from vendorfake.square.surface.oauth import oauth_routes
 from vendorfake.square.surface.orders import order_routes
+from vendorfake.square.surface.webhooks import webhook_routes
 
 __all__ = ["SQUARE_MAGIC", "SQUARE_SCOPES", "SquareVendor", "create_square_vendor"]
 
@@ -127,7 +131,17 @@ are the fields that would otherwise make them differ."""
 class SquareVendor:
     """One Square vendor, for one unit. Satisfies ``VendorDefinition``."""
 
-    __slots__ = ("_auth", "_base_config", "_config", "_errors", "_ids", "_routes", "_seed")
+    __slots__ = (
+        "_auth",
+        "_base_config",
+        "_config",
+        "_errors",
+        "_events",
+        "_ids",
+        "_routes",
+        "_seed",
+        "_signer",
+    )
 
     def __init__(self, *, config: SquareConfig | None = None, seed: int = 1) -> None:
         self._base_config = SquareConfig() if config is None else config
@@ -136,6 +150,12 @@ class SquareVendor:
         self._ids = SquareIds(seed)
         self._errors = self._build_errors()
         self._auth = SquareAuth(self, SQUARE_SCOPES)
+        # Both hold *this vendor*, not a copy of its configuration, so that a
+        # profile resolved in `hydrate` -- which runs after construction -- is
+        # in force on the next delivery rather than on the next process. That
+        # is the same rule the surfaces follow; see `surface/common.py`.
+        self._signer = SquareWebhookSigner(self)
+        self._events = SquareEventMapper()
         self._routes: tuple[Route, ...] | None = None
 
     def _build_errors(self) -> SquareErrorShaper:
@@ -190,7 +210,7 @@ class SquareVendor:
         capability index and the OpenAPI document would each see differently.
         """
         if self._routes is None:
-            self._routes = oauth_routes(self) + order_routes(self)
+            self._routes = oauth_routes(self) + order_routes(self) + directory_routes() + webhook_routes(self)
         return self._routes
 
     @property
@@ -203,18 +223,19 @@ class SquareVendor:
 
     @property
     def signer(self) -> Signer | None:
-        """``None`` until the webhook signer lands.
+        """Square's HMAC scheme, and every header a delivery carries.
 
-        The core treats a missing signer as "this vendor does not sign", which
-        is a legitimate answer for a vendor with no webhook scheme; here it is
-        a temporary one, and the dispatcher will map no event without it.
+        One object for both because the signature is a header too: two hooks
+        would be two chances to register only one, and a delivery that is
+        signed but carries no retry counter -- or counted but unsigned -- is
+        silent at the sink.
         """
-        return None
+        return self._signer
 
     @property
     def events(self) -> EventMapper | None:
-        """``None`` until the journal-to-event mapper lands."""
-        return None
+        """Journal entry to Square notification. See :mod:`.events`."""
+        return self._events
 
     @property
     def magic(self) -> MagicTriggerSpec | None:
