@@ -1,0 +1,13 @@
+{
+  "name": "no-chaos",
+  "summary": "Full surface with fault injection switched off. What a CI suite that only wants happy paths should run.",
+  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "webhooks"],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "application_id": "sandbox-sq0idb-unit-square-application",
+    "application_secret": "sandbox-sq0csb-unit-square-secret",
+    "redirect_uri": "https://example.test/oauth/callback"
+  },
+  "webhooks": { "retry": { "time_scale": 0.000167, "timeout_ms": 2000 } },
+  "chaos": { "seed": 20260824, "rules": [], "strict_rules": true }
+}

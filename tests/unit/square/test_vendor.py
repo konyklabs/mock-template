@@ -183,37 +183,51 @@ def test_an_unknown_key_in_the_vendor_block_is_refused_by_name() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The seams that are not built yet. Each fails loudly rather than plausibly.
+# The surfaces, and the seams that are still to come.
 # ---------------------------------------------------------------------------
 
 
-def test_the_surfaces_are_not_wired_yet() -> None:
-    assert create_square_vendor().routes == ()
+def test_the_oauth_surface_is_wired_and_cached() -> None:
+    """Cached, not rebuilt: the router, the capability index and the OpenAPI
+    document each read this property, and three different route tuples holding
+    three different bound methods would be three different surfaces."""
+    vendor = create_square_vendor()
+    assert vendor.routes is vendor.routes
+    assert [(route.method, route.path) for route in vendor.routes] == [
+        ("GET", "/oauth2/authorize"),
+        ("POST", "/oauth2/token"),
+        ("POST", "/oauth2/revoke"),
+        ("POST", "/oauth2/token/status"),
+    ]
+    assert {route.capability for route in vendor.routes} == {"oauth"}
+
+
+def test_the_webhook_seams_are_still_open() -> None:
     assert create_square_vendor().signer is None
     assert create_square_vendor().events is None
 
 
-def test_hydrate_refuses_rather_than_leaving_an_empty_store() -> None:
+def test_hydrate_refuses_a_missing_scenario_rather_than_leaving_an_empty_store() -> None:
     """An empty store would answer 404 to every read as though the scenario
     were simply small, which is the failure mode this project exists to remove."""
     with pytest.raises(UnitError) as caught:
         create_square_vendor().hydrate(fake_ctx(), None)
     assert caught.value.kind is UnitErrorKind.INTERNAL
-    assert "seed loader" in str(caught.value)
+    assert "No seed scenario" in str(caught.value)
 
 
 def test_hydrate_still_applies_the_profile_config_first() -> None:
+    """The order matters beyond tidiness: the tokens a scenario seeds are
+    stamped with the expiry the *profile's* TTL implies, so resolving the
+    config after loading would seed them against the built-in default."""
     vendor = SquareVendor()
     with pytest.raises(UnitError):
         vendor.hydrate(fake_ctx(vendor_config={"api_version": "2030-12-31"}), None)
     assert vendor.api_version == "2030-12-31"
 
 
-def test_the_auth_adapter_describes_the_documented_schemes_and_refuses() -> None:
-    auth = create_square_vendor().auth
-    described = auth.describe()
+def test_the_auth_adapter_describes_the_documented_schemes() -> None:
+    described = create_square_vendor().auth.describe()
     assert "Bearer" in described["bearer"]
     assert "Client" in described["client-secret"]
-    with pytest.raises(UnitError) as caught:
-        auth.resolve(None, "bearer")  # type: ignore[arg-type]
-    assert caught.value.kind is UnitErrorKind.INTERNAL
+    assert "ORDERS_WRITE" in described["scopes"]

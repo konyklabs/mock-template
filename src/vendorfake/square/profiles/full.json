@@ -1,0 +1,19 @@
+{
+  "name": "full",
+  "summary": "Every capability on. The default profile.",
+  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "webhooks", "chaos", "webhooks.chaos"],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "application_id": "sandbox-sq0idb-unit-square-application",
+    "application_secret": "sandbox-sq0csb-unit-square-secret",
+    "redirect_uri": "https://example.test/oauth/callback",
+    "environment": "Sandbox",
+    "api_version": "2026-08-19"
+  },
+  "webhooks": {
+    "retry": { "time_scale": 0.000167, "timeout_ms": 2000 },
+    "subscribers": []
+  },
+  "chaos": { "seed": 20260824, "rules": [], "strict_rules": true },
+  "clock": { "mode": "real" }
+}

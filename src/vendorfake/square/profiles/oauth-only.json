@@ -1,0 +1,12 @@
+{
+  "name": "oauth-only",
+  "summary": "Only the OAuth dance. For a consumer testing token handling and nothing else.",
+  "capabilities": ["oauth"],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "application_id": "sandbox-sq0idb-unit-square-application",
+    "application_secret": "sandbox-sq0csb-unit-square-secret",
+    "redirect_uri": "https://example.test/oauth/callback"
+  },
+  "chaos": { "seed": 20260824, "rules": [], "strict_rules": true }
+}

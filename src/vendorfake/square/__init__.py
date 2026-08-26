@@ -21,14 +21,18 @@ supplies behaviour.
 from __future__ import annotations
 
 from vendorfake.core.kernel.types import VendorDefinition
+from vendorfake.square.auth import SquareAuth
 from vendorfake.square.capabilities import SQUARE_CAPABILITIES, SQUARE_NOT_SUPPORTED
 from vendorfake.square.config import DEFAULT_SCOPES, SQUARE_API_VERSION, SquareConfig, resolve_square_config
 from vendorfake.square.entities import COL
 from vendorfake.square.errors import SQUARE_ERROR_TABLE, ErrorCategory, ErrorCode, SquareErrorShaper
 from vendorfake.square.ids import SquareIds
 from vendorfake.square.machine import ORDER_MACHINE, ORDER_MACHINE_NAME, OrderState
+from vendorfake.square.model.oauth import SQUARE_GRANT_TYPES, SUPPORTED_GRANT_TYPES
 from vendorfake.square.model.order import project_order, project_order_entry
 from vendorfake.square.retry import SQUARE_RETRY_SCHEDULE_MS
+from vendorfake.square.seed import SeedDocument, hydrate_square
+from vendorfake.square.surface.oauth import oauth_routes
 from vendorfake.square.vendor import SQUARE_MAGIC, SQUARE_SCOPES, SquareVendor, create_square_vendor
 
 __all__ = [
@@ -39,18 +43,24 @@ __all__ = [
     "SQUARE_API_VERSION",
     "SQUARE_CAPABILITIES",
     "SQUARE_ERROR_TABLE",
+    "SQUARE_GRANT_TYPES",
     "SQUARE_MAGIC",
     "SQUARE_NOT_SUPPORTED",
     "SQUARE_RETRY_SCHEDULE_MS",
     "SQUARE_SCOPES",
+    "SUPPORTED_GRANT_TYPES",
     "ErrorCategory",
     "ErrorCode",
     "OrderState",
+    "SeedDocument",
+    "SquareAuth",
     "SquareConfig",
     "SquareErrorShaper",
     "SquareIds",
     "SquareVendor",
     "create_square_vendor",
+    "hydrate_square",
+    "oauth_routes",
     "project_order",
     "project_order_entry",
     "resolve_square_config",

@@ -27,13 +27,20 @@ out of the config (the error shaper) is rebuilt there too, and the id stream is
 re-seeded from the unit's seed, which is what makes a re-hydrated unit mint the
 ids it minted the first time.
 
+Routes are built once, bound to this object
+-------------------------------------------
+:attr:`SquareVendor.routes` builds its surfaces on first access and caches
+them, and each surface holds *this vendor*, not a copy of its configuration.
+That is what lets the routes exist before ``hydrate`` has resolved the profile:
+a handler reads ``deps.config`` when it runs, so a profile that replaces the
+application secret is in force on the next request rather than on the next
+process.
+
 Not yet assembled
 -----------------
-``routes``, ``signer``, ``events``, the auth adapter and the seed loader land
-with the Square *surfaces*. They are named here as the seams they are, and each
-placeholder fails loudly rather than plausibly: an unbuilt seed loader raises
-at unit start instead of hydrating an empty store that would then answer 404 to
-every read as though the scenario were simply small.
+``signer`` and ``events`` land with the webhook surface. Both are named here as
+the seams they are, and ``None`` is a legitimate answer for a vendor with no
+webhook scheme -- here it is a temporary one.
 """
 
 from __future__ import annotations
@@ -44,28 +51,28 @@ from typing import Any
 
 from vendorfake.core.config.models import ProfileDocument
 from vendorfake.core.kernel.types import (
-    AuthResult,
+    AuthAdapter,
     CapabilityDecl,
     ErrorShaper,
     EventMapper,
-    HandlerArgs,
     MagicTriggerSpec,
     MutableResponse,
     Route,
     Signer,
     UnitContext,
-    UnitError,
-    UnitErrorKind,
     UnitRequest,
     VendorDefinition,
 )
 from vendorfake.core.state.machine import MachineDef
+from vendorfake.square.auth import SquareAuth
 from vendorfake.square.capabilities import SQUARE_CAPABILITIES, SQUARE_NOT_SUPPORTED
 from vendorfake.square.config import SquareConfig, resolve_square_config
 from vendorfake.square.errors import SquareErrorShaper
 from vendorfake.square.ids import SquareIds
 from vendorfake.square.machine import ORDER_MACHINE, ORDER_MACHINE_NAME
 from vendorfake.square.retry import square_retry_defaults
+from vendorfake.square.seed.hydrate import hydrate_square
+from vendorfake.square.surface.oauth import oauth_routes
 
 __all__ = ["SQUARE_MAGIC", "SQUARE_SCOPES", "SquareVendor", "create_square_vendor"]
 
@@ -113,42 +120,10 @@ time. Two units seeded identically a second apart must still agree, and these
 are the fields that would otherwise make them differ."""
 
 
-class _PendingAuth:
-    """The auth adapter until the OAuth surface lands.
-
-    It describes the two documented schemes honestly, because ``/__unit/info``
-    reports that description and a blank one would be a lie of omission. It
-    refuses to resolve anything, which no request can reach today: resolution
-    happens only for a matched route that declares ``auth``, and this vendor
-    declares no routes yet.
-    """
-
-    def describe(self) -> Mapping[str, str]:
-        return {
-            "bearer": ("Authorization: Bearer {ACCESS_TOKEN} (developer.squareup.com/docs/build-basics/access-tokens)"),
-            "client-secret": (
-                "Authorization: Client {APPLICATION_SECRET} "
-                "(developer.squareup.com/reference/square/oauth-api/revoke-token)"
-            ),
-            "scopes": " ".join(SQUARE_SCOPES),
-            "status": "not yet implemented; lands with the Square OAuth surface",
-        }
-
-    def resolve(self, args: HandlerArgs, mode: str) -> AuthResult:
-        raise UnitError(
-            UnitErrorKind.INTERNAL,
-            detail=(
-                "The Square auth adapter is not built yet (vendorfake/square/auth.py); "
-                "no authenticated route can be served."
-            ),
-            info={"mode": mode},
-        )
-
-
 class SquareVendor:
     """One Square vendor, for one unit. Satisfies ``VendorDefinition``."""
 
-    __slots__ = ("_base_config", "_config", "_errors", "_ids", "_seed")
+    __slots__ = ("_auth", "_base_config", "_config", "_errors", "_ids", "_routes", "_seed")
 
     def __init__(self, *, config: SquareConfig | None = None, seed: int = 1) -> None:
         self._base_config = SquareConfig() if config is None else config
@@ -156,6 +131,8 @@ class SquareVendor:
         self._seed = seed
         self._ids = SquareIds(seed)
         self._errors = self._build_errors()
+        self._auth = SquareAuth(self, SQUARE_SCOPES)
+        self._routes: tuple[Route, ...] | None = None
 
     def _build_errors(self) -> SquareErrorShaper:
         return SquareErrorShaper(
@@ -201,16 +178,24 @@ class SquareVendor:
 
     @property
     def routes(self) -> Sequence[Route]:
-        """Empty until the four surfaces land: OAuth, orders, directory, webhooks."""
-        return ()
+        """The vendor surface, built once and cached.
+
+        Cached because ``Route`` handlers are bound methods of a surface object
+        and rebuilding them on every access would make two reads of this
+        property produce routes that compare unequal -- which the router, the
+        capability index and the OpenAPI document would each see differently.
+        """
+        if self._routes is None:
+            self._routes = oauth_routes(self)
+        return self._routes
 
     @property
     def errors(self) -> ErrorShaper:
         return self._errors
 
     @property
-    def auth(self) -> _PendingAuth:
-        return _PENDING_AUTH
+    def auth(self) -> AuthAdapter:
+        return self._auth
 
     @property
     def signer(self) -> Signer | None:
@@ -269,16 +254,12 @@ class SquareVendor:
         """Phase two of configuration, then load the seed scenario.
 
         The configuration step happens first and unconditionally, so that a
-        profile's ``vendor`` block is in force even when hydration fails.
+        profile's ``vendor`` block is in force even when hydration fails -- and
+        so that the tokens the scenario seeds are stamped with the expiry the
+        *profile's* TTL implies rather than the built-in default's.
         """
         self._resolve_config(ctx)
-        raise UnitError(
-            UnitErrorKind.INTERNAL,
-            detail=(
-                "The Square seed loader is not built yet (vendorfake/square/seed/); this unit cannot hydrate a store."
-            ),
-            info={"profile": ctx.config.profile, "seed_supplied": seed is not None},
-        )
+        hydrate_square(ctx, seed, self._config)
 
     def _resolve_config(self, ctx: UnitContext) -> None:
         """Re-resolve from the profile, then rebuild what depends on it.
@@ -308,9 +289,6 @@ class SquareVendor:
         requested = req.headers.get("square-version")
         res.headers["square-version"] = self._config.api_version if requested is None else requested
         res.headers["x-unit-vendor"] = ctx.vendor.name
-
-
-_PENDING_AUTH = _PendingAuth()
 
 
 def create_square_vendor(

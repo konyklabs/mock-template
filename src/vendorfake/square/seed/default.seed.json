@@ -1,0 +1,127 @@
+{
+  "_comment": [
+    "Seed scenario for the Square unit. Fork-owned data, not code.",
+    "Ids and example values are taken from Square's own documentation examples",
+    "so that a consumer reading the docs recognises what comes back:",
+    "  merchant/location/order  https://developer.squareup.com/reference/square/locations-api/list-locations",
+    "  catalog ITEM + variation https://developer.squareup.com/reference/square/catalog-api/retrieve-catalog-object",
+    "  order id shape           https://developer.squareup.com/reference/square/orders-api/create-order",
+    "Timestamps are fixed so that SearchOrders date filtering is reproducible.",
+    "Keys are snake_case throughout, which is the one departure from the",
+    "TypeScript reference's copy of this file: every other JSON this project",
+    "publishes or accepts -- profiles, the control plane, the wire projections --",
+    "is snake_case, and a camelCase seed document would be the only exception."
+  ],
+  "merchant": {
+    "id": "MLQW2MYBY81PZ",
+    "business_name": "Jet Fuel Coffee",
+    "country": "US",
+    "language_code": "en-US",
+    "currency": "USD"
+  },
+  "locations": [
+    {
+      "id": "18YC4JDH91E1H",
+      "name": "Grant Park",
+      "address": {
+        "address_line_1": "123 Main St",
+        "locality": "San Francisco",
+        "administrative_district_level_1": "CA",
+        "postal_code": "94114",
+        "country": "US"
+      },
+      "timezone": "America/Los_Angeles",
+      "capabilities": ["CREDIT_CARD_PROCESSING"],
+      "status": "ACTIVE",
+      "phone_number": "+1 650-354-7217",
+      "type": "PHYSICAL",
+      "created_at": "2016-09-19T17:33:12.000Z"
+    },
+    {
+      "id": "057P5VYJ4A5X1",
+      "name": "Midtown Kiosk",
+      "address": {
+        "address_line_1": "500 Market St",
+        "locality": "San Francisco",
+        "administrative_district_level_1": "CA",
+        "postal_code": "94105",
+        "country": "US"
+      },
+      "timezone": "America/Los_Angeles",
+      "capabilities": ["CREDIT_CARD_PROCESSING"],
+      "status": "ACTIVE",
+      "type": "MOBILE",
+      "created_at": "2018-02-01T09:00:00.000Z"
+    }
+  ],
+  "catalog": {
+    "items": [
+      {
+        "id": "W62UWFY35CWMYGVWK6TWJDNI",
+        "name": "Tea",
+        "description": "Hot Leaf Juice",
+        "updated_at": "2016-11-16T22:25:24.878Z",
+        "catalog_version": 1479335124878,
+        "variations": [
+          { "id": "2TZFAOHWGG7PAK2QEXWYPZSP", "name": "Mug", "price_money": { "amount": 150, "currency": "USD" } },
+          { "id": "QK5EVWFBUZTGXYVQJ4XLUIRZ", "name": "Pot", "price_money": { "amount": 400, "currency": "USD" } }
+        ]
+      },
+      {
+        "id": "BJNQCF2FJ6S6UIDT65ABHLRX",
+        "name": "Cold Brew",
+        "description": "Sixteen hours, no regrets",
+        "updated_at": "2019-03-04T21:54:45.000Z",
+        "catalog_version": 1551736485000,
+        "variations": [
+          { "id": "HURXQOOAIC4IZSI2BEXQRYFY", "name": "Small", "price_money": { "amount": 375, "currency": "USD" } },
+          { "id": "GXAQQ4EAXWLFRTLFRZLDWDBJ", "name": "Large", "price_money": { "amount": 525, "currency": "USD" } }
+        ]
+      }
+    ]
+  },
+  "orders": [
+    {
+      "id": "CAISENgvlJ6jLWAzERDzjyHVybY",
+      "location_id": "18YC4JDH91E1H",
+      "state": "OPEN",
+      "reference_id": "seed-open-order",
+      "source_name": "Seed Scenario",
+      "ticket_name": "Table 3",
+      "created_at": "2026-08-01T10:15:00.000Z",
+      "updated_at": "2026-08-01T10:15:00.000Z",
+      "version": 1,
+      "line_items": [
+        { "uid": "seed_li_tea_mug", "catalog_object_id": "2TZFAOHWGG7PAK2QEXWYPZSP", "quantity": "2" },
+        { "uid": "seed_li_coldbrew_lg", "catalog_object_id": "GXAQQ4EAXWLFRTLFRZLDWDBJ", "quantity": "1" }
+      ]
+    },
+    {
+      "id": "CAISEM82RcpmcFBM0TfOyiHV3es",
+      "location_id": "057P5VYJ4A5X1",
+      "state": "COMPLETED",
+      "reference_id": "seed-completed-order",
+      "source_name": "Seed Scenario",
+      "created_at": "2026-07-15T08:00:00.000Z",
+      "updated_at": "2026-07-15T08:05:00.000Z",
+      "version": 3,
+      "line_items": [
+        { "uid": "seed_li_coldbrew_sm", "catalog_object_id": "HURXQOOAIC4IZSI2BEXQRYFY", "quantity": "3" }
+      ]
+    }
+  ],
+  "tokens": [
+    {
+      "id": "tok_seed_full",
+      "access_token": "EAAAl-unit-seeded-access-token-full-scopes",
+      "refresh_token": "EQAAl-unit-seeded-refresh-token-full-scopes",
+      "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ORDERS_WRITE", "ITEMS_READ", "PAYMENTS_WRITE"]
+    },
+    {
+      "id": "tok_seed_readonly",
+      "access_token": "EAAAl-unit-seeded-access-token-read-only",
+      "refresh_token": "EQAAl-unit-seeded-refresh-token-read-only",
+      "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ITEMS_READ"]
+    }
+  ]
+}
