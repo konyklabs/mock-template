@@ -432,8 +432,19 @@ class WebhookDispatcher:
         report the subscriber as silent when it was simply never asked. A
         disabled subscriber is still skipped, so it records no delivery at all
         -- the same rule :meth:`enqueue` applies.
+
+        ``self.enabled`` IS CHECKED HERE, and :meth:`enqueue` does not check it,
+        because of where each is called from. Every other path to the sink
+        arrives through the journal listener installed by :meth:`attach`, whose
+        first line is the same guard. This one is called straight from a route
+        handler, so without the check ``webhooks.disable_delivery`` -- a
+        property of the deployment that :meth:`set_enabled` deliberately cannot
+        undo -- would stop every delivery except the one a caller asked for by
+        name.
         """
         with self._request_lock:
+            if not self.enabled:
+                return
             self._prepared.append(event)
             target = next((s for s in self.subscriptions() if s.id == subscription_id), None)
             if target is None or not target.enabled:
