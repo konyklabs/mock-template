@@ -7,7 +7,7 @@ contract in ``conformance/manifest.json`` is answered by at least one unit that
 violates it, and each of those units turns the named check red and leaves the
 rest alone.
 
-FOUR PROPERTIES, and each of them has caught something real:
+FIVE PROPERTIES, and each of them has caught something real:
 
 1. **The control is green.** ``M00`` mutates nothing. Without it, a red check
    under some other mutant would carry an unexamined second explanation --
@@ -19,8 +19,13 @@ FOUR PROPERTIES, and each of them has caught something real:
    targets, and a mutant that turned a contract *off* would look like a pass.
    Both are failures here.
 4. **Every registered check has a mutant.** This is the one that bites later:
-   it fails the moment a seventeenth contract is added with no evidence it can
+   it fails the moment a twenty-third contract is added with no evidence it can
    fail, which is exactly when nobody is looking.
+5. **A unit that will not start ERRORS, and does not "fail" anything.** The
+   mutant that removes a core-gated capability declaration cannot be
+   constructed at all. Every contract must report ERROR and none may report
+   FAIL, because a report that says ``[FAIL] C11`` about a unit that never ran
+   is a report that says nothing about C11.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from vendorfake.conformance.report import ConformanceReport
 
 _CHECK_IDS = frozenset(spec.id for spec in CHECKS)
 _ALL = [NULL_MUTANT, *MUTANTS]
+_CONSTRUCTABLE = [mutant for mutant in MUTANTS if not mutant.fails_to_construct]
 
 
 def _run(mutant: Mutant) -> ConformanceReport:
@@ -55,18 +61,22 @@ def _outcomes(report: ConformanceReport, outcome: Outcome) -> frozenset[str]:
 def _tolerated_skips(mutant: Mutant) -> frozenset[str]:
     """Skips a mutant is allowed to produce, derived rather than listed.
 
-    Three sources, all of them data: the contracts that need a second binding
-    (none of these runs offers one), the committed expected-skip matrix
-    restricted to the profiles this mutant covers, and whatever the mutant
-    itself declares it will silence.
+    Four sources, all of them data: the contracts that need a second binding
+    (none of these runs offers one), the contracts that need a second OS
+    process (which only the mutant whose defect is per-process pays for), the
+    committed expected-skip matrix restricted to the profiles this mutant
+    covers, and whatever the mutant itself declares it will silence.
     """
     both_transports = frozenset(spec.id for spec in CHECKS if spec.requires.both_transports)
+    out_of_process = (
+        frozenset() if mutant.out_of_process else frozenset(spec.id for spec in CHECKS if spec.requires.out_of_process)
+    )
     declared = frozenset(
         check_id
         for check_id, profiles in expected_skips().items()
         if any(profile in profiles for profile in mutant.profiles)
     )
-    return both_transports | declared | mutant.skips_everywhere
+    return both_transports | out_of_process | declared | mutant.skips_everywhere
 
 
 @pytest.mark.conformance
@@ -76,13 +86,13 @@ def test_the_control_mutates_nothing_and_is_green() -> None:
     red = _outcomes(report, Outcome.FAIL)
     assert not red, (
         "the unmutated unit failed a contract, so no other mutant result is attributable to its "
-        f"mutation. tests/conformance/mutants/model.py::_build_unit has drifted from "
+        f"mutation. tests/conformance/mutants/model.py::build_unit has drifted from "
         f"registry.create_unit.\n{format_report(report)}"
     )
 
 
 @pytest.mark.conformance
-@pytest.mark.parametrize("mutant", MUTANTS, ids=[mutant.label for mutant in MUTANTS])
+@pytest.mark.parametrize("mutant", _CONSTRUCTABLE, ids=[mutant.label for mutant in _CONSTRUCTABLE])
 def test_a_mutant_trips_the_checks_it_names_and_no_others(mutant: Mutant) -> None:
     report = _run(mutant)
     red = _outcomes(report, Outcome.FAIL)
@@ -115,6 +125,42 @@ def test_a_mutant_trips_the_checks_it_names_and_no_others(mutant: Mutant) -> Non
         f"A mutation that removes a contract's precondition hides it: the suite reports green for "
         f"a unit it never examined. If the skip is legitimate, declare it in the mutant's "
         f"`skips_everywhere`.\n{format_report(report)}"
+    )
+
+
+@pytest.mark.conformance
+def test_a_unit_that_cannot_be_constructed_errors_rather_than_failing() -> None:
+    """The FAIL/ERROR split, held down by the one mutant that cannot start.
+
+    Before the split, removing a core-gated capability declaration printed
+    ``[FAIL] C11`` -- which is exactly what C11 prints when it *has* run and
+    found the declaration missing, and exactly what every other contract
+    printed at the same moment. A reader could not tell "this contract was
+    violated" from "this unit does not start", and the second says nothing
+    about any contract at all.
+
+    So: every case ERROR, no case FAIL, and the report red with a problem line
+    that names the construction failure rather than a list of contracts.
+    """
+    mutant = next(m for m in MUTANTS if m.fails_to_construct)
+    report = _run(mutant)
+
+    assert not _outcomes(report, Outcome.FAIL), (
+        f"{mutant.label} reported a FAILING CONTRACT for a unit that never constructed. A failure "
+        f"names a contract to go and fix; this unit answered nothing at all.\n{format_report(report)}"
+    )
+    errored = _outcomes(report, Outcome.ERROR)
+    assert errored == _CHECK_IDS, (
+        f"{mutant.label} errored on {sorted(errored)}, expected every registered contract "
+        f"{sorted(_CHECK_IDS)}: the unit could not be built, so no contract could be asked.\n"
+        f"{format_report(report)}"
+    )
+    assert not report.ok, (
+        "a unit that could not be constructed was reported as a clean run. An ERROR is red exactly "
+        f"as a FAILURE is; only the reason differs.\n{format_report(report)}"
+    )
+    assert any("ERRORED" in problem and "never asked" in problem for problem in report.problems), (
+        f"the report does not say that the contracts were never asked: {list(report.problems)}"
     )
 
 

@@ -28,16 +28,25 @@ substitution the production composition root already accepts:
     truncates or answers for itself. A check cannot tell a wrapped client from
     an unwrapped one, which is exactly the property C10 and C15 exist to test.
 
-Plus two collaborator substitutions that ride in through constructor
+Plus four collaborator substitutions that ride in through constructor
 parameters the kernel already exposes: :class:`LeakyFaultSelector` (through
-``Unit(fault_selector=...)``) and :class:`PermissiveStateMachine` (through a
-replaced probe route, which is where the control plane constructs one).
+``Unit(fault_selector=...)``), :class:`UngatedWebhookDispatcher` and
+:class:`ImpatientWebhookDispatcher` (through ``Unit(dispatcher=...)``),
+:class:`AuthAdapterOverlay` (through ``VendorOverlay(auth=...)``) and
+:class:`PermissiveStateMachine` (through a replaced probe route, which is where
+the control plane constructs one).
+
+The two dispatcher subclasses were added with the contracts that catch them.
+Both defects -- a delivery gate that consults no capability, and a retry that
+is submitted instead of scheduled -- lived in the core with no seam to reach
+them, which is why they could be deleted outright and leave the suite green.
 """
 
 from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -50,11 +59,14 @@ from vendorfake.core.config.models import ProfileDocument
 from vendorfake.core.kernel.magic import MagicExtraction
 from vendorfake.core.kernel.types import (
     AuthAdapter,
+    AuthCredential,
+    AuthResult,
     CapabilityDecl,
     ErrorShaper,
     EventMapper,
     Handler,
     HandlerArgs,
+    JournalEntry,
     MagicTriggerSpec,
     MutableResponse,
     ReplyInit,
@@ -71,14 +83,18 @@ from vendorfake.core.kernel.types import (
     VendorDefinition,
 )
 from vendorfake.core.state.machine import MachineDef, StateMachine
-from vendorfake.core.webhooks.models import DeliveryMetadata
+from vendorfake.core.webhooks.dispatcher import WebhookDispatcher
+from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION, DeliveryMetadata
 
 __all__ = [
+    "AuthAdapterOverlay",
     "ClientOverlay",
     "ErrorShaperOverlay",
+    "ImpatientWebhookDispatcher",
     "LeakyFaultSelector",
     "PermissiveStateMachine",
     "SignerOverlay",
+    "UngatedWebhookDispatcher",
     "VendorOverlay",
     "carries_magic",
     "replace_control_route",
@@ -111,9 +127,11 @@ class VendorOverlay:
         machines: Mapping[str, MachineDef] | None = None,
         signer: Signer | None = None,
         errors: ErrorShaper | None = None,
+        auth: AuthAdapter | None = None,
         hydrate: Callable[[VendorDefinition, UnitContext, object], None] | None = None,
     ) -> None:
         self._inner = inner
+        self._auth = auth
         self._routes = tuple(inner.routes) if routes is None else tuple(routes(inner.routes))
         self._capabilities = (
             tuple(inner.capabilities) if capabilities is None else tuple(capabilities(inner.capabilities))
@@ -153,7 +171,7 @@ class VendorOverlay:
 
     @property
     def auth(self) -> AuthAdapter:
-        return self._inner.auth
+        return self._inner.auth if self._auth is None else self._auth
 
     @property
     def signer(self) -> Signer | None:
@@ -229,6 +247,96 @@ class ErrorShaperOverlay:
 
     def not_found(self, req: UnitRequest, ctx: UnitContext) -> ShapedError:
         return self._inner.not_found(req, ctx) if self._not_found is None else self._not_found
+
+
+class AuthAdapterOverlay:
+    """An auth adapter that is another adapter, except where a mutant says so.
+
+    The seam a *vendor author* gets wrong. The kernel calls ``resolve`` at step
+    5 of its pipeline and checks ``Route.scopes`` against what comes back; an
+    adapter that returns a principal for anything it is handed, or one that
+    returns every scope regardless of the credential, turns an authenticated
+    surface into a public one without changing a single route declaration.
+
+    ``credentials`` is delegated by default, so a mutant aimed at ``resolve``
+    still publishes the credentials a check needs in order to *reach* it.
+    """
+
+    def __init__(
+        self,
+        inner: AuthAdapter,
+        *,
+        resolve: Callable[[AuthAdapter, HandlerArgs, str], AuthResult] | None = None,
+    ) -> None:
+        self._inner = inner
+        self._resolve = resolve
+
+    def describe(self) -> Mapping[str, str]:
+        return self._inner.describe()
+
+    def resolve(self, args: HandlerArgs, mode: str) -> AuthResult:
+        if self._resolve is None:
+            return self._inner.resolve(args, mode)
+        return self._resolve(self._inner, args, mode)
+
+    def credentials(self, ctx: UnitContext) -> Sequence[AuthCredential]:
+        return self._inner.credentials(ctx)
+
+
+class UngatedWebhookDispatcher(WebhookDispatcher):
+    """A dispatcher whose journal listener consults no capability.
+
+    The defect the ``webhooks`` gate exists to prevent, reproduced through the
+    constructor seam the kernel already exposes. The gate is two lines inside
+    :meth:`WebhookDispatcher.attach`; deleting them left the entire suite green
+    because the only two contracts that touched delivery both declared
+    ``requires=webhooks``, so they skipped on exactly the profiles where an
+    ungated dispatcher is visible.
+
+    Everything else ``attach`` refuses -- a vendor with no mapper or no signer,
+    a mutation of the subscription collection, a seed entry, a mapping that
+    raised -- is kept, so this mutant is precisely "the capability is not
+    consulted" and not "the listener is broken".
+    """
+
+    def attach(self) -> None:
+        def listener(entry: JournalEntry) -> None:
+            if not self.enabled:
+                return
+            ctx = self._get_context()
+            if ctx.vendor.events is None or ctx.vendor.signer is None:
+                return
+            if entry.collection == SUBSCRIPTION_COLLECTION:
+                return
+            if entry.meta is not None and entry.meta.get("seed") is True:
+                return
+            try:
+                events = self._prepare(entry, ctx)
+            except Exception:  # pragma: no cover - the real listener logs this
+                return
+            for event in events:
+                self.enqueue(event)
+
+        self._store.on_journal(listener)
+
+
+class ImpatientWebhookDispatcher(WebhookDispatcher):
+    """A dispatcher that retries at once instead of after the declared interval.
+
+    The schedule is still read, still published and still exhausted after the
+    declared number of retries -- only the *delay* is dropped, by submitting
+    the attempt to the worker rather than putting it on the clock. That is the
+    narrowest possible expression of "the documented retry schedule is
+    decoration", and it is the shape a real defect takes: ``_schedule`` and
+    ``_worker.submit`` are one line apart in
+    ``core/webhooks/dispatcher.py::_run_attempt``.
+
+    A contract that asserted only ``len(attempts) >= 2`` cannot see this at
+    all, which is what made it worth writing one that can.
+    """
+
+    def _schedule(self, attempt: Any, delay_ms: float, label: str) -> None:
+        self._worker.submit(partial(self._run_attempt, attempt))
 
 
 class SignerOverlay:

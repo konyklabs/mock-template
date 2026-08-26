@@ -36,6 +36,7 @@ if TYPE_CHECKING:  # pragma: no cover - types only
 __all__ = [
     "CheckFn",
     "CheckSpec",
+    "ConformanceError",
     "ConformanceFailure",
     "ConformanceSkip",
     "ConformanceTarget",
@@ -46,11 +47,22 @@ __all__ = [
 
 
 class Outcome(StrEnum):
-    """What one check said about one (profile, transport)."""
+    """What one check said about one (profile, transport).
+
+    ``ERROR`` is separate from ``FAIL`` on purpose, and the distinction was
+    bought with a measurement: a unit whose *construction* raises turns every
+    contract red identically, so "C11 failed" and "the unit could not be
+    started" were the same line in the report and no reader could tell which
+    had happened. A contract that reports FAIL has been asked and has answered;
+    ERROR means the unit never got far enough to be asked, so nothing was
+    learned about that contract at all. Both are red -- ``ok`` is False for
+    either -- and only one of them names a contract to go and fix.
+    """
 
     PASS = "pass"
     FAIL = "fail"
     SKIP = "skip"
+    ERROR = "error"
 
 
 class ConformanceFailure(AssertionError):
@@ -58,6 +70,15 @@ class ConformanceFailure(AssertionError):
 
     The message names the file or the declaration to change. "assertion
     failed" at three in the morning is worth nothing.
+    """
+
+
+class ConformanceError(Exception):
+    """The unit could not be driven far enough for any contract to be asked.
+
+    Raised where a *unit* is constructed or reached, never from inside a check
+    body: a check that raised this about its own assertions would be laundering
+    a failure into "the harness is broken".
     """
 
 
@@ -111,6 +132,23 @@ class Requires:
     memory_sink: bool = False
     #: The target can open a second, out-of-process client for the same unit.
     both_transports: bool = False
+    #: At least one enabled, non-internal route declares an ``auth`` mode.
+    auth_route: bool = False
+    #: The unit publishes at least one credential at ``/__unit/auth``.
+    credentials: bool = False
+    #: At least one enabled, non-internal route publishes an ``example_body``.
+    example_body: bool = False
+    #: ...and that route is a POST or a PUT, so driving it commits a mutation.
+    mutating_example: bool = False
+    #: ...and that route also declares an idempotency spec.
+    idempotent_example: bool = False
+    #: The unit runs on a virtual clock, so a delay can be crossed on demand.
+    virtual_clock: bool = False
+    #: The target can build the same unit in a SEPARATE OPERATING-SYSTEM
+    #: PROCESS. Two units in one interpreter cannot witness anything drawn
+    #: from the process itself -- a pid, an import-time counter, a hash seed --
+    #: and "deterministic across runs" is a claim about processes.
+    out_of_process: bool = False
 
 
 CheckFn = Callable[["CheckEnv"], str]
@@ -153,3 +191,10 @@ class ConformanceTarget:
     open_client: Callable[[str, str], AbstractContextManager[ConformanceClient]]
     profiles: Sequence[str] = field(default=("full",))
     transports: Sequence[str] = field(default=("inprocess",))
+    #: Transports whose units run in a SEPARATE OPERATING-SYSTEM PROCESS, and
+    #: which ``open_client`` therefore accepts even though the matrix does not
+    #: run them. Declared by the target because only the target knows: a
+    #: uvicorn on a background thread is an HTTP transport and is *not* another
+    #: process, and a suite that assumed otherwise would report a cross-process
+    #: determinism result it had never measured.
+    out_of_process: Sequence[str] = field(default=())

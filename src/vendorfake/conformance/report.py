@@ -4,7 +4,13 @@ FOR: turning a list of per-check outcomes into a verdict a build can act on,
 and into text a person can read at three in the morning.
 
 INVARIANT: **a check that could not run is SKIPPED, and a skip is never a
-pass.** The reference implementation's floor was ``passed >= 9`` against ten
+pass; a check that was never ASKED is an ERROR, and an error is not a
+failure.** The second half is a reporting rule, not a leniency: an error is
+red exactly as a failure is, but it says the unit never started rather than
+naming a contract that was violated, and those are different things to go and
+fix.
+
+The reference implementation's floor was ``passed >= 9`` against ten
 checks, which is green for a run in which one contract was never asked -- and
 "never asked" is exactly the state a check silently gated out of every profile
 lands in. That floor is deliberately not reproduced. This report is ``ok``
@@ -84,6 +90,15 @@ class ConformanceReport:
         return sum(1 for result in self.results if result.outcome is Outcome.SKIP)
 
     @property
+    def errored(self) -> int:
+        return sum(1 for result in self.results if result.outcome is Outcome.ERROR)
+
+    @property
+    def errors(self) -> tuple[CheckResult, ...]:
+        """Cases where the unit never got far enough to be asked anything."""
+        return tuple(result for result in self.results if result.outcome is Outcome.ERROR)
+
+    @property
     def failures(self) -> tuple[CheckResult, ...]:
         return tuple(result for result in self.results if result.outcome is Outcome.FAIL)
 
@@ -129,6 +144,14 @@ class ConformanceReport:
     def problems(self) -> tuple[str, ...]:
         """Every reason this report is not ``ok``, in the order to read them."""
         out: list[str] = []
+        # Errors first, and deliberately: when a unit will not construct every
+        # contract errors at once, and the reader needs to see "this unit did
+        # not start" before a wall of contract names that were never asked.
+        for result in self.errors:
+            out.append(
+                f"ERRORED {result.case_id}: the unit could not be reached, so {result.check_id} was "
+                f"never asked and this run proves nothing about it."
+            )
         for result in self.failures:
             out.append(f"FAILED {result.case_id}: {result.name}")
         for check_id in self.never_ran if self.cross_profile else ():
@@ -156,7 +179,7 @@ class ConformanceReport:
         return not self.problems
 
 
-_MARK = {Outcome.PASS: "PASS", Outcome.FAIL: "FAIL", Outcome.SKIP: "SKIP"}
+_MARK = {Outcome.PASS: "PASS", Outcome.FAIL: "FAIL", Outcome.SKIP: "SKIP", Outcome.ERROR: "ERR!"}
 
 
 def format_report(report: ConformanceReport) -> str:
@@ -181,7 +204,7 @@ def format_report(report: ConformanceReport) -> str:
             for line in result.detail.splitlines():
                 lines.append(f"        {line}")
         lines.append("")
-    lines.append(f"{report.passed} passed, {report.failed} failed, {report.skipped} skipped")
+    lines.append(f"{report.passed} passed, {report.failed} failed, {report.skipped} skipped, {report.errored} errored")
     if report.never_ran:
         note = "" if report.cross_profile else " (informational: this run covered only part of the profile matrix)"
         lines.append(f"never ran on any profile in this run: {', '.join(report.never_ran)}{note}")

@@ -106,8 +106,13 @@ def test_base_url_discovers_the_profile_and_runs_the_registry(capsys: pytest.Cap
     # The profile was read from the running unit, not passed in.
     assert "== full / http ==" in printed
     assert "SHARED, not rebuilt per check" in printed
-    # C10 compares two bindings and a remote target has one; everything else is asked.
-    assert f"{len(CHECKS) - 1} passed, 0 failed, 1 skipped" in printed, printed
+    # Three contracts cannot be asked of a unit somebody else is running, and
+    # each for a reason the target honestly declares: C10 compares two
+    # bindings and a remote target has one, C22 needs a unit built in another
+    # process and a base URL is one unit, and C21 needs a virtual clock, which
+    # the profile behind this URL does not run.
+    unaskable = ("C10", "C21", "C22")
+    assert f"{len(CHECKS) - len(unaskable)} passed, 0 failed, {len(unaskable)} skipped" in printed, printed
 
 
 def _enabled(base_url: str) -> frozenset[str]:

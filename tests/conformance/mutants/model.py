@@ -37,12 +37,12 @@ from vendorfake.core.chaos.selector import FaultSelector
 from vendorfake.core.config.profile import load_profile
 from vendorfake.core.control.plane import control_plane_routes
 from vendorfake.core.kernel.types import Route, VendorDefinition
-from vendorfake.core.kernel.unit import ControlBinding, Unit
+from vendorfake.core.kernel.unit import ControlBinding, DispatcherFactory, Unit
 from vendorfake.core.transport.inprocess import in_process
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.square.vendor import create_square_vendor
 
-__all__ = ["MUTANTS", "Mutant", "Provenance", "mutant_target", "register"]
+__all__ = ["MUTANTS", "Mutant", "Provenance", "build_unit", "mutant_target", "register"]
 
 DEFAULT_PROFILE = "full"
 """Where a mutant is judged unless it says otherwise.
@@ -92,6 +92,21 @@ class Mutant:
     skips_everywhere: frozenset[str] = frozenset()
     profiles: tuple[str, ...] = (DEFAULT_PROFILE,)
     transports: tuple[str, ...] = ("inprocess",)
+    #: Transports on which this mutant's unit is built in a SEPARATE PROCESS.
+    #:
+    #: Empty for all but one. Spawning a process per contract would multiply
+    #: the meta-suite's cost by the number of mutants, and only the mutant
+    #: whose defect is *per-process* has anything to gain by it -- which is
+    #: itself the reason the cross-process contract exists.
+    out_of_process: tuple[str, ...] = ()
+    #: This unit cannot be CONSTRUCTED at all.
+    #:
+    #: Not a contract violation and deliberately not modelled as one: every
+    #: check errors, none is asked, and the meta-test asserts exactly that. It
+    #: is how the FAIL/ERROR split is held down, because the whole point of the
+    #: split is that a unit which refuses to start used to be indistinguishable
+    #: from sixteen violated contracts.
+    fails_to_construct: bool = False
 
     # -- the three seams, all optional -------------------------------------
 
@@ -103,6 +118,8 @@ class Mutant:
     selector: Callable[[ChaosEngine, CapabilityRegistry], FaultSelector] | None = None
     #: Wraps the client for one transport, modelling a defective binding.
     client: Callable[[str, ConformanceClient], ConformanceClient] | None = None
+    #: Replaces the webhook dispatcher, through ``Unit(dispatcher=...)``.
+    dispatcher: DispatcherFactory | None = None
 
     @property
     def expected_red(self) -> frozenset[str]:
@@ -142,7 +159,7 @@ def register(mutant: Mutant) -> Mutant:
 # ---------------------------------------------------------------------------
 
 
-def _build_unit(mutant: Mutant, profile: str) -> Unit:
+def build_unit(mutant: Mutant, profile: str) -> Unit:
     """The four steps ``registry.create_unit`` performs, with two seams open.
 
     Spelled out rather than delegated because ``create_unit`` deliberately
@@ -173,6 +190,7 @@ def _build_unit(mutant: Mutant, profile: str) -> Unit:
         sink=MemorySink(),
         control_routes=control,
         fault_selector=mutant.selector,
+        dispatcher=mutant.dispatcher,
     )
     unit.start()
     return unit
@@ -187,7 +205,10 @@ def _open_client(mutant: Mutant, profile: str, transport: str) -> Iterator[Confo
     unit for the out-of-process binding would make every cross-binding mutant
     result a statement about a unit that was never mutated.
     """
-    unit = _build_unit(mutant, profile)
+    if transport in mutant.out_of_process:
+        yield from _served_by_a_child(mutant, profile)
+        return
+    unit = build_unit(mutant, profile)
     try:
         if transport == "inprocess":
             client: ConformanceClient = InProcessConformanceClient(in_process(unit))
@@ -206,6 +227,37 @@ def _open_client(mutant: Mutant, profile: str, transport: str) -> Iterator[Confo
         unit.stop()
 
 
+def _served_by_a_child(mutant: Mutant, profile: str) -> Iterator[ConformanceClient]:
+    """The mutated unit, rebuilt and served by a separate operating-system process.
+
+    Imported here rather than at module scope so that a purely in-process
+    mutant run never pays for the harness's subprocess machinery.
+    """
+    import subprocess
+    import sys
+
+    from tests.conformance.harness import REPO_ROOT, _client_onto, _stop
+
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "tests.conformance.unit_child",
+            "--profile",
+            profile,
+            "--mutant",
+            mutant.id,
+        ],
+        cwd=str(REPO_ROOT),
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        yield from _client_onto(child)
+    finally:
+        _stop(child)
+
+
 def mutant_target(mutant: Mutant) -> ConformanceTarget:
     """The mutant, as something ``run_conformance`` can be pointed at."""
     return ConformanceTarget(
@@ -213,6 +265,7 @@ def mutant_target(mutant: Mutant) -> ConformanceTarget:
         open_client=functools.partial(_open_client, mutant),
         profiles=mutant.profiles,
         transports=mutant.transports,
+        out_of_process=mutant.out_of_process,
     )
 
 

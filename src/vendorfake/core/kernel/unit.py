@@ -89,6 +89,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from vendorfake.core.capability.gates import CoreCapability, assert_capability_declarations
 from vendorfake.core.capability.registry import CapabilityRegistry
@@ -128,10 +129,22 @@ from vendorfake.core.webhooks.sink import DeliverySink, HttpSink
 __all__ = [
     "REQUEST_ID_HEADER",
     "ControlBinding",
+    "DispatcherFactory",
     "RouteInfo",
     "Unit",
     "make_request",
 ]
+
+DispatcherFactory = Callable[..., WebhookDispatcher]
+"""How a caller supplies its own dispatcher, given the constructor's arguments.
+
+The same shape of seam as ``fault_selector`` and for the same reason: the
+``webhooks`` capability gate lives inside the listener
+``WebhookDispatcher.attach`` registers, and the claim that the gate is real
+must be falsifiable by something other than reading. A conformance mutant
+installs a dispatcher whose gate is missing and asserts the contract goes red.
+Production callers pass nothing and get the one correct dispatcher.
+"""
 
 REQUEST_ID_HEADER = "x-unit-request-id"
 """Echoed on every response, and honoured on the way *in*.
@@ -210,6 +223,16 @@ class RouteInfo:
     path: str
     capability: str
     auth: str | None = None
+    #: Scopes the kernel will require of the resolved credential. Published
+    #: because "this route needs a token" and "this route needs a token
+    #: carrying ORDERS_WRITE" are different facts, and only the second one
+    #: lets a caller tell an insufficient credential from a missing one
+    #: before sending anything.
+    scopes: tuple[str, ...] = ()
+    #: How this route deduplicates a retried request, or ``None``.
+    idempotency: dict[str, object] | None = None
+    #: A body this route accepts. See :attr:`Route.example_body`.
+    example_body: Mapping[str, Any] | None = None
     operation_id: str | None = None
     summary: str | None = None
     internal: bool = False
@@ -217,11 +240,24 @@ class RouteInfo:
 
     @classmethod
     def of(cls, route: Route) -> RouteInfo:
+        idempotency = (
+            None
+            if route.idempotency is None
+            else {
+                "key_path": route.idempotency.key_path,
+                "scope": route.idempotency.scope,
+                "required": route.idempotency.required,
+                "on_mismatch": route.idempotency.on_mismatch,
+            }
+        )
         return cls(
             method=route.method.upper(),
             path=route.path,
             capability=route.capability,
             auth=route.auth,
+            scopes=tuple(route.scopes),
+            idempotency=idempotency,
+            example_body=route.example_body,
             operation_id=route.operation_id,
             summary=route.summary,
             internal=route.internal,
@@ -237,7 +273,15 @@ class RouteInfo:
             "internal": self.internal,
             "serialized": self.serialized,
         }
-        for key, value in (("auth", self.auth), ("operation_id", self.operation_id), ("summary", self.summary)):
+        if self.scopes:
+            body["scopes"] = list(self.scopes)
+        for key, value in (
+            ("auth", self.auth),
+            ("idempotency", self.idempotency),
+            ("example_body", None if self.example_body is None else dict(self.example_body)),
+            ("operation_id", self.operation_id),
+            ("summary", self.summary),
+        ):
             if value is not None:
                 body[key] = value
         return body
@@ -328,6 +372,7 @@ class Unit:
         logger: Logger | None = None,
         control_routes: Callable[[ControlBinding], Sequence[Route]] | None = None,
         fault_selector: Callable[[ChaosEngine, CapabilityRegistry], FaultSelector] | None = None,
+        dispatcher: DispatcherFactory | None = None,
     ) -> None:
         self._vendor = vendor
         self._config = config
@@ -374,7 +419,13 @@ class Unit:
         # client is created on first send, so a unit whose vendor has no
         # webhooks opens no connection pool.
         self._sink: DeliverySink = HttpSink() if sink is None else sink
-        self._webhooks = WebhookDispatcher(
+        # `dispatcher` is the second collaborator seam, alongside
+        # `fault_selector`, and it exists for the same reason: the `webhooks`
+        # capability gate is a line inside `WebhookDispatcher.attach`, and a
+        # contract asserting that the gate is real needs a unit whose gate is
+        # not. Production callers pass nothing.
+        build_dispatcher: DispatcherFactory = WebhookDispatcher if dispatcher is None else dispatcher
+        self._webhooks = build_dispatcher(
             store=self._store,
             clock=self._clock,
             # The dispatcher reaches chaos only through the one choke point,

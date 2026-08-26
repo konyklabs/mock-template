@@ -18,7 +18,14 @@ from pathlib import Path
 import pytest
 
 from tests.conformance.harness import FAULTLESS_PROFILE, PROFILES, target
-from vendorfake.conformance import CHECKS, TARGET_ENV_VAR, ConformanceFailure, Outcome, find_check
+from vendorfake.conformance import (
+    CHECKS,
+    TARGET_ENV_VAR,
+    ConformanceFailure,
+    Outcome,
+    expected_skips,
+    find_check,
+)
 from vendorfake.conformance.plugin import ARGNAME, Case, _Ledger, run_case
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -172,7 +179,11 @@ def test_pyargs_expands_the_registry_over_every_profile() -> None:
     done = _pytest_pyargs("--conformance-target", f"{HARNESS}:target", "--conformance-strict")
     assert done.returncode == 0, done.stdout + done.stderr
     expected = len(CHECKS) * len(PROFILES)
-    assert f"{expected - 6} passed, 6 skipped" in done.stdout, done.stdout
+    # Every skip in this matrix is declared in conformance/manifest.json, which
+    # is what --conformance-strict is asserting: a profile that genuinely lacks
+    # a capability skips forever, and an UNdeclared skip is a failure.
+    skipped = sum(len(profiles) for profiles in expected_skips().values())
+    assert f"{expected - skipped} passed, {skipped} skipped" in done.stdout, done.stdout
     assert "conformance: every contract passed on at least one profile" in done.stdout, done.stdout
 
 
@@ -195,15 +206,21 @@ def test_pyargs_names_the_contract_and_the_profile_in_a_test_id() -> None:
 def test_the_session_goes_red_when_a_contract_passes_on_no_profile() -> None:
     """The falsifiability of the anti-vacuity rule, end to end.
 
-    Every test in this run is green -- the two contracts that cannot run on
+    Every test in this run is green -- the three contracts that cannot run on
     this target skip, and a skip is not a failure. The session must still exit
     non-zero, because a contract nobody could ask proved nothing.
+
+    The three are named rather than counted: C08 and C12 need fault injection,
+    which this profile switches off, and C21 needs a virtual clock, which it
+    does not run. Naming them means a fourth contract quietly joining the list
+    changes this test rather than sliding under a number.
     """
+    silent = ("C08", "C12", "C21")
     done = _pytest_pyargs("--conformance-target", f"{HARNESS}:one_profile_target")
     assert done.returncode == 1, done.stdout + done.stderr
-    assert f"{len(CHECKS) - 2} passed, 2 skipped" in done.stdout, done.stdout
-    assert "NEVER RAN C08" in done.stdout, done.stdout
-    assert "NEVER RAN C12" in done.stdout, done.stdout
+    assert f"{len(CHECKS) - len(silent)} passed, {len(silent)} skipped" in done.stdout, done.stdout
+    for check_id in silent:
+        assert f"NEVER RAN {check_id}" in done.stdout, done.stdout
     assert "NEVER RAN C01" not in done.stdout, done.stdout
 
 

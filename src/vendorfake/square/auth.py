@@ -43,12 +43,14 @@ token.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from vendorfake.core.kernel.types import (
+    AuthCredential,
     AuthMode,
     AuthResult,
     HandlerArgs,
+    UnitContext,
     UnitError,
     UnitErrorKind,
 )
@@ -99,6 +101,44 @@ class SquareAuth:
             ),
             "scopes": " ".join(self._scopes),
         }
+
+    def credentials(self, ctx: UnitContext) -> Sequence[AuthCredential]:
+        """Every credential this unit would currently accept, both schemes.
+
+        Read out of the store rather than out of the seed document, so a token
+        an OAuth flow minted a moment ago is offered and one that has since
+        been revoked or expired is not. That is the difference between "what
+        the scenario shipped with" and "what works now", and only the second is
+        a useful answer to a consumer asking how to authenticate.
+
+        The scopes come from the token record itself, which is what makes an
+        under-scoped credential discoverable: the shipped scenario contains a
+        read-only token alongside the full one, so "this token cannot reach
+        that route" is observable without minting anything.
+        """
+        offered: list[AuthCredential] = [
+            AuthCredential(
+                label="client-secret",
+                mode="client-secret",
+                headers={"authorization": f"{CLIENT_SCHEME} {self._deps.config.application_secret}"},
+                scopes=self._scopes,
+                summary="The application secret, which POST /oauth2/revoke authenticates with.",
+            )
+        ]
+        for entity in ctx.store.collection(COL.tokens).all():
+            token = TokenEntity.from_entity(entity)
+            if token.revoked_at is not None or is_expired(token.expires_at, ctx.clock):
+                continue
+            offered.append(
+                AuthCredential(
+                    label=token.id,
+                    mode="bearer",
+                    headers={"authorization": f"{BEARER_SCHEME} {token.access_token}"},
+                    scopes=token.scopes,
+                    summary=f"Access token for merchant {token.merchant_id}, expiring {token.expires_at}.",
+                )
+            )
+        return tuple(offered)
 
     def resolve(self, args: HandlerArgs, mode: AuthMode) -> AuthResult:
         header = args.header("authorization")

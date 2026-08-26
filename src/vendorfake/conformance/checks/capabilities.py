@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from vendorfake.conformance.env import CheckEnv, ancestors
+from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv, ancestors
 from vendorfake.conformance.registry import check
 from vendorfake.conformance.types import Requires, require
 
@@ -97,24 +97,41 @@ def routes_and_capabilities_describe_one_unit(env: CheckEnv) -> str:
     id="C03",
     name="capabilities: a disabled capability answers explicitly, never 404",
     asserts=(
-        "With a capability off, its routes answer capability_disabled -- not 404 -- and the body "
-        "names the capability; re-enabling it with its prerequisites restores the route."
+        "With a capability off, EVERY route it owns answers capability_disabled -- not 404 -- and "
+        "the body names the capability; re-enabling it with its prerequisites restores them; and "
+        "no vendor route escapes the gate by being internal or by naming the control capability."
     ),
     requires=Requires(surface_route=True),
 )
 def disabled_capability_answers_explicitly(env: CheckEnv) -> str:
+    """EVERY route of every capability, and then every route once more.
+
+    It used to be the *first* route of each capability -- ``next(item for item
+    in table if item.capability == row.name)`` -- which on the shipped vendor
+    is four routes out of eighteen. Skipping the gate for a single operation
+    left the suite entirely green: the token endpoint answered on a profile
+    that declares OAuth off, and the only reason the coarser version of that
+    mutation was caught at all is that the first route of one capability
+    happened to be the one it hit. That is luck in a vendor's route ordering,
+    not coverage.
+
+    The second half is the complement, and it catches what per-capability
+    iteration structurally cannot: a route that belongs to no capability a
+    consumer can switch off. A vendor route marked ``internal=True`` skips the
+    gate at step 1 of the pipeline, and one naming the control plane's own
+    capability is never listed at all -- both are invisible to a loop over
+    declared capabilities, and both mean an endpoint no profile can remove.
+    """
     rows = env.capabilities()
     original = [row.name for row in rows if row.enabled]
     table = env.routes()
     probed: list[str] = []
+    probed_routes: set[str] = set()
     behavior_only: list[str] = []
     try:
         for row in rows:
-            route = next(
-                (item for item in table if not item.internal and item.capability == row.name),
-                None,
-            )
-            if route is None:
+            owned = [item for item in table if not item.internal and item.capability == row.name]
+            if not owned:
                 if row.kind == "behavior":
                     behavior_only.append(row.name)
                 continue
@@ -125,41 +142,46 @@ def disabled_capability_answers_explicitly(env: CheckEnv) -> str:
                 if name != row.name and not name.startswith(f"{row.name}.") and row.name not in ancestors(name)
             ]
             env.set_capabilities(off)
-            refused = env.client.call(route.method, route.probe_path, json_body={})
+            for route in owned:
+                refused = env.client.call(route.method, route.probe_path, json_body={})
 
-            require(
-                refused.status != 404,
-                f"{row.name}: with the capability off, {route.key} answered 404. A consumer cannot "
-                f"tell that apart from 'this vendor has no such endpoint', so a profile becomes "
-                f"indistinguishable from a typo. The capability gate runs at step 2 of "
-                f"core/kernel/unit.py::_run_pipeline, before anything can produce a not-found.",
-            )
-            require(
-                refused.error_kind == _DISABLED,
-                f"{row.name}: with the capability off, {route.key} answered "
-                f"{refused.status} with x-unit-error={refused.error_kind!r}, expected "
-                f"{_DISABLED!r}. Raise UnitErrorKind.CAPABILITY_DISABLED from "
-                f"core/capability/registry.py::assert_enabled and let the vendor shaper turn it "
-                f"into its own wire format.",
-            )
-            require(
-                row.name in refused.text,
-                f"{row.name}: the refusal body does not name the disabled capability, so the "
-                f"message cannot tell a consumer what to switch on. The detail built in "
-                f"core/capability/registry.py::assert_enabled names it; check the vendor's "
-                f"ErrorShaper is not discarding the detail.",
-            )
+                require(
+                    refused.status != 404,
+                    f"{row.name}: with the capability off, {route.key} answered 404. A consumer "
+                    f"cannot tell that apart from 'this vendor has no such endpoint', so a profile "
+                    f"becomes indistinguishable from a typo. The capability gate runs at step 2 of "
+                    f"core/kernel/unit.py::_run_pipeline, before anything can produce a not-found.",
+                )
+                require(
+                    refused.error_kind == _DISABLED,
+                    f"{row.name}: with the capability off, {route.key} answered "
+                    f"{refused.status} with x-unit-error={refused.error_kind!r}, expected "
+                    f"{_DISABLED!r}. Every route the capability owns passes the SAME gate; one that "
+                    f"reaches its handler is an endpoint the profile cannot switch off. Raise "
+                    f"UnitErrorKind.CAPABILITY_DISABLED from core/capability/registry.py::"
+                    f"assert_enabled and let the vendor shaper turn it into its own wire format.",
+                )
+                require(
+                    row.name in refused.text,
+                    f"{row.name}: the refusal body for {route.key} does not name the disabled "
+                    f"capability, so the message cannot tell a consumer what to switch on. The "
+                    f"detail built in core/capability/registry.py::assert_enabled names it; check "
+                    f"the vendor's ErrorShaper is not discarding the detail.",
+                )
 
             back_on = sorted({*original, row.name, *row.requires, *ancestors(row.name)})
             env.set_capabilities(back_on)
-            restored = env.client.call(route.method, route.probe_path, json_body={})
-            require(
-                restored.error_kind != _DISABLED,
-                f"{row.name}: still reported {_DISABLED!r} after being enabled together with its "
-                f"prerequisites {sorted(set(row.requires) | set(ancestors(row.name)))}. Either "
-                f"`requires` is incomplete, or blocked_by is not following the dotted parent.",
-            )
-            probed.append(row.name)
+            for route in owned:
+                restored = env.client.call(route.method, route.probe_path, json_body={})
+                require(
+                    restored.error_kind != _DISABLED,
+                    f"{row.name}: {route.key} still reported {_DISABLED!r} after the capability was "
+                    f"enabled together with its prerequisites "
+                    f"{sorted(set(row.requires) | set(ancestors(row.name)))}. Either `requires` is "
+                    f"incomplete, or blocked_by is not following the dotted parent.",
+                )
+                probed_routes.add(route.key)
+            probed.append(f"{row.name}({len(owned)})")
     finally:
         # The reference has no restore, so one failed assertion leaves the unit
         # with capabilities off and poisons every later check that shares it.
@@ -173,8 +195,26 @@ def disabled_capability_answers_explicitly(env: CheckEnv) -> str:
         "no capability owned a route to probe, so this check proved nothing. Either the vendor "
         "declares no surface capability, or every route is internal.",
     )
+
+    ungated = sorted(
+        route.key for route in table if not route.path.startswith(CONTROL_PREFIX) and route.key not in probed_routes
+    )
+    require(
+        not ungated,
+        f"{ungated} are vendor routes that no capability switched off. A route is exempt from the "
+        f"gate in exactly two ways, and both are defects outside the control plane: "
+        f"``internal=True`` short-circuits the whole pipeline at step 1 of "
+        f"core/kernel/unit.py::_run_pipeline, and naming {CONTROL_CAPABILITY!r} points the route at "
+        f"the one capability a consumer can never disable. Either way the endpoint is live on every "
+        f"profile and nothing in the capability table says so. Give it a declared vendor "
+        f"capability. (Probed: {sorted(probed_routes)}.)",
+    )
+
     tail = f"; behavior-only (no surface, correctly): {', '.join(behavior_only)}" if behavior_only else ""
-    return f"probed {len(probed)}: {', '.join(probed)}{tail}"
+    return (
+        f"probed {len(probed_routes)} routes across {len(probed)} capabilities "
+        f"({', '.join(probed)}); every vendor route gated{tail}"
+    )
 
 
 @check(
@@ -182,10 +222,31 @@ def disabled_capability_answers_explicitly(env: CheckEnv) -> str:
     name="capabilities: every core-gated capability is declared or explicitly excused",
     asserts=(
         "Every capability the core itself gates on is either declared by the vendor or listed in "
-        "not_supported with a prose reason -- never both, never neither, never a name nothing gates."
+        "not_supported with a prose reason -- never both, never neither, never a name nothing "
+        "gates. Discriminating over --base-url; a Python unit that violates it does not start."
     ),
 )
 def capability_declaration_is_complete(env: CheckEnv) -> str:
+    """WHAT THIS CONTRACT DISCRIMINATES, stated rather than implied.
+
+    Against a unit built by *this* core it discriminates a **document**, and no
+    more. ``core/capability/gates.py::assert_capability_declarations`` raises on
+    exactly this predicate at construction, so a Python unit that omits a
+    declaration never starts: every contract reports ERROR, this one included,
+    and its body never runs. A unit that starts always passes it.
+
+    That is not a reason to delete it. Its value is over ``--base-url``, against
+    an implementation in another language with no such startup assertion in
+    front of it -- which is the mode a second vendor, or a container somebody
+    else built, will actually be checked in. There the predicate is the only
+    thing standing between a silently-off behaviour and a green report, because
+    ``is_enabled`` cannot tell "you never told me you have this" from "it is
+    switched off".
+
+    Written down here because the alternative is a reader concluding from a
+    green line that something was proved about this unit's declarations, when
+    what was proved is that the unit started.
+    """
     document = env.capabilities_document()
     require(
         "not_supported" in document,

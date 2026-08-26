@@ -40,6 +40,7 @@ __all__ = [
     "PROBE_SEGMENT",
     "CapabilityRow",
     "CheckEnv",
+    "Credential",
     "InBandTrigger",
     "RouteRow",
     "ancestors",
@@ -94,6 +95,9 @@ class RouteRow:
     capability: str
     internal: bool
     auth: str | None = None
+    scopes: tuple[str, ...] = ()
+    idempotency: Mapping[str, Any] | None = None
+    example_body: Mapping[str, Any] | None = None
     operation_id: str | None = None
 
     @classmethod
@@ -104,6 +108,9 @@ class RouteRow:
             capability=str(row["capability"]),
             internal=bool(row.get("internal", False)),
             auth=None if row.get("auth") is None else str(row["auth"]),
+            scopes=tuple(str(name) for name in row.get("scopes", ())),
+            idempotency=None if row.get("idempotency") is None else dict(row["idempotency"]),
+            example_body=None if row.get("example_body") is None else dict(row["example_body"]),
             operation_id=None if row.get("operation_id") is None else str(row["operation_id"]),
         )
 
@@ -139,6 +146,36 @@ class CapabilityRow:
             routes=tuple(str(item) for item in row.get("routes", ())),
             blocked_by=None if row.get("blocked_by") is None else str(row["blocked_by"]),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class Credential:
+    """One row of ``GET /__unit/auth``: something a caller can actually present.
+
+    ``headers`` is the whole instruction, so a check never has to know that a
+    bearer scheme spells itself ``Authorization: Bearer``; it copies what the
+    unit published onto the request and sees what happens.
+    """
+
+    label: str
+    mode: str
+    headers: Mapping[str, str]
+    scopes: frozenset[str]
+    summary: str = ""
+
+    @classmethod
+    def of(cls, row: Mapping[str, Any]) -> Credential:
+        return cls(
+            label=str(row["label"]),
+            mode=str(row["mode"]),
+            headers={str(name): str(value) for name, value in dict(row["headers"]).items()},
+            scopes=frozenset(str(name) for name in row.get("scopes", ())),
+            summary=str(row.get("summary", "")),
+        )
+
+    def covers(self, scopes: Sequence[str]) -> bool:
+        """Whether presenting this would satisfy a route asking for ``scopes``."""
+        return all(scope in self.scopes for scope in scopes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +280,19 @@ class CheckEnv:
         rows: Sequence[Mapping[str, Any]] = self.capabilities_document()["capabilities"]
         return tuple(CapabilityRow.of(row) for row in rows)
 
+    def auth_document(self) -> Mapping[str, Any]:
+        document: Mapping[str, Any] = self.get_json(f"{CONTROL_PREFIX}auth")
+        return document
+
+    def credentials(self) -> tuple[Credential, ...]:
+        """Every credential the unit says would authenticate right now.
+
+        Fetched rather than memoised: a check that revoked a token and asked
+        again must not be handed the answer from before it did so.
+        """
+        rows: Sequence[Mapping[str, Any]] = self.auth_document()["credentials"]
+        return tuple(Credential.of(row) for row in rows)
+
     def state(self) -> Mapping[str, Any]:
         document: Mapping[str, Any] = self.get_json(f"{CONTROL_PREFIX}state")
         return document
@@ -302,6 +352,59 @@ class CheckEnv:
 
     def first_mutating_route(self, *, exclude_capability: str | None = None) -> RouteRow:
         return self.first_vendor_route(methods=_MUTATING_METHODS, exclude_capability=exclude_capability)
+
+    def auth_routes(self) -> tuple[RouteRow, ...]:
+        """Enabled vendor routes that require a credential."""
+        return tuple(row for row in self.vendor_routes() if row.auth is not None)
+
+    def example_routes(
+        self,
+        *,
+        methods: frozenset[str] | None = None,
+        idempotent: bool = False,
+    ) -> tuple[RouteRow, ...]:
+        """Enabled vendor routes publishing a body they accept.
+
+        The only way a language-independent check can cause a *successful*
+        vendor mutation: a body a check assembled itself can only ever be
+        refused by the vendor's own validation, and every contract about what a
+        committed mutation does is unaskable until one has succeeded.
+        """
+        return tuple(
+            row
+            for row in self.vendor_routes(methods=methods)
+            if row.example_body is not None and (not idempotent or row.idempotency is not None)
+        )
+
+    def first_example_route(
+        self,
+        *,
+        methods: frozenset[str] | None = None,
+        idempotent: bool = False,
+    ) -> RouteRow:
+        rows = self.example_routes(methods=methods, idempotent=idempotent)
+        if not rows:
+            raise ConformanceSkip(
+                f"profile {self.profile!r} enables no route publishing an example_body"
+                f"{' with an idempotency spec' if idempotent else ''}"
+            )
+        return rows[0]
+
+    def credential_for(self, route: RouteRow) -> Credential:
+        """A published credential that satisfies ``route``'s mode and scopes."""
+        for credential in self.credentials():
+            if credential.mode == route.auth and credential.covers(route.scopes):
+                return credential
+        raise ConformanceSkip(
+            f"no credential published at /__unit/auth satisfies {route.key} "
+            f"(mode {route.auth!r}, scopes {sorted(route.scopes)})"
+        )
+
+    def authorized(self, route: RouteRow) -> dict[str, str]:
+        """Headers that authenticate ``route``, or ``{}`` if it needs none."""
+        if route.auth is None:
+            return {}
+        return dict(self.credential_for(route).headers)
 
     def signer(self) -> Mapping[str, Any] | None:
         declared = self.info().get("signer")
@@ -379,6 +482,40 @@ def unmet_precondition(requires: Requires, env: CheckEnv) -> str | None:
         )
     if requires.in_band_trigger and env.info().get("magic") is None:
         return "the vendor declares no in-band (magic-value) trigger"
+    if requires.auth_route and not env.auth_routes():
+        return f"profile {env.profile!r} enables no vendor route that requires a credential"
+    if requires.credentials and not env.credentials():
+        return (
+            "GET /__unit/auth publishes no credential, so no check can send an authenticated "
+            "request; the vendor's AuthAdapter.credentials() returned nothing"
+        )
+    if requires.example_body and not env.example_routes():
+        return f"profile {env.profile!r} enables no route publishing an example_body"
+    if requires.mutating_example and not env.example_routes(methods=_MUTATING_METHODS):
+        return f"profile {env.profile!r} enables no POST/PUT route publishing an example_body"
+    if requires.idempotent_example and not env.example_routes(methods=_MUTATING_METHODS, idempotent=True):
+        return (
+            f"profile {env.profile!r} enables no idempotent POST/PUT route publishing an "
+            f"example_body, so no request can be sent twice under one key"
+        )
+    if requires.virtual_clock:
+        # ``.get`` and not ``[...]``: a unit that publishes no clock block at
+        # all has not met the precondition either, and an unmet precondition is
+        # a skip with a reason -- never a KeyError that the runner would have
+        # to report as this contract failing. The contract that fails for a
+        # missing documented key is C01, which is where it belongs.
+        clock = env.info().get("clock") or {}
+        if clock.get("mode") != "virtual":
+            return (
+                f"profile {env.profile!r} reports clock mode {clock.get('mode')!r}; observing a "
+                f"declared delay without waiting for it needs the virtual one"
+            )
+    if requires.out_of_process and not env.target.out_of_process:
+        return (
+            f"target {env.target.name!r} declares no out-of-process transport, so a second unit "
+            f"would be built in this same interpreter and could not witness anything drawn from "
+            f"the process itself (set ConformanceTarget.out_of_process)"
+        )
     if requires.both_transports and len(set(env.target.transports)) < 2:
         return (
             f"target {env.target.name!r} offers only the {env.transport!r} transport; "
