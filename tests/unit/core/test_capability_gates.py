@@ -59,8 +59,8 @@ def test_silence_is_a_failure_naming_the_gate_site() -> None:
     report = check_capability_declarations(declared, {})
     assert set(report.undeclared) == {"chaos", "webhooks.chaos"}
     joined = " ".join(report.problems)
-    assert "vendorfake.core.chaos.selector.select_request" in joined
-    assert "vendorfake.core.chaos.selector.select_webhook" in joined
+    assert "vendorfake.core.chaos.selector.FaultSelector.select_request" in joined
+    assert "vendorfake.core.chaos.selector.FaultSelector.select_webhook" in joined
 
 
 def test_an_explicit_not_supported_entry_satisfies_the_rule() -> None:
