@@ -1,0 +1,664 @@
+"""The unit: composition root, and the eight-step request pipeline.
+
+FOR: assembling a vendor definition and a resolved profile into the one object
+that answers requests, and running every request through the same ordered
+sequence of decisions so that "what happens before what" is a property of this
+file rather than of each vendor's handlers.
+
+INVARIANT: **the order below is the specification.** It is ported from
+``packages/core/src/kernel/unit.ts`` and the steps carry numbered comments so a
+reviewer can diff eight against eight rather than re-deriving them. Each
+boundary is observable, and each is pinned by a test that would pass under a
+plausible wrong order:
+
+1. **internal short-circuit** -- a control-plane route runs with no capability
+   gate, no fault selection, no auth and no idempotency. If it did not, a unit
+   with a capability disabled could not be re-enabled through its own control
+   plane, and a chaos rule matching ``*`` would make the unit unrecoverable.
+2. **capability gate** -- *before* authentication. A disabled capability is a
+   property of the deployment, not of the caller, so it must answer the same
+   way whether or not a token was presented. Answering ``unauthorized`` first
+   would tell a consumer to go fix their credentials for a route that is
+   switched off.
+3. **fault selection** -- exactly once per request, through the single choke
+   point in ``chaos/selector.py``, which applies the ``chaos`` capability gate
+   before it parses anything. One selection, two application phases: a rule
+   that matches must not be evaluated twice and count twice.
+4. **pre-auth faults** -- everything except ``token_expiry``. A rate limit or
+   an outage does not care who is calling, and injecting it before auth is what
+   lets a consumer test their backoff without holding a valid token.
+5. **auth and scopes** -- the vendor resolves the credential; the *kernel*
+   checks ``Route.scopes`` against the result. Checked here rather than in the
+   vendor because a second place to check is a second place to forget.
+6. **post-auth fault** -- ``token_expiry`` only, and applied unconditionally,
+   i.e. whether or not this route declared ``auth``. Unconditional because the
+   phase belongs to the fault, not to the call site; ``chaos/faults.py`` owns
+   which phase a fault fires in, and a pipeline that only ran this step for
+   authenticated routes would be a second, divergent copy of that rule.
+7. **idempotency** -- lookup and replay, *after* auth, so a stored response is
+   never handed to an unauthenticated caller who guessed a key, and after the
+   fault phases, so an injected 500 does not consume a key.
+8. **handler, idempotency store, finish and decorate** -- the handler runs, a
+   2xx response is stored against the key, and then ``finish()`` stamps
+   ``x-unit-request-id`` and gives the vendor its last chance to decorate.
+
+The router match happens **before** step 1 and produces both the ``no_route``
+404 and the ``method_not_allowed`` 405; ``finish()`` and ``decorate`` happen
+after step 8 on the success path *and on every error path*. Both live outside
+the numbering, where the reference puts them.
+
+``decorate`` runs on shaped errors too, for any matched non-internal route --
+the reference's own transport test asserts the vendor's API-version header on a
+400 -- and never on the 404 path, where no route matched and there is no vendor
+opinion to apply.
+
+WHAT DID NOT SURVIVE THE PORT
+
+``kernel/bindings.ts``' ``WeakMap<UnitContext, ControlBinding>``
+    A workaround for not wanting to widen an interface. The design point it
+    protected is real and is kept: :class:`UnitContext` exposes the store, the
+    capabilities, the chaos engine, the clock, the rng, the log, the config and
+    the vendor, and **not** ``hydrate`` or ``list_routes`` -- a route handler
+    has no business re-seeding the store or enumerating the router. Here the
+    control plane is handed a typed :class:`ControlBinding` at construction
+    instead, which is the same guarantee without a global side table.
+
+The forward-declared ``let ctx`` closure
+    The reference declares ``ctx`` before it is assigned so the dispatcher can
+    capture a getter for it. Construction order here makes that unnecessary.
+
+``process.env``
+    Read nowhere in this file. The log level arrives on
+    :attr:`ResolvedConfig.log_level`, which the profile loader resolved from a
+    mapping its caller passed -- ``{}`` unless the CLI passed the real one.
+
+THE REQUEST LOCK. ``handle`` is synchronous and takes one re-entrant lock for
+the whole pipeline, unless the matched route declares ``serialized=False``.
+The lock is what makes id minting and journal ordering deterministic, so that
+two runs of the same scenario produce the same ids and a transcript is diffable
+evidence rather than noise -- which Node gave the reference for free from its
+single thread. It is taken *after* the router match, because the match decides
+whether to take it at all.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+import uuid
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from vendorfake.core.capability.gates import CoreCapability, assert_capability_declarations
+from vendorfake.core.capability.registry import CapabilityRegistry
+from vendorfake.core.chaos.engine import ChaosEngine, ChaosSubject
+from vendorfake.core.chaos.faults import apply_request_fault
+from vendorfake.core.chaos.selector import FaultSelector
+from vendorfake.core.config.models import ResolvedConfig
+from vendorfake.core.kernel.magic import MagicExtraction, extract_magic
+from vendorfake.core.kernel.reply import normalize
+from vendorfake.core.kernel.router import Match, MethodNotAllowed, Router
+from vendorfake.core.kernel.types import (
+    AuthResult,
+    HandlerArgs,
+    Logger,
+    MutableResponse,
+    ReplyInit,
+    Route,
+    ShapedError,
+    UnitContext,
+    UnitError,
+    UnitErrorKind,
+    UnitRequest,
+    UnitResponse,
+    VendorDefinition,
+)
+from vendorfake.core.logging import JsonLogger
+from vendorfake.core.rand.rng import Rng
+from vendorfake.core.state.store import IdempotencyRecord, Store
+from vendorfake.core.time.clock import Clock
+from vendorfake.core.util.b64 import b64url_decode, b64url_encode
+from vendorfake.core.util.json import digest_of, dump_json
+from vendorfake.core.util.paths import dot_get
+
+__all__ = [
+    "REQUEST_ID_HEADER",
+    "ControlBinding",
+    "RouteInfo",
+    "Unit",
+    "make_request",
+]
+
+REQUEST_ID_HEADER = "x-unit-request-id"
+"""Echoed on every response, and honoured on the way *in*.
+
+A binding that mints a fresh id for a request whose caller already supplied one
+breaks cross-transport correlation: the same logical call gets two identities
+depending on which binding carried it."""
+
+
+def _now_iso() -> str:
+    """Wall clock, RFC 3339 with milliseconds.
+
+    Deliberately *not* the unit's :class:`Clock`: ``received_at`` records when
+    a binding actually took delivery of the request, which is a fact about the
+    world and not about the scenario. A virtual clock frozen in 2024 must not
+    make every request look as though it arrived then.
+    """
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def make_request(
+    *,
+    method: str,
+    path: str,
+    query: Mapping[str, str] | None = None,
+    headers: Mapping[str, str] | None = None,
+    body: object = None,
+    raw_body: bytes | str | None = None,
+    transport: str = "inprocess",
+    request_id: str | None = None,
+    received_at: str | None = None,
+) -> UnitRequest:
+    """Build a :class:`UnitRequest` the way every binding must build one.
+
+    Shared rather than duplicated per binding, because the three normalisations
+    below are exactly the ones a second binding gets subtly wrong:
+
+    * header names are lower-cased, so ``args.header()`` is case-insensitive
+      without every handler saying so;
+    * ``raw_body`` wins over ``body``; supplying ``body`` serialises it and
+      defaults the content type to JSON, which is what makes
+      ``post(path, {...})`` mean what a caller expects while leaving the exact
+      received bytes reachable for signature checks;
+    * the id is the inbound ``x-unit-request-id`` when the caller supplied one.
+    """
+    normalised: dict[str, str] = {}
+    for name, value in (headers or {}).items():
+        normalised[name.lower()] = value
+
+    payload: bytes
+    if raw_body is not None:
+        payload = raw_body.encode("utf-8") if isinstance(raw_body, str) else raw_body
+    elif body is not None:
+        payload = body.encode("utf-8") if isinstance(body, str) else dump_json(body)
+        normalised.setdefault("content-type", "application/json")
+    else:
+        payload = b""
+
+    return UnitRequest(
+        id=request_id or normalised.get(REQUEST_ID_HEADER) or str(uuid.uuid4()),
+        method=method.upper(),
+        path=path if path.startswith("/") else f"/{path}",
+        query=dict(query or {}),
+        headers=normalised,
+        raw_body=payload,
+        transport=transport,
+        received_at=received_at or _now_iso(),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RouteInfo:
+    """One row of the route table, as the control plane publishes it."""
+
+    method: str
+    path: str
+    capability: str
+    auth: str | None = None
+    operation_id: str | None = None
+    summary: str | None = None
+    internal: bool = False
+    serialized: bool = True
+
+    @classmethod
+    def of(cls, route: Route) -> RouteInfo:
+        return cls(
+            method=route.method.upper(),
+            path=route.path,
+            capability=route.capability,
+            auth=route.auth,
+            operation_id=route.operation_id,
+            summary=route.summary,
+            internal=route.internal,
+            serialized=route.serialized,
+        )
+
+    def as_json(self) -> dict[str, object]:
+        """snake_case, and optional keys omitted rather than sent as null."""
+        body: dict[str, object] = {
+            "method": self.method,
+            "path": self.path,
+            "capability": self.capability,
+            "internal": self.internal,
+            "serialized": self.serialized,
+        }
+        for key, value in (("auth", self.auth), ("operation_id", self.operation_id), ("summary", self.summary)):
+            if value is not None:
+                body[key] = value
+        return body
+
+
+@dataclass(frozen=True, slots=True)
+class ControlBinding:
+    """Unit internals the control plane needs and a route handler must not have.
+
+    Two callables rather than a reference to the unit, so the surface is
+    enumerable: this is the complete list of things ``/__unit/*`` can do that a
+    vendor handler cannot.
+    """
+
+    #: Wipe state and re-apply the seed document.
+    hydrate: Callable[[], None]
+    #: Every registered route, control routes included.
+    list_routes: Callable[[], tuple[RouteInfo, ...]]
+
+
+class _Context:
+    """The concrete :class:`UnitContext`. Attributes, checked against the
+    protocol by the annotated assignment in :meth:`Unit.__init__`."""
+
+    __slots__ = ("capabilities", "chaos", "clock", "config", "log", "rng", "store", "vendor")
+
+    def __init__(
+        self,
+        *,
+        vendor: VendorDefinition,
+        config: ResolvedConfig,
+        store: Store,
+        capabilities: CapabilityRegistry,
+        chaos: ChaosEngine,
+        clock: Clock,
+        rng: Rng,
+        log: Logger,
+    ) -> None:
+        self.vendor = vendor
+        self.config = config
+        self.store = store
+        self.capabilities = capabilities
+        self.chaos = chaos
+        self.clock = clock
+        self.rng = rng
+        self.log = log
+
+
+class Unit:
+    """One running fake: a vendor surface, a profile, and the pipeline.
+
+    Everything below the constructor is shared machinery. A vendor supplies a
+    :class:`VendorDefinition` and nothing else; the pipeline, the capability
+    gate, the chaos hooks, idempotency and the control-plane wiring are the
+    same for every vendor, which is the property that makes adding one a data
+    exercise.
+    """
+
+    __slots__ = (
+        "_capabilities",
+        "_chaos",
+        "_clock",
+        "_config",
+        "_control",
+        "_ctx",
+        "_lock",
+        "_log",
+        "_rng",
+        "_router",
+        "_routes",
+        "_seed",
+        "_selector",
+        "_sink",
+        "_store",
+        "_vendor",
+    )
+
+    def __init__(
+        self,
+        *,
+        vendor: VendorDefinition,
+        config: ResolvedConfig,
+        seed: object = None,
+        sink: object = None,
+        logger: Logger | None = None,
+        control_routes: Callable[[ControlBinding], Sequence[Route]] | None = None,
+    ) -> None:
+        self._vendor = vendor
+        self._config = config
+        self._seed = seed
+        self._log: Logger = JsonLogger(config.log_level) if logger is None else logger
+
+        # Before anything else: a vendor that gates on a core capability it
+        # never declared would have that behaviour silently off. This is a
+        # startup failure naming every problem at once.
+        assert_capability_declarations(vendor.capabilities, vendor.not_supported)
+
+        self._clock = Clock(config.clock.mode, config.clock.start)
+        # One stream for the unit, seeded from the profile and reported by the
+        # control plane. A vendor salts its own id stream off the same seed so
+        # that adding a probability rule does not renumber every generated id.
+        self._rng = Rng(config.chaos.seed)
+        self._store = Store(self._clock)
+        self._chaos = ChaosEngine(self._rng, self._clock.iso_ms, config.chaos.rules)
+
+        self._control = ControlBinding(hydrate=self._hydrate, list_routes=self._list_routes)
+        control = tuple(control_routes(self._control)) if control_routes is not None else ()
+        self._routes: tuple[Route, ...] = tuple(vendor.routes) + control
+        # Router.add is where a vendor route claiming the control-plane
+        # namespace is refused, so every construction path passes that gate.
+        self._router = Router(self._routes)
+        self._capabilities = CapabilityRegistry(vendor.capabilities, self._routes, config.capabilities, config.profile)
+        self._selector = FaultSelector(self._chaos, self._capabilities)
+
+        self._assert_retry_schedule()
+
+        self._sink = sink
+        if sink is not None:
+            self._log.warn(
+                "a delivery sink was supplied but the webhook dispatcher has not landed yet; it is held, unused",
+                {"profile": config.profile},
+            )
+
+        self._ctx: UnitContext = _Context(
+            vendor=vendor,
+            config=config,
+            store=self._store,
+            capabilities=self._capabilities,
+            chaos=self._chaos,
+            clock=self._clock,
+            rng=self._rng,
+            log=self._log,
+        )
+        self._store.mark_volatile(*vendor.volatile_fields)
+        self._lock = threading.RLock()
+
+    # -- construction-time assertions ---------------------------------------
+
+    def _assert_retry_schedule(self) -> None:
+        """A declared ``webhooks`` capability needs a non-empty retry schedule.
+
+        The core ships no schedule -- one is a documented property of a
+        particular vendor's webhook system, and the config layer may not import
+        a vendor -- so the vendor's ``retry_defaults`` is merged under the
+        profile document. If that merge did not happen, every delivery would
+        exhaust on its first attempt and present as "the subscriber is
+        unreachable" rather than as a configuration mistake. Checked here
+        because this is the first place that knows both what the vendor
+        declared and what the profile resolved to.
+        """
+        declared = {decl.name for decl in self._vendor.capabilities}
+        if CoreCapability.WEBHOOKS.value not in declared:
+            return
+        if self._config.webhooks.retry.schedule_ms:
+            return
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                f"Vendor {self._vendor.name!r} declares the "
+                f"{CoreCapability.WEBHOOKS.value!r} capability but the resolved retry schedule is empty. "
+                "Supply it in the vendor's retry_defaults or in the profile's webhooks.retry.schedule_ms."
+            ),
+            field="webhooks.retry.schedule_ms",
+            info={"profile": self._config.profile, "vendor": self._vendor.name},
+        )
+
+    # -- identity -----------------------------------------------------------
+
+    @property
+    def name(self) -> str:
+        return self._vendor.name
+
+    @property
+    def context(self) -> UnitContext:
+        return self._ctx
+
+    @property
+    def routes(self) -> tuple[Route, ...]:
+        return self._routes
+
+    @property
+    def control(self) -> ControlBinding:
+        """The typed binding the control plane is built against."""
+        return self._control
+
+    # -- lifecycle ----------------------------------------------------------
+
+    def start(self) -> None:
+        """Hydrate the store from the seed document and report what was built."""
+        self._hydrate()
+        self._log.info(
+            "unit started",
+            {
+                "vendor": self._vendor.name,
+                "profile": self._config.profile,
+                "capabilities": list(self._capabilities.enabled_names()),
+                "entities": self._store.stats(),
+                "state_digest": self._store.entity_digest()[:16],
+                "chaos_seed": self._config.chaos.seed,
+                "clock": self._config.clock.mode,
+            },
+        )
+
+    def stop(self) -> None:
+        """Release every timer. A fake must not outlive the test that built it."""
+        self._clock.clear_all()
+
+    def _hydrate(self) -> None:
+        self._store.reset()
+        self._vendor.hydrate(self._ctx, self._seed)
+
+    def _list_routes(self) -> tuple[RouteInfo, ...]:
+        return tuple(RouteInfo.of(route) for route in self._router.routes())
+
+    # -- the seam -----------------------------------------------------------
+
+    def handle(self, req: UnitRequest) -> UnitResponse:
+        """The only thing that crosses the core/transport seam.
+
+        Synchronous by design. Every failure leaves through ``finish()`` with a
+        vendor-shaped body and an ``x-unit-error`` header, so no caller ever
+        receives a framework's own error document.
+        """
+        started = time.monotonic()
+        route: Route | None = None
+        try:
+            outcome = self._router.match(req.method, req.path)
+            if isinstance(outcome, MethodNotAllowed):
+                raise UnitError(
+                    UnitErrorKind.METHOD_NOT_ALLOWED,
+                    detail=(f"{req.method} is not allowed on {req.path}. Allowed: {', '.join(outcome.allowed)}."),
+                    info={"allowed": list(outcome.allowed)},
+                )
+            if not isinstance(outcome, Match):
+                shaped = self._vendor.errors.not_found(req, self._ctx)
+                return self._finish(req, self._shape(shaped, UnitErrorKind.NOT_FOUND), None, started)
+
+            route = outcome.route
+            args = HandlerArgs(req=req, params=outcome.params, ctx=self._ctx, route=route)
+            if route.serialized:
+                with self._lock:
+                    res = self._run_pipeline(req, route, args)
+            else:
+                res = self._run_pipeline(req, route, args)
+            return self._finish(req, res, route, started)
+        except UnitError as err:
+            return self._finish(req, self._shape(self._vendor.errors.shape(err, self._ctx), err.kind), route, started)
+        except Exception as exc:
+            # Not a UnitError, so nothing in the core meant this: it is a defect
+            # in a handler or in this file. It is logged as one, then answered
+            # as the vendor's own 500 so that no caller ever receives a Python
+            # traceback or a framework's error document.
+            self._log.error("unhandled error", {"path": req.path, "error": _describe(exc)})
+            internal = UnitError(UnitErrorKind.INTERNAL, detail=_describe(exc))
+            shaped = self._vendor.errors.shape(internal, self._ctx)
+            return self._finish(req, self._shape(shaped, internal.kind), route, started)
+
+    # -- the pipeline -------------------------------------------------------
+
+    def _run_pipeline(self, req: UnitRequest, route: Route, args: HandlerArgs) -> UnitResponse:
+        # 1. internal short-circuit -----------------------------------------
+        if route.internal:
+            return normalize(route.handler(args))
+
+        # 2. capability gate -------------------------------------------------
+        self._capabilities.assert_enabled(route.capability, route.key)
+
+        # 3. fault selection -------------------------------------------------
+        selection = self._selector.select_request(
+            ChaosSubject(
+                scope="request",
+                route_key=route.key,
+                method=req.method,
+                path=req.path,
+                capability=route.capability,
+                headers=req.headers,
+                body_text=args.body_text(),
+            ),
+            lambda: self._in_band(req, args),
+        )
+        decision = selection.decision
+
+        # 4. pre-auth faults -------------------------------------------------
+        if decision is not None:
+            apply_request_fault(decision, "pre", clock=self._clock, log=self._log)
+
+        # 5. auth and scopes -------------------------------------------------
+        auth: AuthResult | None = None
+        if route.auth is not None:
+            auth = self._vendor.auth.resolve(args, route.auth)
+            missing = [scope for scope in route.scopes if scope not in auth.scopes]
+            if missing:
+                raise UnitError(
+                    UnitErrorKind.FORBIDDEN_SCOPE,
+                    detail=f"The access token is missing the required permission(s): {', '.join(missing)}.",
+                    info={"missing": missing, "granted": list(auth.scopes)},
+                )
+
+        # 6. post-auth fault (token_expiry only, unconditional) --------------
+        if decision is not None:
+            apply_request_fault(decision, "post_auth", clock=self._clock, log=self._log)
+        args.auth = auth
+
+        # 7. idempotency -----------------------------------------------------
+        idem = route.idempotency
+        idem_key: str | None = None
+        request_digest = ""
+        if idem is not None:
+            body = args.body()
+            raw = dot_get(body, idem.key_path)
+            if isinstance(raw, str) and raw:
+                idem_key = raw
+                request_digest = digest_of(dict(body))
+                stored = self._store.get_idempotent(idem.scope, idem_key)
+                if stored is not None:
+                    return self._replay(idem.scope, idem.key_path, idem.on_mismatch, idem_key, request_digest, stored)
+            elif idem.required:
+                raise UnitError(
+                    UnitErrorKind.MISSING_FIELD,
+                    detail=f"{idem.key_path} is required.",
+                    field=idem.key_path,
+                )
+
+        # 8. handler, then store the response against the idempotency key ----
+        res = normalize(route.handler(args))
+        if idem is not None and idem_key is not None and 200 <= res.status < 300:
+            self._store.put_idempotent(
+                IdempotencyRecord(
+                    scope=idem.scope,
+                    key=idem_key,
+                    request_digest=request_digest,
+                    status=res.status,
+                    headers=dict(res.headers),
+                    body_b64=b64url_encode(res.body),
+                    stored_at=self._clock.iso_ms(),
+                )
+            )
+        return res
+
+    # -- pipeline helpers ---------------------------------------------------
+
+    def _in_band(self, req: UnitRequest, args: HandlerArgs) -> MagicExtraction:
+        """Scan the request for a magic value, tolerating an unreadable body.
+
+        Reads the content-type-general ``body()`` rather than the reference's
+        JSON-only ``safeJson``, which left every declared body path unreachable
+        on a form-encoded request. Neither of the shipped magic paths is an
+        OAuth field, so nothing observable changes today; it is recorded as
+        ``provenance: judgment`` because keeping a second, JSON-only body
+        reader would re-create exactly the drift this build exists to remove.
+
+        A body that will not parse is not an error *here*: the request may not
+        have a body at all, and the handler is entitled to produce the real
+        error a moment later.
+        """
+        try:
+            parsed: object = args.body()
+        except UnitError:
+            parsed = None
+        return extract_magic(self._vendor.magic, req, parsed)
+
+    def _replay(
+        self,
+        scope: str,
+        key_path: str,
+        on_mismatch: str,
+        key: str,
+        request_digest: str,
+        stored: IdempotencyRecord,
+    ) -> UnitResponse:
+        """Return the stored response, or refuse a reused key with a new body.
+
+        ``x-unit-idempotent-replay`` is always stamped, and
+        ``x-unit-idempotent-ignored-body`` additionally when the body differed
+        and the route asked for ``replay`` rather than ``conflict``. The second
+        header exists because "you got a 200 and your update was silently
+        discarded" is real documented vendor behaviour that a consumer has no
+        other way to observe.
+        """
+        same_body = stored.request_digest == request_digest
+        if not same_body and on_mismatch == "conflict":
+            raise UnitError(
+                UnitErrorKind.IDEMPOTENCY_CONFLICT,
+                detail="The idempotency key can only be retried with the same request data.",
+                field=key_path,
+                info={"key": key, "scope": scope},
+            )
+        self._log.debug("idempotent replay", {"scope": scope, "key": key, "same_body": same_body})
+        headers = dict(stored.headers)
+        headers["x-unit-idempotent-replay"] = "true"
+        if not same_body:
+            headers["x-unit-idempotent-ignored-body"] = "true"
+        return UnitResponse(status=stored.status, headers=headers, body=b64url_decode(stored.body_b64))
+
+    # -- response shaping ---------------------------------------------------
+
+    def _shape(self, shaped: ShapedError, kind: UnitErrorKind) -> UnitResponse:
+        """The vendor's error body, plus the machine-readable ``x-unit-error``.
+
+        The header is what lets a conformance check assert "this failed, and it
+        failed for *this* reason" across vendors whose bodies share no field.
+        """
+        headers = dict(shaped.headers)
+        headers["x-unit-error"] = kind.value
+        return normalize(ReplyInit(status=shaped.status, json=shaped.body, headers=headers))
+
+    def _finish(self, req: UnitRequest, res: UnitResponse, route: Route | None, started: float) -> UnitResponse:
+        mutable = MutableResponse(status=res.status, headers=dict(res.headers), body=res.body)
+        mutable.headers[REQUEST_ID_HEADER] = req.id
+        if route is not None and not route.internal:
+            self._vendor.decorate(mutable, self._ctx, req)
+        self._log.debug(
+            "request",
+            {
+                "method": req.method,
+                "path": req.path,
+                "status": mutable.status,
+                "route": route.key if route is not None else None,
+                "ms": round((time.monotonic() - started) * 1000, 3),
+            },
+        )
+        return UnitResponse(status=mutable.status, headers=mutable.headers, body=mutable.body)
+
+
+def _describe(exc: BaseException) -> str:
+    text = str(exc)
+    return text if text else exc.__class__.__name__
