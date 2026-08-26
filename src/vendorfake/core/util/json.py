@@ -48,12 +48,15 @@ Non-finite floats
 
 from __future__ import annotations
 
+import enum
 import hashlib
 import json
 from collections.abc import Mapping
 from typing import TypeVar
 
 __all__ = [
+    "MISSING",
+    "Missing",
     "canonical_json",
     "compact",
     "digest_of",
@@ -62,6 +65,43 @@ __all__ = [
 ]
 
 _T = TypeVar("_T")
+
+
+class Missing(enum.Enum):
+    """The type of :data:`MISSING`; an enum so that ``mypy`` narrows on it.
+
+    A single-member enum is the one construct a static checker treats as a
+    literal singleton, so ``if value is MISSING: ...`` narrows the other branch
+    to the real value type. A bare ``object()`` sentinel does not narrow and
+    every use site would need a cast.
+    """
+
+    TOKEN = 0
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid only
+        return "MISSING"
+
+
+MISSING = Missing.TOKEN
+"""Absence, as a value that can be passed around and compared.
+
+JavaScript has two empty values and Python has one, which is the single
+largest source of drift between this port and its oracle. ``JSON.stringify``
+and ``structuredClone`` both erase a key whose value is ``undefined`` while
+faithfully keeping one whose value is ``null``, so the reference distinguishes
+"this order has no ``reference_id``" from "this order's ``reference_id`` is
+null" without ever writing the distinction down.
+
+Python needs it written down. The rule this project adopts: **an entity never
+carries ``None`` to mean absent** -- a field is cleared by removing the key,
+mirroring the reference's ``delete draft.referenceId`` -- and any comparison
+that must tell absence from an explicit null reads through ``MISSING`` rather
+than through ``dict.get(key)``, whose ``None`` default collapses the two. The
+state store's ``diff_keys`` is the first consumer and the reason this exists:
+its ``changed`` list is published at ``/__unit/journal``, so collapsing the two
+would produce a journal entry that quietly disagrees with the mutation it
+describes.
+"""
 
 
 def canonical_json(value: object) -> str:
