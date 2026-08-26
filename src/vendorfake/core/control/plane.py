@@ -112,6 +112,7 @@ from vendorfake.core.kernel.types import (
     PreparedEvent,
     ReplyInit,
     Route,
+    Signer,
     UnitContext,
     UnitError,
     UnitErrorKind,
@@ -213,7 +214,7 @@ def control_plane_routes(
                     "capabilities": [view.as_json() for view in ctx.capabilities.view()],
                     "not_supported": dict(ctx.vendor.not_supported),
                     "auth": dict(ctx.vendor.auth.describe()),
-                    "signer": None if ctx.vendor.signer is None else dict(ctx.vendor.signer.describe()),
+                    "signer": None if ctx.vendor.signer is None else _signer_as_json(ctx.vendor.signer),
                     "magic": _magic_as_json(ctx.vendor.magic),
                     "chaos": {
                         "seed": ctx.config.chaos.seed,
@@ -634,8 +635,19 @@ def control_plane_routes(
         # Nothing below touches the store: a probe answers the predicate and
         # mutates nothing, which is what makes it safe to call from a check
         # that is also asserting on the state digest.
-        machine.assert_mutable(body.from_, subject)
-        if body.to is not None:
+        #
+        # ONE question per call, and never both. A handler runs `assert_mutable`
+        # and then `assert_transition`, in that order and for good reason -- but
+        # a probe that did the same could never report the transition predicate
+        # for a terminal state, because mutability would always answer first. A
+        # machine that treated `from == to` as always legal would then be
+        # undetectable through this route on any vendor whose non-terminal
+        # states all allow themselves, which is the exact defect the route was
+        # added to expose. With `to`, this asks whether the move is legal;
+        # without it, whether the entity may be mutated at all.
+        if body.to is None:
+            machine.assert_mutable(body.from_, subject)
+        else:
             machine.assert_transition(body.from_, body.to, subject)
         return json_(
             compact(
@@ -974,6 +986,29 @@ def _subscription_as_json(subscription: Subscription) -> dict[str, Any]:
             "api_version": subscription.api_version,
         }
     )
+
+
+def _signer_as_json(signer: Signer) -> dict[str, Any]:
+    """The signing scheme's own description, plus what it declares it depends on.
+
+    ``describe()`` is free prose a vendor writes for an operator. ``bindings``
+    is the machine-readable half, and it is published because a conformance
+    check has to assert each declared direction *in the direction declared* --
+    a static scheme is conformant, not merely tolerated -- and it cannot do
+    that from prose. ``signature_headers`` is in the same block for the same
+    reason: without it a check comparing two deliveries can see that something
+    moved but not that the *signature* moved.
+    """
+    properties = signer.properties
+    return {
+        **dict(signer.describe()),
+        "bindings": {
+            "url_bound": properties.url_bound,
+            "body_bound": properties.body_bound,
+            "secret_bound": properties.secret_bound,
+            "signature_headers": [name.lower() for name in properties.signature_headers],
+        },
+    }
 
 
 def _magic_as_json(spec: MagicTriggerSpec | None) -> dict[str, Any] | None:
