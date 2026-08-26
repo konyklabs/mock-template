@@ -104,8 +104,25 @@ def pay(h: Harness, order_id: str, **body: Any) -> Any:
     return h.api.post(f"/v2/orders/{order_id}/pay", body, headers=h.auth)
 
 
+ALL_SEED_LOCATIONS = [SEED_LOCATION_ID, SEED_KIOSK_LOCATION_ID]
+"""Every location the shipped scenario has.
+
+`location_ids` is required on SearchOrders -- "Your request must include one or
+more `location_ids`"
+(https://developer.squareup.com/docs/orders-api/manage-orders/search-orders) --
+so a search that is not about location filtering still has to say something.
+Naming both locations is the "no location filter" of a required field.
+"""
+
+
 def search(h: Harness, **body: Any) -> Any:
-    return h.api.post("/v2/orders/search", body, headers=h.auth)
+    """`POST /v2/orders/search`, defaulting `location_ids` to every location.
+
+    The default is here rather than in the surface: a test about sorting or
+    paging must not have to restate the scenario's locations, and a test about
+    the requirement itself passes its own (or none).
+    """
+    return h.api.post("/v2/orders/search", {"location_ids": ALL_SEED_LOCATIONS, **body}, headers=h.auth)
 
 
 def journal_seq(h: Harness) -> int:
@@ -224,6 +241,60 @@ def test_create_requires_a_quantity_on_every_line_item(h: Harness) -> None:
     response = create(h, {"location_id": SEED_LOCATION_ID, "line_items": [{"name": "Mystery"}]})
     assert response.status == 400
     assert first_error(response)["field"] == "order.line_items[0].quantity"
+
+
+def test_a_model_rejection_names_the_field_the_way_the_surface_does(h: Harness) -> None:
+    """One logical field, one spelling of it in `errors[].field`.
+
+    `{"quantity": 1}` is caught by the strict request model and
+    `{"quantity": null}` by a hand-written check in the surface. They used to
+    answer `order.line_items.0.quantity` and `order.line_items[0].quantity`
+    respectively -- Pydantic's location path versus the surface's -- so a
+    consumer keying on `field` could rely on neither. Square's `Error.field` is
+    "The name of the field provided in the original request (if any) that the
+    error pertains to" and publishes no array notation at all
+    (https://developer.squareup.com/reference/square/objects/Error), so the
+    brackets are this unit's convention, stated once in
+    `vendorfake.square.model.common`.
+    """
+    from_model = create(h, {"location_id": SEED_LOCATION_ID, "line_items": [{"quantity": 1}]})
+    assert from_model.status == 400
+    assert first_error(from_model)["field"] == "order.line_items[0].quantity"
+
+    from_surface = create(h, {"location_id": SEED_LOCATION_ID, "line_items": [{"name": "Mystery"}]})
+    assert first_error(from_surface)["field"] == "order.line_items[0].quantity"
+
+
+@pytest.mark.parametrize(
+    ("field", "length"),
+    [("uid", 61), ("name", 513), ("note", 2001), ("quantity", 13)],
+)
+def test_a_line_item_string_over_its_documented_maximum_is_refused(h: Harness, field: str, length: int) -> None:
+    """ "uid ... Max Length 60", "name ... Max Length 512", "note ... Max Length
+    2000", "quantity ... Max Length 12".
+    https://developer.squareup.com/reference/square/objects/OrderLineItem
+
+    None of the four were enforced: a 200-character uid and a 41-character
+    quantity both came back 200, so a consumer generating ids longer than
+    Square accepts learns nothing here and fails on the real API.
+    """
+    line: dict[str, Any] = {"quantity": "1", "base_price_money": {"amount": 100, "currency": "USD"}}
+    line[field] = "9" * length if field == "quantity" else "x" * length
+    response = create(h, {"location_id": SEED_LOCATION_ID, "line_items": [line]})
+    assert response.status == 400
+    assert first_error(response)["field"] == f"order.line_items[0].{field}"
+
+
+@pytest.mark.parametrize(
+    ("field", "length"),
+    [("uid", 60), ("name", 512), ("note", 2000), ("quantity", 12)],
+)
+def test_a_line_item_string_at_its_documented_maximum_is_accepted(h: Harness, field: str, length: int) -> None:
+    """The other side of the boundary: "Max Length 60" means 60 is allowed."""
+    line: dict[str, Any] = {"quantity": "1", "base_price_money": {"amount": 100, "currency": "USD"}}
+    line[field] = "9" * length if field == "quantity" else "x" * length
+    response = create(h, {"location_id": SEED_LOCATION_ID, "line_items": [line]})
+    assert response.status == 200, response.text
 
 
 def test_create_requires_a_price_or_a_catalog_reference(h: Harness) -> None:
@@ -644,6 +715,84 @@ def test_pay_moves_an_open_order_to_completed_and_closes_it(h: Harness) -> None:
     assert tender["payment_id"] == "unit-payment"
 
 
+def test_paying_removes_the_line_items_whose_quantity_is_zero(h: Harness) -> None:
+    """ "Line items with a quantity of `0` are automatically removed when
+    paying for or otherwise completing the order."
+    https://developer.squareup.com/reference/square/objects/OrderLineItem
+
+    Documented, and neither the reference nor this file did it: a zeroed line
+    survived PayOrder, which is exactly what a cart UI sends when a customer
+    sets an item to none.
+    """
+    order = create(
+        h,
+        {
+            "location_id": SEED_LOCATION_ID,
+            "line_items": [
+                {"uid": "keep", "quantity": "1", "base_price_money": {"amount": 500, "currency": "USD"}},
+                {"uid": "zero", "quantity": "0", "base_price_money": {"amount": 500, "currency": "USD"}},
+            ],
+        },
+    ).json()["order"]
+    assert [item["uid"] for item in order["line_items"]] == ["keep", "zero"]
+
+    paid = pay(h, order["id"], idempotency_key="pay-zero").json()["order"]
+    assert [item["uid"] for item in paid["line_items"]] == ["keep"]
+    # The total was never the zeroed line's to change: round(500 * 0) is 0.
+    assert paid["total_money"] == order["total_money"]
+
+
+def test_completing_through_update_removes_them_too(h: Harness) -> None:
+    """ "or otherwise completing the order" -- the UpdateOrder transition into
+    COMPLETED is the other completion path."""
+    order = create(
+        h,
+        {
+            "location_id": SEED_LOCATION_ID,
+            "line_items": [
+                {"uid": "keep", "quantity": "2", "base_price_money": {"amount": 100, "currency": "USD"}},
+                {"uid": "zero", "quantity": "0.00", "base_price_money": {"amount": 100, "currency": "USD"}},
+            ],
+        },
+    ).json()["order"]
+    updated = update(h, order["id"], {"version": order["version"], "state": "COMPLETED"}).json()["order"]
+    assert updated["state"] == "COMPLETED"
+    assert [item["uid"] for item in updated["line_items"]] == ["keep"]
+
+
+def test_cancelling_removes_nothing_because_it_is_not_completing(h: Harness) -> None:
+    """The sentence says *completing*. A canceled order's lines are the record
+    of what was not sold, so they stay -- and this unit says so rather than
+    leaving the reader to infer it from the absence of code."""
+    order = create(
+        h,
+        {
+            "location_id": SEED_LOCATION_ID,
+            "line_items": [{"uid": "zero", "quantity": "0", "base_price_money": {"amount": 100, "currency": "USD"}}],
+        },
+    ).json()["order"]
+    canceled = update(h, order["id"], {"version": order["version"], "state": "CANCELED"}).json()["order"]
+    assert canceled["state"] == "CANCELED"
+    assert [item["uid"] for item in canceled["line_items"]] == ["zero"]
+
+
+def test_a_quantity_that_is_not_a_number_is_not_swept_up_as_a_zero(h: Harness) -> None:
+    """`"pieces"` has a line total of 0 -- `parseFloat` finds no number -- but
+    it is not a quantity *of* zero, and the documented rule is about the
+    quantity, not about the total."""
+    order = create(
+        h,
+        {
+            "location_id": SEED_LOCATION_ID,
+            "line_items": [
+                {"uid": "junk", "quantity": "pieces", "base_price_money": {"amount": 100, "currency": "USD"}}
+            ],
+        },
+    ).json()["order"]
+    paid = pay(h, order["id"], idempotency_key="pay-junk").json()["order"]
+    assert [item["uid"] for item in paid["line_items"]] == ["junk"]
+
+
 def test_paying_a_completed_order_a_second_time_is_refused(h: Harness) -> None:
     """The reference answered 200 here, replaced the tenders and bumped the
     version -- a second payment against a closed order, because its
@@ -766,6 +915,28 @@ def test_search_filters_by_location(h: Harness) -> None:
     assert ids == [SEED_COMPLETED_ORDER_ID]
 
 
+def test_search_requires_location_ids(h: Harness) -> None:
+    """ "Your request must include one or more `location_ids`. `SearchOrders`
+    only returns the orders for those locations."
+    https://developer.squareup.com/docs/orders-api/manage-orders/search-orders
+
+    The reference typed the field optional and answered 200 with every
+    location's orders, which is the one shape Square will not answer: a
+    consumer whose query is missing the field builds a page of results here and
+    gets an error in production. The 400 is this unit's convention -- Square
+    publishes no error code for the omission -- but the refusal is not.
+    """
+    omitted = h.api.post("/v2/orders/search", {}, headers=h.auth)
+    assert omitted.status == 400
+    assert first_error(omitted)["field"] == "location_ids"
+    assert omitted.json()["unit_error"]["kind"] == "missing_field"
+
+    # An empty list is the same failure: it names no location either.
+    empty = h.api.post("/v2/orders/search", {"location_ids": []}, headers=h.auth)
+    assert empty.status == 400
+    assert first_error(empty)["field"] == "location_ids"
+
+
 def test_search_caps_location_ids_at_ten(h: Harness) -> None:
     """ "location_ids ... Max: 10"
     https://developer.squareup.com/reference/square/orders-api/search-orders
@@ -823,7 +994,13 @@ def test_a_date_range_is_start_inclusive_and_end_exclusive(h: Harness) -> None:
 
 def test_an_order_with_no_value_for_the_filtered_field_is_excluded(h: Harness) -> None:
     """ "closed between Monday and Tuesday" must not match an order that is
-    still open, and the seeded open order has no `closed_at` at all."""
+    still open, and the seeded open order has no `closed_at` at all.
+
+    The COMPLETED order does have one, so this asserts the exclusion by naming
+    what came back rather than by expecting nothing at all -- which is the
+    stronger assertion: an empty page passes a filter that excludes every
+    order, and this one must exclude exactly the open order.
+    """
     found = search(
         h,
         query={
@@ -831,7 +1008,31 @@ def test_an_order_with_no_value_for_the_filtered_field_is_excluded(h: Harness) -
             "sort": {"sort_field": "CLOSED_AT"},
         },
     ).json()["orders"]
-    assert found == []
+    assert [order["id"] for order in found] == [SEED_COMPLETED_ORDER_ID]
+
+
+def test_a_search_that_matches_nothing_still_carries_an_orders_array(h: Harness) -> None:
+    """Half of the one empty-array rule; the other half is asserted in
+    `test_model_order.py`, where an order with no line items carries no
+    `line_items` key.
+
+    Square settles neither case -- it publishes no sentence about empty arrays
+    -- so this is stated as convention in `vendorfake.square.model.order`: an
+    optional array inside an ENTITY is absent when empty, and the collection an
+    OPERATION returns is always present. The package previously did both
+    without saying so, which meant neither could be relied on.
+    """
+    body = search(h, query={"filter": {"state_filter": {"states": ["CANCELED"]}}}).json()
+    assert body["orders"] == []
+    assert "cursor" not in body
+
+    entries = search(
+        h,
+        return_entries=True,
+        query={"filter": {"state_filter": {"states": ["CANCELED"]}}},
+    ).json()
+    assert entries["order_entries"] == []
+    assert "orders" not in entries
 
 
 @pytest.mark.parametrize(
@@ -860,6 +1061,7 @@ def test_search_orders_same_instant_orders_by_code_point_not_by_collation(collat
         for order in collated.api.post(
             "/v2/orders/search",
             {
+                "location_ids": ALL_SEED_LOCATIONS,
                 "return_entries": True,
                 "query": {
                     "filter": {

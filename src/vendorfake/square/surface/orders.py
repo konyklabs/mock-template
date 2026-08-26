@@ -76,6 +76,18 @@ core's state machine forbids a self-transition unless the state declares
 ``invalid_transition``. See :mod:`vendorfake.square.machine` and
 :mod:`vendorfake.core.state.machine`.
 
+Zero-quantity lines
+-------------------
+"Line items with a quantity of `0` are automatically removed when paying for or
+otherwise completing the order."
+https://developer.squareup.com/reference/square/objects/OrderLineItem
+
+Documented, and neither the reference nor the first cut of this file did it: a
+line with ``"quantity": "0"`` survived PayOrder, so a consumer who sends one --
+which is exactly what a cart UI does when a customer zeroes an item -- reads
+back an order Square would not have returned. Both completion paths now drop
+them; see :func:`_drop_zero_quantity_lines`.
+
 SHRINK (prototype): CalculateOrder and CloneOrder are not implemented -- they
 add no state behaviour over the six above. Taxes, discounts, service charges,
 fulfillments, returns and refunds are not modelled; see
@@ -108,6 +120,7 @@ from vendorfake.core.kernel.types import (
 from vendorfake.core.state.machine import StateMachine
 from vendorfake.core.state.store import Collection, Entity
 from vendorfake.core.util.json import compact
+from vendorfake.core.util.numbers import js_parse_float
 from vendorfake.square.entities import (
     COL,
     CatalogObjectEntity,
@@ -379,6 +392,8 @@ class OrdersSurface:
                 draft["state"] = next_state
                 if _MACHINE.is_terminal(next_state):
                     draft["closed_at"] = args.ctx.clock.iso_ms()
+                if next_state == OrderState.COMPLETED.value:
+                    _drop_zero_quantity_lines(draft)
 
         updated = orders.update(
             order_id,
@@ -391,9 +406,32 @@ class OrdersSurface:
     # -- POST /v2/orders/search --------------------------------------------
 
     def search_orders(self, args: HandlerArgs) -> ReplyInit:
+        """Search the merchant's orders, one location set at a time.
+
+        ``location_ids`` is required: "Your request must include one or more
+        `location_ids`. `SearchOrders` only returns the orders for those
+        locations."
+        https://developer.squareup.com/docs/orders-api/manage-orders/search-orders
+
+        The reference typed it optional and answered 200 with every location's
+        orders when it was omitted, which is the one shape Square will not
+        answer -- so a consumer whose query is missing the field builds a page
+        of results here and gets an error in production.
+
+        JUDGMENT -- the status. Square publishes no error code for the omission;
+        this unit answers its standard 400 ``MISSING_FIELD`` naming
+        ``location_ids``, which is what every other absent required field on
+        this surface answers.
+        """
         body = args.body()
         request = validate_body(SearchOrdersRequest, body)
-        if request.location_ids is not None and len(request.location_ids) > MAX_LOCATION_IDS:
+        if not request.location_ids:
+            raise UnitError(
+                UnitErrorKind.MISSING_FIELD,
+                detail="Your request must include one or more location_ids.",
+                field="location_ids",
+            )
+        if len(request.location_ids) > MAX_LOCATION_IDS:
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail=f"Max: {MAX_LOCATION_IDS} location IDs.",
@@ -436,9 +474,8 @@ class OrdersSurface:
 
         collection = args.ctx.store.collection(COL.orders)
         orders = [OrderEntity.from_entity(entity) for entity in collection.all()]
-        if request.location_ids is not None:
-            wanted = set(request.location_ids)
-            orders = [order for order in orders if order.location_id in wanted]
+        wanted = set(request.location_ids)
+        orders = [order for order in orders if order.location_id in wanted]
         states = None if filters is None or filters.state_filter is None else set(filters.state_filter.states)
         if states is not None:
             orders = [order for order in orders if order.state in states]
@@ -468,6 +505,10 @@ class OrdersSurface:
             default_limit=SEARCH_DEFAULT_LIMIT,
             max_limit=SEARCH_MAX_LIMIT,
         )
+        # `orders` and `order_entries` are the answer to the request rather
+        # than properties of an object, so the one that was asked for is
+        # present even when it is empty; see "Empty arrays, in one rule" in
+        # :mod:`vendorfake.square.model.order`.
         return json_(
             compact(
                 {
@@ -569,6 +610,7 @@ class OrdersSurface:
             ]
             draft["state"] = OrderState.COMPLETED.value
             draft["closed_at"] = now
+            _drop_zero_quantity_lines(draft)
 
         updated = orders.update(
             order_id,
@@ -843,6 +885,40 @@ def _apply_fields_to_clear(draft: Entity, paths: Sequence[str]) -> None:
             draft["line_items"] = []
         elif path in _CLEARABLE_ORDER_FIELDS:
             draft.pop(path, None)
+
+
+def _drop_zero_quantity_lines(draft: Entity) -> None:
+    """Completing an order removes the lines whose quantity is zero.
+
+    "Line items with a quantity of `0` are automatically removed when paying
+    for or otherwise completing the order."
+    https://developer.squareup.com/reference/square/objects/OrderLineItem
+
+    Called from PayOrder and from the UpdateOrder transition into COMPLETED --
+    "otherwise completing" is what that second call site is. A transition into
+    CANCELED does not remove anything: the sentence says *completing*, and a
+    canceled order's lines are the record of what was not sold.
+
+    Removing them changes no total, because a line whose quantity is zero
+    already contributes ``round(base * 0) = 0``; what changes is the array a
+    consumer reads back, which is the thing the sentence is about. The quantity
+    is parsed with the same ``parseFloat`` port the money projection uses, so
+    ``"0"``, ``"0.0"`` and ``"0.00"`` are all the documented zero, and junk --
+    which yields no number at all -- is left alone rather than swept up.
+    """
+    lines = _lines_of(draft)
+    kept = [line for line in lines if not _is_zero_quantity(line)]
+    if len(kept) != len(lines):
+        draft["line_items"] = kept
+
+
+def _is_zero_quantity(line: Mapping[str, Any]) -> bool:
+    """Whether a stored line's ``quantity`` is the documented literal zero."""
+    raw = line.get("quantity")
+    if not isinstance(raw, str):
+        return False
+    quantity = js_parse_float(raw)
+    return quantity == 0.0
 
 
 def _instant(value: str | None) -> float | None:

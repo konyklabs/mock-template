@@ -78,6 +78,10 @@ def test_every_constant_names_something_the_document_contains(document: dict[str
         seed_constants.SEED_REFRESH_TOKEN,
         seed_constants.SEED_READ_ONLY_REFRESH_TOKEN,
     }
+    completed = next(order for order in doc.orders if order.id == seed_constants.SEED_COMPLETED_ORDER_ID)
+    assert completed.closed_at == seed_constants.SEED_COMPLETED_ORDER_CLOSED_AT
+    assert [tender.id for tender in completed.tenders] == [seed_constants.SEED_COMPLETED_ORDER_TENDER_ID]
+    assert completed.tenders[0].amount_money.amount == seed_constants.SEED_COMPLETED_ORDER_TOTAL
     by_access = {token.access_token: token.scopes for token in doc.tokens}
     assert by_access[seed_constants.SEED_ACCESS_TOKEN] == seed_constants.SEED_SCOPES
     assert by_access[seed_constants.SEED_READ_ONLY_ACCESS_TOKEN] == seed_constants.SEED_READ_ONLY_SCOPES
@@ -140,6 +144,61 @@ def test_a_seeded_order_keeps_its_stated_timestamps_and_version(h: Harness) -> N
     assert stored["created_at"] == "2026-07-15T08:00:00.000Z"
     assert stored["updated_at"] == "2026-07-15T08:05:00.000Z"
     assert stored["version"] == 3
+
+
+def test_the_shipped_completed_order_is_one_square_could_have_produced(h: Harness) -> None:
+    """A COMPLETED order with no `closed_at`, no tenders and its full amount
+    still due is a state Square cannot reach.
+
+    "Completed orders are fully paid. This is a terminal state."
+    (https://developer.squareup.com/reference/square/enums/OrderState), and
+    `closed_at` is "The timestamp for when the order reached a terminal state,
+    in RFC 3339 format"
+    (https://developer.squareup.com/reference/square/objects/Order). The
+    shipped scenario used to carry all three defects at once, so a consumer
+    branching on `"closed_at" in order` was misled by the only terminal order
+    the unit ships, and one debugging a `closed_at` filter got an empty page
+    and concluded their query was wrong.
+    """
+    order = h.api.get(
+        f"/v2/orders/{seed_constants.SEED_COMPLETED_ORDER_ID}",
+        headers=h.auth,
+    ).json()["order"]
+    assert order["state"] == "COMPLETED"
+    assert order["closed_at"] == seed_constants.SEED_COMPLETED_ORDER_CLOSED_AT
+    assert order["total_money"] == {"amount": seed_constants.SEED_COMPLETED_ORDER_TOTAL, "currency": "USD"}
+    # Fully paid: one tender for the whole total, and nothing due.
+    tender = order["tenders"][0]
+    assert tender["id"] == seed_constants.SEED_COMPLETED_ORDER_TENDER_ID
+    assert tender["amount_money"] == {"amount": seed_constants.SEED_COMPLETED_ORDER_TOTAL, "currency": "USD"}
+    assert tender["transaction_id"] == seed_constants.SEED_COMPLETED_ORDER_ID
+    assert tender["location_id"] == seed_constants.SEED_KIOSK_LOCATION_ID
+    assert order["net_amount_due_money"] == {"amount": 0, "currency": "USD"}
+
+
+def test_the_shipped_open_order_is_still_open_in_every_respect(h: Harness) -> None:
+    """The other direction of the same rule: an OPEN order has no `closed_at`
+    and no tenders, and its whole total is due. Asserting only the COMPLETED
+    half would pass for a unit that stamped both on everything."""
+    order = h.api.get(f"/v2/orders/{seed_constants.SEED_OPEN_ORDER_ID}", headers=h.auth).json()["order"]
+    assert order["state"] == "OPEN"
+    assert "closed_at" not in order
+    assert "tenders" not in order
+    assert order["net_amount_due_money"] == order["total_money"]
+
+
+def test_the_completed_order_cannot_be_paid_again(h: Harness) -> None:
+    """The scenario now says the order was paid, and the state machine says a
+    terminal state cannot be re-entered. Before the tenders were added, the
+    fake shipped an order that was COMPLETED and simultaneously owed its full
+    amount."""
+    response = h.api.post(
+        f"/v2/orders/{seed_constants.SEED_COMPLETED_ORDER_ID}/pay",
+        {"idempotency_key": "pay-the-seed"},
+        headers=h.auth,
+    )
+    assert response.status == 400
+    assert response.json()["unit_error"]["kind"] == "invalid_transition"
 
 
 def test_seeded_writes_are_marked_as_seeded(h: Harness) -> None:

@@ -6,6 +6,12 @@
     "  merchant/location/order  https://developer.squareup.com/reference/square/locations-api/list-locations",
     "  catalog ITEM + variation https://developer.squareup.com/reference/square/catalog-api/retrieve-catalog-object",
     "  order id shape           https://developer.squareup.com/reference/square/orders-api/create-order",
+    "  tender id + shape        https://developer.squareup.com/reference/square/orders-api/pay-order",
+    "The COMPLETED order carries closed_at and a tender that covers its whole",
+    "total, because Square cannot produce one that does not: COMPLETED means",
+    "'Completed orders are fully paid. This is a terminal state.'",
+    "  https://developer.squareup.com/reference/square/enums/OrderState",
+    "  https://developer.squareup.com/reference/square/objects/Order",
     "Timestamps are fixed so that SearchOrders date filtering is reproducible.",
     "Keys are snake_case throughout, which is the one departure from the",
     "TypeScript reference's copy of this file: every other JSON this project",
@@ -104,9 +110,19 @@
       "source_name": "Seed Scenario",
       "created_at": "2026-07-15T08:00:00.000Z",
       "updated_at": "2026-07-15T08:05:00.000Z",
+      "closed_at": "2026-07-15T08:05:00.000Z",
       "version": 3,
       "line_items": [
         { "uid": "seed_li_coldbrew_sm", "catalog_object_id": "HURXQOOAIC4IZSI2BEXQRYFY", "quantity": "3" }
+      ],
+      "tenders": [
+        {
+          "id": "EnZdNAlWCmfh6Mt5FMNST1o7taB",
+          "payment_id": "EnZdNAlWCmfh6Mt5FMNST1o7taB",
+          "type": "CARD",
+          "created_at": "2026-07-15T08:05:00.000Z",
+          "amount_money": { "amount": 1125, "currency": "USD" }
+        }
       ]
     }
   ],

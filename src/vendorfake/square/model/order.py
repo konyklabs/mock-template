@@ -64,6 +64,30 @@ the value against ``None``. Getting that wrong in either direction is a real
 data loss: read an order, echo it back with one field changed, and every
 optional the caller did not mention is either wiped or frozen.
 
+Empty arrays, in one rule
+-------------------------
+This package had two contradictory answers to "what does an empty list look
+like on the wire": :class:`OrderWire` omitted ``line_items`` and ``tenders``
+when empty, while SearchOrders emitted ``"orders": []`` on a search that
+matched nothing -- the same question, answered both ways, in one vendor. Square
+settles neither case: it publishes no sentence about empty arrays, and the only
+adjacent text is SearchOrders' "The list is populated only if `return_entries`
+is set to `false`", which is about ``return_entries`` and not about emptiness.
+**NOT VERIFIED**, therefore, and stated here once as this unit's convention:
+
+* an optional array **inside an entity** -- ``line_items``, ``tenders`` -- is
+  *absent* when it is empty, exactly like every other absent optional, because
+  "absence is absence" is the rule the rest of this file, the entity digest and
+  the journal's ``changed`` list all run on, and an order with no tenders has
+  no more tenders than it has a ``closed_at``;
+* the collection **an operation returns** -- ``orders`` on SearchOrders and on
+  BatchRetrieveOrders, ``order_entries`` -- is always present, empty when there
+  was nothing to return, because it is the answer to the request rather than a
+  property of an object, and "there were no matches" is a result a consumer
+  must be able to read without also handling a missing key.
+
+Both halves are pinned by tests, so the two cannot drift apart again.
+
 Strictness
 ----------
 Every request model here is ``strict=True``. The reference guards three
@@ -157,43 +181,65 @@ class MoneyWire(BaseModel):
 class LineItemWire(BaseModel):
     """One ``OrderLineItem``, with its own roll-ups.
 
-    Field order is the reference's, which is the order Square's CreateOrder
-    example prints, because a response body is read by humans as often as by
-    parsers.
+    Key order is Square's, and it is checkable. It was previously described
+    here as "the reference's, which is the order Square's CreateOrder example
+    prints"; that was simply untrue -- the reference led with
+    ``catalog_object_id`` and ``variation_name``, which Square's example does
+    not -- and an unverifiable citation in a package whose whole discipline is
+    that citations are checkable is worse than none.
+
+    The two published orders differ, so both are named and one is followed:
+
+    * the identifying fields are in the order the object's own field listing
+      prints them -- ``uid, name, quantity, quantity_unit, note,
+      catalog_object_id, catalog_version, variation_name, ...``
+      (https://developer.squareup.com/reference/square/objects/OrderLineItem),
+      which is the only published order that carries ``note`` and
+      ``catalog_object_id`` at all;
+    * the money roll-ups are in the order the CreateOrder example *response*
+      prints them -- ``base_price_money, gross_sales_money, total_tax_money,
+      total_service_charge_money, total_discount_money, total_money,
+      variation_total_price_money``
+      (https://developer.squareup.com/reference/square/orders-api/create-order)
+      -- because that is the block a consumer actually reads back, and the
+      field listing disagrees with the example about it.
+
+    JSON key order is not semantic and no consumer may depend on it, so this
+    buys nothing but legibility. It is the citation that had to be right.
     """
 
     model_config = _WIRE
 
     uid: str
+    name: str | None = None
     quantity: str
-    base_price_money: MoneyWire
-    variation_total_price_money: MoneyWire
-    gross_sales_money: MoneyWire
-    total_tax_money: MoneyWire
-    total_discount_money: MoneyWire
-    total_money: MoneyWire
-    total_service_charge_money: MoneyWire
+    note: str | None = None
     catalog_object_id: str | None = None
     variation_name: str | None = None
-    name: str | None = None
-    note: str | None = None
+    base_price_money: MoneyWire
+    gross_sales_money: MoneyWire
+    total_tax_money: MoneyWire
+    total_service_charge_money: MoneyWire
+    total_discount_money: MoneyWire
+    total_money: MoneyWire
+    variation_total_price_money: MoneyWire
 
     def wire(self) -> dict[str, Any]:
         return compact(
             {
                 "uid": self.uid,
-                "catalog_object_id": self.catalog_object_id,
-                "variation_name": self.variation_name,
                 "name": self.name,
                 "quantity": self.quantity,
                 "note": self.note,
+                "catalog_object_id": self.catalog_object_id,
+                "variation_name": self.variation_name,
                 "base_price_money": self.base_price_money.wire(),
-                "variation_total_price_money": self.variation_total_price_money.wire(),
                 "gross_sales_money": self.gross_sales_money.wire(),
                 "total_tax_money": self.total_tax_money.wire(),
+                "total_service_charge_money": self.total_service_charge_money.wire(),
                 "total_discount_money": self.total_discount_money.wire(),
                 "total_money": self.total_money.wire(),
-                "total_service_charge_money": self.total_service_charge_money.wire(),
+                "variation_total_price_money": self.variation_total_price_money.wire(),
             }
         )
 
@@ -275,9 +321,10 @@ class OrderWire(BaseModel):
         """The order as JSON, with every absent optional omitted.
 
         ``line_items`` and ``tenders`` are omitted when empty rather than sent
-        as ``[]``: the reference passes ``undefined`` for an empty list and
-        Square's own examples carry no ``line_items`` key on an order that has
-        none. ``source`` is a nested object built from a single stored name.
+        as ``[]`` -- the entity half of the one empty-array rule in the module
+        docstring, which also says why the envelope half goes the other way and
+        that Square documents neither. ``source`` is a nested object built from
+        a single stored name.
         """
         return compact(
             {
@@ -334,6 +381,17 @@ def money(amount: int, currency: str) -> MoneyWire:
 
 def line_item_total(item: OrderLineItem) -> int:
     """``Math.round(base * parseFloat(quantity))``, with both halves ported.
+
+    JUDGMENT -- a **negative** quantity is accepted and produces a negative
+    line total, and therefore a negative ``total_money`` on the order. Square's
+    ``quantity`` is a string documented only as "The count, or measurement, of
+    a line item being purchased" with a length range and no sign rule
+    (https://developer.squareup.com/reference/square/objects/OrderLineItem),
+    and no published error covers it, so **NOT VERIFIED**: this unit neither
+    refuses it nor floors the money at zero, and a consumer must not read a
+    negative total here as something Square would return. ``net_amount_due``
+    does clamp at zero, so such an order reports a negative total with nothing
+    due -- see :func:`project_order`.
 
     A quantity with no numeric prefix -- ``""``, ``"pieces"`` -- and a
     non-finite one -- ``"Infinity"`` -- both give 0, which is what the
@@ -432,9 +490,23 @@ def project_order(order: OrderEntity) -> dict[str, Any]:
             tip_money=zero,
             service_charge_money=zero,
         ),
-        # "net_amount_due_money" never goes negative: over-tendering an order
-        # leaves nothing due rather than owing the buyer money, which is what
-        # `Math.max(0, ...)` says in the reference.
+        # JUDGMENT, twice over, and NOT VERIFIED both times.
+        #
+        # First: this key is emitted on every order, and Square's own
+        # CreateOrder and PayOrder example responses do not carry it. It is a
+        # documented read-only `Order` field -- "The net amount of money due on
+        # the order" -- and Square publishes no rule about when it is present,
+        # so a consumer must not read its presence here as proof Square always
+        # sends it. It is always sent because a fake that omits a computable
+        # field teaches nothing, and it is the one number an unpaid order is
+        # about.
+        #
+        # Second: it never goes negative. Over-tendering leaves nothing due
+        # rather than owing the buyer money, which is what `Math.max(0, ...)`
+        # says in the reference. Note the asymmetry this leaves with a NEGATIVE
+        # quantity, which this unit accepts because Square's `quantity` text
+        # forbids no such thing (see `line_item_total`): such an order reports
+        # a negative `total_money` and nothing due.
         net_amount_due_money=money(max(0, total - tendered_total(order)), currency),
     ).wire()
 
@@ -505,14 +577,25 @@ class LineItemRequest(BaseModel):
     (https://developer.squareup.com/reference/square/objects/OrderLineItem),
     so ``"2"`` is right and ``2`` is a type error here rather than a silently
     coerced 2.
+
+    The maximum lengths are Square's, from the same page: ``uid`` "Max Length
+    60", ``name`` "Max Length 512", ``note`` "Max Length 2000", ``quantity``
+    "Max Length 12". They are enforced because they are documented, and a fake
+    that accepts a 200-character ``uid`` teaches a consumer that Square will.
+
+    The documented *minimum* on ``quantity`` -- "Min Length 1" -- is deliberately
+    not spelled here. An empty ``quantity`` has two meanings on this surface,
+    "you did not send one" on create and "clear it" on update, and each already
+    has its own error naming the field; a ``min_length`` in the model would
+    answer both of them with a third.
     """
 
     model_config = _REQUEST
 
-    uid: str | None = None
-    name: str | None = None
-    quantity: str | None = None
-    note: str | None = None
+    uid: str | None = Field(default=None, max_length=60)
+    name: str | None = Field(default=None, max_length=512)
+    quantity: str | None = Field(default=None, max_length=12)
+    note: str | None = Field(default=None, max_length=2000)
     catalog_object_id: str | None = None
     variation_name: str | None = None
     base_price_money: MoneyRequest | None = None
@@ -683,6 +766,13 @@ class SearchOrdersRequest(BaseModel):
 
     model_config = _REQUEST
 
+    #: Required, and required in the surface rather than here: "Your request
+    #: must include one or more `location_ids`. `SearchOrders` only returns the
+    #: orders for those locations."
+    #: https://developer.squareup.com/docs/orders-api/manage-orders/search-orders
+    #: Typed optional so that an omitted list and an empty one reach the same
+    #: check and produce the same error, instead of Pydantic reporting one of
+    #: them in its own vocabulary.
     location_ids: list[str] | None = None
     query: SearchOrdersQueryRequest | None = None
     cursor: str | None = None
