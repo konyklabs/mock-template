@@ -25,6 +25,7 @@ import uvicorn
 from vendorfake.asgi import bind, bound_port, create_app
 from vendorfake.conformance import ConformanceClient, ConformanceTarget, HttpConformanceClient
 from vendorfake.conformance.client import InProcessConformanceClient
+from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.transport.inprocess import in_process
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.registry import create_unit
@@ -45,8 +46,16 @@ SHUTDOWN_TIMEOUT_S = 10.0
 
 
 @contextmanager
-def _served(profile: str) -> Iterator[ConformanceClient]:
-    unit = create_unit(vendor=VENDOR, profile=profile, sink=MemorySink())
+def serve(unit: Unit) -> Iterator[ConformanceClient]:
+    """A client against *this* unit, over a real socket.
+
+    Takes the unit rather than a profile name so that the mutant fixtures --
+    which build their units through a different composition root in order to
+    reach the control-plane and fault-selector seams -- serve the unit they
+    mutated rather than a fresh unmutated one. A transport harness that quietly
+    substituted a correct unit would make every out-of-process mutant result a
+    lie, so there is one server function and it is handed its unit.
+    """
     app = create_app(unit)
     sock: socket.socket = bind("127.0.0.1", 0)
     port = bound_port(sock)
@@ -66,6 +75,15 @@ def _served(profile: str) -> Iterator[ConformanceClient]:
         server.should_exit = True
         thread.join(SHUTDOWN_TIMEOUT_S)
         sock.close()
+
+
+@contextmanager
+def _served(profile: str) -> Iterator[ConformanceClient]:
+    unit = create_unit(vendor=VENDOR, profile=profile, sink=MemorySink())
+    try:
+        with serve(unit) as client:
+            yield client
+    finally:
         unit.stop()
 
 
