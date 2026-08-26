@@ -1,4 +1,4 @@
-"""The ``/__unit/*`` control plane: the same twenty-seven routes for every vendor.
+"""The ``/__unit/*`` control plane: the same thirty routes for every vendor.
 
 FOR: making everything a consumer needs in order to *drive* a fake -- what it
 is, what it can do, what it has recorded, what it will do wrong next, and how
@@ -35,8 +35,8 @@ The store, the delivery log and the clock each keep their own lock; the request
 lock exists only so that id minting and journal ordering are deterministic,
 which is exactly what those two routes do not touch.
 
-``POST /__unit/clock/advance`` PASSES ``settle=``
--------------------------------------------------
+``POST /__unit/clock/advance`` PASSES ``settle=``, AND MAY BE ASKED NOT TO DRAIN
+--------------------------------------------------------------------------------
 The reference does ``await clock.advance(ms)`` then ``await webhooks.drain()``.
 Here deliveries run on one worker thread, so ``advance``'s re-scan can run
 *before* the worker has registered the retry it is about to schedule -- and a
@@ -45,8 +45,15 @@ the subscriber had stopped failing. ``ctx.webhooks.settle`` is the handshake
 that closes that window, and it is why the dispatcher publishes ``settle`` as a
 named public method rather than hiding it.
 
-SIX ROUTES THE REFERENCE DOES NOT HAVE
---------------------------------------
+The drain that follows is the reference's and stays the default, but it is a
+flag: draining a *virtual* clock means advancing to every pending timer in
+turn, so "advance ten milliseconds" can run a cascade spanning the whole
+declared retry schedule. ``{"drain": false}`` advances by exactly what was
+asked, fires only what that made due, and settles the worker -- which is the
+only way to observe that a retry did NOT happen before its interval.
+
+NINE ROUTES THE REFERENCE DOES NOT HAVE
+---------------------------------------
 ``GET /__unit/errors``
     The vendor's shaping of every one of the twenty core error kinds, read over
     the wire instead of by importing the vendor's table.
@@ -65,6 +72,16 @@ SIX ROUTES THE REFERENCE DOES NOT HAVE
     An emitter, so a profile with no mutating route can still make a delivery
     happen, and a way to program the memory sink's next answers, so a forced
     retry can be driven from outside the process.
+``GET /__unit/auth``
+    Credentials that would authenticate right now. Without it a consumer -- or
+    a conformance check -- can read that a route requires a bearer token and
+    has no way whatever to obtain one, so the entire authentication layer is
+    describable and undrivable.
+``POST /__unit/state/update`` and ``POST /__unit/state/page``
+    The store's write path and its cursor, reached without a vendor body.
+    Optimistic concurrency and the cursor's query fingerprint are rules of the
+    CORE; asking them only through whichever endpoint a vendor happens to
+    expose would make them contracts about that vendor.
 
 WIRE CASING IS snake_case, HERE AS EVERYWHERE
 ---------------------------------------------
@@ -97,7 +114,9 @@ from vendorfake.core.control.schemas import (
     MachineProbeBody,
     RetryPolicyPatchBody,
     SinkProgramBody,
+    StatePageBody,
     StateRestoreBody,
+    StateUpdateBody,
     SubscriptionCreateBody,
     WebhookEmitBody,
     journal_entry_as_json,
@@ -411,6 +430,85 @@ def control_plane_routes(
             }
         )
 
+    def auth_get(args: HandlerArgs) -> ReplyInit:
+        """How to authenticate here, and credentials that would work right now.
+
+        The gap this closes is not small: without it, a route table says
+        ``auth: "bearer"`` and a conformance suite can assert the whole
+        ``unauthorized`` row of the error table while never once sending an
+        authenticated request -- which is exactly the state this control plane
+        was in before. A credential has to cross the wire for authentication to
+        be drivable by a consumer in another language.
+
+        Publishing them is safe *because this is a fake*: every credential here
+        is scenario data with no counterpart anywhere real, and withholding
+        them would only mean each consumer copying the seed document instead.
+        """
+        ctx = args.ctx
+        offered = list(ctx.vendor.auth.credentials(ctx))
+        return json_(
+            {
+                "describe": dict(ctx.vendor.auth.describe()),
+                "modes": sorted({credential.mode for credential in offered}),
+                "count": len(offered),
+                "credentials": [credential.as_json() for credential in offered],
+            }
+        )
+
+    def state_update(args: HandlerArgs) -> ReplyInit:
+        """One committed mutation of one entity, under optimistic concurrency.
+
+        The store's write path, reached directly. ``version`` is passed through
+        as ``expect_version``, so a stale value raises ``version_conflict`` from
+        ``core/state/store.py`` and nothing is written -- which is the half of
+        the journal contract no seed insert can demonstrate.
+
+        Journalled like any other mutation, which means it is also delivered
+        like any other mutation: this is a real write, not a simulation of one.
+        """
+        ctx = args.ctx
+        body = parse_or_raise(StateUpdateBody, args.body(), source="POST /__unit/state/update")
+        patch = dict(body.patch)
+
+        def mutate(entity: dict[str, Any]) -> None:
+            entity.update(patch)
+
+        updated = ctx.store.collection(body.collection).update(body.id, mutate, expect_version=body.version)
+        return json_(
+            {
+                "collection": body.collection,
+                "id": body.id,
+                "version": updated["version"],
+                "journal_seq": ctx.store.journal_seq,
+            }
+        )
+
+    def state_page(args: HandlerArgs) -> ReplyInit:
+        """Page a collection through the store's own cursor implementation.
+
+        Ids only, deliberately: the contract being made observable is the
+        cursor's -- opaque, fingerprinted against the query it was issued for,
+        expiring -- and a page of whole entities would invite a check to start
+        asserting on a vendor's field names instead.
+        """
+        ctx = args.ctx
+        body = parse_or_raise(StatePageBody, args.body(), source="POST /__unit/state/page")
+        collection = ctx.store.collection(body.collection)
+        page = collection.paginate(
+            collection.all(),
+            limit=body.limit,
+            cursor=body.cursor,
+            fingerprint=body.query,
+        )
+        return json_(
+            {
+                "collection": body.collection,
+                "count": len(page.items),
+                "ids": [str(item.get("id", "")) for item in page.items],
+                "cursor": page.cursor,
+            }
+        )
+
     def state_reset(args: HandlerArgs) -> ReplyInit:
         ctx = args.ctx
         binding.hydrate()
@@ -583,7 +681,8 @@ def control_plane_routes(
                 info={"mode": ctx.clock.mode},
             )
         fired = ctx.clock.advance(ms, settle=ctx.webhooks.settle)
-        ctx.webhooks.drain()
+        if body.drain:
+            ctx.webhooks.drain()
         return json_(
             {
                 "now": ctx.clock.iso_ms(),
@@ -765,6 +864,27 @@ def control_plane_routes(
             "Wipe state and re-apply the seed scenario.",
             state_reset,
             operation_id="UnitStateReset",
+        ),
+        c(
+            "POST",
+            "/__unit/state/update",
+            "Commit one mutation under optimistic concurrency.",
+            state_update,
+            operation_id="UnitStateUpdate",
+        ),
+        c(
+            "POST",
+            "/__unit/state/page",
+            "Page a collection through the store's cursor.",
+            state_page,
+            operation_id="UnitStatePage",
+        ),
+        c(
+            "GET",
+            "/__unit/auth",
+            "How to authenticate, and credentials that currently work.",
+            auth_get,
+            operation_id="UnitAuth",
         ),
         c(
             "GET",

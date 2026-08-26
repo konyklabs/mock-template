@@ -1060,3 +1060,37 @@ def test_the_oauth_routes_disappear_with_the_capability() -> None:
         response = harness_.api.call(method="GET", path="/oauth2/authorize", query={"client_id": APPLICATION_ID})
         assert response.status == 501
         assert response.header("x-unit-capability") == "oauth"
+
+
+# ---------------------------------------------------------------------------
+# A refusal must not spend the grant it refused
+# ---------------------------------------------------------------------------
+
+
+def test_a_refused_scope_intersection_leaves_the_code_spendable(h: Harness) -> None:
+    """Found by an adversarial re-attack, as a regression introduced by the fix
+    for the scope-escalation defect itself.
+
+    `_narrowed_scopes` raises when the intersection is empty, and it was being
+    evaluated as an argument to `_mint` -- so Python ran it only after the code
+    had already been marked used. The consumer received a 400 saying nothing
+    had happened, and their next correct attempt received a 401, because the
+    code was spent by the request that failed.
+
+    Every other refusal on this endpoint is ordered before the write. This one
+    is too, now. The general rule -- a 4xx must not leave a mutation behind --
+    is asserted for the whole surface by the conformance suite.
+    """
+    code = h.code(scope="ORDERS_READ")
+
+    refused = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="authorization_code",
+        code=code,
+        scopes=["PAYMENTS_WRITE"],
+    )
+    assert refused.status == 400, refused.text
+
+    accepted = h.token(client_secret=APPLICATION_SECRET, grant_type="authorization_code", code=code)
+    assert accepted.status == 200, "the refused request spent the code it refused"
+    assert accepted.json()["access_token"]

@@ -144,6 +144,7 @@ from vendorfake.square.model.order import (
     project_order_entry,
     supplied,
 )
+from vendorfake.square.seed.constants import SEED_LOCATION_ID
 from vendorfake.square.surface.common import SquareDeps
 
 __all__ = [
@@ -244,6 +245,19 @@ class OrdersSurface:
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="orders.create"),
                 operation_id="CreateOrder",
                 summary="Create an order. Idempotent on idempotency_key.",
+                # The minimum body CreateOrder accepts, published so that a
+                # language-independent check can cause a committed mutation
+                # rather than only observing seed inserts. "The order object
+                # must include a location_id"
+                # (https://developer.squareup.com/reference/square/orders-api/create-order),
+                # and the id has to be one the scenario actually holds -- an
+                # example naming an invented location would be an example the
+                # route refuses, which is worse than publishing none.
+                #
+                # `idempotency_key` is deliberately absent: whoever sends this
+                # body supplies their own, and a shipped constant would make
+                # every caller of the example collide with every other.
+                example_body={"order": {"location_id": SEED_LOCATION_ID}},
             ),
             Route(
                 method="POST",

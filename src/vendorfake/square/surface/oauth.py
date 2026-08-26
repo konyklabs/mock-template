@@ -325,6 +325,18 @@ class OAuthSurface:
             self._check_secret(grant.client_secret)
         self._check_redirect_uri(grant.redirect_uri, record.redirect_uri)
 
+        # Narrow BEFORE the write, not as an argument to `_mint`.
+        #
+        # `_narrowed_scopes` raises when the intersection is empty, and Python
+        # evaluates arguments after the statements above have already run. With
+        # the call left inline, a refused exchange still burned the code: the
+        # consumer got a 400 saying nothing happened, and their next correct
+        # attempt got a 401 because the code was spent. Every other refusal on
+        # this endpoint is ordered before the write; this one has to be too.
+        # The rule it belongs to is broader than OAuth -- a 4xx must not leave a
+        # journal entry behind -- and the conformance suite now asserts it.
+        narrowed = _narrowed_scopes(grant.scopes, record.scopes)
+
         def mark_used(draft: Entity) -> None:
             draft["used_at"] = ctx.clock.iso_ms()
 
@@ -334,7 +346,7 @@ class OAuthSurface:
             ctx,
             client_id=record.client_id,
             merchant_id=record.merchant_id,
-            scopes=_narrowed_scopes(grant.scopes, record.scopes),
+            scopes=narrowed,
             short_lived=grant.short_lived,
             flow=flow,
             refresh_token=self._deps.ids.refresh_token(),
@@ -369,6 +381,12 @@ class OAuthSurface:
         else:
             self._check_secret(grant.client_secret)
 
+        # Narrow before the retire/supersede write below, for the reason given
+        # on the exchange path: a PKCE refresh token is single-use, so a refused
+        # request that had already retired it would lock the consumer out of the
+        # grant permanently -- with a 400 telling them nothing had happened.
+        narrowed = _narrowed_scopes(grant.scopes, existing.scopes)
+
         now = ctx.clock.iso_ms()
         if existing.flow == "pkce":
             # "Refresh tokens obtained using the PKCE flow are single-use
@@ -393,7 +411,7 @@ class OAuthSurface:
             ctx,
             client_id=existing.client_id,
             merchant_id=existing.merchant_id,
-            scopes=_narrowed_scopes(grant.scopes, existing.scopes),
+            scopes=narrowed,
             # Set on refresh, never cleared by it; see the model.
             short_lived=grant.short_lived or existing.short_lived,
             flow=existing.flow,

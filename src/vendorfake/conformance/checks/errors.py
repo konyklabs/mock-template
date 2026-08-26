@@ -16,9 +16,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv
+from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv, RouteRow
 from vendorfake.conformance.registry import check
-from vendorfake.conformance.types import ConformanceFailure, Requires, require
+from vendorfake.conformance.types import ConformanceFailure, ConformanceSkip, Requires, require
 from vendorfake.core.kernel.types import UnitErrorKind
 
 __all__ = ["error_kinds_are_all_shaped", "the_framework_never_answers_a_consumer"]
@@ -34,6 +34,43 @@ diff attached.
 
 _UNKNOWN_PATH = "/definitely/not/a/real/path/conformance"
 _STARLETTE_ENVELOPE = {"detail"}
+_INVALID_JSON = "invalid_json"
+_ECHO_PATH = f"{CONTROL_PREFIX}echo"
+_MUTATING = frozenset({"POST", "PUT"})
+
+
+def _body_parsing_route(env: CheckEnv) -> tuple[RouteRow, dict[str, str], str]:
+    """A route that will actually attempt to parse the body it is sent.
+
+    "Send a malformed body and see what comes back" says nothing at all if the
+    route never reads one. The first enabled vendor route on the shipped vendor
+    is ``GET /oauth2/authorize``, whose own evidence line gave the game away --
+    ``malformed body -> 400:missing_field``, a missing query parameter -- and a
+    unit that answered a validation library's 422 for every genuinely parsed
+    body passed this contract unchanged.
+
+    A mutating vendor route first, because that is a route a consumer really
+    posts to; the control plane's echo route as the fallback, so a profile
+    whose vendor exposes no such route still asks the question rather than
+    quietly asking a different one.
+    """
+    for route in env.vendor_routes(methods=_MUTATING):
+        if route.auth is None:
+            return route, {}, "the first enabled mutating vendor route needing no credential"
+        try:
+            headers = env.authorized(route)
+        except ConformanceSkip:
+            continue
+        # Authenticated deliberately: a body is parsed at step 7 or step 8 of
+        # the pipeline and auth is step 5, so an anonymous probe is refused
+        # before anything reads it and the answer would be about the
+        # credential rather than about the body.
+        return route, headers, "the first enabled mutating vendor route, authenticated"
+    return (
+        RouteRow(method="POST", path=_ECHO_PATH, capability="", internal=True),
+        {},
+        "POST /__unit/echo, this profile offering no drivable mutating vendor route",
+    )
 
 
 @check(
@@ -89,23 +126,28 @@ def the_framework_never_answers_a_consumer(env: CheckEnv) -> str:
         f"core/kernel/router.py decide.",
     )
 
+    parser, credential, why = _body_parsing_route(env)
     malformed = env.client.call(
-        route.method,
-        route.probe_path,
+        parser.method,
+        parser.probe_path,
         body=b"{not json",
-        headers={"content-type": "application/json"},
+        headers={**credential, "content-type": "application/json"},
+    )
+    require(
+        malformed.error_kind == _INVALID_JSON,
+        f"a malformed body sent to {parser.key} answered {malformed.status} with "
+        f"x-unit-error={malformed.error_kind!r}, expected {_INVALID_JSON!r}. This probe must land "
+        f"on a route that READS a body: aimed at the vendor's first route it hit "
+        f"{env.first_vendor_route().key}, which answered `missing_field` for an absent query "
+        f"parameter and never parsed anything, so the clause below could not fail however the "
+        f"vendor shaped a parse error.",
     )
     require(
         malformed.status != 422,
-        "a malformed body answered 422, which is a validation library's error envelope reaching a "
-        "consumer. The adapter must declare no request model: asgi/adapt.py reads await "
-        "request.body() once and the core parses, raising UnitErrorKind.INVALID_JSON for the "
-        "vendor to shape.",
-    )
-    require(
-        malformed.error_kind,
-        f"a malformed body answered {malformed.status} with no x-unit-error header, so it did not "
-        f"pass through the vendor's shaper at all.",
+        f"a malformed body sent to {parser.key} answered 422, which is a validation library's "
+        f"error envelope reaching a consumer. The adapter must declare no request model: "
+        f"asgi/adapt.py reads await request.body() once and the core parses, raising "
+        f"UnitErrorKind.INVALID_JSON for the vendor to shape into its own document.",
     )
 
     health = env.client.call("GET", f"{CONTROL_PREFIX}health").json()
@@ -113,12 +155,14 @@ def the_framework_never_answers_a_consumer(env: CheckEnv) -> str:
         health.get("framework_answered") == 0,
         f"after three deliberately wrong requests, framework_answered is "
         f"{health.get('framework_answered')!r}. The tripwire in asgi/app.py counted a request the "
-        f"framework answered by itself: that consumer received a document no vendor wrote.",
+        f"framework answered by itself: that consumer received a document no vendor wrote. The "
+        f"three requests above are chosen to be exactly the ones a framework likes to answer for "
+        f"itself, so a hole in the catch-all shows up here and nowhere else.",
     )
     return (
         f"unknown path -> {missing.status}:{missing.error_kind}; {wrong_method} {route.probe_path} -> "
-        f"{wrong.status}:{wrong.error_kind}; malformed body -> {malformed.status}:{malformed.error_kind}; "
-        f"framework_answered still 0"
+        f"{wrong.status}:{wrong.error_kind}; malformed body to {parser.key} ({why}) -> "
+        f"{malformed.status}:{malformed.error_kind}; framework_answered {health.get('framework_answered')!r}"
     )
 
 

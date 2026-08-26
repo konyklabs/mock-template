@@ -50,7 +50,13 @@ from vendorfake.conformance.runner import (
     run_check,
     select_checks,
 )
-from vendorfake.conformance.types import CheckSpec, ConformanceFailure, ConformanceTarget, Outcome
+from vendorfake.conformance.types import (
+    CheckSpec,
+    ConformanceError,
+    ConformanceFailure,
+    ConformanceTarget,
+    Outcome,
+)
 
 __all__ = ["ARGNAME", "Case", "run_case"]
 
@@ -105,6 +111,11 @@ def run_case(case: Case | None, ledger: _Ledger | None = None) -> None:
                 f"conformance/manifest.json does not declare: {result.detail}"
             )
         raise unittest.SkipTest(f"{result.case_id}: {result.detail}")
+    if result.outcome is Outcome.ERROR:
+        # Reported apart from a failure, because it is a different fact: the
+        # contract was never asked. A run where every case says this is a unit
+        # that would not start, not a suite that found sixteen violations.
+        raise ConformanceError(f"{result.case_id}: the unit could not be reached\n{result.detail}")
     if result.outcome is Outcome.FAIL:
         raise ConformanceFailure(f"{result.check_id} {result.name}\n{result.detail}")
 

@@ -15,9 +15,18 @@ it. In-process construction costs milliseconds. Isolation removes the whole
 class of flake, and it makes "two fresh units agree" the ordinary case rather
 than a special one.
 
-SECOND INVARIANT: **an unexpected exception is a FAILURE, never a skip.** A
-vendor whose unit cannot even be constructed must go red. A suite that turned
-a crash into a skip would report the emptiest possible run as its cleanest.
+SECOND INVARIANT: **an unexpected exception is red, never a skip.** A suite
+that turned a crash into a skip would report the emptiest possible run as its
+cleanest. But red comes in two kinds and they are reported as two: an
+exception raised *inside* a check body is a FAILURE of that contract, while an
+exception raised while the unit is being CONSTRUCTED or reached is an ERROR --
+the contract was never asked, so nothing at all was learned about it.
+
+That split was bought with a measurement. Deleting one core-gated capability
+declaration from a vendor makes ``Unit`` refuse to start, which used to print
+``[FAIL] C11`` -- indistinguishable from C11 having been asked and having
+found the declaration missing, and identical to what every other contract
+printed at the same moment. One line of the report now says which happened.
 """
 
 from __future__ import annotations
@@ -26,6 +35,7 @@ import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from importlib import import_module
+from typing import Any
 
 import httpx
 
@@ -35,6 +45,7 @@ from vendorfake.conformance.registry import CHECKS, expected_skips, find_check
 from vendorfake.conformance.report import CheckResult, ConformanceReport
 from vendorfake.conformance.types import (
     CheckSpec,
+    ConformanceError,
     ConformanceFailure,
     ConformanceSkip,
     ConformanceTarget,
@@ -189,6 +200,36 @@ def select_checks(ids: Sequence[str] | None) -> tuple[CheckSpec, ...]:
     return tuple(find_check(check_id) for check_id in sorted(wanted))
 
 
+@contextmanager
+def _reached(target: ConformanceTarget, profile: str, transport: str) -> Iterator[Any]:
+    """``check_env``, with a construction crash relabelled as an ERROR.
+
+    The whole of the distinction lives here, in the narrowest place it can:
+    only what ``target.open_client`` does on the way *in* is reclassified.
+    Once a client exists the context is a plain pass-through, so an exception
+    a check body raises is still that check body's failure and cannot be
+    laundered into "the harness is broken".
+    """
+    try:
+        manager = check_env(target, profile, transport)
+        env = manager.__enter__()
+    except ConformanceSkip:
+        raise
+    except Exception as exc:
+        raise ConformanceError(
+            f"the unit could not be constructed on profile {profile!r} over {transport!r}: "
+            f"{type(exc).__name__}: {exc}\n"
+            f"This contract was never asked, so this run says nothing about it -- and it says "
+            f"nothing about any other contract either, because they all failed the same way. "
+            f"Fix the construction failure first; a unit that refuses to start is a startup "
+            f"assertion doing its job, not sixteen violated contracts."
+        ) from exc
+    try:
+        yield env
+    finally:
+        manager.__exit__(None, None, None)
+
+
 def run_check(
     spec: CheckSpec,
     target: ConformanceTarget,
@@ -200,21 +241,24 @@ def run_check(
     outcome = Outcome.PASS
     detail = ""
     try:
-        with check_env(target, profile, transport) as env:
+        with _reached(target, profile, transport) as env:
             unmet = unmet_precondition(spec.requires, env)
             if unmet is not None:
                 raise ConformanceSkip(unmet)
             detail = spec.fn(env)
     except ConformanceSkip as skip:
         outcome, detail = Outcome.SKIP, str(skip)
+    except ConformanceError as error:
+        outcome, detail = Outcome.ERROR, str(error)
     except ConformanceFailure as failure:
         outcome, detail = Outcome.FAIL, str(failure)
     except Exception as exc:
         outcome = Outcome.FAIL
         detail = (
             f"the check raised {type(exc).__name__}: {exc}\n"
-            f"An unexpected exception is a failure, not a skip: the unit could not be driven "
-            f"far enough to say anything about {spec.id}."
+            f"An unexpected exception from inside a check body is a failure, not a skip: the "
+            f"contract was asked and {spec.id} could not be satisfied. An exception from unit "
+            f"CONSTRUCTION is reported as ERROR instead -- see _reached()."
         )
     return CheckResult(
         check_id=spec.id,

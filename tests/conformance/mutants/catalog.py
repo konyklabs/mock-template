@@ -1,4 +1,4 @@
-"""Twenty units, each broken in exactly one way, and the check each must trip.
+"""Thirty units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -18,6 +18,14 @@ check ids it must turn red. Two of them are not inventions:
 Everything else is labelled ``hypothetical`` and means it: a defect nobody has
 shipped in this lineage, written to give a contract something to catch.
 
+M21 through M30 were written against measured holes rather than imagined ones.
+Each reproduces a mutation that was applied to this codebase and left the whole
+suite green: authentication deleted, a capability gate skipped for one
+operation, the journal recording the version it read, the webhooks gate removed
+outright, a retry schedule declared and not followed, idempotent replay
+disabled, a cursor's query fingerprint ignored, a seed drawn from the process
+id, and a vendor whose unit will not start at all.
+
 WHAT IS NOT REACHABLE FROM A PRODUCTION PATH. Nothing in this module is
 imported by ``src/vendorfake/``. Every mutation is applied by handing a
 deliberately wrong collaborator to a constructor that already takes one, so
@@ -27,6 +35,7 @@ the seams are real and the defects are not.
 from __future__ import annotations
 
 import itertools
+import os
 import secrets
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -34,11 +43,14 @@ from typing import Any
 from tests.conformance.harness import PROFILES
 from tests.conformance.mutants.model import Mutant, Provenance, register
 from tests.conformance.mutants.seams import (
+    AuthAdapterOverlay,
     ClientOverlay,
     ErrorShaperOverlay,
+    ImpatientWebhookDispatcher,
     LeakyFaultSelector,
     PermissiveStateMachine,
     SignerOverlay,
+    UngatedWebhookDispatcher,
     VendorOverlay,
     carries_magic,
     replace_control_route,
@@ -46,10 +58,13 @@ from tests.conformance.mutants.seams import (
     wrap_vendor_handlers,
 )
 from vendorfake.conformance.client import FORM_CONTENT_TYPE, ConformanceClient, ConformanceResponse
-from vendorfake.core.capability.registry import CapabilityRegistry
+from vendorfake.core.capability.gates import CoreCapability
+from vendorfake.core.capability.registry import CONTROL_CAPABILITY, CapabilityRegistry
 from vendorfake.core.chaos.engine import ChaosEngine
 from vendorfake.core.chaos.selector import FaultSelector
 from vendorfake.core.kernel.types import (
+    AuthAdapter,
+    AuthResult,
     CapabilityDecl,
     Handler,
     HandlerArgs,
@@ -65,9 +80,11 @@ from vendorfake.core.kernel.types import (
     VendorDefinition,
 )
 from vendorfake.core.state.machine import MachineDef
+from vendorfake.core.webhooks.dispatcher import WebhookDispatcher
 from vendorfake.core.webhooks.models import DeliveryMetadata
 from vendorfake.square.retry import RETRY_NUMBER_HEADER, RETRY_REASON_HEADER, RETRY_REASONS
 from vendorfake.square.signer import SIGNATURE_HEADER, square_signature
+from vendorfake.square.vendor import SQUARE_SCOPES
 
 __all__ = ["PERMISSIVE_SELF_TRANSITION", "UNGATED_IN_BAND_CHAOS"]
 
@@ -75,6 +92,22 @@ _PROBE_CAPABILITY = "merchant-directory"
 """An existing, enabled surface capability the route mutants can hang a route
 off. Chosen so that a mutant about *route* wiring does not also become a
 mutant about capability declaration."""
+
+_GATED_CAPABILITY = CoreCapability.WEBHOOKS_CHAOS.value
+"""The core-gated capability the construction mutant removes.
+
+The leaf of the three, so its removal is a declaration failure and nothing
+else: taking away ``webhooks`` would also orphan its child and produce two
+problems where the contract is about one.
+"""
+
+VIRTUAL_CLOCK_PROFILE = "chaos-demo"
+"""The one shipped profile whose clock is virtual.
+
+Named rather than indexed, because the mutant that judges the retry schedule
+must run somewhere a declared delay can be *crossed*; on every other profile
+the contract's precondition is unmet and the mutant would prove nothing.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +163,14 @@ register(
         defect="A vendor route names a capability that appears in no CapabilityDecl, so it can never be enabled.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C02"}),
+        also_trips=frozenset({"C03"}),
+        cascade=(
+            "An undeclared capability is one no profile can switch off, so the orphan route is also "
+            "a route no capability gates -- which is exactly what C03's completeness clause now "
+            "asserts against. The two findings are the same defect seen from the route table and "
+            "from the gate, and suppressing either would mean C03 passing over a live, ungateable "
+            "endpoint."
+        ),
         vendor=lambda inner: VendorOverlay(inner, routes=_add_orphan),
     )
 )
@@ -653,6 +694,11 @@ register(
         # the anti-vacuity rule would be firing on two things at once -- which
         # is exactly the ambiguity this mutant exists to remove.
         transports=("inprocess", "http"),
+        # And an out-of-process transport, for the same reason and no other:
+        # C22 needs one, and a target that offered none would leave C22 having
+        # passed nowhere too. This mutant is the one place where "passed
+        # nowhere" must mean exactly one contract.
+        out_of_process=("subprocess",),
         vendor=lambda inner: VendorOverlay(inner, machines={}),
     )
 )
@@ -664,4 +710,390 @@ report's anti-vacuity rule is what catches it: ``report.ok`` is False when any
 check passed on no profile at all. This mutant is how that rule is exercised,
 and it is the reason the rule is asserted at the report level rather than being
 inferred from a count of failures.
+"""
+
+
+# ---------------------------------------------------------------------------
+# C01, C04 -- the framework tripwire is a measurement, not a constant.
+# ---------------------------------------------------------------------------
+
+
+def _framework_answered_a_request(document: dict[str, Any]) -> dict[str, Any]:
+    return {**document, "framework_answered": 1}
+
+
+register(
+    Mutant(
+        id="M21",
+        name="the-framework-answered-a-consumer",
+        defect="GET /__unit/health reports framework_answered=1: some request was answered above the unit.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C01"}),
+        also_trips=frozenset({"C04"}),
+        cascade=(
+            "C01 and C04 assert the same number for two different reasons -- C01 that a quiet unit "
+            "reports zero, C04 that three deliberately wrong requests still report zero -- so a "
+            "non-zero counter is a genuine violation of both. That both were previously satisfied "
+            "by a literal 0 is the defect this mutant exists alongside: tests/conformance/"
+            "harness.py now builds the served unit with framework_answered=tripwire.get and hands "
+            "create_app the same tripwire, so the number is measured rather than assumed."
+        ),
+        control=replace_control_route("GET", "/__unit/health", rewrite_document(_framework_answered_a_request)),
+    )
+)
+"""Why this one is a document mutant, and why that is the right shape.
+
+The counter is incremented by the ASGI application and read from the unit; over
+the in-process transport there is no framework at all, so a *behavioural*
+mutant here would be a mutant of the web framework rather than of the unit. The
+wiring that makes the number real is pinned separately, by
+``tests/conformance/test_harness_wiring.py``, which drives a verb the catch-all
+does not claim and watches the number the unit reports move. This mutant pins
+the other half: that a non-zero value is not tolerated by either contract.
+"""
+
+
+# ---------------------------------------------------------------------------
+# C04 -- a malformed body must not meet a validation library's envelope.
+# ---------------------------------------------------------------------------
+
+register(
+    Mutant(
+        id="M22",
+        name="malformed-body-shaped-as-422",
+        defect="The vendor shapes invalid_json as HTTP 422, the validation-library envelope a consumer must never meet.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C04"}),
+        vendor=lambda inner: VendorOverlay(
+            inner,
+            errors=ErrorShaperOverlay(
+                inner.errors,
+                overrides={
+                    UnitErrorKind.INVALID_JSON: ShapedError(
+                        status=422,
+                        body={"detail": [{"loc": ["body", 0], "msg": "Expecting value", "type": "value_error"}]},
+                    )
+                },
+            ),
+        ),
+    )
+)
+"""The mutant a probe aimed at the wrong route could not catch.
+
+C04 used to send its malformed body to ``env.first_vendor_route()``, which on
+this vendor is ``GET /oauth2/authorize`` -- a route with no body at all, whose
+own evidence line read ``malformed body -> 400:missing_field``. Under this
+mutant every route that genuinely parses a body answered 422 and the suite
+stayed green. C05 does not catch it either: 422 is a 4xx with a non-empty body,
+which is all the error *table* is asked for.
+"""
+
+
+# ---------------------------------------------------------------------------
+# C03 -- no vendor route escapes the capability gate.
+# ---------------------------------------------------------------------------
+
+
+def _ungated_vendor_route(args: HandlerArgs) -> ReplyInit:
+    return ReplyInit(json={"reachable": True})
+
+
+def _add_route_owned_by_the_control_capability(routes: Sequence[Route]) -> Sequence[Route]:
+    return (
+        *routes,
+        Route(
+            method="GET",
+            path="/v2/conformance-ungated",
+            # The control plane's own capability: always enabled, filtered out
+            # of every capability listing, and therefore invisible to a loop
+            # over declared capabilities. A copy-paste away from the real thing.
+            capability=CONTROL_CAPABILITY,
+            handler=_ungated_vendor_route,
+            operation_id="ConformanceUngated",
+            summary="A vendor route no profile can switch off.",
+        ),
+    )
+
+
+register(
+    Mutant(
+        id="M23",
+        name="vendor-route-outside-every-capability",
+        defect="A vendor route names the control capability, so it is live on every profile and no gate applies.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C03"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_add_route_owned_by_the_control_capability),
+    )
+)
+"""The hole per-capability iteration structurally cannot see.
+
+C03 iterates capabilities and probes the routes each one owns; a route owned by
+the one capability that is never listed belongs to no iteration at all. C02
+tolerates it by design -- a route naming the control capability is not an
+orphan -- so the route table and the capability table stay consistent while an
+endpoint sits outside every profile's reach. Only the complementary assertion
+catches it: every vendor route must have been probed by *some* capability.
+"""
+
+
+# ---------------------------------------------------------------------------
+# C17 -- the unit actually authenticates somebody.
+# ---------------------------------------------------------------------------
+
+
+def _accepts_anything(inner: AuthAdapter, args: HandlerArgs, mode: str) -> AuthResult:
+    # Every scope, for any caller, with or without a credential. This is what
+    # `if False:` around step 5 of the pipeline looks like from the outside,
+    # expressed through the seam a vendor author would actually get wrong.
+    return AuthResult(principal_id="anyone", scopes=SQUARE_SCOPES, meta={"mode": mode})
+
+
+register(
+    Mutant(
+        id="M24",
+        name="auth-adapter-accepts-anyone",
+        defect="The auth adapter resolves any request -- credential or none -- to a principal holding every scope.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C17"}),
+        vendor=lambda inner: VendorOverlay(inner, auth=AuthAdapterOverlay(inner.auth, resolve=_accepts_anything)),
+    )
+)
+"""The unit the suite certified before C17 existed.
+
+Replacing the whole authentication step in ``core/kernel/unit.py`` with ``if
+False:`` left all sixteen contracts green: ``unauthorized`` and
+``forbidden_scope`` appeared only as rows of the error table read from
+``GET /__unit/errors``, never as behaviour. This mutant is that unit, reached
+through the vendor's own adapter, and it violates all three of C17's clauses at
+once -- anonymous accepted, invented credential accepted, under-scoped
+credential accepted.
+"""
+
+
+# ---------------------------------------------------------------------------
+# C18 -- the delivery capability gate is real.
+# ---------------------------------------------------------------------------
+
+
+def _ungated_dispatcher(**kwargs: Any) -> WebhookDispatcher:
+    return UngatedWebhookDispatcher(**kwargs)
+
+
+register(
+    Mutant(
+        id="M25",
+        name="delivery-gate-consults-no-capability",
+        defect="The dispatcher's journal listener never asks whether the webhooks capability is enabled.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C18"}),
+        dispatcher=_ungated_dispatcher,
+    )
+)
+"""Two deleted lines that nothing noticed.
+
+C11 publishes this gate with its ``gated_at`` and its ``effect`` -- "the
+listener returns at once, so no event is ever mapped, prepared or delivered" --
+and until C18 there was no equivalent of C14 asserting that the effect happens.
+The two contracts that touch delivery both declare ``requires=webhooks``, so
+they skip on precisely the profiles where an ungated dispatcher would show.
+"""
+
+
+# ---------------------------------------------------------------------------
+# C19 -- a replayed idempotency key runs nothing.
+# ---------------------------------------------------------------------------
+
+
+def _lie_about_the_idempotency_key(document: dict[str, Any]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for row in document["routes"]:
+        spec = row.get("idempotency")
+        if spec is None:
+            rows.append(row)
+            continue
+        rows.append({**row, "idempotency": {**spec, "key_path": f"{spec['key_path']}_v2"}})
+    return {**document, "routes": rows}
+
+
+register(
+    Mutant(
+        id="M26",
+        name="published-idempotency-key-is-not-the-one-used",
+        defect="GET /__unit/routes names an idempotency key_path the route does not deduplicate on.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C19"}),
+        control=replace_control_route("GET", "/__unit/routes", rewrite_document(_lie_about_the_idempotency_key)),
+    )
+)
+"""A published contract that is not the behaviour.
+
+The route table is what a consumer builds against, so a ``key_path`` there that
+the kernel does not read means every retry a consumer sends under the
+documented field is a fresh execution -- a second order per dropped
+acknowledgement, with a 200 each time. Observationally identical, from outside,
+to the lookup at step 7 of ``core/kernel/unit.py::_run_pipeline`` being
+disabled, which is the defect that left the suite green; both are caught by the
+same two observations, the stored bytes and the unmoved journal.
+"""
+
+
+# ---------------------------------------------------------------------------
+# C20 -- a cursor belongs to the query that issued it.
+# ---------------------------------------------------------------------------
+
+
+def _page_without_a_fingerprint(handler: Handler) -> Handler:
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        body = args.body()
+        if not isinstance(body, Mapping) or not isinstance(body.get("collection"), str):
+            return handler(args)
+        collection = args.ctx.store.collection(str(body["collection"]))
+        limit = body.get("limit")
+        cursor = body.get("cursor")
+        # The call site forgets `fingerprint=`, which the store treats as the
+        # query being `None` every time -- so every cursor matches every query.
+        # One missing keyword argument, and the rule the store implements is
+        # silently unreachable from this endpoint.
+        page = collection.paginate(
+            collection.all(),
+            limit=limit if isinstance(limit, int) else None,
+            cursor=cursor if isinstance(cursor, str) else None,
+        )
+        return ReplyInit(
+            json={
+                "collection": body["collection"],
+                "count": len(page.items),
+                "ids": [str(item.get("id", "")) for item in page.items],
+                "cursor": page.cursor,
+            }
+        )
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M27",
+        name="cursor-issued-without-a-query-fingerprint",
+        defect="A paginating call site omits the query fingerprint, so a cursor from one query pages another.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C20"}),
+        control=replace_control_route("POST", "/__unit/state/page", _page_without_a_fingerprint),
+    )
+)
+"""A wrong answer with no error attached.
+
+``if decoded.q != fp`` in ``core/state/store.py`` could be replaced with ``if
+False`` and nothing went red. The consequence is the worst kind: a consumer
+changes a filter, keeps paging, and receives rows from the previous query with
+a 200 and no indication anywhere that the page does not belong to the question
+they asked.
+"""
+
+
+# ---------------------------------------------------------------------------
+# C21 -- the declared retry schedule is the one followed.
+# ---------------------------------------------------------------------------
+
+
+def _impatient_dispatcher(**kwargs: Any) -> WebhookDispatcher:
+    return ImpatientWebhookDispatcher(**kwargs)
+
+
+register(
+    Mutant(
+        id="M28",
+        name="retry-schedule-is-decoration",
+        defect="Retries are submitted immediately instead of being put on the clock, so every declared interval is 0.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C21"}),
+        # The one profile that runs a virtual clock, which is what makes a
+        # declared interval crossable rather than waitable. On any other
+        # profile C21's precondition is unmet and this mutant would prove
+        # nothing at all.
+        profiles=(VIRTUAL_CLOCK_PROFILE,),
+        dispatcher=_impatient_dispatcher,
+    )
+)
+"""The schedule still declared, published and exhausted -- and never waited for.
+
+C16 asserted the published ``schedule_ms`` was non-empty and positive; C09 and
+C16 then required ``len(attempts) >= 2``. Eleven declared intervals with the
+whole cascade running in one millisecond satisfies every one of those, and a
+consumer's backoff test written against this fake would pass without the
+backoff ever being exercised.
+"""
+
+
+# ---------------------------------------------------------------------------
+# C22 -- determinism across processes.
+# ---------------------------------------------------------------------------
+
+
+def _hydrate_with_a_per_process_entity(inner: VendorDefinition, ctx: UnitContext, seed: object) -> None:
+    inner.hydrate(ctx, seed)
+    # Constant within one interpreter and different in the next. Two units
+    # built here agree exactly, which is why C06 stays green and why this
+    # mutant needs a unit built somewhere else to be caught at all.
+    ctx.store.collection(_MUTANT_COLLECTION).insert({"id": f"per-process-{os.getpid()}", "pid": os.getpid()})
+
+
+register(
+    Mutant(
+        id="M29",
+        name="per-process-seed",
+        defect="hydrate() mints an id from the process id: constant within one interpreter, different in the next.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C22"}),
+        out_of_process=("subprocess",),
+        vendor=lambda inner: VendorOverlay(inner, hydrate=_hydrate_with_a_per_process_entity),
+    )
+)
+"""Invisible to C06 by construction, which is the finding.
+
+C06 builds its second unit with ``target.open_client``, and every transport the
+harness offered built it in this interpreter -- ``uvicorn`` on a background
+thread is a second *binding*, not a second process. So both of C06's units read
+the same pid, digest identically, and C06 reports determinism. The claim C06
+makes is about runs, and runs are processes: only a unit built by
+``tests/conformance/unit_child.py`` can falsify it.
+"""
+
+
+# ---------------------------------------------------------------------------
+# The unit that will not start at all.
+# ---------------------------------------------------------------------------
+
+
+def _drop_a_core_gated_declaration(decls: Sequence[CapabilityDecl]) -> Sequence[CapabilityDecl]:
+    return tuple(decl for decl in decls if decl.name != _GATED_CAPABILITY)
+
+
+register(
+    Mutant(
+        id="M30",
+        name="unit-refuses-to-start",
+        defect=(
+            "The vendor neither declares nor excuses a core-gated capability, so the startup "
+            "assertion refuses to construct the unit."
+        ),
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset(),
+        fails_to_construct=True,
+        vendor=lambda inner: VendorOverlay(inner, capabilities=_drop_a_core_gated_declaration),
+    )
+)
+"""The mutant that must NOT be reported as a failing contract.
+
+Removing this declaration used to print ``[FAIL] C11`` -- which reads exactly
+like C11 having been asked and having found the declaration missing, and which
+every other contract printed at the same moment for the same reason. C11's body
+never ran. A unit that constructs always passes C11 and a unit that does not
+fails everything, so the line said nothing about C11 at all.
+
+The FAIL/ERROR split is what this holds down: every case here must be ERROR,
+none may be FAIL, and the report must be red. What C11 discriminates is a
+*document* -- which is honest, and is why C11's own prose now says so: its value
+is against a foreign implementation reached over ``--base-url``, which has no
+Python startup assertion in front of it.
 """
