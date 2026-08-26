@@ -41,6 +41,7 @@ __all__ = [
     "SeedMoney",
     "SeedOrder",
     "SeedSubscription",
+    "SeedTender",
     "SeedToken",
     "SeedVariation",
     "parse_seed_document",
@@ -144,8 +145,43 @@ class SeedLineItem(BaseModel):
     base_price_money: SeedMoney | None = None
 
 
+class SeedTender(BaseModel):
+    """One payment already recorded against a seeded order.
+
+    A scenario that ships a COMPLETED order has to be able to say how it was
+    paid, because Square cannot produce a completed order that was not:
+    "Completed orders are fully paid. This is a terminal state."
+    https://developer.squareup.com/reference/square/enums/OrderState
+
+    Field names and the ``CARD`` default are Square's ``Tender``
+    (https://developer.squareup.com/reference/square/objects/Tender); the
+    PayOrder example response shows the shape this mirrors
+    (https://developer.squareup.com/reference/square/orders-api/pay-order).
+    ``location_id`` and ``transaction_id`` default to the order's own values
+    during hydration, which is what PayOrder writes here.
+    """
+
+    model_config = _SEED
+
+    id: str = Field(min_length=1)
+    payment_id: str = ""
+    amount_money: SeedMoney
+    created_at: str | None = None
+    location_id: str | None = None
+    transaction_id: str | None = None
+    type: str = "CARD"
+
+
 class SeedOrder(BaseModel):
-    """An order that already exists when the unit starts."""
+    """An order that already exists when the unit starts.
+
+    ``closed_at`` and ``tenders`` exist so that a terminal order in a scenario
+    can be one Square could actually have produced. ``closed_at`` is "The
+    timestamp for when the order reached a terminal state, in RFC 3339 format"
+    (https://developer.squareup.com/reference/square/objects/Order); without
+    them a shipped COMPLETED order is fully payable, has nothing due against
+    it and matches no ``closed_at`` filter.
+    """
 
     model_config = _SEED
 
@@ -158,8 +194,10 @@ class SeedOrder(BaseModel):
     source_name: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
+    closed_at: str | None = None
     version: int = 1
     line_items: tuple[SeedLineItem, ...] = ()
+    tenders: tuple[SeedTender, ...] = ()
 
 
 class SeedToken(BaseModel):

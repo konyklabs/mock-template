@@ -344,6 +344,17 @@ class Tender:
     """One payment against an order.
 
     https://developer.squareup.com/reference/square/objects/Tender
+
+    JUDGMENT -- ``type`` defaults to ``CARD``. It is a real ``TenderType``
+    value (https://developer.squareup.com/reference/square/enums/TenderType)
+    and it is what the PayOrder example response shows
+    (https://developer.squareup.com/reference/square/orders-api/pay-order), but
+    Square derives it from the *payment*, and this unit has no Payments API to
+    derive it from -- see the SHRINK in
+    :mod:`vendorfake.square.surface.orders`. So the value is this unit's
+    choice, not a documented consequence of anything the caller sent, and a
+    consumer must not test that a particular payment produced a particular
+    tender type here. A scenario can state a different one on a seeded tender.
     """
 
     id: str
