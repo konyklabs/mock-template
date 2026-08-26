@@ -94,6 +94,7 @@ from vendorfake.core.capability.gates import CoreCapability, assert_capability_d
 from vendorfake.core.capability.registry import CapabilityRegistry
 from vendorfake.core.chaos.engine import ChaosEngine, ChaosSubject
 from vendorfake.core.chaos.faults import apply_request_fault
+from vendorfake.core.chaos.rules import matched_routes
 from vendorfake.core.chaos.selector import FaultSelector
 from vendorfake.core.config.models import ResolvedConfig
 from vendorfake.core.kernel.magic import MagicExtraction, extract_magic
@@ -355,6 +356,7 @@ class Unit:
         self._selector = FaultSelector(self._chaos, self._capabilities)
 
         self._assert_retry_schedule()
+        self._report_dead_chaos_rules()
 
         # An HTTP sink by default, built here but connecting nothing: its
         # client is created on first send, so a unit whose vendor has no
@@ -422,6 +424,47 @@ class Unit:
             field="webhooks.retry.schedule_ms",
             info={"profile": self._config.profile, "vendor": self._vendor.name},
         )
+
+    def _report_dead_chaos_rules(self) -> None:
+        """A profile rule whose ``match.route`` names no route can never fire.
+
+        The reference's ``validateRule`` checks ``id``, ``fault`` and ``scope``
+        and never checks the route, so a typo -- or a path template that moved
+        from ``:order_id`` to ``{order_id}`` -- is a rule that matches nothing,
+        forever, silently. The first symptom is a chaos transcript in which two
+        of four rules did nothing and nobody the wiser.
+
+        Checked here because this is the first moment both facts exist: the
+        parsed rules and the assembled route table. Internal routes are
+        excluded from the table because the pipeline short-circuits them before
+        fault selection runs, so a rule "matching" one could still never fire.
+
+        A NOTE by default and a hard ``invalid_value`` under
+        ``config.chaos.strict_rules``. Both, because refusing outright would
+        reject a rule aimed at a route whose capability is temporarily switched
+        off, which is a legitimate thing to write; and staying silent is the
+        defect this exists to close.
+        """
+        rules = self._chaos.list()
+        if not rules:
+            return
+        route_keys = tuple(route.key for route in self._routes if not route.internal)
+        dead = [rule for rule in rules if not matched_routes(rule, route_keys)]
+        if not dead:
+            return
+        offenders = {rule.id: (rule.match.route if rule.match is not None else None) for rule in dead}
+        detail = (
+            f"chaos rule(s) {', '.join(sorted(offenders))} match no registered route and can never fire. "
+            "Route templates are braces -- 'GET /v2/orders/{order_id}' -- not colons."
+        )
+        if self._config.chaos.strict_rules:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=detail,
+                field="chaos.rules",
+                info={"rules": offenders, "profile": self._config.profile},
+            )
+        self._log.warn("chaos rules match no route", {"rules": offenders, "profile": self._config.profile})
 
     # -- identity -----------------------------------------------------------
 

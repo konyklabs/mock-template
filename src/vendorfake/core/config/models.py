@@ -121,6 +121,17 @@ class ChaosSection(BaseModel):
 
     seed: int = 1
     rules: tuple[dict[str, Any], ...] = ()
+    #: Refuse a rule whose ``match.route`` names no registered route, instead
+    #: of logging a NOTE and carrying on.
+    #:
+    #: The reference validates a rule's ``id``, ``fault`` and ``scope`` and
+    #: never checks the route, so a typo -- or a path template that moved from
+    #: ``:order_id`` to ``{order_id}`` -- is a rule that matches nothing,
+    #: forever, silently, and the first symptom is a chaos demo transcript in
+    #: which two of four rules did nothing. Shipped profiles set this true;
+    #: the default is false because a rule aimed at a route whose capability is
+    #: temporarily switched off is a legitimate thing to write.
+    strict_rules: bool = False
 
 
 class ClockSection(BaseModel):
@@ -190,6 +201,10 @@ class ResolvedChaos(BaseModel):
 
     seed: int
     rules: tuple[dict[str, Any], ...] = ()
+    #: See :attr:`ChaosSection.strict_rules`. No environment override: it
+    #: changes whether a unit *starts*, and a variable that can stop a
+    #: container booting belongs in the profile a reader can diff.
+    strict_rules: bool = False
 
 
 class ResolvedConfig(BaseModel):
