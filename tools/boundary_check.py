@@ -93,6 +93,29 @@ def vendor_slugs() -> list[str]:
     return sorted(child.name for child in package.iterdir() if child.is_dir() and (child / "vendor.py").is_file())
 
 
+def docstring_nodes(tree: ast.AST) -> set[int]:
+    """Every string Constant that is a docstring, by object id.
+
+    The vendor-slug rule below targets vendor-specific *values* in shared code.
+    A docstring is never used as a value, and comments -- which can say exactly
+    the same thing -- are not in the AST at all, so scanning docstrings would
+    make the rule inconsistent rather than stricter: `# square-retry-number`
+    would pass where the same words in a docstring failed. Citing the reference
+    implementation by path is exactly the evidence discipline this project
+    wants, so it must not be what trips the check.
+    """
+    found: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        body = node.body
+        if body and isinstance(body[0], ast.Expr):
+            value = body[0].value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                found.add(id(value))
+    return found
+
+
 def import_edges(tree: ast.AST) -> list[ImportEdge]:
     """Every imported module name, with whether it was reached under a guard.
 
@@ -264,8 +287,9 @@ def ast_pass(policy: dict[str, object]) -> list[Finding]:
 
         # 5. no vendor slug as a literal in shared code
         if slugs and matches_prefix(where, slug_prefixes):
+            docstrings = docstring_nodes(tree)
             for node in ast.walk(tree):
-                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings:
                     lowered = node.value.lower()
                     for slug in slugs:
                         if slug in lowered:

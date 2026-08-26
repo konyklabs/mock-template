@@ -121,6 +121,8 @@ from vendorfake.core.time.clock import Clock
 from vendorfake.core.util.b64 import b64url_decode, b64url_encode
 from vendorfake.core.util.json import digest_of, dump_json
 from vendorfake.core.util.paths import dot_get
+from vendorfake.core.webhooks.dispatcher import WebhookDispatcher
+from vendorfake.core.webhooks.sink import DeliverySink, HttpSink
 
 __all__ = [
     "REQUEST_ID_HEADER",
@@ -259,7 +261,7 @@ class _Context:
     """The concrete :class:`UnitContext`. Attributes, checked against the
     protocol by the annotated assignment in :meth:`Unit.__init__`."""
 
-    __slots__ = ("capabilities", "chaos", "clock", "config", "log", "rng", "store", "vendor")
+    __slots__ = ("capabilities", "chaos", "clock", "config", "log", "rng", "store", "vendor", "webhooks")
 
     def __init__(
         self,
@@ -271,6 +273,7 @@ class _Context:
         chaos: ChaosEngine,
         clock: Clock,
         rng: Rng,
+        webhooks: WebhookDispatcher,
         log: Logger,
     ) -> None:
         self.vendor = vendor
@@ -280,6 +283,7 @@ class _Context:
         self.chaos = chaos
         self.clock = clock
         self.rng = rng
+        self.webhooks = webhooks
         self.log = log
 
 
@@ -310,6 +314,7 @@ class Unit:
         "_sink",
         "_store",
         "_vendor",
+        "_webhooks",
     )
 
     def __init__(
@@ -318,7 +323,7 @@ class Unit:
         vendor: VendorDefinition,
         config: ResolvedConfig,
         seed: object = None,
-        sink: object = None,
+        sink: DeliverySink | None = None,
         logger: Logger | None = None,
         control_routes: Callable[[ControlBinding], Sequence[Route]] | None = None,
     ) -> None:
@@ -351,12 +356,24 @@ class Unit:
 
         self._assert_retry_schedule()
 
-        self._sink = sink
-        if sink is not None:
-            self._log.warn(
-                "a delivery sink was supplied but the webhook dispatcher has not landed yet; it is held, unused",
-                {"profile": config.profile},
-            )
+        # An HTTP sink by default, built here but connecting nothing: its
+        # client is created on first send, so a unit whose vendor has no
+        # webhooks opens no connection pool.
+        self._sink: DeliverySink = HttpSink() if sink is None else sink
+        self._webhooks = WebhookDispatcher(
+            store=self._store,
+            clock=self._clock,
+            # The dispatcher reaches chaos only through the one choke point,
+            # which applies the `webhooks.chaos` gate before anything is armed.
+            selector=self._selector,
+            sink=self._sink,
+            retry=config.webhooks.retry,
+            # Deferred, because the context needs the dispatcher and the
+            # dispatcher needs the context. The reference does the same with a
+            # forward-declared `let ctx`; a callable says so out loud.
+            get_context=lambda: self._ctx,
+            disabled=config.webhooks.disable_delivery,
+        )
 
         self._ctx: UnitContext = _Context(
             vendor=vendor,
@@ -366,9 +383,14 @@ class Unit:
             chaos=self._chaos,
             clock=self._clock,
             rng=self._rng,
+            webhooks=self._webhooks,
             log=self._log,
         )
         self._store.mark_volatile(*vendor.volatile_fields)
+        # After the context exists, because the listener reaches through it on
+        # its first journal entry. The `webhooks` capability gate lives inside
+        # the listener rather than around this call; see `attach`.
+        self._webhooks.attach()
         self._lock = threading.RLock()
 
     # -- construction-time assertions ---------------------------------------
@@ -438,13 +460,41 @@ class Unit:
             },
         )
 
+    @property
+    def webhooks(self) -> WebhookDispatcher:
+        """The dispatcher, for a control plane built against this unit."""
+        return self._webhooks
+
     def stop(self) -> None:
-        """Release every timer. A fake must not outlive the test that built it."""
+        """Settle delivery, then release every timer.
+
+        Drain first and clear second, in that order and not the other: clearing
+        the timers first would discard the retries a drain is meant to settle
+        and make ``stop()`` silently lose deliveries a test had already caused.
+        The worker is stopped after the drain so no thread outlives the unit --
+        a fake must not outlive the test that built it, and a daemon thread
+        that survives one test shows up as a mystery in the next.
+        """
+        self._webhooks.drain()
+        self._webhooks.stop()
         self._clock.clear_all()
 
     def _hydrate(self) -> None:
+        """Reset, re-seed, then re-declare the profile's subscribers.
+
+        Order is the reference's (``unit.ts:hydrate``) and each step depends on
+        the one before: ``reset`` empties every collection including the
+        subscriptions, so config subscribers must be re-inserted after it or a
+        ``POST /__unit/state/reset`` would silently deregister them.
+        ``clear_log`` is last so the transcript starts at the scenario rather
+        than spanning the one before it -- and note that the re-insertion above
+        journals, which is exactly why the dispatcher ignores mutations to the
+        subscription collection.
+        """
         self._store.reset()
         self._vendor.hydrate(self._ctx, self._seed)
+        self._webhooks.load_config_subscribers(self._config.webhooks.subscribers)
+        self._webhooks.clear_log()
 
     def _list_routes(self) -> tuple[RouteInfo, ...]:
         return tuple(RouteInfo.of(route) for route in self._router.routes())

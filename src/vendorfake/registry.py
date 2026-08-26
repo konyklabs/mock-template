@@ -38,6 +38,7 @@ from importlib.metadata import entry_points
 from vendorfake.core.config.profile import load_profile
 from vendorfake.core.kernel.types import Logger, VendorDefinition
 from vendorfake.core.kernel.unit import Unit
+from vendorfake.core.webhooks.sink import DeliverySink
 
 __all__ = [
     "ENTRY_POINT_GROUP",
@@ -134,7 +135,7 @@ def create_unit(
     vendor: str | VendorDefinition | None = None,
     profile: str | None = None,
     env: Mapping[str, str] | None = None,
-    sink: object = None,
+    sink: DeliverySink | None = None,
     logger: Logger | None = None,
 ) -> Unit:
     """Build and start a unit. The single constructor.

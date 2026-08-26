@@ -63,6 +63,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from vendorfake.core.config.models import ProfileDocument, ResolvedConfig
     from vendorfake.core.state.machine import MachineDef
     from vendorfake.core.state.store import Store
+    from vendorfake.core.webhooks.dispatcher import WebhookDispatcher
+    from vendorfake.core.webhooks.models import DeliveryMetadata
 
 __all__ = [
     "AuthAdapter",
@@ -708,15 +710,19 @@ class AuthAdapter(Protocol):
 
 
 class Signer(Protocol):
-    """The vendor's webhook signature scheme.
+    """The vendor's webhook signature scheme, and its delivery headers.
 
     ``properties`` is declared rather than assumed so that conformance can
     check the directions this scheme actually claims.
 
-    The delivery-header hook that de-vendors the dispatcher's ``square-*``
-    header names lands with ``core/webhooks/models.py``; it is one hook and not
-    two, because the signature is a header too and two hooks would be two
-    chances to forget one.
+    :meth:`headers` is the hook that de-vendors delivery. The reference writes
+    a content type and three brand-prefixed retry headers straight into
+    vendor-neutral core (``packages/core/src/webhooks/dispatcher.ts``, lines
+    292-300); here the core computes neutral metadata and the vendor names its
+    own headers. It is one hook and not two -- ``sign`` and ``headers`` on the
+    same protocol -- because the signature is a header too, and two hooks would
+    be two chances to register only one, whose failure mode is a delivery that
+    is signed but uncounted, or counted but unsigned, and silent at the sink.
     """
 
     @property
@@ -724,6 +730,15 @@ class Signer(Protocol):
 
     def sign(self, payload: SignInput) -> Mapping[str, str]:
         """Headers carrying the signature for one outbound delivery attempt."""
+        ...
+
+    def headers(self, meta: DeliveryMetadata) -> Mapping[str, str]:
+        """Every non-signature header for one attempt, including the content type.
+
+        The core adds nothing to what comes back, so a vendor that returns an
+        empty mapping ships deliveries with no content type -- which is its
+        decision to make and not the core's to second-guess.
+        """
         ...
 
     def describe(self) -> Mapping[str, str]:
@@ -864,14 +879,12 @@ class UnitContext(Protocol):
     cannot reach them. Only the control plane can, through a separate typed
     binding it is given at construction.
 
-    Stage note: ``webhooks`` is the one member still missing, and it is absent
-    rather than declared because a protocol member whose type does not yet
-    exist is a promise the type checker cannot keep. ``chaos`` was added the
-    moment the engine landed, by the rule that governs the rest: declared here
-    with its concrete type imported under ``if TYPE_CHECKING:``, which is how
-    the kernel/subsystem import cycle stays broken. The dispatcher follows the
-    same three lines when it lands -- the guarded import, the property, and the
-    field on the context the unit builds.
+    Every member is declared here with its concrete type imported under
+    ``if TYPE_CHECKING:``, which is how the kernel/subsystem import cycle stays
+    broken: the subsystems import this module at run time, and this module
+    imports them only for the type checker. ``webhooks`` was the last to land
+    and followed the same three lines as the rest -- the guarded import, the
+    property, and the field on the context the unit builds.
     """
 
     @property
@@ -894,6 +907,9 @@ class UnitContext(Protocol):
 
     @property
     def rng(self) -> Rng: ...
+
+    @property
+    def webhooks(self) -> WebhookDispatcher: ...
 
     @property
     def log(self) -> Logger: ...

@@ -32,7 +32,11 @@ in-band magic values, forced headers -- at one choke point. It is a
 ``behavior`` capability: it owns no routes, because there is no endpoint whose
 absence would represent it.
 
-``webhooks`` gates delivery existing at all: the dispatcher never attaches.
+``webhooks`` gates delivery existing at all. The check is inside the listener
+``attach`` registers rather than around the registration, because the registry
+is mutable at runtime -- switching ``webhooks`` off through the control plane
+must stop delivery immediately, and a gate evaluated once at construction would
+answer a question about the profile instead.
 
 ``webhooks.chaos`` gates delivery-scope faults only. It is a separate gate
 rather than a second caller of the first one because collapsing them would
@@ -111,7 +115,9 @@ CORE_GATED_CAPABILITIES: tuple[CoreGate, ...] = (
     CoreGate(
         capability=CoreCapability.WEBHOOKS,
         gated_at="vendorfake.core.webhooks.dispatcher.WebhookDispatcher.attach",
-        effect="The dispatcher never attaches to the journal, so no event is ever prepared or delivered.",
+        effect=(
+            "The dispatcher's journal listener returns at once, so no event is ever mapped, prepared or delivered."
+        ),
     ),
     CoreGate(
         capability=CoreCapability.WEBHOOKS_CHAOS,
