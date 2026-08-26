@@ -45,6 +45,7 @@ import json as _json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 from urllib.parse import parse_qsl
 
@@ -58,7 +59,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     # that keeps the kernel free of its own subsystems, so nothing here
     # ever becomes an unguarded import.
     from vendorfake.core.capability.registry import CapabilityRegistry
-    from vendorfake.core.config.models import ResolvedConfig
+    from vendorfake.core.chaos.engine import ChaosEngine
+    from vendorfake.core.config.models import ProfileDocument, ResolvedConfig
+    from vendorfake.core.state.machine import MachineDef
     from vendorfake.core.state.store import Store
 
 __all__ = [
@@ -334,6 +337,19 @@ class Route:
     #: Control-plane route: no auth, no chaos, no idempotency, never in the
     #: vendor surface report and never decorated.
     internal: bool = False
+    #: Whether the pipeline takes the unit-wide request lock for this route.
+    #:
+    #: True for everything except the handful of routes whose handler blocks
+    #: on machinery *another request must feed* -- draining the webhook queue,
+    #: advancing a virtual clock, a vendor's "send a test event and tell me
+    #: what happened". The reference gets away without the distinction because
+    #: Node's event loop yields at every ``await``; a real lock does not, and
+    #: such a route would hold the whole unit for the full delivery timeout
+    #: against an unreachable subscriber. The store, the delivery log and the
+    #: clock keep their own independent locks; the request lock exists only so
+    #: that id minting and journal ordering are deterministic, which is exactly
+    #: what those routes do not touch.
+    serialized: bool = True
 
     @property
     def key(self) -> str:
@@ -769,6 +785,47 @@ class VendorDefinition(Protocol):
     def magic(self) -> MagicTriggerSpec | None: ...
 
     @property
+    def machines(self) -> Mapping[str, MachineDef]:
+        """Named state machines this vendor's entities move through.
+
+        Reaching the control plane is the point: without a registration
+        mechanism a machine is a module-level object nothing can see, and
+        "every declared terminal state really is terminal" is unassertable
+        from outside the vendor package. The mapping is empty for a vendor
+        whose entities have no lifecycle.
+        """
+        ...
+
+    @property
+    def retry_defaults(self) -> ProfileDocument:
+        """This vendor's own defaults, merged **under** the profile document.
+
+        The delivery retry schedule above all. It lives here rather than in the
+        core because a schedule is a documented property of one vendor's
+        webhook system, and the core's ``RetryPolicy`` therefore ships with an
+        empty schedule and no vendor default. Unit construction refuses to
+        start when the ``webhooks`` capability is declared and the merged
+        schedule is still empty, so a vendor that forgets this is a startup
+        error rather than a delivery that exhausts on its first attempt.
+        """
+        ...
+
+    @property
+    def profile_dir(self) -> Path:
+        """Directory holding this vendor's ``<name>.json`` profiles."""
+        ...
+
+    @property
+    def base_dir(self) -> Path:
+        """Directory a profile's relative ``seed`` path resolves against.
+
+        Separate from :attr:`profile_dir` because the reference resolves seeds
+        against the *package* root while profiles live one level down, and
+        collapsing the two would silently move every relative seed path.
+        """
+        ...
+
+    @property
     def not_supported(self) -> Mapping[str, str]:
         """Core-gated capabilities this vendor deliberately does not implement,
         each with a prose reason, echoed into ``/__unit/info``.
@@ -807,12 +864,14 @@ class UnitContext(Protocol):
     cannot reach them. Only the control plane can, through a separate typed
     binding it is given at construction.
 
-    Stage note: ``chaos`` and ``webhooks`` join this protocol when those
-    subsystems land. They are absent rather than declared because a protocol
-    member whose type does not yet exist is a promise the type checker cannot
-    keep. The rule for adding one: it is declared here with its concrete type
-    imported under ``if TYPE_CHECKING:``, which is how the kernel/subsystem
-    import cycle stays broken.
+    Stage note: ``webhooks`` is the one member still missing, and it is absent
+    rather than declared because a protocol member whose type does not yet
+    exist is a promise the type checker cannot keep. ``chaos`` was added the
+    moment the engine landed, by the rule that governs the rest: declared here
+    with its concrete type imported under ``if TYPE_CHECKING:``, which is how
+    the kernel/subsystem import cycle stays broken. The dispatcher follows the
+    same three lines when it lands -- the guarded import, the property, and the
+    field on the context the unit builds.
     """
 
     @property
@@ -826,6 +885,9 @@ class UnitContext(Protocol):
 
     @property
     def capabilities(self) -> CapabilityRegistry: ...
+
+    @property
+    def chaos(self) -> ChaosEngine: ...
 
     @property
     def clock(self) -> Clock: ...

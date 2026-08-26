@@ -66,6 +66,16 @@ def test_token_request_with_form_encoded_body(no_web_framework: None) -> None:
     from vendorfake import create_unit
     from vendorfake.core.transport.inprocess import in_process
 
+    # The failure shape is asserted here rather than left to the marker,
+    # because pytest reports the marker's `reason` and not the underlying
+    # exception -- so "the failure moved" is otherwise unreadable from a run.
+    # Where it stands today: the kernel, the pipeline and this binding all
+    # exist and are reachable with the web framework blocked; the one thing
+    # missing is the vendor module. When the vendor lands, this block is what
+    # goes red first, and it is deleted along with the marker below.
+    with pytest.raises(ValueError, match="no vendor named 'square'"):
+        create_unit(vendor="square", profile="oauth-only")
+
     unit = create_unit(vendor="square", profile="oauth-only")
     try:
         api = in_process(unit)
