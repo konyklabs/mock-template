@@ -1,0 +1,33 @@
+name: self-test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor and a current release. The floor is what `requires-python`
+        # promises, so it is tested rather than assumed.
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync
+        run: uv sync --frozen --python ${{ matrix.python-version }}
+
+      - name: Self-test
+        run: bash tools/self-test.sh
