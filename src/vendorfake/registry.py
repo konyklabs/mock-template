@@ -36,6 +36,7 @@ from collections.abc import Mapping
 from importlib.metadata import entry_points
 
 from vendorfake.core.config.profile import load_profile
+from vendorfake.core.control.plane import control_plane_routes
 from vendorfake.core.kernel.types import Logger, VendorDefinition
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.webhooks.sink import DeliverySink
@@ -149,8 +150,9 @@ def create_unit(
        merged **under** the profile document, which is itself under the
        environment layer -- so a profile can override a vendor default and an
        operator can override both;
-    3. construct the unit, which is where the capability-declaration and
-       retry-schedule assertions live;
+    3. construct the unit -- with the control plane, which is where the
+       capability-declaration, retry-schedule and dead-chaos-rule assertions
+       live;
     4. start it, which hydrates the store from the seed document.
 
     ``env`` is a plain mapping and defaults to empty. Pass ``os.environ``
@@ -171,6 +173,12 @@ def create_unit(
         seed=loaded.seed,
         sink=sink,
         logger=logger,
+        # Every unit built through this function has a control plane. The
+        # constructor keeps it optional so a kernel test can build a unit with
+        # a vendor surface and nothing else -- but a unit a *consumer* is given
+        # without `/__unit/*` is a unit they cannot drive, and there is exactly
+        # one place to decide that.
+        control_routes=control_plane_routes,
     )
     unit.start()
     return unit

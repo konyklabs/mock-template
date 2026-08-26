@@ -222,6 +222,21 @@ class WebhookDispatcher:
         return self._sink.kind
 
     @property
+    def sink(self) -> DeliverySink:
+        """The sink itself, for the one control route that programs it.
+
+        Published rather than private because ``POST /__unit/webhooks/sink``
+        has to reach a :class:`~vendorfake.core.webhooks.sink.MemorySink` to
+        program its next answers, and a forced retry driven from *outside* the
+        process is the only way a language-independent conformance check can
+        observe the retry schedule at all. The dispatcher does not care what it
+        hands back: it narrows nothing and promises nothing beyond the
+        :class:`~vendorfake.core.webhooks.sink.DeliverySink` protocol, so a
+        caller wanting more must check for it.
+        """
+        return self._sink
+
+    @property
     def retry_policy(self) -> MutableRetryPolicy:
         return self._retry
 

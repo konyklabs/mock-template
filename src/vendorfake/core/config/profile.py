@@ -350,6 +350,7 @@ def resolve_config(
         chaos=ResolvedChaos(
             seed=document.chaos.seed if chaos_seed is None else chaos_seed,
             rules=document.chaos.rules,
+            strict_rules=document.chaos.strict_rules,
         ),
         clock=document.clock if clock_mode is None else document.clock.model_copy(update={"mode": clock_mode}),
         transport=TransportSection(

@@ -154,6 +154,7 @@ def make_config(
     capabilities: Sequence[str] = ("orders", "chaos"),
     chaos_rules: Sequence[Mapping[str, object]] = (),
     chaos_seed: int = 1,
+    chaos_strict_rules: bool = False,
     clock_mode: str = "real",
     clock_start: str | None = None,
     log_level: str = "error",
@@ -182,7 +183,9 @@ def make_config(
             subscribers=tuple(SubscriberConfig(**dict(s)) for s in subscribers),  # type: ignore[arg-type]
             disable_delivery=disable_delivery,
         ),
-        chaos=ResolvedChaos(seed=chaos_seed, rules=tuple(dict(r) for r in chaos_rules)),
+        chaos=ResolvedChaos(
+            seed=chaos_seed, rules=tuple(dict(r) for r in chaos_rules), strict_rules=chaos_strict_rules
+        ),
         clock=ClockSection(mode=clock_mode, start=clock_start),  # type: ignore[arg-type]
         transport=TransportSection(),
         log_level=log_level,
