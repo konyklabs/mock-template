@@ -104,7 +104,7 @@ class CoreGate:
 CORE_GATED_CAPABILITIES: tuple[CoreGate, ...] = (
     CoreGate(
         capability=CoreCapability.CHAOS,
-        gated_at="vendorfake.core.chaos.selector.select_request",
+        gated_at="vendorfake.core.chaos.selector.FaultSelector.select_request",
         effect="Request-scope faults are never armed, from any source: standing rules, in-band values, forced headers.",
         expected_kind="behavior",
     ),
@@ -115,7 +115,7 @@ CORE_GATED_CAPABILITIES: tuple[CoreGate, ...] = (
     ),
     CoreGate(
         capability=CoreCapability.WEBHOOKS_CHAOS,
-        gated_at="vendorfake.core.chaos.selector.select_webhook",
+        gated_at="vendorfake.core.chaos.selector.FaultSelector.select_webhook",
         effect="Delivery-scope faults are never armed: no duplication, reordering, dropped acknowledgement or delay.",
         expected_kind="behavior",
         required_prerequisites=(CoreCapability.WEBHOOKS.value, CoreCapability.CHAOS.value),
