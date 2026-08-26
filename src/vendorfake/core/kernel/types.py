@@ -45,11 +45,21 @@ import json as _json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 from urllib.parse import parse_qsl
 
 from vendorfake.core.rand.rng import Rng
 from vendorfake.core.time.clock import Clock
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    # These are the subsystems ``UnitContext`` exposes. The import is
+    # guarded because each of those modules imports this one at runtime;
+    # a runtime import back would be a cycle. That guard IS the mechanism
+    # that keeps the kernel free of its own subsystems, so nothing here
+    # ever becomes an unguarded import.
+    from vendorfake.core.capability.registry import CapabilityRegistry
+    from vendorfake.core.config.models import ResolvedConfig
+    from vendorfake.core.state.store import Store
 
 __all__ = [
     "AuthAdapter",
@@ -797,16 +807,25 @@ class UnitContext(Protocol):
     cannot reach them. Only the control plane can, through a separate typed
     binding it is given at construction.
 
-    Stage note: ``store``, ``capabilities``, ``chaos``, ``webhooks`` and
-    ``config`` join this protocol when those subsystems land. They are declared
-    there and not here because a protocol member whose type does not yet exist
-    is a promise the type checker cannot keep. The rule for adding one: it is
-    declared here with its concrete type imported under ``if TYPE_CHECKING:``,
-    which is how the kernel/subsystem import cycle stays broken.
+    Stage note: ``chaos`` and ``webhooks`` join this protocol when those
+    subsystems land. They are absent rather than declared because a protocol
+    member whose type does not yet exist is a promise the type checker cannot
+    keep. The rule for adding one: it is declared here with its concrete type
+    imported under ``if TYPE_CHECKING:``, which is how the kernel/subsystem
+    import cycle stays broken.
     """
 
     @property
     def vendor(self) -> VendorDefinition: ...
+
+    @property
+    def config(self) -> ResolvedConfig: ...
+
+    @property
+    def store(self) -> Store: ...
+
+    @property
+    def capabilities(self) -> CapabilityRegistry: ...
 
     @property
     def clock(self) -> Clock: ...
