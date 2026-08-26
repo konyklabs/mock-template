@@ -1,0 +1,332 @@
+"""The Square vendor definition -- everything the core needs to become a Square
+unit, and nothing else.
+
+FOR: assembling one object that satisfies
+:class:`~vendorfake.core.kernel.types.VendorDefinition`. Compare this file's
+length with the core it plugs into: that ratio is the authoring-economics claim
+this project makes.
+
+INVARIANT: **one vendor instance per unit.** :data:`VENDOR` is minted fresh on
+every attribute access, which is unusual enough to state plainly. A vendor owns
+a *stateful* id stream, and the whole point of that stream is that two runs of
+the same scenario produce the same ids so a transcript can be diffed. A single
+shared instance would have two units in one process -- which is exactly what the
+conformance suite builds, a fresh unit per check -- drawing from one stream and
+interleaving, so neither run would reproduce. The reference has no such problem
+because its ``createSquareVendor`` factory is called per unit; the registry here
+resolves a module *attribute*, so the module makes that attribute a factory.
+
+Configuration resolves in two phases
+------------------------------------
+A profile's ``vendor`` block is part of the *profile*, and the profile is
+loaded after the vendor is resolved -- ``create_unit`` needs the vendor to know
+where the profiles are. So this object starts with defaults and re-resolves in
+:meth:`SquareVendor.hydrate`, which the unit calls at start and again on
+``POST /__unit/state/reset``, from ``ctx.config.vendor_config``. Anything built
+out of the config (the error shaper) is rebuilt there too, and the id stream is
+re-seeded from the unit's seed, which is what makes a re-hydrated unit mint the
+ids it minted the first time.
+
+Not yet assembled
+-----------------
+``routes``, ``signer``, ``events``, the auth adapter and the seed loader land
+with the Square *surfaces*. They are named here as the seams they are, and each
+placeholder fails loudly rather than plausibly: an unbuilt seed loader raises
+at unit start instead of hydrating an empty store that would then answer 404 to
+every read as though the scenario were simply small.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from typing import Any
+
+from vendorfake.core.config.models import ProfileDocument
+from vendorfake.core.kernel.types import (
+    AuthResult,
+    CapabilityDecl,
+    ErrorShaper,
+    EventMapper,
+    HandlerArgs,
+    MagicTriggerSpec,
+    MutableResponse,
+    Route,
+    Signer,
+    UnitContext,
+    UnitError,
+    UnitErrorKind,
+    UnitRequest,
+    VendorDefinition,
+)
+from vendorfake.core.state.machine import MachineDef
+from vendorfake.square.capabilities import SQUARE_CAPABILITIES, SQUARE_NOT_SUPPORTED
+from vendorfake.square.config import SquareConfig, resolve_square_config
+from vendorfake.square.errors import SquareErrorShaper
+from vendorfake.square.ids import SquareIds
+from vendorfake.square.machine import ORDER_MACHINE, ORDER_MACHINE_NAME
+from vendorfake.square.retry import square_retry_defaults
+
+__all__ = ["SQUARE_MAGIC", "SQUARE_SCOPES", "SquareVendor", "create_square_vendor"]
+
+_PACKAGE_DIR = Path(__file__).resolve().parent
+
+SQUARE_SCOPES: tuple[str, ...] = (
+    "MERCHANT_PROFILE_READ",
+    "ORDERS_READ",
+    "ORDERS_WRITE",
+    "ITEMS_READ",
+    "PAYMENTS_WRITE",
+)
+"""The scopes this unit's routes ask for.
+
+A subset of Square's published OAuth permissions
+(https://developer.squareup.com/docs/oauth-api/square-permissions) -- the ones
+the modelled surface actually needs. A route names the scopes it requires and
+the kernel checks them against the token, so this tuple is the vocabulary and
+not the policy.
+"""
+
+SQUARE_MAGIC = MagicTriggerSpec(
+    prefix="chaos:",
+    body_paths=("order.reference_id", "idempotency_key", "subscription.name"),
+    query_params=("state",),
+)
+"""In-band fault triggering, in fields a consumer can set through an SDK.
+
+Prior art is Square's own sandbox, which uses magic values in ordinary request
+fields (``cnon:card-nonce-declined``) rather than a control channel, so a
+consumer's real client library can drive a fault.
+https://developer.squareup.com/docs/devtools/sandbox/testing
+"""
+
+_VOLATILE_FIELDS: tuple[str, ...] = (
+    "expires_at",
+    "refresh_token_expires_at",
+    "closed_at",
+    "used_at",
+    "revoked_at",
+    "superseded_at",
+)
+"""Entity fields excluded from the state digest because they carry wall-clock
+time. Two units seeded identically a second apart must still agree, and these
+are the fields that would otherwise make them differ."""
+
+
+class _PendingAuth:
+    """The auth adapter until the OAuth surface lands.
+
+    It describes the two documented schemes honestly, because ``/__unit/info``
+    reports that description and a blank one would be a lie of omission. It
+    refuses to resolve anything, which no request can reach today: resolution
+    happens only for a matched route that declares ``auth``, and this vendor
+    declares no routes yet.
+    """
+
+    def describe(self) -> Mapping[str, str]:
+        return {
+            "bearer": ("Authorization: Bearer {ACCESS_TOKEN} (developer.squareup.com/docs/build-basics/access-tokens)"),
+            "client-secret": (
+                "Authorization: Client {APPLICATION_SECRET} "
+                "(developer.squareup.com/reference/square/oauth-api/revoke-token)"
+            ),
+            "scopes": " ".join(SQUARE_SCOPES),
+            "status": "not yet implemented; lands with the Square OAuth surface",
+        }
+
+    def resolve(self, args: HandlerArgs, mode: str) -> AuthResult:
+        raise UnitError(
+            UnitErrorKind.INTERNAL,
+            detail=(
+                "The Square auth adapter is not built yet (vendorfake/square/auth.py); "
+                "no authenticated route can be served."
+            ),
+            info={"mode": mode},
+        )
+
+
+class SquareVendor:
+    """One Square vendor, for one unit. Satisfies ``VendorDefinition``."""
+
+    __slots__ = ("_base_config", "_config", "_errors", "_ids", "_seed")
+
+    def __init__(self, *, config: SquareConfig | None = None, seed: int = 1) -> None:
+        self._base_config = SquareConfig() if config is None else config
+        self._config = self._base_config
+        self._seed = seed
+        self._ids = SquareIds(seed)
+        self._errors = self._build_errors()
+
+    def _build_errors(self) -> SquareErrorShaper:
+        return SquareErrorShaper(
+            sidecar=self._config.error_sidecar,
+            retry_after_header=self._config.retry_after_header,
+        )
+
+    # -- identity ----------------------------------------------------------
+
+    @property
+    def name(self) -> str:
+        return "square"
+
+    @property
+    def display_name(self) -> str:
+        return "Square (Connect v2)"
+
+    @property
+    def api_version(self) -> str | None:
+        return self._config.api_version
+
+    # -- what this vendor is made of ---------------------------------------
+
+    @property
+    def config(self) -> SquareConfig:
+        """The resolved configuration. Not part of the protocol; the surfaces
+        read it, and a test asserting that a profile's ``vendor`` block took
+        effect reads it too."""
+        return self._config
+
+    @property
+    def ids(self) -> SquareIds:
+        """This unit's id stream."""
+        return self._ids
+
+    @property
+    def capabilities(self) -> Sequence[CapabilityDecl]:
+        return SQUARE_CAPABILITIES
+
+    @property
+    def not_supported(self) -> Mapping[str, str]:
+        return SQUARE_NOT_SUPPORTED
+
+    @property
+    def routes(self) -> Sequence[Route]:
+        """Empty until the four surfaces land: OAuth, orders, directory, webhooks."""
+        return ()
+
+    @property
+    def errors(self) -> ErrorShaper:
+        return self._errors
+
+    @property
+    def auth(self) -> _PendingAuth:
+        return _PENDING_AUTH
+
+    @property
+    def signer(self) -> Signer | None:
+        """``None`` until the webhook signer lands.
+
+        The core treats a missing signer as "this vendor does not sign", which
+        is a legitimate answer for a vendor with no webhook scheme; here it is
+        a temporary one, and the dispatcher will map no event without it.
+        """
+        return None
+
+    @property
+    def events(self) -> EventMapper | None:
+        """``None`` until the journal-to-event mapper lands."""
+        return None
+
+    @property
+    def magic(self) -> MagicTriggerSpec | None:
+        return SQUARE_MAGIC
+
+    @property
+    def machines(self) -> Mapping[str, MachineDef]:
+        """The order lifecycle, reachable at ``GET /__unit/machines``.
+
+        This is the registration the reference lacks: its ``orderMachine`` is a
+        module-level singleton nothing publishes, so "every declared terminal
+        state really is terminal" could not be asserted from outside the vendor
+        package.
+        """
+        return {ORDER_MACHINE_NAME: ORDER_MACHINE}
+
+    @property
+    def retry_defaults(self) -> ProfileDocument:
+        return square_retry_defaults()
+
+    @property
+    def volatile_fields(self) -> Sequence[str]:
+        return _VOLATILE_FIELDS
+
+    @property
+    def profile_dir(self) -> Path:
+        return _PACKAGE_DIR / "profiles"
+
+    @property
+    def base_dir(self) -> Path:
+        """What a profile's relative ``seed`` path resolves against.
+
+        The package root, one level above the profiles, which is where the
+        reference resolves seeds from.
+        """
+        return _PACKAGE_DIR
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def hydrate(self, ctx: UnitContext, seed: object) -> None:
+        """Phase two of configuration, then load the seed scenario.
+
+        The configuration step happens first and unconditionally, so that a
+        profile's ``vendor`` block is in force even when hydration fails.
+        """
+        self._resolve_config(ctx)
+        raise UnitError(
+            UnitErrorKind.INTERNAL,
+            detail=(
+                "The Square seed loader is not built yet (vendorfake/square/seed/); this unit cannot hydrate a store."
+            ),
+            info={"profile": ctx.config.profile, "seed_supplied": seed is not None},
+        )
+
+    def _resolve_config(self, ctx: UnitContext) -> None:
+        """Re-resolve from the profile, then rebuild what depends on it.
+
+        The id stream is re-seeded rather than continued: a unit that
+        re-hydrates must mint the same ids it minted the first time, which is
+        what makes ``POST /__unit/state/reset`` reproduce a scenario instead of
+        merely repeating it.
+        """
+        block = dict(ctx.config.vendor_config)
+        self._config = self._base_config if not block else self._base_config.merged_with(block)
+        self._errors = self._build_errors()
+        self._ids.reseed(ctx.config.chaos.seed)
+
+    def decorate(self, res: MutableResponse, ctx: UnitContext, req: UnitRequest) -> None:
+        """Stamp the API version on every response, success or error.
+
+        "Regardless of whether you explicitly specify a version in the request,
+        the response always returns the Square-Version header so you know which
+        API version is used."
+        https://developer.squareup.com/docs/build-basics/versioning-overview
+
+        The request's own value is echoed when it sent one -- including an empty
+        one, which is what ``??`` does in the reference and is the difference
+        between echoing what was asked for and quietly substituting a default.
+        """
+        requested = req.headers.get("square-version")
+        res.headers["square-version"] = self._config.api_version if requested is None else requested
+        res.headers["x-unit-vendor"] = ctx.vendor.name
+
+
+_PENDING_AUTH = _PendingAuth()
+
+
+def create_square_vendor(
+    *,
+    vendor_config: dict[str, Any] | None = None,
+    seed: int = 1,
+) -> VendorDefinition:
+    """Build a Square vendor.
+
+    ``vendor_config`` is the base a profile's ``vendor`` block is merged over,
+    and ``seed`` seeds the id stream until :meth:`SquareVendor.hydrate` re-seeds
+    it from the unit. Both exist for tests and for a caller assembling a unit by
+    hand; ``create_unit(vendor="square")`` needs neither.
+
+    The return annotation is the protocol, so ``mypy --strict`` checks the
+    structural conformance of :class:`SquareVendor` here, at one call site,
+    rather than wherever a unit happens to be built.
+    """
+    return SquareVendor(config=resolve_square_config(vendor_config), seed=seed)
