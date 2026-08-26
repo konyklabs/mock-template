@@ -7,7 +7,9 @@ one and asserts the surface it serves.
 
 from __future__ import annotations
 
+import importlib.resources
 import json
+import re
 
 import pytest
 
@@ -21,12 +23,16 @@ SHIPPED = sorted(path.stem for path in PROFILE_DIR.glob("*.json"))
 
 
 def test_the_expected_profiles_are_shipped() -> None:
-    """`chaos-demo` is deliberately absent until the orders surface lands: its
-    rules name `POST /v2/orders` and `GET /v2/orders/{order_id}`, and a rule
-    matching no registered route can never fire. The shipped profiles all set
-    `strict_rules`, so shipping it early would be a startup failure rather than
-    a silent no-op -- which is the right way round, and the reason to wait."""
-    assert SHIPPED == ["full", "no-chaos", "oauth-only", "orders-only"]
+    """Six, named as a literal.
+
+    A consumer selects a profile by name and a rename is a breaking change, so
+    the set is asserted rather than derived. `chaos-demo` could only land once
+    the Orders surface existed: its rules name `POST /v2/orders` and
+    `GET /v2/orders/{order_id}`, every shipped profile sets `strict_rules`, and
+    a rule matching no registered route is a startup failure here rather than a
+    rule that quietly never fires.
+    """
+    assert SHIPPED == ["chaos-demo", "full", "no-chaos", "no-faults", "oauth-only", "orders-only"]
 
 
 @pytest.mark.parametrize("name", SHIPPED)
@@ -73,7 +79,7 @@ def test_the_vendor_block_is_snake_case_and_typed() -> None:
     }
 
 
-def test_oauth_only_registers_the_whole_surface_and_enables_only_oauth() -> None:
+def test_oauth_only_registers_the_whole_surface_and_enables_only_its_own() -> None:
     """The surface belongs to the vendor and the profile only gates it.
 
     `oauth-only` still *registers* the Orders routes -- the router is the
@@ -92,7 +98,7 @@ def test_oauth_only_registers_the_whole_surface_and_enables_only_oauth() -> None
             "/oauth2/token/status",
         } <= vendor_paths
         enabled = {row["name"] for row in h.api.get("/__unit/capabilities").json()["capabilities"] if row["enabled"]}
-        assert enabled == {"oauth"}
+        assert enabled == {"oauth", "chaos"}
         assert h.api.get("/v2/orders/CAISENgvlJ6jLWAzERDzjyHVybY").status == 501
 
 
@@ -111,3 +117,111 @@ def test_the_default_profile_is_full() -> None:
     running the container with no configuration gets."""
     for h in build_harness(profile=None):
         assert h.api.get("/__unit/info").json()["profile"] == "full"
+
+
+# ---------------------------------------------------------------------------
+# The sixth capability, and the two profiles it made necessary.
+# ---------------------------------------------------------------------------
+
+
+def test_chaos_is_on_everywhere_except_the_profile_named_for_having_it_off() -> None:
+    """The mapping decision, written down as an assertion.
+
+    `chaos` gates request-scope fault injection from every source. The
+    reference had no such capability, so a request-scope rule fired on all five
+    of its profiles including `no-chaos` -- whose capability list drops only
+    `webhooks.chaos`. Preserving that behaviour means `chaos` is on in
+    `no-chaos`, which makes the name narrower than it reads: what `no-chaos`
+    switches off is *delivery* faults. `no-faults` is the profile that means
+    what `no-chaos` sounds like, and it exists precisely because the two are
+    different configurations a consumer might genuinely want.
+    """
+    without_chaos = set()
+    for name in SHIPPED:
+        document = json.loads((PROFILE_DIR / f"{name}.json").read_text(encoding="utf-8"))
+        if "chaos" not in document["capabilities"]:
+            without_chaos.add(name)
+    assert without_chaos == {"no-faults"}
+
+
+def test_no_faults_switches_off_both_fault_gates() -> None:
+    for h in build_harness("no-faults"):
+        enabled = {row["name"] for row in h.api.get("/__unit/capabilities").json()["capabilities"] if row["enabled"]}
+        assert "chaos" not in enabled
+        assert "webhooks.chaos" not in enabled
+        assert {"oauth", "order-lifecycle", "merchant-directory", "webhooks"} <= enabled
+
+
+def test_a_profile_declaring_a_behavior_capability_declares_its_prerequisites() -> None:
+    """`webhooks.chaos` requires `webhooks` and `chaos`; a profile that named
+    the child without its parents would start with the child silently blocked,
+    which reads in `/__unit/capabilities` exactly like a profile that never
+    asked for it."""
+    declared = {decl.name: decl for decl in SQUARE_CAPABILITIES}
+    for name in SHIPPED:
+        listed = set(json.loads((PROFILE_DIR / f"{name}.json").read_text(encoding="utf-8"))["capabilities"])
+        for capability in listed:
+            assert set(declared[capability].requires) <= listed, f"{name}: {capability}"
+
+
+# ---------------------------------------------------------------------------
+# chaos-demo: the profile whose whole content is rules.
+# ---------------------------------------------------------------------------
+
+
+def test_chaos_demo_ships_four_rules_and_every_one_of_them_can_fire() -> None:
+    """`strict_rules` makes a dead rule a startup failure, so this test would
+    not even reach its assertions if a template had drifted -- but the
+    `matched_routes` count is asserted anyway, because "it started" and "the
+    rule selects a route" are different claims and only the second is the one
+    a demo transcript depends on."""
+    for h in build_harness("chaos-demo"):
+        status = h.api.get("/__unit/chaos").json()
+        assert [rule["id"] for rule in status["rules"]] == [
+            "rate-limit-every-third-create",
+            "token-expires-on-fourth-read",
+            "duplicate-order-created",
+            "reorder-order-updated",
+        ]
+        for rule in status["rules"]:
+            assert rule["matched_routes"], rule["id"]
+        assert status["enabled"] is True
+
+
+def test_chaos_demo_runs_on_a_virtual_clock() -> None:
+    """The one profile with a preloaded `timeout`-capable rule set, and the one
+    the deadlock reversal in `chaos/faults.py` was written for: a request-scope
+    stall must never park on a timer only another request could fire."""
+    document = json.loads((PROFILE_DIR / "chaos-demo.json").read_text(encoding="utf-8"))
+    assert document["clock"] == {"mode": "virtual", "start": "2026-08-24T12:00:00.000Z"}
+
+
+def test_no_profile_writes_a_colon_path_template() -> None:
+    """The DoD grep, as a test, because a colon template matches nothing
+    forever and the reference shipped one."""
+    for name in SHIPPED:
+        text = (PROFILE_DIR / f"{name}.json").read_text(encoding="utf-8")
+        assert not re.search(r'"route": "[A-Z]+ [^"]*:', text), name
+
+
+# ---------------------------------------------------------------------------
+# Package data: a profile a consumer cannot read is not shipped.
+# ---------------------------------------------------------------------------
+
+
+def test_every_profile_and_the_seed_resolve_as_package_data() -> None:
+    """`importlib.resources` is how an installed consumer reaches these files,
+    and it is not the same path as `Path(__file__).parent` -- a package data
+    glob that stopped matching would leave the second working from a source
+    tree and the first failing in the wheel."""
+    package = importlib.resources.files("vendorfake.square")
+    for name in SHIPPED:
+        assert package.joinpath(f"profiles/{name}.json").is_file(), name
+    assert package.joinpath("seed/default.seed.json").is_file()
+
+
+def test_the_distribution_declares_itself_typed() -> None:
+    """`py.typed` is what makes the `Typing :: Typed` classifier true for a
+    consumer: without the marker file, mypy ignores every annotation in this
+    package once it is installed."""
+    assert importlib.resources.files("vendorfake").joinpath("py.typed").is_file()

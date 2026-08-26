@@ -1,0 +1,53 @@
+{
+  "name": "chaos-demo",
+  "summary": "Full surface with a preloaded fault set: rate limiting, mid-flow token expiry, duplicate and reordered webhook delivery.",
+  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "webhooks", "chaos", "webhooks.chaos"],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "application_id": "sandbox-sq0idb-unit-square-application",
+    "application_secret": "sandbox-sq0csb-unit-square-secret",
+    "redirect_uri": "https://example.test/oauth/callback"
+  },
+  "webhooks": { "retry": { "time_scale": 0.000167, "timeout_ms": 2000 } },
+  "clock": { "mode": "virtual", "start": "2026-08-24T12:00:00.000Z" },
+  "chaos": {
+    "seed": 20260824,
+    "strict_rules": true,
+    "rules": [
+      {
+        "id": "rate-limit-every-third-create",
+        "scope": "request",
+        "fault": "rate_limit",
+        "match": { "route": "POST /v2/orders" },
+        "when": { "every": 3 },
+        "params": { "retry_after_seconds": 2 },
+        "note": "Every third CreateOrder is refused with 429 RATE_LIMITED."
+      },
+      {
+        "id": "token-expires-on-fourth-read",
+        "scope": "request",
+        "fault": "token_expiry",
+        "match": { "route": "GET /v2/orders/{order_id}" },
+        "when": { "nth": [4] },
+        "note": "The fourth retrieve sees ACCESS_TOKEN_EXPIRED mid-flow without the stored token changing."
+      },
+      {
+        "id": "duplicate-order-created",
+        "scope": "webhook",
+        "fault": "webhook.duplicate",
+        "match": { "event_type": "order.created" },
+        "when": { "nth": [1] },
+        "params": { "copies": 1 },
+        "note": "The first order.created is delivered twice with the same event_id."
+      },
+      {
+        "id": "reorder-order-updated",
+        "scope": "webhook",
+        "fault": "webhook.out_of_order",
+        "match": { "event_type": "order.updated" },
+        "when": { "nth": [1] },
+        "note": "The first order.updated is held until the following event has been delivered."
+      }
+    ]
+  }
+}
