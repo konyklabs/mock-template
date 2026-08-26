@@ -149,9 +149,29 @@ def test_an_unknown_vendor_is_a_startup_failure_that_lists_the_real_ones() -> No
     assert "no vendor named 'nosuchvendor'" in str(raised.value)
 
 
-def test_vendors_reports_nothing_installed_as_a_failure() -> None:
+def test_vendors_lists_what_would_actually_resolve() -> None:
+    """The list is derived from an importability check, never declared, so a
+    name printed here is a name that will start."""
+    from vendorfake.registry import available_vendors
+
+    code, out = run("vendors")
+    assert code == 0
+    assert out.split() == list(available_vendors())
+    assert "square" in out.split()
+
+
+def test_vendors_reports_nothing_installed_as_a_failure(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Exit 1 with the message on stderr. An empty successful list would read
-    as "the fake is fine, you asked for nothing"."""
+    as "the fake is fine, you asked for nothing".
+
+    A vendor ships in this distribution, so the empty case is reached by
+    emptying the discovery rather than by uninstalling one -- which is what the
+    subcommand consults, and therefore what has to be empty for the branch to
+    be the one under test.
+    """
+    import vendorfake.registry as registry_module
+
+    monkeypatch.setattr(registry_module, "available_vendors", lambda: ())
     code, out = run("vendors")
     assert code == 1
     assert out == ""
