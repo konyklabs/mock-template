@@ -1,0 +1,57 @@
+# Policy for tools/boundary_check.py.
+#
+# This file is the whole boundary policy. The checker prints its SHA-256, so
+# widening the boundary and the evidence that it was widened land in the same
+# diff hunk. Every exception must carry a reason.
+
+schema = 1
+
+# ---------------------------------------------------------------------------
+# The web framework may be imported only by the transport adapter.
+# ---------------------------------------------------------------------------
+[forbidden]
+modules = ["fastapi", "starlette", "uvicorn", "python_multipart", "multipart"]
+allowed_prefixes = ["src/vendorfake/asgi/"]
+
+# ---------------------------------------------------------------------------
+# Pydantic is permitted in the core only where an external document is parsed.
+# The invariant is that a *request-parsing framework's* assumptions must not
+# leak into shared code; Pydantic has no notion of HTTP. Allowing it on the
+# store's copy path would cost real time for objects that are produced
+# internally and never parsed, so entities stay plain dicts.
+# ---------------------------------------------------------------------------
+[pydantic]
+forbidden_prefixes = ["src/vendorfake/core/"]
+allowed_modules = [
+  "src/vendorfake/core/config/models.py",
+  "src/vendorfake/core/chaos/rules.py",
+  "src/vendorfake/core/control/schemas.py",
+]
+
+# ---------------------------------------------------------------------------
+# First-party layering. A module under <prefix> may import first-party modules
+# only under the listed prefixes.
+# ---------------------------------------------------------------------------
+[layers]
+"src/vendorfake/core/" = ["src/vendorfake/core/"]
+"src/vendorfake/conformance/" = ["src/vendorfake/conformance/", "src/vendorfake/core/"]
+"src/vendorfake/asgi/" = ["src/vendorfake/asgi/", "src/vendorfake/core/"]
+
+# Third-party packages each layer may import at all.
+[externals]
+"src/vendorfake/core/" = ["httpx", "pydantic"]
+"src/vendorfake/conformance/" = ["httpx"]
+
+# ---------------------------------------------------------------------------
+# No vendor slug may appear as a literal token or string under these prefixes.
+# Slugs are discovered as the directories under src/vendorfake/ containing a
+# vendor.py, never hand-listed, so adding a vendor cannot silently widen this.
+# ---------------------------------------------------------------------------
+[vendor_slugs]
+scan_prefixes = ["src/vendorfake/core/", "src/vendorfake/conformance/"]
+
+# ---------------------------------------------------------------------------
+# Named exceptions. Each must say why it exists.
+# ---------------------------------------------------------------------------
+[exceptions]
+"src/vendorfake/cli.py" = "the serve subcommand imports vendorfake.asgi inside the function body, so `vendorfake --help` does not pay for importing FastAPI"
