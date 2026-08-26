@@ -618,6 +618,17 @@ class SignerProperties:
     body_bound: bool = True
     #: Signature changes when the subscription's secret changes.
     secret_bound: bool = True
+    #: Delivery headers the signature itself occupies, lower-cased.
+    #:
+    #: Declared rather than discovered because a conformance check asserting
+    #: "the signature moved when the secret moved" has to know *which* header
+    #: is the signature. Inferring it -- as the header that differs between two
+    #: deliveries -- works only for whichever binding is being varied and
+    #: cannot separate the signature from a delivery header that varies for its
+    #: own reasons, such as a per-event timestamp. A signer that leaves this
+    #: empty is declaring that it contributes no signature header, and the
+    #: suite skips the signing contract rather than guessing.
+    signature_headers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -825,6 +825,24 @@ def test_a_probe_with_no_target_asks_whether_the_entity_may_be_mutated_at_all() 
     assert (refused.status, refused.header("x-unit-error")) == (400, "invalid_transition")
 
 
+def test_a_probe_answers_one_question_per_call_and_never_both() -> None:
+    """With `to`, the probe evaluates the transition predicate ALONE.
+
+    If mutability answered first, a terminal state's transition predicate could
+    never be observed through this route -- and a machine treating `from == to`
+    as always legal would be undetectable on any vendor whose non-terminal
+    states all allow themselves. The `allowed` list in the info block is the
+    evidence that assert_transition, and not assert_mutable, produced this.
+    """
+    api, _ = _api()
+    refused = api.post("/__unit/machines/probe", {"machine": "order", "from": "COMPLETED", "to": "CANCELED"})
+    assert (refused.status, refused.header("x-unit-error")) == (400, "invalid_transition")
+    info = refused.json()["error"]["info"]
+    assert info["allowed"] == []
+    assert info["from"] == "COMPLETED"
+    assert info["to"] == "CANCELED"
+
+
 def test_an_undeclared_from_state_is_invalid_value_rather_than_a_cheerful_ok() -> None:
     """Without this, a probe with no `to` would sail past `assert_mutable` --
     an unknown state is not terminal -- and answer `ok` about a state that does
