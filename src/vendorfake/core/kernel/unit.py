@@ -327,6 +327,7 @@ class Unit:
         sink: DeliverySink | None = None,
         logger: Logger | None = None,
         control_routes: Callable[[ControlBinding], Sequence[Route]] | None = None,
+        fault_selector: Callable[[ChaosEngine, CapabilityRegistry], FaultSelector] | None = None,
     ) -> None:
         self._vendor = vendor
         self._config = config
@@ -353,7 +354,18 @@ class Unit:
         # namespace is refused, so every construction path passes that gate.
         self._router = Router(self._routes)
         self._capabilities = CapabilityRegistry(vendor.capabilities, self._routes, config.capabilities, config.profile)
-        self._selector = FaultSelector(self._chaos, self._capabilities)
+        # The single arming point, injected rather than constructed inline.
+        # `chaos/selector.py` states that the one-shot leak is *unrepresentable*
+        # there rather than merely tested for -- a claim the conformance suite
+        # has to be able to falsify. This seam is how: the mutant fixtures in
+        # `tests/conformance/mutants/` install a deliberately leaky selector and
+        # assert C12 goes red, without patching a module. Production callers
+        # pass nothing and get the one correct selector.
+        self._selector = (
+            FaultSelector(self._chaos, self._capabilities)
+            if fault_selector is None
+            else fault_selector(self._chaos, self._capabilities)
+        )
 
         self._assert_retry_schedule()
         self._report_dead_chaos_rules()
