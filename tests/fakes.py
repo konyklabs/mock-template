@@ -15,15 +15,22 @@ from vendorfake.core.config.models import ProfileDocument
 from vendorfake.core.kernel.types import (
     AuthResult,
     CapabilityDecl,
+    EventMeta,
+    JournalEntry,
     MagicTriggerSpec,
+    MappedEvent,
     MutableResponse,
     Route,
     ShapedError,
+    SignerProperties,
+    SignInput,
     UnitContext,
     UnitError,
     UnitErrorKind,
     UnitRequest,
 )
+from vendorfake.core.util.json import sha256_hex
+from vendorfake.core.webhooks.models import DeliveryMetadata
 
 # The five statuses the twenty core kinds collapse onto for a fake vendor.
 STATUS: Mapping[UnitErrorKind, int] = {
@@ -151,6 +158,10 @@ def make_config(
     clock_start: str | None = None,
     log_level: str = "error",
     schedule_ms: Sequence[int] = (),
+    time_scale: float = 1.0,
+    timeout_ms: int = 10_000,
+    subscribers: Sequence[Mapping[str, object]] = (),
+    disable_delivery: bool = False,
 ) -> object:
     """A ``ResolvedConfig`` for a kernel test, with the knobs those tests move."""
     from vendorfake.core.config.models import (
@@ -159,13 +170,18 @@ def make_config(
         ResolvedConfig,
         ResolvedWebhooks,
         RetryPolicy,
+        SubscriberConfig,
         TransportSection,
     )
 
     return ResolvedConfig(
         profile=profile,
         capabilities=tuple(capabilities),
-        webhooks=ResolvedWebhooks(retry=RetryPolicy(schedule_ms=tuple(schedule_ms))),
+        webhooks=ResolvedWebhooks(
+            retry=RetryPolicy(schedule_ms=tuple(schedule_ms), time_scale=time_scale, timeout_ms=timeout_ms),
+            subscribers=tuple(SubscriberConfig(**dict(s)) for s in subscribers),  # type: ignore[arg-type]
+            disable_delivery=disable_delivery,
+        ),
         chaos=ResolvedChaos(seed=chaos_seed, rules=tuple(dict(r) for r in chaos_rules)),
         clock=ClockSection(mode=clock_mode, start=clock_start),  # type: ignore[arg-type]
         transport=TransportSection(),
@@ -178,6 +194,7 @@ def make_unit(
     *,
     vendor: FakeVendor | None = None,
     control_routes: object = None,
+    sink: object = None,
     **config_kwargs: object,
 ) -> object:
     """A started :class:`Unit` over a fake vendor. Returns the unit."""
@@ -188,7 +205,123 @@ def make_unit(
     unit = Unit(
         vendor=definition,  # type: ignore[arg-type]
         config=make_config(**config_kwargs),  # type: ignore[arg-type]
+        sink=sink,  # type: ignore[arg-type]
         control_routes=control_routes,  # type: ignore[arg-type]
     )
     unit.start()
     return unit
+
+
+# ---------------------------------------------------------------------------
+# The webhook half of a vendor: a signer with both hooks, and an event mapper.
+# ---------------------------------------------------------------------------
+
+
+def _default_signature(payload: SignInput) -> dict[str, str]:
+    """A signature bound to the url, the body and the secret -- and to nothing
+    else, so a test can vary one input at a time and see the header move."""
+    material = payload.notification_url.encode() + payload.raw_body + payload.secret.encode()
+    return {"x-fake-signature": sha256_hex(material)}
+
+
+def _default_delivery_headers(meta: DeliveryMetadata) -> dict[str, str]:
+    """What a vendor would put on the wire, in a vendor's own spelling.
+
+    Deliberately prefixed ``acme-``: the point of the hook is that the core
+    never learns these names, and a test asserting they came from here rather
+    than from the core needs them to be recognisably not-core.
+    """
+    headers = {"content-type": "application/json", "acme-initial-delivery": meta.initial_delivery_at}
+    if meta.is_retry:
+        headers["acme-retry-number"] = str(meta.retry_number)
+        if meta.retry_reason is not None:
+            headers["acme-retry-reason"] = _ACME_RETRY_REASONS[meta.retry_reason]
+    return headers
+
+
+#: The vendor-owned map from the core's neutral outcome to this vendor's wire
+#: strings. The whole point of ``DeliveryOutcome``: the core never sees these.
+_ACME_RETRY_REASONS: Mapping[str, str] = {
+    "timeout": "acme_timed_out",
+    "transport_error": "acme_no_answer",
+    "http_error": "acme_bad_status",
+}
+
+
+@dataclass
+class FakeSigner:
+    """A ``Signer`` whose two hooks are both observable and both replaceable."""
+
+    sign_with: Callable[[SignInput], Mapping[str, str]] = _default_signature
+    headers_with: Callable[[DeliveryMetadata], Mapping[str, str]] = _default_delivery_headers
+    properties: SignerProperties = field(default_factory=SignerProperties)
+    sign_calls: list[SignInput] = field(default_factory=list)
+    header_calls: list[DeliveryMetadata] = field(default_factory=list)
+
+    def sign(self, payload: SignInput) -> Mapping[str, str]:
+        self.sign_calls.append(payload)
+        return self.sign_with(payload)
+
+    def headers(self, meta: DeliveryMetadata) -> Mapping[str, str]:
+        self.header_calls.append(meta)
+        return self.headers_with(meta)
+
+    def describe(self) -> Mapping[str, str]:
+        return {"scheme": "fake-hmac"}
+
+
+#: A signer that contributes nothing at all. Used to prove the negative: with
+#: this installed, every header on the wire would have to have come from the
+#: core, so an empty header mapping is the whole assertion.
+SILENT_SIGNER_HOOKS: tuple[
+    Callable[[SignInput], Mapping[str, str]], Callable[[DeliveryMetadata], Mapping[str, str]]
+] = (
+    lambda payload: {},
+    lambda meta: {},
+)
+
+
+def order_event(entry: JournalEntry) -> Sequence[MappedEvent]:
+    """One event per mutation of the ``orders`` collection, and nothing else.
+
+    ``order.created`` / ``order.updated`` / ``order.deleted``, matching the
+    shape a real vendor uses, so that the event-type matching tests exercise
+    globs rather than single words.
+    """
+    if entry.collection != "orders":
+        return ()
+    name = {"insert": "created", "update": "updated", "delete": "deleted"}[entry.op]
+    event_type = f"order.{name}"
+
+    def build(meta: EventMeta) -> object:
+        return {
+            "merchant_id": "MERCHANT",
+            "type": event_type,
+            "event_id": meta.event_id,
+            "created_at": meta.created_at,
+            "data": {"type": "order", "id": entry.id, "object": {"version": entry.to_version}},
+        }
+
+    return (MappedEvent(type=event_type, entity_id=entry.id, build=build),)
+
+
+@dataclass
+class FakeEvents:
+    """An ``EventMapper`` delegating to a plain function, so a test can swap it."""
+
+    mapper: Callable[[JournalEntry], Sequence[MappedEvent]] = order_event
+    calls: list[JournalEntry] = field(default_factory=list)
+
+    def map(self, entry: JournalEntry, ctx: UnitContext) -> Sequence[MappedEvent]:
+        self.calls.append(entry)
+        return self.mapper(entry)
+
+
+#: A vendor that declares delivery and its faults, rather than excusing itself
+#: from them the way :data:`DEFAULT_CAPABILITIES` does.
+WEBHOOK_CAPABILITIES: tuple[CapabilityDecl, ...] = (
+    capability("orders"),
+    capability("chaos", kind="behavior"),
+    capability("webhooks"),
+    capability("webhooks.chaos", kind="behavior", requires=("webhooks", "chaos")),
+)

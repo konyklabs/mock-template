@@ -135,3 +135,38 @@ def test_the_startup_assertion_raises_invalid_value_carrying_every_problem() -> 
     assert isinstance(problems, list)
     assert len(problems) == 3
     assert [gate["capability"] for gate in err.info["core_gated"]] == list(core_gated_names())  # type: ignore[index,union-attr]
+
+
+def test_every_gate_site_names_something_that_actually_exists() -> None:
+    """``gated_at`` is a promise, and until now nothing checked it was kept.
+
+    The boundary checker is supposed to reconcile this tuple against the
+    literals handed to ``is_enabled`` / ``assert_enabled`` in the core and does
+    not yet. This is the half that can be written from here: every path must
+    resolve to a real callable, so a rename or a deleted method turns a
+    documented gate site into a red test rather than into a lie a reader
+    follows and does not find.
+
+    ``webhooks`` names ``WebhookDispatcher.attach`` because the check lives
+    inside the listener that method registers -- deliberately, so that
+    switching the capability off at runtime stops delivery immediately rather
+    than answering a question about the profile.
+    """
+    import importlib
+
+    for gate in CORE_GATED_CAPABILITIES:
+        parts = gate.gated_at.split(".")
+        module = None
+        index = len(parts)
+        while index > 0:
+            try:
+                module = importlib.import_module(".".join(parts[:index]))
+                break
+            except ModuleNotFoundError:
+                index -= 1
+        assert module is not None, f"{gate.gated_at} names no importable module"
+        target: object = module
+        for attribute in parts[index:]:
+            assert hasattr(target, attribute), f"{gate.gated_at} stops resolving at {attribute!r}"
+            target = getattr(target, attribute)
+        assert callable(target), f"{gate.gated_at} resolves to something that is not callable"
