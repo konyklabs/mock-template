@@ -13,6 +13,10 @@ the web framework entirely and still expects a form-encoded token request to
 be understood, so the only implementation that can pass it is one where the
 core parses the body itself from raw bytes.
 
+It carried ``xfail(strict=True)`` from the moment it was written until the
+OAuth surface landed. The marker is gone, which is what ``strict=True`` was
+for: it could not be left on by accident.
+
 A note on fidelity, because this test is easy to misread. Square documents
 ``POST /oauth2/token`` as ``Content-Type: application/json``, with a verbatim
 curl example, and publishes nothing about accepting form encoding. Accepting
@@ -26,10 +30,29 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Iterator
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 BLOCKED = ("fastapi", "starlette", "uvicorn", "python_multipart", "multipart")
+
+APPLICATION_ID = "sandbox-sq0idb-unit-square-application"
+APPLICATION_SECRET = "sandbox-sq0csb-unit-square-secret"
+"""What ``profiles/oauth-only.json`` configures. Spelled here rather than
+imported, because importing the vendor package at module scope would happen
+before the fixture blocks the framework and would prove less than it looks."""
+
+
+class _Silent:
+    """A logger that says nothing, so a passing run prints no unit banner."""
+
+    def debug(self, msg: str, fields: object = None) -> None: ...
+    def info(self, msg: str, fields: object = None) -> None: ...
+    def warn(self, msg: str, fields: object = None) -> None: ...
+    def error(self, msg: str, fields: object = None) -> None: ...
+
+
+SILENT = _Silent()
 
 
 class _Blocked:
@@ -58,41 +81,99 @@ def no_web_framework() -> Iterator[None]:
                 sys.modules[name] = module
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the OAuth surface lands in phase 4; this marker is removed there, and strict=True means it cannot be left on by accident",
-)
 def test_token_request_with_form_encoded_body(no_web_framework: None) -> None:
+    """The whole point, and the marker that used to guard it is gone.
+
+    Two reconciliations against the version written before any implementation
+    existed, both because the test assumed a world the implementation
+    legitimately contradicts:
+
+    * the credentials are the profile's, not invented ones. ``oauth-only.json``
+      configures ``sandbox-sq0idb-unit-square-application``, and a token
+      request whose ``client_id`` names a different application is refused with
+      ``UNAUTHORIZED`` -- correctly, and before the body is ever looked at,
+      which would make this a test of the wrong thing.
+    * the authorization code is minted rather than seeded. The shipped scenario
+      contains no authorization codes and should not: Square issues one from
+      the authorization page and it expires five minutes later, so a code
+      baked into a fixture is a code that is either always fresh or always
+      stale. ``GET /oauth2/authorize`` is the only way to get one, and it costs
+      one line.
+
+    Neither changes what is under test. The assertion that matters is the same:
+    the framework is blocked at ``sys.meta_path``, the body is
+    ``application/x-www-form-urlencoded``, and the unit understands it.
+    """
     from vendorfake import create_unit
     from vendorfake.core.transport.inprocess import in_process
 
-    # The failure shape is asserted here rather than left to the marker,
-    # because pytest reports the marker's `reason` and not the underlying
-    # exception -- so "the failure moved" is otherwise unreadable from a run.
-    # Where it stands today: the kernel, the pipeline and this binding all
-    # exist and are reachable with the web framework blocked; the one thing
-    # missing is the vendor module. When the vendor lands, this block is what
-    # goes red first, and it is deleted along with the marker below.
-    with pytest.raises(ValueError, match="no vendor named 'square'"):
-        create_unit(vendor="square", profile="oauth-only")
-
-    unit = create_unit(vendor="square", profile="oauth-only")
+    unit = create_unit(vendor="square", profile="oauth-only", logger=SILENT)
     try:
         api = in_process(unit)
+        authorized = api.call(
+            method="GET",
+            path="/oauth2/authorize",
+            query={"client_id": APPLICATION_ID, "state": "form-encoded-body"},
+        )
+        assert authorized.status == 302, authorized.text
+        code = parse_qs(urlsplit(authorized.headers["location"]).query)["code"][0]
+
         response = api.call(
             method="POST",
             path="/oauth2/token",
             headers={"content-type": "application/x-www-form-urlencoded"},
             raw_body=(
-                b"client_id=sandbox-app-id"
-                b"&client_secret=sandbox-app-secret"
-                b"&grant_type=authorization_code"
-                b"&code=sq0cgb-seeded-authorization-code"
-            ),
+                f"client_id={APPLICATION_ID}"
+                f"&client_secret={APPLICATION_SECRET}"
+                f"&grant_type=authorization_code"
+                f"&code={code}"
+            ).encode(),
         )
         assert response.status == 200, response.text
         body = response.json()
         assert body["access_token"]
         assert body["token_type"] == "bearer"
+        assert body["merchant_id"] == "MLQW2MYBY81PZ"
+    finally:
+        unit.stop()
+
+
+def test_the_documented_json_body_is_the_one_square_publishes(no_web_framework: None) -> None:
+    """The JSON path, asserted beside the form path and with equal weight.
+
+    Square documents ``POST /oauth2/token`` as ``Content-Type:
+    application/json``, with a verbatim curl example, and publishes nothing
+    about form encoding -- so this is the fidelity test and the one above is
+    the framework-trap test. The reference had zero tests over its own
+    urlencoded branch, which is exactly how a defect in it went unnoticed; both
+    paths are covered here, and they must agree on everything but the encoding.
+    """
+    from vendorfake import create_unit
+    from vendorfake.core.transport.inprocess import in_process
+
+    unit = create_unit(vendor="square", profile="oauth-only", logger=SILENT)
+    try:
+        api = in_process(unit)
+        authorized = api.call(
+            method="GET",
+            path="/oauth2/authorize",
+            query={"client_id": APPLICATION_ID, "state": "json-body"},
+        )
+        code = parse_qs(urlsplit(authorized.headers["location"]).query)["code"][0]
+        response = api.post(
+            "/oauth2/token",
+            {
+                "client_id": APPLICATION_ID,
+                "client_secret": APPLICATION_SECRET,
+                "grant_type": "authorization_code",
+                "code": code,
+            },
+        )
+        assert response.status == 200, response.text
+        body = response.json()
+        assert body["token_type"] == "bearer"
+        assert body["short_lived"] is False
+        # Absent, not null: the code flow's refresh token does not expire.
+        assert "refresh_token_expires_at" not in body
     finally:
         unit.stop()
