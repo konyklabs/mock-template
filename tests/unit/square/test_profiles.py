@@ -73,16 +73,27 @@ def test_the_vendor_block_is_snake_case_and_typed() -> None:
     }
 
 
-def test_oauth_only_serves_the_oauth_surface_and_nothing_else() -> None:
+def test_oauth_only_registers_the_whole_surface_and_enables_only_oauth() -> None:
+    """The surface belongs to the vendor and the profile only gates it.
+
+    `oauth-only` still *registers* the Orders routes -- the router is the
+    vendor's -- and the capability gate is what answers 501. Asserting the
+    route list rather than the capability list would make this test a mirror
+    of whichever surfaces happen to have landed; asserting both is what pins
+    the distinction the gate exists to make.
+    """
     for h in build_harness("oauth-only"):
         routes = h.api.get("/__unit/routes").json()["routes"]
         vendor_paths = {route["path"] for route in routes if not route["internal"]}
-        assert vendor_paths == {
+        assert {
             "/oauth2/authorize",
             "/oauth2/token",
             "/oauth2/revoke",
             "/oauth2/token/status",
-        }
+        } <= vendor_paths
+        enabled = {row["name"] for row in h.api.get("/__unit/capabilities").json()["capabilities"] if row["enabled"]}
+        assert enabled == {"oauth"}
+        assert h.api.get("/v2/orders/CAISENgvlJ6jLWAzERDzjyHVybY").status == 501
 
 
 def test_orders_only_serves_no_oauth_surface() -> None:

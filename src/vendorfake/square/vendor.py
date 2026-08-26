@@ -40,7 +40,10 @@ Not yet assembled
 -----------------
 ``signer`` and ``events`` land with the webhook surface. Both are named here as
 the seams they are, and ``None`` is a legitimate answer for a vendor with no
-webhook scheme -- here it is a temporary one.
+webhook scheme -- here it is a temporary one. ``merchant-directory`` and
+``webhooks`` are declared capabilities that own no routes yet, which the
+capability registry allows: adding a surface is appending it to
+:attr:`SquareVendor.routes` beside the two that are there.
 """
 
 from __future__ import annotations
@@ -73,6 +76,7 @@ from vendorfake.square.machine import ORDER_MACHINE, ORDER_MACHINE_NAME
 from vendorfake.square.retry import square_retry_defaults
 from vendorfake.square.seed.hydrate import hydrate_square
 from vendorfake.square.surface.oauth import oauth_routes
+from vendorfake.square.surface.orders import order_routes
 
 __all__ = ["SQUARE_MAGIC", "SQUARE_SCOPES", "SquareVendor", "create_square_vendor"]
 
@@ -186,7 +190,7 @@ class SquareVendor:
         capability index and the OpenAPI document would each see differently.
         """
         if self._routes is None:
-            self._routes = oauth_routes(self)
+            self._routes = oauth_routes(self) + order_routes(self)
         return self._routes
 
     @property

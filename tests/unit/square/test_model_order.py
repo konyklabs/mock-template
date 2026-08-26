@@ -15,11 +15,15 @@ from pydantic import ValidationError
 from vendorfake.core.util.json import dump_json
 from vendorfake.square.entities import Money, OrderEntity, OrderLineItem, Tender
 from vendorfake.square.model.order import (
+    DateTimeFilterRequest,
+    MoneyRequest,
     MoneyWire,
+    OrderPatch,
     line_item_total,
     order_total,
     project_order,
     project_order_entry,
+    supplied,
     tendered_total,
 )
 
@@ -216,3 +220,59 @@ def test_a_closed_order_carries_the_terminal_timestamp() -> None:
 
 def test_the_order_entry_projection() -> None:
     assert project_order_entry(order(version=3)) == {"order_id": "CAIS1", "version": 3, "location_id": "L1"}
+
+
+# ---------------------------------------------------------------------------
+# The request models: absent, null, and strict.
+# ---------------------------------------------------------------------------
+
+
+def test_supplied_separates_an_absent_field_from_an_explicit_null() -> None:
+    """The whole reason the request models exist.
+
+    Both parse to `None`, and treating them the same is data loss in one
+    direction or the other: read an order, echo it back with one field changed,
+    and every optional you did not mention is either wiped or frozen.
+    """
+    absent = OrderPatch.model_validate({"version": 1})
+    nulled = OrderPatch.model_validate({"version": 1, "reference_id": None})
+    assert absent.reference_id is nulled.reference_id is None
+    assert supplied(absent, "reference_id") is False
+    assert supplied(nulled, "reference_id") is True
+
+
+def test_supplied_sees_through_a_nested_model() -> None:
+    """`date_time_filter` is read by presence, not by value: which of the three
+    fields was supplied is what the sort_field rule is keyed on."""
+    filtered = DateTimeFilterRequest.model_validate({"closed_at": {"start_at": "2026-01-01T00:00:00Z"}})
+    assert supplied(filtered, "closed_at") is True
+    assert supplied(filtered, "created_at") is False
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"version": "1"},
+        {"version": 3.5},
+        {"version": True},
+    ],
+)
+def test_a_version_that_is_not_an_integer_is_refused(body: dict[str, object]) -> None:
+    """Standing in for the reference's `typeof version !== 'number'`. Lax
+    coercion would accept `"1"` as 1 and delete the gate outright."""
+    with pytest.raises(ValidationError):
+        OrderPatch.model_validate(body)
+
+
+def test_an_unmodelled_field_is_ignored_rather_than_refused() -> None:
+    """Square's Order carries taxes, discounts and fulfillments that this unit
+    declares as a SHRINK. Refusing a request because it mentioned one would
+    fail on the shrink rather than on the thing under test."""
+    patch = OrderPatch.model_validate({"version": 1, "taxes": [{"uid": "t1"}]})
+    assert patch.version == 1
+    assert supplied(patch, "metadata") is False
+
+
+def test_a_money_request_takes_its_currency_from_the_location_when_omitted() -> None:
+    assert MoneyRequest.model_validate({"amount": 150}).entity("USD") == Money(150, "USD")
+    assert MoneyRequest.model_validate({"amount": 150, "currency": "GBP"}).entity("USD") == Money(150, "GBP")
