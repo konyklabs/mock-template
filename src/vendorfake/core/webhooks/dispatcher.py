@@ -416,16 +416,57 @@ class WebhookDispatcher:
             self._prepared.append(event)
             matching = [s for s in self.subscriptions() if s.enabled and matches_event_type(s.event_types, event.type)]
             for subscription in matching:
-                queued = _Queued(
-                    event=event,
-                    subscription=subscription,
-                    retry_number=0,
-                    initial_delivery_at=self._clock.iso_ms(),
-                    drop_ack=False,
-                    retry_reason=None,
-                    chaos_applied=(),
-                )
-                self._apply_chaos_and_schedule(queued)
+                self._queue(event, subscription)
+
+    def enqueue_to(self, event: PreparedEvent, subscription_id: str) -> None:
+        """Deliver one event to exactly one subscriber, with no fan-out.
+
+        For the routes that name their recipient rather than describing it --
+        TestWebhookSubscription is the one -- where a broadcast would send a
+        subscriber an event nobody asked it for, signed with its own key so it
+        looks genuine, and would leave the caller reading somebody else's
+        status code back.
+
+        The event type is *not* matched against ``event_types``: the caller
+        named this subscription explicitly, and filtering a targeted send would
+        report the subscriber as silent when it was simply never asked. A
+        disabled subscriber is still skipped, so it records no delivery at all
+        -- the same rule :meth:`enqueue` applies.
+
+        ``self.enabled`` IS CHECKED HERE, and :meth:`enqueue` does not check it,
+        because of where each is called from. Every other path to the sink
+        arrives through the journal listener installed by :meth:`attach`, whose
+        first line is the same guard. This one is called straight from a route
+        handler, so without the check ``webhooks.disable_delivery`` -- a
+        property of the deployment that :meth:`set_enabled` deliberately cannot
+        undo -- would stop every delivery except the one a caller asked for by
+        name.
+        """
+        with self._request_lock:
+            if not self.enabled:
+                return
+            self._prepared.append(event)
+            target = next((s for s in self.subscriptions() if s.id == subscription_id), None)
+            if target is None or not target.enabled:
+                return
+            self._queue(event, target)
+
+    def _queue(self, event: PreparedEvent, subscription: Subscription) -> None:
+        """Prepare and schedule one subscriber's first attempt.
+
+        The caller holds ``_request_lock``.
+        """
+        self._apply_chaos_and_schedule(
+            _Queued(
+                event=event,
+                subscription=subscription,
+                retry_number=0,
+                initial_delivery_at=self._clock.iso_ms(),
+                drop_ack=False,
+                retry_reason=None,
+                chaos_applied=(),
+            )
+        )
 
     def _apply_chaos_and_schedule(self, queued: _Queued) -> None:
         """Ported from ``dispatcher.ts:218``, with two threading changes.
