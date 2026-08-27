@@ -412,20 +412,103 @@ class WebhookDispatcher:
         a disabled subscriber produces no delivery record at all rather than a
         record explaining that it was disabled.
         """
+        if not self.enabled:
+            return
+
+        # Resolved before ``_request_lock``, for the reason set out on
+        # :meth:`enqueue_to`. The journal listener reaches here already holding
+        # ``Store.lock``, so this path was store->request only by accident of
+        # who called it; the control plane's ``POST /__unit/webhooks/emit``
+        # calls this method holding neither lock and would have established
+        # request->store. Nothing today runs those two concurrently, because
+        # every route that reaches either is ``serialized=True`` -- a property
+        # no test asserts and that the next ``serialized=False`` route would
+        # remove without anyone noticing.
+        matching = [s for s in self.subscriptions() if s.enabled and matches_event_type(s.event_types, event.type)]
+
         with self._request_lock:
             self._prepared.append(event)
-            matching = [s for s in self.subscriptions() if s.enabled and matches_event_type(s.event_types, event.type)]
             for subscription in matching:
-                queued = _Queued(
-                    event=event,
-                    subscription=subscription,
-                    retry_number=0,
-                    initial_delivery_at=self._clock.iso_ms(),
-                    drop_ack=False,
-                    retry_reason=None,
-                    chaos_applied=(),
-                )
-                self._apply_chaos_and_schedule(queued)
+                self._queue(event, subscription)
+
+    def enqueue_to(self, event: PreparedEvent, subscription_id: str) -> None:
+        """Deliver one event to exactly one subscriber, with no fan-out.
+
+        For the routes that name their recipient rather than describing it --
+        TestWebhookSubscription is the one -- where a broadcast would send a
+        subscriber an event nobody asked it for, signed with its own key so it
+        looks genuine, and would leave the caller reading somebody else's
+        status code back.
+
+        The event type is *not* matched against ``event_types``: the caller
+        named this subscription explicitly, and filtering a targeted send would
+        report the subscriber as silent when it was simply never asked. A
+        disabled subscriber is still skipped, so it records no delivery at all
+        -- the same rule :meth:`enqueue` applies.
+
+        ``self.enabled`` is checked here AND in :meth:`enqueue`. An earlier
+        version of this docstring claimed only this method needed it, because
+        "every other path to the sink arrives through the journal listener".
+        That was false: ``POST /__unit/webhooks/emit`` calls :meth:`enqueue`
+        straight from a route handler and never sees the listener's guard, so
+        ``webhooks.disable_delivery`` -- a property of the deployment that
+        :meth:`set_enabled` deliberately cannot undo -- was still bypassable
+        through the control plane. Guarding one door while recording that only
+        one existed is worse than guarding neither, because the note is what
+        the next reader trusts.
+        """
+        if not self.enabled:
+            return
+
+        # LOCK ORDER. The store lock is taken and RELEASED before
+        # ``_request_lock``, and the two are never held together in that
+        # direction, because the journal path holds them the other way round:
+        # ``Store.append_journal`` dispatches its listeners while still holding
+        # ``Store.lock``, and that listener calls :meth:`enqueue`, which takes
+        # ``_request_lock``. An earlier version of this comment said every
+        # pre-existing caller therefore arrived store->request; that was wrong.
+        # :meth:`enqueue` took ``_request_lock`` and then read the store, so it
+        # was request->store too, and safe only because every route reaching it
+        # is ``serialized=True``. Both now resolve the store before the lock.
+        #
+        # This method is the first delivery entry point called straight from a
+        # route handler, holding neither. Resolving the subscription inside
+        # ``_request_lock`` would establish request->store and close the cycle --
+        # and it is reachable, because the only caller is the one route
+        # declaring ``serialized=False``, which the ASGI threadpool runs
+        # concurrently with other requests by design. Neither acquire has a
+        # timeout, so the deadlock would be permanent and would take the whole
+        # unit down with it: the request holding the pipeline lock is the one
+        # that hangs.
+        #
+        # Reading the subscription first is safe. ``subscriptions()`` returns
+        # copies, so the value cannot be mutated underneath the send, and a
+        # subscription deleted between the read and the queue produces a
+        # delivery to a snapshot -- which is what a test delivery is anyway.
+        target = next((s for s in self.subscriptions() if s.id == subscription_id), None)
+        if target is None or not target.enabled:
+            return
+
+        with self._request_lock:
+            self._prepared.append(event)
+            self._queue(event, target)
+
+    def _queue(self, event: PreparedEvent, subscription: Subscription) -> None:
+        """Prepare and schedule one subscriber's first attempt.
+
+        The caller holds ``_request_lock``.
+        """
+        self._apply_chaos_and_schedule(
+            _Queued(
+                event=event,
+                subscription=subscription,
+                retry_number=0,
+                initial_delivery_at=self._clock.iso_ms(),
+                drop_ack=False,
+                retry_reason=None,
+                chaos_applied=(),
+            )
+        )
 
     def _apply_chaos_and_schedule(self, queued: _Queued) -> None:
         """Ported from ``dispatcher.ts:218``, with two threading changes.

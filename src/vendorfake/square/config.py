@@ -40,7 +40,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["DEFAULT_SCOPES", "SQUARE_API_VERSION", "SquareConfig", "resolve_square_config"]
+__all__ = [
+    "DEFAULT_SCOPES",
+    "SQUARE_API_VERSION",
+    "WEBHOOK_SUBSCRIPTIONS_SCOPE",
+    "SquareConfig",
+    "resolve_square_config",
+]
 
 _DAY_MS = 24 * 60 * 60 * 1000
 
@@ -61,6 +67,48 @@ DEFAULT_SCOPES: tuple[str, ...] = (
 """The scope set Square grants when ``GET /oauth2/authorize`` carries no
 ``scope`` parameter.
 https://developer.squareup.com/reference/square/oauth-api/authorize
+"""
+
+WEBHOOK_SUBSCRIPTIONS_SCOPE = "DEVELOPER_APPLICATION_WEBHOOKS_WRITE"
+"""The permission the Webhook Subscriptions surface requires, and the one name
+in this file that is **not** taken from Square's permissions reference.
+
+What Square publishes, and what it does not:
+
+* the permissions reference
+  (https://developer.squareup.com/docs/oauth-api/square-permissions) lists no
+  webhook permission at all -- the whole vocabulary is seller-scoped, from
+  ``BANK_ACCOUNTS_READ`` to ``VENDOR_WRITE``;
+* the Webhook Subscriptions API guide states the reason:
+  "Because webhook subscriptions are owned by the application and not by any
+  one seller, you cannot use OAuth access tokens with the Webhook
+  Subscriptions API. You must use the application's personal access token."
+  https://developer.squareup.com/docs/webhooks/webhook-subscriptions-api
+* Square's own refusal on that API names this permission, and Square staff
+  confirm it applies to the application credential rather than to an OAuth
+  grant: "The WebhookSubscription endpoint can only be called with your
+  personal access token. Not an OAuth access token."
+  https://developer.squareup.com/forums/t/attempting-to-register-webhooks/7954
+
+JUDGMENT -- **this unit models "application credential, not seller grant" as a
+scope, because a scope is the only authorization axis it has.** There is no
+personal-access-token principal here; every ``bearer`` credential is a token
+record. So the one permission name Square's own error uses becomes the gate,
+and it is deliberately absent from :data:`DEFAULT_SCOPES` and from the
+read-only seeded token: an OAuth grant that asked for nothing special cannot
+reach these routes, which is the outcome Square's rule produces. It is granted
+to the full seeded token, which is this unit's stand-in for the credential a
+developer already holds.
+
+The alternative -- a separate ``personal-access-token`` auth mode -- models
+Square more exactly and is a larger change than a scope declaration; recorded
+here so the choice is visible rather than assumed.
+
+There is no ``..._READ`` counterpart on purpose. Square names exactly one
+permission for this API and it is the write one; inventing a read sibling would
+be this fake asserting a permission Square does not publish. All six routes
+therefore name this single scope, which also matches the guide's framing of the
+API as application administration rather than seller data.
 """
 
 
