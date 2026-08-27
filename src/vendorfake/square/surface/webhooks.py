@@ -54,14 +54,27 @@ delivery timeout times the retry schedule against an unreachable subscriber.
 The reference gets away with it because Node's loop yields at its ``await``; a
 lock does not. See ``Route.serialized`` and ``WebhookDispatcher.drain``.
 
-JUDGMENT -- **the test route waits for one delivery timeout, not for the whole
-cascade.** Square documents TestWebhookSubscription as sending a test event and
+JUDGMENT -- **the test route reports the first attempt, not the eventual
+outcome.** Square documents TestWebhookSubscription as sending a test event and
 reporting the subscriber's status code, and publishes nothing about how long it
-waits. Draining without a bound would make this endpoint hang for
-``timeout_ms`` times eleven retries against a dead URL, which is a worse answer
-than the ``status_code: 0`` the reference already produces for "no attempt was
-recorded". Retries continue in the background and show up at
-``GET /__unit/webhooks/deliveries`` either way.
+waits. Reporting the first attempt is the closest answer to that, and it beats
+the ``status_code: 0`` the reference produces for "no attempt was recorded".
+
+KNOWN DEFECT, tracked as konyklabs/roadmap#26 -- **the bound this drain passes
+does not hold on a virtual clock, so the call runs the whole retry cascade.**
+``drain``'s deadline is wall-clock (``time.monotonic()``), and ``Clock.advance``
+costs no wall time, so on a virtual-clock profile nothing trips it: all eleven
+retries run inside this one request and the unit's clock jumps by their sum.
+``test_the_test_route_reports_a_subscriber_that_never_answers`` demonstrates
+it -- one call to this route, and the delivery log holds twelve records ending
+in ``exhausted``.
+
+An earlier version of this paragraph asserted the bound as a guarantee. It was
+wrong, two reviews said so, and it is written out here rather than quietly
+softened, because a contributor reusing this pattern for a new blocking
+endpoint would inherit the clock side-effect and have been told by this
+docstring that it could not happen. The behavioural fix is deferred, not the
+warning.
 
 SHRINK (prototype): ``UpdateWebhookSubscription`` (PUT), the enabled/disabled
 toggle endpoint and ``UpdateWebhookSubscriptionSignatureKey`` are not
