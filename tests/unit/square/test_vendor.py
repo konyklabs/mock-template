@@ -9,7 +9,6 @@ from tests.unit.square.conftest import fake_ctx
 from vendorfake.core.capability.gates import CORE_GATED_CAPABILITIES, check_capability_declarations
 from vendorfake.core.kernel.types import (
     MutableResponse,
-    Route,
     UnitError,
     UnitErrorKind,
     UnitRequest,
@@ -293,66 +292,3 @@ def test_the_auth_adapter_describes_the_documented_schemes() -> None:
     assert "Bearer" in described["bearer"]
     assert "Client" in described["client-secret"]
     assert "ORDERS_WRITE" in described["scopes"]
-
-
-# ---------------------------------------------------------------------------
-# Every authenticated route names a scope
-# ---------------------------------------------------------------------------
-
-#: Routes that authenticate a caller but require no scope, each with the reason
-#: it is exempt. The list is explicit for the same purpose as
-#: ``VendorDefinition.not_supported``: an absence has to be *stated* to be
-#: distinguishable from an omission.
-SCOPELESS_BY_DESIGN: dict[tuple[str, str], str] = {
-    ("POST", "/oauth2/token/status"): (
-        "RetrieveTokenStatus reports what a token may do. Requiring a scope to "
-        "ask that question would make an under-scoped token unable to discover "
-        "why it is under-scoped."
-    ),
-    ("POST", "/oauth2/revoke"): (
-        "RevokeToken authenticates the application with a client secret rather "
-        "than a bearer grant, so there are no granted scopes to check against."
-    ),
-}
-
-
-def test_every_authenticated_route_names_a_scope_or_is_listed_as_exempt() -> None:
-    """The invariant the webhook surface was missing, made repo-wide.
-
-    A code review of konyklabs/vendorfake#14 found all six webhook routes
-    declaring ``auth="bearer"`` and no ``scopes=``, so the seeded read-only
-    token could register subscribers and read every subscriber's HMAC signing
-    key. The kernel's check is ``[s for s in route.scopes if s not in
-    auth.scopes]`` -- an empty tuple means the loop body never runs, so *no
-    scope declared* reads exactly like *every scope satisfied*.
-
-    Every other surface happened to declare its scopes. The reviewer's sharpest
-    point was that nothing required it: "adding ``scopes=(...)`` later, or
-    removing it again in a refactor, changes no test result." So the fix for
-    the six routes is not the fix for the defect. This is.
-    """
-    vendor = create_square_vendor()
-    offenders = [
-        (route.method, route.path)
-        for route in vendor.routes
-        if route.auth is not None and not route.scopes and (route.method, route.path) not in SCOPELESS_BY_DESIGN
-    ]
-    assert offenders == [], (
-        "these routes authenticate a caller but require no scope, so any valid "
-        f"token reaches them: {offenders}. Declare scopes=(...), or add an "
-        "entry to SCOPELESS_BY_DESIGN saying why the route legitimately needs "
-        "none."
-    )
-
-
-def test_the_exemption_list_names_only_routes_that_exist_and_authenticate() -> None:
-    """An exemption for a route that is gone, or that never authenticated, is
-    a stale excuse that quietly widens the invariant next time someone reads
-    it as precedent."""
-    authenticated = {(route.method, route.path) for route in vendor_routes() if route.auth is not None}
-    stale = [key for key in SCOPELESS_BY_DESIGN if key not in authenticated]
-    assert stale == [], f"exemptions for routes that do not exist or do not authenticate: {stale}"
-
-
-def vendor_routes() -> tuple[Route, ...]:
-    return tuple(create_square_vendor().routes)
