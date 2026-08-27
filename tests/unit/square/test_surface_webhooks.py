@@ -45,6 +45,7 @@ SUBSCRIPTION_ID = re.compile(r"^wbhk_[0-9a-f]{32}$")
 """``wbhk_`` plus 32 lowercase hex characters, matching Square's own examples."""
 
 HOOKS = "https://api-created.test/hooks"
+OTHER_HOOKS = "https://api-other.test/hooks"
 
 
 def independent_signature(signature_key: str, notification_url: str, raw_body: bytes) -> str:
@@ -492,6 +493,66 @@ def test_the_test_route_defaults_to_a_type_the_subscriber_asked_for(h: Harness, 
     subscription = create_subscription(h, event_types=[ORDER_UPDATED])
     response = h.api.post(f"/v2/webhooks/subscriptions/{subscription['id']}/test", {}, headers=h.auth)
     assert response.json()["subscription_test_result"]["status_code"] == 200
+    assert json.loads(bytes(sink.received[0].body).decode("utf-8"))["type"] == ORDER_UPDATED
+
+
+def test_the_test_route_reaches_only_the_subscriber_under_test(h: Harness, sink: MemorySink) -> None:
+    """Square's TestWebhookSubscription targets one subscription.
+
+    A broadcast would send every other enabled subscriber whose patterns cover
+    the type a synthetic event it never asked for -- signed with its own key,
+    so indistinguishable from a genuine one.
+    """
+    other = create_subscription(h, idempotency_key="sub-other", notification_url=OTHER_HOOKS)
+    under_test = create_subscription(h, idempotency_key="sub-under-test")
+
+    response = h.api.post(f"/v2/webhooks/subscriptions/{under_test['id']}/test", {}, headers=h.auth)
+
+    assert response.status == 200
+    (request,) = sink.received
+    assert request.url == HOOKS
+    assert OTHER_HOOKS not in [r.url for r in sink.received]
+    assert other["id"] != under_test["id"]
+
+
+def test_the_test_route_reports_the_status_code_of_the_subscriber_under_test(h: Harness, sink: MemorySink) -> None:
+    """The reported `status_code` describes the targeted endpoint, not whichever
+    record the single delivery worker happened to write first.
+
+    With a broadcast, `event_id` is shared across the fan-out, so the lookup
+    returns the first subscriber inserted -- and a wrong non-zero code is a
+    failure shaped like success: the caller cannot tell it was told about
+    somebody else.
+    """
+    sink.respond_with = lambda request, _index: 500 if request.url == HOOKS else 200
+    # Inserted first, so its record would be written first under a broadcast.
+    create_subscription(h, idempotency_key="sub-a")
+    healthy = create_subscription(h, idempotency_key="sub-b", notification_url=OTHER_HOOKS)
+
+    response = h.api.post(f"/v2/webhooks/subscriptions/{healthy['id']}/test", {}, headers=h.auth)
+
+    result = response.json()["subscription_test_result"]
+    assert result["status_code"] == 200, "reported the other subscriber's failure"
+    (request,) = sink.received
+    assert request.url == OTHER_HOOKS
+
+
+def test_the_test_route_resolves_a_glob_to_a_real_event_type(h: Harness, sink: MemorySink) -> None:
+    """`event_types` holds patterns. Returning the first one verbatim puts
+    `"type": "*"` on the wire, and a consumer dispatching on `body["type"]`
+    falls through to its unknown-event branch on the very request meant to
+    prove its wiring works."""
+    subscription = create_subscription(h, event_types=["*"])
+    response = h.api.post(f"/v2/webhooks/subscriptions/{subscription['id']}/test", {}, headers=h.auth)
+    assert response.json()["subscription_test_result"]["status_code"] == 200
+    delivered = json.loads(bytes(sink.received[0].body).decode("utf-8"))["type"]
+    assert delivered in SQUARE_EVENT_TYPES, f"delivered a pattern, not a type: {delivered!r}"
+
+
+def test_the_test_route_prefers_a_literal_type_the_subscriber_named(h: Harness, sink: MemorySink) -> None:
+    """A glob alongside a literal must not displace the literal."""
+    subscription = create_subscription(h, event_types=[ORDER_UPDATED, "order.*"])
+    h.api.post(f"/v2/webhooks/subscriptions/{subscription['id']}/test", {}, headers=h.auth)
     assert json.loads(bytes(sink.received[0].body).decode("utf-8"))["type"] == ORDER_UPDATED
 
 
