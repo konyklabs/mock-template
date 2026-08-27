@@ -703,12 +703,20 @@ def test_a_second_refresh_mints_from_the_second_record_not_the_first(h: Harness)
         grant_type="authorization_code",
         code=h.code(scope="ORDERS_READ ORDERS_WRITE"),
     ).json()
+    # `short_lived` is set on refresh and never cleared by it, so it is the
+    # property that distinguishes the two records. Scopes used to serve here,
+    # and cannot any more: a refresh naming none intersects against the
+    # SELLER'S APPROVAL rather than the previous token, so the third mint
+    # legitimately carries both again. That coupling hid the ratchet defect --
+    # this assertion passed precisely because the grant had been narrowed
+    # permanently.
     second = h.token(
         client_secret=APPLICATION_SECRET,
         grant_type="refresh_token",
         refresh_token=first["refresh_token"],
-        scopes=["ORDERS_READ"],
+        short_lived=True,
     ).json()
+    assert second["short_lived"] is True
     third = h.token(
         client_secret=APPLICATION_SECRET,
         grant_type="refresh_token",
@@ -716,14 +724,9 @@ def test_a_second_refresh_mints_from_the_second_record_not_the_first(h: Harness)
     )
     assert third.status == 200, third.text
 
-    status = h.api.post(
-        "/oauth2/token/status",
-        {},
-        headers={"authorization": f"Bearer {third.json()['access_token']}"},
-    )
-    # The scopes of the SECOND mint, not the first: proof the lookup skipped
-    # the superseded record. Had it found the stale one, this would be both.
-    assert status.json()["scopes"] == ["ORDERS_READ"]
+    # Inherited from the SECOND record: proof the lookup skipped the superseded
+    # one. Had it found the stale first record, short_lived would be false.
+    assert third.json()["short_lived"] is True
     assert second["access_token"] != third.json()["access_token"]
 
     # And the very first access token is still good.
@@ -1094,3 +1097,48 @@ def test_a_refused_scope_intersection_leaves_the_code_spendable(h: Harness) -> N
     accepted = h.token(client_secret=APPLICATION_SECRET, grant_type="authorization_code", code=code)
     assert accepted.status == 200, "the refused request spent the code it refused"
     assert accepted.json()["access_token"]
+
+
+def test_a_down_scoped_refresh_does_not_ratchet_the_grant_down_permanently(h: Harness) -> None:
+    """Narrowing is per-token, not per-grant. The reviewer's exact scenario.
+
+    A refresh intersects the request against what the SELLER APPROVED, not
+    against what the current token happens to carry. Square narrows "from the
+    ones granted when the seller approved", so taking a narrow token for one
+    subtask must not stop the grant producing a full one afterwards.
+
+    Intersecting against ``existing.scopes`` made every narrowing permanent,
+    with no path back. It is the mirror image of the escalation this surface
+    was already fixed for -- wrong in the other direction, and it reads as safe
+    because it refuses rather than over-grants, which is exactly why it
+    survived a review that was looking for over-granting.
+    """
+    code = h.code(scope="ORDERS_READ ORDERS_WRITE")
+    first = h.token(client_secret=APPLICATION_SECRET, grant_type="authorization_code", code=code).json()
+    refresh_token = first["refresh_token"]
+
+    narrowed = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="refresh_token",
+        refresh_token=refresh_token,
+        scopes=["ORDERS_READ"],
+    )
+    assert narrowed.status == 200, narrowed.text
+
+    widened = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="refresh_token",
+        refresh_token=refresh_token,
+        scopes=["ORDERS_WRITE"],
+    )
+    assert widened.status == 200, (
+        f"a permission the seller approved became unreachable after one down-scoped refresh: {widened.text}"
+    )
+
+    granted = h.api.post(
+        "/oauth2/token/status",
+        {},
+        headers={"authorization": f"Bearer {widened.json()['access_token']}"},
+    )
+    assert granted.status == 200, granted.text
+    assert "ORDERS_WRITE" in granted.json()["scopes"], granted.text

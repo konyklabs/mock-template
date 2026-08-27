@@ -347,6 +347,7 @@ class OAuthSurface:
             client_id=record.client_id,
             merchant_id=record.merchant_id,
             scopes=narrowed,
+            authorized_scopes=record.scopes,
             short_lived=grant.short_lived,
             flow=flow,
             refresh_token=self._deps.ids.refresh_token(),
@@ -385,7 +386,17 @@ class OAuthSurface:
         # on the exchange path: a PKCE refresh token is single-use, so a refused
         # request that had already retired it would lock the consumer out of the
         # grant permanently -- with a 400 telling them nothing had happened.
-        narrowed = _narrowed_scopes(grant.scopes, existing.scopes)
+        # Intersect against what the SELLER APPROVED, not against what this
+        # token happens to carry. Square narrows "from the ones granted when the
+        # seller approved", so a refresh asking for a permission that an earlier
+        # down-scoped refresh dropped must still succeed.
+        #
+        # Using existing.scopes made every narrowing permanent -- a ratchet with
+        # no way back, and the mirror image of the escalation this surface was
+        # fixed for. Wrong in the other direction, and refused rather than
+        # over-granted, which is why it reads as safe and is not.
+        approved = existing.authorized_scopes or existing.scopes
+        narrowed = _narrowed_scopes(grant.scopes, approved)
 
         now = ctx.clock.iso_ms()
         if existing.flow == "pkce":
@@ -412,6 +423,7 @@ class OAuthSurface:
             client_id=existing.client_id,
             merchant_id=existing.merchant_id,
             scopes=narrowed,
+            authorized_scopes=approved,
             # Set on refresh, never cleared by it; see the model.
             short_lived=grant.short_lived or existing.short_lived,
             flow=existing.flow,
@@ -597,6 +609,7 @@ class OAuthSurface:
         client_id: str,
         merchant_id: str,
         scopes: tuple[str, ...],
+        authorized_scopes: tuple[str, ...],
         short_lived: bool,
         flow: Literal["code", "pkce"],
         refresh_token: str,
@@ -616,6 +629,7 @@ class OAuthSurface:
             merchant_id=merchant_id,
             expires_at=expires_at,
             scopes=scopes,
+            authorized_scopes=authorized_scopes,
             refresh_token_expires_at=refresh_expires_at,
             short_lived=short_lived,
             flow=flow,
