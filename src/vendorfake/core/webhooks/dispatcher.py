@@ -442,13 +442,36 @@ class WebhookDispatcher:
         undo -- would stop every delivery except the one a caller asked for by
         name.
         """
+        if not self.enabled:
+            return
+
+        # LOCK ORDER. The store lock is taken and RELEASED before
+        # ``_request_lock``, and the two are never held together in that
+        # direction, because the journal path holds them the other way round:
+        # ``Store.append_journal`` dispatches its listeners while still holding
+        # ``Store.lock``, and that listener calls :meth:`enqueue`, which takes
+        # ``_request_lock``. So every pre-existing caller arrives store->request.
+        #
+        # This method is the first delivery entry point called straight from a
+        # route handler, holding neither. Resolving the subscription inside
+        # ``_request_lock`` would establish request->store and close the cycle --
+        # and it is reachable, because the only caller is the one route
+        # declaring ``serialized=False``, which the ASGI threadpool runs
+        # concurrently with other requests by design. Neither acquire has a
+        # timeout, so the deadlock would be permanent and would take the whole
+        # unit down with it: the request holding the pipeline lock is the one
+        # that hangs.
+        #
+        # Reading the subscription first is safe. ``subscriptions()`` returns
+        # copies, so the value cannot be mutated underneath the send, and a
+        # subscription deleted between the read and the queue produces a
+        # delivery to a snapshot -- which is what a test delivery is anyway.
+        target = next((s for s in self.subscriptions() if s.id == subscription_id), None)
+        if target is None or not target.enabled:
+            return
+
         with self._request_lock:
-            if not self.enabled:
-                return
             self._prepared.append(event)
-            target = next((s for s in self.subscriptions() if s.id == subscription_id), None)
-            if target is None or not target.enabled:
-                return
             self._queue(event, target)
 
     def _queue(self, event: PreparedEvent, subscription: Subscription) -> None:
