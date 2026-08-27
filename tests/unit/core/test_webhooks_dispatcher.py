@@ -38,8 +38,10 @@ from tests.fakes import (
     make_unit,
     route,
 )
+from vendorfake import create_unit
 from vendorfake.core.kernel.types import JournalEntry, MappedEvent, PreparedEvent, ReplyInit
 from vendorfake.core.kernel.unit import Unit, make_request
+from vendorfake.core.transport.inprocess import in_process
 from vendorfake.core.webhooks.models import DeliveryOutcome
 from vendorfake.core.webhooks.sink import MemorySink
 
@@ -1220,3 +1222,89 @@ def test_the_sink_kind_and_the_live_policy_are_reportable() -> None:
     assert unit.webhooks.sink_kind == "memory"
     assert unit.webhooks.retry_policy.as_json()["schedule_ms"] == list(SHORT_SCHEDULE)
     unit.stop()
+
+
+def test_a_targeted_send_never_reads_the_store_while_holding_the_request_lock() -> None:
+    """The lock ORDER, asserted directly rather than raced for.
+
+    Review found an AB-BA deadlock introduced by the fix for the broadcast
+    defect. ``Store.append_journal`` dispatches listeners while still holding
+    ``Store.lock``, and that listener calls ``enqueue``, which takes
+    ``_request_lock`` -- the journal path is store->request. ``enqueue_to`` is
+    the first delivery entry point called straight from a route handler,
+    holding neither, and resolving the subscription inside ``_request_lock``
+    made it request->store. Neither acquire has a timeout, so the cycle hangs
+    the unit permanently.
+
+    A first attempt at this test drove both orders from two threads for forty
+    iterations and passed against the deadlocking code, because the window
+    between acquiring ``_request_lock`` and reading the store is a few
+    instructions wide. A test that cannot fail is worse than no test, so this
+    asserts the invariant instead of hoping to hit the race: it counts the
+    depth of ``_request_lock`` and fails if the store is read at depth > 0.
+    """
+    unit = create_unit(vendor="square", profile="full")
+    try:
+        dispatcher = unit.context.webhooks
+        api = in_process(unit)
+        created = api.post(
+            "/__unit/webhooks/subscriptions",
+            {
+                "notification_url": "https://lockorder.test/hooks",
+                "event_types": ["order.created"],
+                "signature_key": "k",
+            },
+        )
+        subscription_id = created.json()["subscription"]["id"]
+
+        depth = 0
+        violations: list[str] = []
+        real_lock = dispatcher._request_lock
+
+        class _Tracking:
+            def __enter__(self) -> None:
+                nonlocal depth
+                real_lock.acquire()
+                depth += 1
+
+            def __exit__(self, *exc: object) -> None:
+                nonlocal depth
+                depth -= 1
+                real_lock.release()
+
+        store = unit.context.store
+        real_store_lock = store.lock
+
+        class _WatchedStoreLock:
+            def __enter__(self) -> None:
+                if depth > 0:
+                    violations.append("the store lock was taken while holding _request_lock")
+                real_store_lock.acquire()
+
+            def __exit__(self, *exc: object) -> None:
+                real_store_lock.release()
+
+        dispatcher._request_lock = _Tracking()  # type: ignore[assignment]
+        store.lock = _WatchedStoreLock()  # type: ignore[assignment]
+        try:
+            dispatcher.enqueue_to(
+                PreparedEvent(
+                    type="order.created",
+                    event_id="evt_lock_order",
+                    entity_id=subscription_id,
+                    created_at="2026-01-01T00:00:00.000Z",
+                    body={"type": "order.created"},
+                ),
+                subscription_id,
+            )
+        finally:
+            dispatcher._request_lock = real_lock  # type: ignore[assignment]
+            store.lock = real_store_lock  # type: ignore[assignment]
+
+        assert violations == [], (
+            f"{violations} -- enqueue_to must resolve the subscription before "
+            "taking _request_lock, because the journal path holds the store "
+            "lock while calling enqueue, which takes _request_lock."
+        )
+    finally:
+        unit.stop()
