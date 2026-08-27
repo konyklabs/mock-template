@@ -27,6 +27,23 @@ That also means registering a subscriber journals like any other mutation --
 and the dispatcher deliberately ignores journal entries for this collection, so
 subscribing does not notify every subscriber that somebody subscribed.
 
+AUTHORIZATION -- all six routes name one scope
+---------------------------------------------
+:data:`~vendorfake.square.config.WEBHOOK_SUBSCRIPTIONS_SCOPE`, on every route
+including the three reads, and that constant carries the citations and the
+JUDGMENT behind the name. The short version: Square's permissions reference
+publishes no webhook permission because this API is application-owned --
+"you cannot use OAuth access tokens with the Webhook Subscriptions API. You
+must use the application's personal access token"
+(https://developer.squareup.com/docs/webhooks/webhook-subscriptions-api) --
+so a scope is how this unit expresses "not an ordinary seller grant".
+
+Declaring nothing was not a neutral choice: ``Route.scopes`` defaults to ``()``
+and the kernel's check is a loop over it, so an empty tuple lets any bearer
+token register a subscriber and read subscribers back. The repo-wide invariant
+in ``tests/unit/test_route_scopes.py`` is what keeps that from recurring here or
+in a surface written later.
+
 ``POST .../test`` DECLARES ``serialized=False``
 -----------------------------------------------
 It is the one vendor route that blocks inside its handler on machinery another
@@ -69,6 +86,7 @@ from vendorfake.core.kernel.types import (
     UnitErrorKind,
 )
 from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION, Subscription, matches_event_type
+from vendorfake.square.config import WEBHOOK_SUBSCRIPTIONS_SCOPE
 from vendorfake.square.events import ORDER_CREATED, SQUARE_EVENT_TYPES
 from vendorfake.square.model.common import validate_body
 from vendorfake.square.model.webhooks import (
@@ -116,6 +134,7 @@ class WebhooksSurface:
                 capability=CAPABILITY,
                 handler=self.list_event_types,
                 auth="bearer",
+                scopes=(WEBHOOK_SUBSCRIPTIONS_SCOPE,),
                 operation_id="ListWebhookEventTypes",
                 summary="Event types this unit can emit.",
             ),
@@ -125,6 +144,7 @@ class WebhooksSurface:
                 capability=CAPABILITY,
                 handler=self.create_subscription,
                 auth="bearer",
+                scopes=(WEBHOOK_SUBSCRIPTIONS_SCOPE,),
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="webhooks.create"),
                 operation_id="CreateWebhookSubscription",
                 summary="Register a subscriber and receive its signature key.",
@@ -135,6 +155,7 @@ class WebhooksSurface:
                 capability=CAPABILITY,
                 handler=self.list_subscriptions,
                 auth="bearer",
+                scopes=(WEBHOOK_SUBSCRIPTIONS_SCOPE,),
                 operation_id="ListWebhookSubscriptions",
                 summary="List subscribers.",
             ),
@@ -144,6 +165,7 @@ class WebhooksSurface:
                 capability=CAPABILITY,
                 handler=self.retrieve_subscription,
                 auth="bearer",
+                scopes=(WEBHOOK_SUBSCRIPTIONS_SCOPE,),
                 operation_id="RetrieveWebhookSubscription",
                 summary="Retrieve one subscriber.",
             ),
@@ -153,6 +175,7 @@ class WebhooksSurface:
                 capability=CAPABILITY,
                 handler=self.delete_subscription,
                 auth="bearer",
+                scopes=(WEBHOOK_SUBSCRIPTIONS_SCOPE,),
                 operation_id="DeleteWebhookSubscription",
                 summary="Remove a subscriber.",
             ),
@@ -162,6 +185,7 @@ class WebhooksSurface:
                 capability=CAPABILITY,
                 handler=self.test_subscription,
                 auth="bearer",
+                scopes=(WEBHOOK_SUBSCRIPTIONS_SCOPE,),
                 operation_id="TestWebhookSubscription",
                 summary="Send a signed test event and report the subscriber status code.",
                 # Blocks on the delivery worker; see the module docstring.
@@ -225,7 +249,7 @@ class WebhooksSurface:
             },
             {"operation_id": "CreateWebhookSubscription"},
         )
-        return json_({"subscription": _project(entity)})
+        return json_({"subscription": _project(entity, signature_key=True)})
 
     # -- GET /v2/webhooks/subscriptions ------------------------------------
 
@@ -236,15 +260,26 @@ class WebhooksSurface:
         ``ctx.webhooks.subscriptions()`` -- which returns the dispatcher's
         typed view and drops the store's ``created_at``/``updated_at`` stamps
         that Square's object carries.
+
+        NO ``signature_key`` HERE, and there is on create and retrieve: this is
+        the one response that hands back subscribers the caller did not
+        register, and Square's own list example omits the key while its create
+        and retrieve examples include it. See :class:`SubscriptionWire`.
         """
         rows = args.ctx.store.collection(SUBSCRIPTION_COLLECTION).all()
-        return json_({"subscriptions": [_project(entity) for entity in rows]})
+        return json_({"subscriptions": [_project(entity, signature_key=False) for entity in rows]})
 
     # -- GET /v2/webhooks/subscriptions/{subscription_id} -------------------
 
     def retrieve_subscription(self, args: HandlerArgs) -> ReplyInit:
+        """One subscriber, with its signing key.
+
+        https://developer.squareup.com/reference/square/webhook-subscriptions-api/retrieve-webhook-subscription
+        -- Square's example response for this operation carries
+        ``signature_key``, and its list example does not.
+        """
         entity = _require_subscription(args.ctx, args.params["subscription_id"])
-        return json_({"subscription": _project(entity)})
+        return json_({"subscription": _project(entity, signature_key=True)})
 
     # -- DELETE /v2/webhooks/subscriptions/{subscription_id} ----------------
 
@@ -359,8 +394,12 @@ def _require_subscription(ctx: UnitContext, subscription_id: str) -> Mapping[str
     return entity
 
 
-def _project(entity: Mapping[str, Any]) -> dict[str, Any]:
+def _project(entity: Mapping[str, Any], *, signature_key: bool) -> dict[str, Any]:
     """One stored subscription as Square's ``WebhookSubscription``.
+
+    ``signature_key`` is a required keyword rather than a default, so adding a
+    seventh route that returns a subscription is a decision about the signing
+    key and not a field that comes along for free.
 
     Goes through the core's typed :class:`Subscription` reader for everything
     the dispatcher also reads, so the projection and the fan-out cannot
@@ -377,7 +416,7 @@ def _project(entity: Mapping[str, Any]) -> dict[str, Any]:
         enabled=subscription.enabled,
         event_types=list(subscription.event_types),
         notification_url=subscription.notification_url,
-        signature_key=subscription.signature_key,
+        signature_key=subscription.signature_key if signature_key else None,
         api_version=subscription.api_version,
         created_at=None if created_at is None else str(created_at),
         updated_at=None if updated_at is None else str(updated_at),
