@@ -412,9 +412,22 @@ class WebhookDispatcher:
         a disabled subscriber produces no delivery record at all rather than a
         record explaining that it was disabled.
         """
+        if not self.enabled:
+            return
+
+        # Resolved before ``_request_lock``, for the reason set out on
+        # :meth:`enqueue_to`. The journal listener reaches here already holding
+        # ``Store.lock``, so this path was store->request only by accident of
+        # who called it; the control plane's ``POST /__unit/webhooks/emit``
+        # calls this method holding neither lock and would have established
+        # request->store. Nothing today runs those two concurrently, because
+        # every route that reaches either is ``serialized=True`` -- a property
+        # no test asserts and that the next ``serialized=False`` route would
+        # remove without anyone noticing.
+        matching = [s for s in self.subscriptions() if s.enabled and matches_event_type(s.event_types, event.type)]
+
         with self._request_lock:
             self._prepared.append(event)
-            matching = [s for s in self.subscriptions() if s.enabled and matches_event_type(s.event_types, event.type)]
             for subscription in matching:
                 self._queue(event, subscription)
 
@@ -433,14 +446,16 @@ class WebhookDispatcher:
         disabled subscriber is still skipped, so it records no delivery at all
         -- the same rule :meth:`enqueue` applies.
 
-        ``self.enabled`` IS CHECKED HERE, and :meth:`enqueue` does not check it,
-        because of where each is called from. Every other path to the sink
-        arrives through the journal listener installed by :meth:`attach`, whose
-        first line is the same guard. This one is called straight from a route
-        handler, so without the check ``webhooks.disable_delivery`` -- a
-        property of the deployment that :meth:`set_enabled` deliberately cannot
-        undo -- would stop every delivery except the one a caller asked for by
-        name.
+        ``self.enabled`` is checked here AND in :meth:`enqueue`. An earlier
+        version of this docstring claimed only this method needed it, because
+        "every other path to the sink arrives through the journal listener".
+        That was false: ``POST /__unit/webhooks/emit`` calls :meth:`enqueue`
+        straight from a route handler and never sees the listener's guard, so
+        ``webhooks.disable_delivery`` -- a property of the deployment that
+        :meth:`set_enabled` deliberately cannot undo -- was still bypassable
+        through the control plane. Guarding one door while recording that only
+        one existed is worse than guarding neither, because the note is what
+        the next reader trusts.
         """
         if not self.enabled:
             return
@@ -450,7 +465,11 @@ class WebhookDispatcher:
         # direction, because the journal path holds them the other way round:
         # ``Store.append_journal`` dispatches its listeners while still holding
         # ``Store.lock``, and that listener calls :meth:`enqueue`, which takes
-        # ``_request_lock``. So every pre-existing caller arrives store->request.
+        # ``_request_lock``. An earlier version of this comment said every
+        # pre-existing caller therefore arrived store->request; that was wrong.
+        # :meth:`enqueue` took ``_request_lock`` and then read the store, so it
+        # was request->store too, and safe only because every route reaching it
+        # is ``serialized=True``. Both now resolve the store before the lock.
         #
         # This method is the first delivery entry point called straight from a
         # route handler, holding neither. Resolving the subscription inside
