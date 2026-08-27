@@ -640,3 +640,59 @@ def test_a_magic_value_in_the_subscription_name_drives_a_fault(h: Harness) -> No
     )
     assert response.status == 429
     assert response.headers["x-unit-error"] == "rate_limited"
+
+
+def test_a_read_only_token_is_refused_by_every_webhook_route(h: Harness) -> None:
+    """The property `WEBHOOK_SUBSCRIPTIONS_SCOPE` exists to provide, exercised.
+
+    Review caught this: `SEED_SCOPES`'s docstring and the fix commit both
+    described "a read-only token cannot register a subscriber or read a signing
+    key" as testable against the seeded fixtures, and nothing tested it. The
+    standing invariant in ``tests/unit/test_route_scopes.py`` asserts only that
+    each route *declares* a non-empty ``scopes`` tuple; it never calls a route,
+    so it cannot see whether the kernel actually refuses an under-scoped caller.
+
+    The gap that leaves is exact: a typo in the scope name, or dropping it from
+    one ``Route(...)`` while adding that path to ``SCOPELESS_BY_DESIGN`` for an
+    unrelated reason, would let the read-only token reach these routes again --
+    the precise vulnerability the scope was added to close -- and CI would stay
+    green. ``test_the_surface_needs_a_token`` covers only the no-token 401, not
+    the wrong-scope 403 that is the whole point.
+
+    So this drives all six routes with the read-only bearer token and requires
+    ``forbidden_scope`` on each, which is a different answer from
+    ``unauthorized`` and must not be confusable with it.
+    """
+    created = h.api.call(
+        method="POST",
+        path="/v2/webhooks/subscriptions",
+        headers=h.auth,
+        body={"subscription": {"notification_url": "https://scoped.test/hooks", "event_types": ["order.created"]}},
+    )
+    assert created.status == 200, created.text
+    subscription_id = created.json()["subscription"]["id"]
+
+    probes = [
+        ("GET", "/v2/webhooks/event-types", None),
+        ("GET", "/v2/webhooks/subscriptions", None),
+        ("POST", "/v2/webhooks/subscriptions", {"subscription": {"notification_url": "https://x.test/h"}}),
+        ("GET", f"/v2/webhooks/subscriptions/{subscription_id}", None),
+        ("POST", f"/v2/webhooks/subscriptions/{subscription_id}/test", {}),
+        ("DELETE", f"/v2/webhooks/subscriptions/{subscription_id}", None),
+    ]
+
+    refused: list[str] = []
+    for method, path, body in probes:
+        response = h.api.call(method=method, path=path, headers=h.read_auth, body=body)
+        refused.append(f"{method} {path} -> {response.status}:{response.headers.get('x-unit-error')}")
+        assert response.status == 403, f"{method} {path} was not refused: {response.text}"
+        assert response.headers.get("x-unit-error") == "forbidden_scope", (
+            f"{method} {path} answered {response.headers.get('x-unit-error')}; a token that authenticated but "
+            "lacks the scope must be distinguishable from one that did not authenticate"
+        )
+
+    assert len(refused) == 6, refused
+    # And the signing key never reaches an under-scoped caller, which is the
+    # consequence that made this a security finding rather than a nit.
+    listing = h.api.call(method="GET", path="/v2/webhooks/subscriptions", headers=h.read_auth)
+    assert "signature_key" not in listing.text
