@@ -94,7 +94,18 @@ SEED_SCOPES: tuple[str, ...] = (
     "ORDERS_WRITE",
     "ITEMS_READ",
     "PAYMENTS_WRITE",
+    "DEVELOPER_APPLICATION_WEBHOOKS_WRITE",
 )
+"""The full seeded grant.
+
+The last entry is this unit's stand-in for the application credential Square
+requires on the Webhook Subscriptions API -- see
+:data:`~vendorfake.square.config.WEBHOOK_SUBSCRIPTIONS_SCOPE` for why an
+application-owned API is modelled as a scope here. It is deliberately absent
+from :data:`SEED_READ_ONLY_SCOPES`, so "a read-only token cannot register a
+subscriber or read a signing key" is testable against a token the fixtures
+already define.
+"""
 
 SEED_READ_ONLY_ACCESS_TOKEN = "EAAAl-unit-seeded-access-token-read-only"
 SEED_READ_ONLY_REFRESH_TOKEN = "EQAAl-unit-seeded-refresh-token-read-only"

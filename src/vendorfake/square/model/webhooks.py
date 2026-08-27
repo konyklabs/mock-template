@@ -219,10 +219,29 @@ class TestWebhookSubscriptionRequest(BaseModel):
 class SubscriptionWire(BaseModel):
     """One ``WebhookSubscription``, as this unit publishes it.
 
-    ``signature_key`` is included. Square returns it on creation and not on
-    later reads; this is a fake, the key is whatever configured it, and a
-    consumer whose test needs to verify a signature has nowhere else to learn
-    it. Recorded as a deliberate deviation rather than an oversight.
+    ``signature_key`` IS OPTIONAL HERE, because Square's own examples do not
+    agree across the three responses that carry a subscription and this unit
+    follows each of them:
+
+    * CreateWebhookSubscription returns it --
+      https://developer.squareup.com/reference/square/webhook-subscriptions-api/create-webhook-subscription
+    * RetrieveWebhookSubscription returns it --
+      https://developer.squareup.com/reference/square/webhook-subscriptions-api/retrieve-webhook-subscription
+    * ListWebhookSubscriptions does **not**: its example response carries
+      ``id``, ``name``, ``enabled``, ``event_types``, ``notification_url``,
+      ``api_version``, ``created_at`` and ``updated_at``, and no key --
+      https://developer.squareup.com/reference/square/webhook-subscriptions-api/list-webhook-subscriptions
+
+    That distinction is worth keeping rather than smoothing over. A list is the
+    one response that hands back subscribers the caller did not create -- a
+    profile's ``webhooks.subscribers``, another consumer's registration -- and
+    the signing key is the secret that makes a forged delivery verify. The
+    caller learns their own key from the create call, which is where a consumer
+    with a signature to verify actually gets it.
+
+    ``compact`` drops the key when it is ``None``, so an omitted signing key is
+    an absent field rather than a ``null`` a consumer's ``if "signature_key" in
+    row`` would read as present.
     """
 
     model_config = _WIRE
@@ -232,7 +251,7 @@ class SubscriptionWire(BaseModel):
     enabled: bool
     event_types: list[str]
     notification_url: str
-    signature_key: str
+    signature_key: str | None = None
     api_version: str | None = None
     created_at: str | None = None
     updated_at: str | None = None

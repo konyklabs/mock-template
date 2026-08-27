@@ -69,7 +69,11 @@ from vendorfake.core.kernel.types import (
 from vendorfake.core.state.machine import MachineDef
 from vendorfake.square.auth import SquareAuth
 from vendorfake.square.capabilities import SQUARE_CAPABILITIES, SQUARE_NOT_SUPPORTED
-from vendorfake.square.config import SquareConfig, resolve_square_config
+from vendorfake.square.config import (
+    WEBHOOK_SUBSCRIPTIONS_SCOPE,
+    SquareConfig,
+    resolve_square_config,
+)
 from vendorfake.square.errors import SquareErrorShaper
 from vendorfake.square.events import SquareEventMapper
 from vendorfake.square.ids import SquareIds
@@ -92,14 +96,20 @@ SQUARE_SCOPES: tuple[str, ...] = (
     "ORDERS_WRITE",
     "ITEMS_READ",
     "PAYMENTS_WRITE",
+    WEBHOOK_SUBSCRIPTIONS_SCOPE,
 )
 """The scopes this unit's routes ask for.
 
-A subset of Square's published OAuth permissions
+The first five are a subset of Square's published OAuth permissions
 (https://developer.squareup.com/docs/oauth-api/square-permissions) -- the ones
 the modelled surface actually needs. A route names the scopes it requires and
 the kernel checks them against the token, so this tuple is the vocabulary and
 not the policy.
+
+The last one is not on that page, and is the only entry here that is not:
+Square publishes no webhook permission because the Webhook Subscriptions API is
+application-owned rather than seller-owned. The citations and the JUDGMENT are
+on :data:`~vendorfake.square.config.WEBHOOK_SUBSCRIPTIONS_SCOPE`.
 """
 
 SQUARE_MAGIC = MagicTriggerSpec(

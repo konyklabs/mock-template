@@ -1051,6 +1051,29 @@ def test_a_unit_that_never_declared_webhooks_delivers_nothing() -> None:
     unit.stop()
 
 
+def test_a_targeted_enqueue_is_stopped_by_disable_delivery_too() -> None:
+    """``enqueue_to`` is the one delivery entry point called straight from a
+    route handler rather than through the journal listener, so it carries the
+    ``enabled`` guard itself. Without it, the deployment kill switch would stop
+    every delivery except the one a caller asked for by name."""
+    unit, sink, _ = build(subscribers=[subscriber()], disable_delivery=True)
+    (target,) = unit.webhooks.subscriptions()
+    unit.webhooks.enqueue_to(
+        PreparedEvent(
+            type="order.created",
+            event_id="evt_test_1",
+            entity_id=target.id,
+            created_at="2024-01-01T00:00:00.000Z",
+            body={"type": "order.created"},
+        ),
+        target.id,
+    )
+    unit.webhooks.drain()
+    assert sink.received == []
+    assert unit.webhooks.deliveries() == ()
+    unit.stop()
+
+
 def test_disable_delivery_in_the_profile_cannot_be_switched_back_on() -> None:
     """Two switches with different lifetimes: the profile's is a property of the
     deployment, ``set_enabled`` is a runtime one."""

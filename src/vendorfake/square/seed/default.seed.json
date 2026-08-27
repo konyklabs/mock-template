@@ -131,7 +131,8 @@
       "id": "tok_seed_full",
       "access_token": "EAAAl-unit-seeded-access-token-full-scopes",
       "refresh_token": "EQAAl-unit-seeded-refresh-token-full-scopes",
-      "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ORDERS_WRITE", "ITEMS_READ", "PAYMENTS_WRITE"]
+      "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ORDERS_WRITE", "ITEMS_READ", "PAYMENTS_WRITE",
+                 "DEVELOPER_APPLICATION_WEBHOOKS_WRITE"]
     },
     {
       "id": "tok_seed_readonly",
