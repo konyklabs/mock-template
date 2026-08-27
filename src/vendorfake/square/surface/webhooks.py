@@ -40,9 +40,10 @@ so a scope is how this unit expresses "not an ordinary seller grant".
 
 Declaring nothing was not a neutral choice: ``Route.scopes`` defaults to ``()``
 and the kernel's check is a loop over it, so an empty tuple lets any bearer
-token register a subscriber and read subscribers back. The repo-wide invariant
-in ``tests/unit/test_route_scopes.py`` is what keeps that from recurring here or
-in a surface written later.
+token register a subscriber and read subscribers back.
+``tests/unit/test_route_scopes.py`` walks every route of every registered
+vendor and fails on any that authenticates without naming one, so a surface
+written later -- for this vendor or another -- cannot repeat it.
 
 ``POST .../test`` DECLARES ``serialized=False``
 -----------------------------------------------
