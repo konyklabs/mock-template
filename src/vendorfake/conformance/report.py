@@ -14,19 +14,21 @@ The reference implementation's floor was ``passed >= 9`` against ten
 checks, which is green for a run in which one contract was never asked -- and
 "never asked" is exactly the state a check silently gated out of every profile
 lands in. That floor is deliberately not reproduced. This report is ``ok``
-only when nothing failed, nothing skipped that was not declared to skip, every
-skip declared actually happened, and **every check passed on at least one
-profile**. The last is the anti-vacuity rule and it is strictly stronger than
-any count: a check that skipped everywhere proved nothing, however many others
+only when nothing failed and **every check passed on at least one profile**;
+under ``strict=True`` (the CI posture -- ``--strict`` on the CLI, off by
+default) it additionally requires that nothing skipped that was not declared
+to skip and that every declared skip actually happened. The anti-vacuity rule
+is the one that holds in every mode, and it is strictly stronger than any
+count: a check that skipped everywhere proved nothing, however many others
 passed.
 
 WHY THE EXPECTED-SKIP MATRIX IS DATA. Three of the shipped profiles genuinely
 lack the capability some contract needs, permanently. Failing those under
 ``--strict`` would make strict mode unusable, and exempting them in code would
 put a second, silent description of a profile next to the profile. Keeping the
-pairs in ``manifest.json`` fails two ways instead: an undeclared skip is a
-failure, and a declared skip that stops happening is a failure too, because it
-means a profile changed and the record did not.
+pairs in ``manifest.json`` fails two ways instead, under ``--strict``: an
+undeclared skip is a failure, and a declared skip that stops happening is a
+failure too, because it means a profile changed and the record did not.
 """
 
 from __future__ import annotations

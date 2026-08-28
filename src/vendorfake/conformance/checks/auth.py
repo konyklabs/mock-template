@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv, Credential, RouteRow
 from vendorfake.conformance.registry import check
-from vendorfake.conformance.types import Requires, require
+from vendorfake.conformance.types import ConformanceSkip, Requires, require
 
 __all__ = ["an_auth_required_route_authenticates"]
 
@@ -125,12 +125,18 @@ def an_auth_required_route_authenticates(env: CheckEnv) -> str:
 
     weak = _under_scoped(env, route)
     if weak is None:
-        return (
-            f"{route.key} (auth={route.auth!r}, scopes {sorted(route.scopes)}): anonymous -> "
+        # A skip, not a soft pass: three of four clauses held, but a contract
+        # that reports PASS while a clause went unasked is gated out with no
+        # red and no manifest entry -- undeclared_skips and never_ran both
+        # inspect SKIP outcomes only. Raising makes the gap visible to
+        # --strict and forces the profile to declare it in expected_skips.
+        raise ConformanceSkip(
+            f"{route.key} (auth={route.auth!r}, scopes {sorted(route.scopes)}): no published "
+            f"credential is under-scoped for any auth route, so the forbidden_scope clause "
+            f"cannot be asked -- add a narrower credential to AuthAdapter.credentials() to "
+            f"close it. The other three clauses held: anonymous -> "
             f"{anonymous.status}:{anonymous.error_kind}; invented -> {invented.status}:"
-            f"{invented.error_kind}; {good.label!r} -> {accepted.status}:{accepted.error_kind or '-'}. "
-            f"No published credential is under-scoped for any auth route, so the scope clause could "
-            f"not be asked -- add a narrower credential to AuthAdapter.credentials() to close it."
+            f"{invented.error_kind}; {good.label!r} -> {accepted.status}:{accepted.error_kind or '-'}."
         )
 
     refused = env.client.call(route.method, route.probe_path, json_body={}, headers=dict(weak.headers))
