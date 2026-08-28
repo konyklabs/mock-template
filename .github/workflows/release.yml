@@ -34,23 +34,75 @@ jobs:
   # token-created objects to prevent workflow recursion), so in practice a
   # publish is dispatched by hand against the release tag -- which keeps
   # publishing a deliberate human action.
-  publish:
+  # The build runs in a job with NO publishing privilege, and the publish job
+  # never checks out or executes anything -- it uploads an artifact the build
+  # job produced. That split is PyPA's own guidance: a build backend or hook
+  # at the checked-out ref must never execute beside `id-token: write`, or a
+  # crafted ref can mint a PyPI token for the project itself.
+  build:
     if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    environment: pypi
     permissions:
       contents: read
-      id-token: write
     steps:
+      - id: tag
+        name: Resolve and validate the tag
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then tag="$INPUT_TAG"; else tag="${REF#refs/tags/}"; fi
+          # A release tag and nothing else: not a branch, not a SHA, not `main`
+          # typed into the dispatch box. The checkout below asks for
+          # refs/tags/<tag> explicitly, so a branch of the same name cannot
+          # answer for it either.
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'$tag' is not a release tag (vMAJOR.MINOR.PATCH)"; exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
       - name: Build sdist and wheel
         run: uv build
+
+      - name: The artifacts are the tag's version, and the wheel is whole
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          version="${TAG#v}"
+          ls dist/
+          # Both artifacts must carry exactly the tagged version -- a tag
+          # pointing at a commit whose pyproject says something else (0.0.0
+          # included) must fail here, not surface as a wrong upload PyPI will
+          # never let us replace.
+          [ -f "dist/vendorfake-$version.tar.gz" ] || { echo "::error::sdist is not version $version"; exit 1; }
+          ls "dist/vendorfake-$version-"*.whl >/dev/null || { echo "::error::wheel is not version $version"; exit 1; }
+          python3 tools/check_wheel_data.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
