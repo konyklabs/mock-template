@@ -1,0 +1,56 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and publish (e.g. v0.1.0)"
+        required: true
+        type: string
+
+jobs:
+  release-please:
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: konyklabs/.github/.github/workflows/release-please.yml@785936b557e93b013841e10599970795c5687662 # main
+    with:
+      release-type: python
+
+  # PyPI via OIDC trusted publishing -- no token secret anywhere.
+  #
+  # INERT until the trusted publisher is registered on PyPI for the
+  # `vendorfake` project: owner `konyklabs`, repository `vendorfake`,
+  # workflow `release.yml`, environment `pypi`. That registration, the
+  # name re-verification, and the first publish are Oleg's steps.
+  #
+  # The `release` trigger above will not fire for releases release-please
+  # creates with the default GITHUB_TOKEN (GitHub suppresses events from
+  # token-created objects to prevent workflow recursion), so in practice a
+  # publish is dispatched by hand against the release tag -- which keeps
+  # publishing a deliberate human action.
+  publish:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
