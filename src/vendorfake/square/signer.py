@@ -68,7 +68,12 @@ __all__ = [
 SIGNATURE_HEADER = "x-square-hmacsha256-signature"
 """The documented header name. Spelled once, here."""
 
-SQUARE_SIGNER_PROPERTIES = SignerProperties(url_bound=True, body_bound=True, secret_bound=True)
+SQUARE_SIGNER_PROPERTIES = SignerProperties(
+    url_bound=True,
+    body_bound=True,
+    secret_bound=True,
+    signature_headers=(SIGNATURE_HEADER,),
+)
 """What this scheme actually depends on, declared for the conformance suite.
 
 All three are true and each is separately observable: change the subscriber's

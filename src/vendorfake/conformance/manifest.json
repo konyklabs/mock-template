@@ -1,0 +1,63 @@
+{
+  "$comment": "The committed record of what the conformance suite asserts. A test fails if the live registry and this file disagree, so removing, renaming or re-gating a contract is a reviewable diff rather than a silent deletion.",
+  "checks": {
+    "C01": "control plane: the unit describes itself",
+    "C02": "capabilities: every route is owned, every surface capability is used",
+    "C03": "capabilities: a disabled capability answers explicitly, never 404",
+    "C04": "errors: the framework never answers a consumer",
+    "C05": "errors: the vendor shaper covers every core error kind",
+    "C06": "state: the seed scenario is deterministic across two fresh units",
+    "C07": "state: the journal is append-only and versions never go backwards",
+    "C08": "chaos: identical rules and identical traffic produce identical outcomes",
+    "C09": "webhooks: signing is deterministic and matches the declared bindings",
+    "C10": "transport: the HTTP and in-process bindings agree byte for byte",
+    "C11": "capabilities: every core-gated capability is declared or explicitly excused",
+    "C12": "chaos: a one-shot trigger mutates neither configuration nor counters",
+    "C13": "state: self-transitions are illegal unless declared, terminal states are immutable",
+    "C14": "chaos: an in-band trigger respects the capability gate",
+    "C15": "transport: a form-encoded body reaches the handler as fields",
+    "C16": "webhooks: the core brands no delivery header, and the retry metadata is the vendor's",
+    "C17": "auth: a credential is required, honoured, and checked for scope",
+    "C18": "webhooks: the delivery capability gate is real, at the point of delivery",
+    "C19": "state: a replayed idempotency key returns the stored answer and runs nothing",
+    "C20": "state: a cursor belongs to the query that issued it",
+    "C21": "webhooks: the declared retry schedule is the schedule actually followed",
+    "C22": "state: the seed scenario is deterministic across two OPERATING-SYSTEM PROCESSES"
+  },
+  "expected_skips": {
+    "C07": [
+      "oauth-only"
+    ],
+    "C08": [
+      "no-faults"
+    ],
+    "C09": [
+      "oauth-only",
+      "orders-only"
+    ],
+    "C12": [
+      "no-faults"
+    ],
+    "C16": [
+      "oauth-only",
+      "orders-only"
+    ],
+    "C17": [
+      "oauth-only"
+    ],
+    "C18": [
+      "oauth-only",
+      "orders-only"
+    ],
+    "C19": [
+      "oauth-only"
+    ],
+    "C21": [
+      "full",
+      "no-chaos",
+      "no-faults",
+      "oauth-only",
+      "orders-only"
+    ]
+  }
+}

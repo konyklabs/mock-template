@@ -29,6 +29,10 @@ Documented behaviour reproduced here
 * code-flow refresh returns the SAME refresh token and PKCE refresh returns a
   new single-use one that expires after 90 days
   (https://developer.squareup.com/docs/oauth-api/refresh-revoke-limit-scope);
+* a requested ``scopes`` list narrows the grant and never widens it: the token
+  carries "the intersection of these requested permissions and those authorized
+  by the provided ``refresh_token``"
+  (https://developer.squareup.com/reference/square/oauth-api/obtain-token);
 * ``redirect_uri`` is "Required if provided in the authorization URL", and is
   checked against the one the code was issued for;
 * revoke takes ``Authorization: Client {APPLICATION_SECRET}``, returns
@@ -36,8 +40,21 @@ Documented behaviour reproduced here
   ``revoke_only_access_token`` is set
   (https://developer.squareup.com/reference/square/oauth-api/revoke-token).
 
-Two corrections to the TypeScript reference this file was rebuilt from
-----------------------------------------------------------------------
+Three corrections to the TypeScript reference this file was rebuilt from
+-----------------------------------------------------------------------
+**``scopes`` narrows a grant and can never widen it.** The reference replaced
+the granted set with whatever the request asked for -- on both the exchange and
+the refresh path -- so a token could be minted with permissions the seller
+never approved. Square documents the opposite in one sentence: "The returned
+access token is limited to the permissions that are the intersection of these
+requested permissions and those authorized by the provided ``refresh_token``"
+(https://developer.squareup.com/reference/square/oauth-api/obtain-token). The
+escalation is the one defect here with a security shape: a consumer whose test
+asks "does my down-scoped token really lose write access?" passed against the
+reference and failed against Square, and one that over-requests by accident got
+a broader token from the fake than the API would ever issue. See
+:func:`_narrowed_scopes`.
+
 **Code-flow refresh no longer revokes the previous access token.** The
 reference set ``revokedAt`` on the old record on every refresh, for both flows.
 Square documents the opposite for the code flow -- "A refresh token obtained
@@ -96,7 +113,7 @@ from __future__ import annotations
 import hashlib
 import html
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -308,6 +325,18 @@ class OAuthSurface:
             self._check_secret(grant.client_secret)
         self._check_redirect_uri(grant.redirect_uri, record.redirect_uri)
 
+        # Narrow BEFORE the write, not as an argument to `_mint`.
+        #
+        # `_narrowed_scopes` raises when the intersection is empty, and Python
+        # evaluates arguments after the statements above have already run. With
+        # the call left inline, a refused exchange still burned the code: the
+        # consumer got a 400 saying nothing happened, and their next correct
+        # attempt got a 401 because the code was spent. Every other refusal on
+        # this endpoint is ordered before the write; this one has to be too.
+        # The rule it belongs to is broader than OAuth -- a 4xx must not leave a
+        # journal entry behind -- and the conformance suite now asserts it.
+        narrowed = _narrowed_scopes(grant.scopes, record.scopes)
+
         def mark_used(draft: Entity) -> None:
             draft["used_at"] = ctx.clock.iso_ms()
 
@@ -317,7 +346,8 @@ class OAuthSurface:
             ctx,
             client_id=record.client_id,
             merchant_id=record.merchant_id,
-            scopes=tuple(grant.scopes) if grant.scopes is not None else record.scopes,
+            scopes=narrowed,
+            authorized_scopes=record.scopes,
             short_lived=grant.short_lived,
             flow=flow,
             refresh_token=self._deps.ids.refresh_token(),
@@ -352,6 +382,22 @@ class OAuthSurface:
         else:
             self._check_secret(grant.client_secret)
 
+        # Narrow before the retire/supersede write below, for the reason given
+        # on the exchange path: a PKCE refresh token is single-use, so a refused
+        # request that had already retired it would lock the consumer out of the
+        # grant permanently -- with a 400 telling them nothing had happened.
+        # Intersect against what the SELLER APPROVED, not against what this
+        # token happens to carry. Square narrows "from the ones granted when the
+        # seller approved", so a refresh asking for a permission that an earlier
+        # down-scoped refresh dropped must still succeed.
+        #
+        # Using existing.scopes made every narrowing permanent -- a ratchet with
+        # no way back, and the mirror image of the escalation this surface was
+        # fixed for. Wrong in the other direction, and refused rather than
+        # over-granted, which is why it reads as safe and is not.
+        approved = existing.authorized_scopes or existing.scopes
+        narrowed = _narrowed_scopes(grant.scopes, approved)
+
         now = ctx.clock.iso_ms()
         if existing.flow == "pkce":
             # "Refresh tokens obtained using the PKCE flow are single-use
@@ -376,7 +422,8 @@ class OAuthSurface:
             ctx,
             client_id=existing.client_id,
             merchant_id=existing.merchant_id,
-            scopes=tuple(grant.scopes) if grant.scopes is not None else existing.scopes,
+            scopes=narrowed,
+            authorized_scopes=approved,
             # Set on refresh, never cleared by it; see the model.
             short_lived=grant.short_lived or existing.short_lived,
             flow=existing.flow,
@@ -386,7 +433,31 @@ class OAuthSurface:
     # -- POST /oauth2/revoke ------------------------------------------------
 
     def revoke_token(self, args: HandlerArgs) -> ReplyInit:
+        """Revoke one access token, or the merchant's whole authorization.
+
+        ``success`` is documented as "If the request is successful, this is
+        ``true``" and nothing else on the page describes a failure
+        (https://developer.squareup.com/reference/square/oauth-api/revoke-token),
+        so the field's only job is to say whether the revocation happened. It
+        must therefore never be ``true`` over a request that revoked nothing:
+        a ``client_id`` with a typo in it, or a merchant this application holds
+        no token for, used to answer ``{"success": true}`` here while the token
+        went on working -- a green test and a live credential.
+
+        JUDGMENT -- the statuses. Square publishes no error table for this
+        endpoint (see the module docstring), so the refusals below are this
+        unit's convention: a ``client_id`` that is not this application is the
+        same 401 :meth:`obtain_token` already answers, and a selector that
+        matches no token this application issued is the 401 the
+        ``access_token`` branch already answered.
+        """
         request = validate_body(RevokeTokenRequest, args.body())
+        if request.client_id != self._deps.config.application_id:
+            raise UnitError(
+                UnitErrorKind.UNAUTHORIZED,
+                detail="The `client_id` does not match this application.",
+                field="client_id",
+            )
         if not request.access_token and not request.merchant_id:
             raise UnitError(
                 UnitErrorKind.MISSING_FIELD,
@@ -423,6 +494,15 @@ class OAuthSurface:
                     )
                 )
             ]
+            if not victims:
+                # Nothing to revoke is not a successful revocation; see the
+                # docstring. Already-revoked records still count as victims, so
+                # a retried revocation stays idempotent.
+                raise UnitError(
+                    UnitErrorKind.UNAUTHORIZED,
+                    detail=f"This application holds no token for merchant {merchant_id}.",
+                    field="merchant_id",
+                )
 
         at = args.ctx.clock.iso_ms()
 
@@ -529,6 +609,7 @@ class OAuthSurface:
         client_id: str,
         merchant_id: str,
         scopes: tuple[str, ...],
+        authorized_scopes: tuple[str, ...],
         short_lived: bool,
         flow: Literal["code", "pkce"],
         refresh_token: str,
@@ -548,6 +629,7 @@ class OAuthSurface:
             merchant_id=merchant_id,
             expires_at=expires_at,
             scopes=scopes,
+            authorized_scopes=authorized_scopes,
             refresh_token_expires_at=refresh_expires_at,
             short_lived=short_lived,
             flow=flow,
@@ -571,6 +653,51 @@ class OAuthSurface:
 def oauth_routes(deps: SquareDeps) -> tuple[Route, ...]:
     """The OAuth routes for one vendor."""
     return OAuthSurface(deps).routes()
+
+
+def _narrowed_scopes(requested: Sequence[str] | None, authorized: tuple[str, ...]) -> tuple[str, ...]:
+    """``scopes`` NARROWS the grant. It can never widen it.
+
+    "The returned access token is limited to the permissions that are the
+    intersection of these requested permissions and those authorized by the
+    provided `refresh_token`."
+    https://developer.squareup.com/reference/square/oauth-api/obtain-token
+
+    That sentence is the whole of the down-scoping story -- "you can create a
+    new access token that has a reduced set of permissions from the ones
+    granted when the seller approved your authorization"
+    (https://developer.squareup.com/docs/oauth-api/refresh-revoke-limit-scope)
+    -- and nothing on either page permits the other direction. The intersection
+    is applied on the code-exchange path too, against the scopes the seller
+    approved at authorize time: the authorization code is what carries the
+    approval there, so the same rule with the same authority behind it.
+
+    Absent ``scopes`` is not an empty intersection: it means "no opinion", and
+    the whole authorized set is granted. The order returned is the *requested*
+    order, so a caller that asks for two permissions gets them back the way it
+    asked for them.
+
+    JUDGMENT -- an intersection with nothing in it is refused. Square documents
+    no error table for this endpoint at all (see the module docstring), so
+    there is no published answer; minting a token with an empty scope list
+    would answer 200 and then 403 every call made with it, and the request that
+    is actually wrong is this one.
+    """
+    if requested is None:
+        return authorized
+    approved = set(authorized)
+    narrowed = tuple(dict.fromkeys(scope for scope in requested if scope in approved))
+    if not narrowed:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                "None of the requested scopes were authorized by this grant. The access token is limited to the "
+                "intersection of the requested permissions and the permissions the seller approved."
+            ),
+            field="scopes",
+            info={"requested": list(requested), "authorized": list(authorized)},
+        )
+    return narrowed
 
 
 def _live_holder_of(refresh_token: str) -> Callable[[Entity], bool]:

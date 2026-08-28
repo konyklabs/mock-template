@@ -1,4 +1,4 @@
-"""The control plane's twenty-seven routes, asserted on shape rather than on 200.
+"""The control plane's thirty routes, asserted on shape rather than on 200.
 
 Every test here pins something a reviewer could reasonably disagree about: a
 path, a key name, an error kind, an ordering, or which of two plausible
@@ -58,8 +58,13 @@ REFERENCE_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/__unit/clock/advance"),
 )
 
-#: The six the conformance design requires so that every check can be driven
-#: through a URL instead of an in-process object graph.
+#: The nine the conformance design requires so that every check can be driven
+#: through a URL instead of an in-process object graph. The last three closed
+#: measured holes: with no ``/__unit/auth`` no check could obtain a credential,
+#: so the whole authentication layer could be deleted and the suite stayed
+#: green; with no ``state/update`` and no ``state/page`` the store's version
+#: and cursor rules were reachable only through whichever endpoint a particular
+#: vendor happened to publish.
 ADDED_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/__unit/errors"),
     ("GET", "/__unit/machines"),
@@ -67,6 +72,9 @@ ADDED_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/__unit/echo"),
     ("POST", "/__unit/webhooks/emit"),
     ("POST", "/__unit/webhooks/sink"),
+    ("GET", "/__unit/auth"),
+    ("POST", "/__unit/state/update"),
+    ("POST", "/__unit/state/page"),
 )
 
 #: The routes whose handler blocks on machinery another request must feed.
@@ -143,13 +151,13 @@ def test_every_reference_path_is_present_byte_for_byte() -> None:
     assert missing == []
 
 
-def test_the_plane_is_exactly_the_twenty_one_plus_six_and_nothing_else() -> None:
+def test_the_plane_is_exactly_the_twenty_one_plus_nine_and_nothing_else() -> None:
     """A count, and then the set, because a count alone would pass if one route
     were dropped and an unrelated one added."""
     unit = _unit()
     control = {(r.method, r.path) for r in unit.routes if r.internal}
     assert control == set(REFERENCE_ROUTES) | set(ADDED_ROUTES)
-    assert len(control) == 27
+    assert len(control) == 30
 
 
 def test_every_control_route_is_internal_and_owns_the_control_capability() -> None:
@@ -823,6 +831,24 @@ def test_a_probe_with_no_target_asks_whether_the_entity_may_be_mutated_at_all() 
     assert api.post("/__unit/machines/probe", {"machine": "order", "from": "OPEN"}).status == 200
     refused = api.post("/__unit/machines/probe", {"machine": "order", "from": "COMPLETED"})
     assert (refused.status, refused.header("x-unit-error")) == (400, "invalid_transition")
+
+
+def test_a_probe_answers_one_question_per_call_and_never_both() -> None:
+    """With `to`, the probe evaluates the transition predicate ALONE.
+
+    If mutability answered first, a terminal state's transition predicate could
+    never be observed through this route -- and a machine treating `from == to`
+    as always legal would be undetectable on any vendor whose non-terminal
+    states all allow themselves. The `allowed` list in the info block is the
+    evidence that assert_transition, and not assert_mutable, produced this.
+    """
+    api, _ = _api()
+    refused = api.post("/__unit/machines/probe", {"machine": "order", "from": "COMPLETED", "to": "CANCELED"})
+    assert (refused.status, refused.header("x-unit-error")) == (400, "invalid_transition")
+    info = refused.json()["error"]["info"]
+    assert info["allowed"] == []
+    assert info["from"] == "COMPLETED"
+    assert info["to"] == "CANCELED"
 
 
 def test_an_undeclared_from_state_is_invalid_value_rather_than_a_cheerful_ok() -> None:

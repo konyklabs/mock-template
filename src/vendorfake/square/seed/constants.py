@@ -29,7 +29,10 @@ __all__ = [
     "COLD_BREW_SMALL_VARIATION_ID",
     "DEFAULT_SEED_PATH",
     "SEED_ACCESS_TOKEN",
+    "SEED_COMPLETED_ORDER_CLOSED_AT",
     "SEED_COMPLETED_ORDER_ID",
+    "SEED_COMPLETED_ORDER_TENDER_ID",
+    "SEED_COMPLETED_ORDER_TOTAL",
     "SEED_KIOSK_LOCATION_ID",
     "SEED_LOCATION_ID",
     "SEED_MERCHANT_ID",
@@ -60,6 +63,28 @@ COLD_BREW_LARGE_VARIATION_ID = "GXAQQ4EAXWLFRTLFRZLDWDBJ"
 
 SEED_OPEN_ORDER_ID = "CAISENgvlJ6jLWAzERDzjyHVybY"
 SEED_COMPLETED_ORDER_ID = "CAISEM82RcpmcFBM0TfOyiHV3es"
+
+SEED_COMPLETED_ORDER_CLOSED_AT = "2026-07-15T08:05:00.000Z"
+"""When the COMPLETED order reached its terminal state.
+
+"The timestamp for when the order reached a terminal state, in RFC 3339
+format" (https://developer.squareup.com/reference/square/objects/Order). A
+terminal order in the scenario has to have one, or a ``closed_at`` date filter
+-- the documented pairing with ``sort_field: CLOSED_AT`` -- matches nothing
+over the only terminal order the unit ships, and a consumer debugging that
+query concludes the query is wrong.
+"""
+
+SEED_COMPLETED_ORDER_TENDER_ID = "EnZdNAlWCmfh6Mt5FMNST1o7taB"
+"""The tender that paid the COMPLETED order, id and shape from Square's
+PayOrder example response
+(https://developer.squareup.com/reference/square/orders-api/pay-order). It
+covers the whole 1125-minor-unit total, because "Completed orders are fully
+paid" (https://developer.squareup.com/reference/square/enums/OrderState)."""
+
+SEED_COMPLETED_ORDER_TOTAL = 1125
+"""3 x the 375 Cold Brew Small, in minor units: the order total, and therefore
+the tender amount and the reason nothing is due on it."""
 
 SEED_ACCESS_TOKEN = "EAAAl-unit-seeded-access-token-full-scopes"
 SEED_REFRESH_TOKEN = "EQAAl-unit-seeded-refresh-token-full-scopes"

@@ -31,7 +31,12 @@ from tests.unit.square.harness import Harness, first_error
 from tests.unit.square.harness import harness as build_harness
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.square.events import ORDER_CREATED, ORDER_UPDATED
-from vendorfake.square.seed.constants import SEED_LOCATION_ID, SEED_OPEN_ORDER_ID, TEA_MUG_VARIATION_ID
+from vendorfake.square.seed.constants import (
+    SEED_KIOSK_LOCATION_ID,
+    SEED_LOCATION_ID,
+    SEED_OPEN_ORDER_ID,
+    TEA_MUG_VARIATION_ID,
+)
 
 HOOKS = "https://subscriber.test/hooks"
 
@@ -182,7 +187,13 @@ def test_a_rejected_request_creates_nothing(h: Harness) -> None:
     add_rule(h, id="boom", scope="request", fault="server_error", match={"route": "POST /v2/orders"}, when={})
     assert create(h, "gone-1").status == 500
     assert create(h, "gone-2").status == 500
-    found = h.api.post("/v2/orders/search", {}, headers=h.auth).json()["orders"]
+    found = h.api.post(
+        "/v2/orders/search",
+        # Required: "Your request must include one or more `location_ids`."
+        # https://developer.squareup.com/docs/orders-api/manage-orders/search-orders
+        {"location_ids": [SEED_LOCATION_ID, SEED_KIOSK_LOCATION_ID]},
+        headers=h.auth,
+    ).json()["orders"]
     assert len(found) == 2
 
 

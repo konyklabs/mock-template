@@ -143,6 +143,24 @@ def test_decorate_echoes_even_an_empty_requested_version() -> None:
     assert res.headers["square-version"] == ""
 
 
+def test_decorate_echoes_an_unsupported_version_verbatim() -> None:
+    """JUDGMENT, and NOT VERIFIED: the echo is not an acceptance.
+
+    The versioning page documents only that "the response always returns the
+    `Square-Version` header" and says nothing about a version the API does not
+    support (https://developer.squareup.com/docs/build-basics/versioning-overview).
+    This unit implements exactly one API version, so it has no supported set to
+    check a value against and echoes whatever arrived -- including nonsense. A
+    consumer must not read the echo as "this version was accepted"; the
+    alternative, substituting the configured version whenever the value is
+    unrecognised, would quietly hide a typo instead.
+    """
+    res = MutableResponse(status=200, headers={}, body=b"{}")
+    create_square_vendor().decorate(res, fake_ctx(), request({"square-version": "not-a-version"}))
+    assert res.headers["square-version"] == "not-a-version"
+    assert res.headers["square-version"] != square.SQUARE_API_VERSION
+
+
 # ---------------------------------------------------------------------------
 # Configuration, phase two.
 # ---------------------------------------------------------------------------

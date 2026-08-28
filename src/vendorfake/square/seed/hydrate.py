@@ -39,9 +39,16 @@ from vendorfake.square.entities import (
     Money,
     OrderEntity,
     OrderLineItem,
+    Tender,
     TokenEntity,
 )
-from vendorfake.square.seed.document import SeedDocument, SeedLineItem, SeedOrder, parse_seed_document
+from vendorfake.square.seed.document import (
+    SeedDocument,
+    SeedLineItem,
+    SeedOrder,
+    SeedTender,
+    parse_seed_document,
+)
 
 __all__ = ["SEED_META", "hydrate_square"]
 
@@ -167,11 +174,32 @@ def _insert_orders(ctx: UnitContext, doc: SeedDocument) -> None:
             customer_id=order.customer_id,
             source_name=order.source_name,
             ticket_name=order.ticket_name,
+            tenders=tuple(_resolve_tender(order, tender) for tender in order.tenders),
+            closed_at=order.closed_at,
             version=order.version,
             created_at=order.created_at or "",
             updated_at=order.updated_at or "",
         ).to_entity()
         orders.insert(entity, SEED_META)
+
+
+def _resolve_tender(order: SeedOrder, tender: SeedTender) -> Tender:
+    """A seeded payment, with the fields PayOrder would have filled in.
+
+    ``location_id`` and ``transaction_id`` default to the order's, and
+    ``created_at`` to the moment the order was last touched, so a scenario
+    states the amount and the id and nothing that can contradict the order it
+    belongs to.
+    """
+    return Tender(
+        id=tender.id,
+        location_id=tender.location_id or order.location_id,
+        transaction_id=tender.transaction_id or order.id,
+        created_at=tender.created_at or order.updated_at or order.created_at or "",
+        amount_money=Money(amount=tender.amount_money.amount, currency=tender.amount_money.currency),
+        type=tender.type,
+        payment_id=tender.payment_id or tender.id,
+    )
 
 
 def _resolve_line_item(catalog: Collection, order: SeedOrder, line: SeedLineItem) -> OrderLineItem:

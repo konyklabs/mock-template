@@ -122,6 +122,53 @@ def test_over_tendering_leaves_nothing_due_rather_than_owing() -> None:
     assert project_order(subject)["net_amount_due_money"] == {"amount": 0, "currency": "USD"}
 
 
+def test_net_amount_due_is_on_every_order_which_is_this_units_choice() -> None:
+    """JUDGMENT, NOT VERIFIED. `net_amount_due_money` is a documented read-only
+    `Order` field -- "The net amount of money due on the order"
+    (https://developer.squareup.com/reference/square/objects/Order) -- but
+    Square's own CreateOrder and PayOrder example responses do not carry it,
+    and no page says when it is present. Its presence here is not evidence that
+    Square always sends it."""
+    assert "net_amount_due_money" in project_order(order())
+    assert "net_amount_due_money" in project_order(order(line_items=(line("1"),)))
+
+
+def test_a_negative_quantity_is_accepted_and_produces_a_negative_total() -> None:
+    """JUDGMENT, NOT VERIFIED, and pinned so the asymmetry is visible rather
+    than surprising.
+
+    Square's `quantity` is a string documented only as "The count, or
+    measurement, of a line item being purchased", with a length range and no
+    sign rule (https://developer.squareup.com/reference/square/objects/OrderLineItem),
+    and no published error covers a negative. This unit neither refuses it nor
+    floors the money: the order reports a negative total while
+    `net_amount_due_money` clamps at zero, so it owes nothing. A consumer must
+    not read either number as something Square would return.
+    """
+    projected = project_order(order(line_items=(line("-3", 100),)))
+    assert projected["total_money"] == {"amount": -300, "currency": "USD"}
+    assert projected["net_amount_due_money"] == {"amount": 0, "currency": "USD"}
+
+
+def test_a_tender_type_defaults_to_card_which_is_this_units_choice() -> None:
+    """JUDGMENT. `CARD` is a real `TenderType`
+    (https://developer.squareup.com/reference/square/enums/TenderType) and it
+    is what the PayOrder example response shows, but Square derives the type
+    from the *payment* and this unit has no Payments API to derive it from. A
+    consumer must not test that a particular payment produced a particular
+    tender type here."""
+    tender = Tender(
+        id="t1",
+        location_id="L1",
+        transaction_id="x",
+        created_at="2026-01-01T00:00:00.000Z",
+        amount_money=Money(100, "USD"),
+        payment_id="p1",
+    )
+    assert tender.type == "CARD"
+    assert project_order(order(tenders=(tender,)))["tenders"][0]["type"] == "CARD"
+
+
 def test_a_fractional_money_amount_is_refused_at_the_wire_model() -> None:
     """Minor units are whole numbers. Strict mode is what stops 2.5 becoming 2
     somewhere between the projection and the response body."""
@@ -187,23 +234,40 @@ def test_a_line_item_omits_its_own_absent_optionals() -> None:
 
 
 def test_a_line_item_keeps_squares_field_order_when_everything_is_set() -> None:
+    """The order was previously the TypeScript reference's, described in the
+    docstring as "the order Square's CreateOrder example prints". It was not:
+    the reference led with `catalog_object_id` and `variation_name`, which
+    Square's example does not carry at all, and the money block ran
+    `base_price_money, variation_total_price_money, gross_sales_money, ...`
+    where the example runs `base_price_money, gross_sales_money, ...`. JSON key
+    order is not semantic, so nothing on the wire changed -- what was wrong was
+    a citation, in a package whose discipline is that citations are checkable.
+    """
     projected = project_order(
         order(line_items=(line("2", name="Coffee", note="hot", catalog_object_id="V1", variation_name="Large"),))
     )
     assert list(projected["line_items"][0]) == [
+        # OrderLineItem's own field listing, for the fields that identify the
+        # line: uid, name, quantity, quantity_unit, note, catalog_object_id,
+        # catalog_version, variation_name.
+        # https://developer.squareup.com/reference/square/objects/OrderLineItem
         "uid",
-        "catalog_object_id",
-        "variation_name",
         "name",
         "quantity",
         "note",
+        "catalog_object_id",
+        "variation_name",
+        # The CreateOrder example RESPONSE, for the money block -- the two
+        # published orders disagree about it, and the example is the one a
+        # consumer reads back.
+        # https://developer.squareup.com/reference/square/orders-api/create-order
         "base_price_money",
-        "variation_total_price_money",
         "gross_sales_money",
         "total_tax_money",
+        "total_service_charge_money",
         "total_discount_money",
         "total_money",
-        "total_service_charge_money",
+        "variation_total_price_money",
     ]
 
 

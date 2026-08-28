@@ -68,6 +68,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = [
     "AuthAdapter",
+    "AuthCredential",
     "AuthMode",
     "AuthResult",
     "CapabilityDecl",
@@ -296,6 +297,47 @@ class AuthResult:
 
 
 @dataclass(frozen=True, slots=True)
+class AuthCredential:
+    """A credential a caller can actually present to this unit, and what it grants.
+
+    FOR: making authentication *drivable* from outside the process. A route
+    table that says ``auth: "bearer"`` tells a consumer -- and a conformance
+    check -- that a credential is required and nothing whatever about how to
+    obtain one, which is why a suite can assert the whole error table for
+    ``unauthorized`` while never once sending an authenticated request.
+
+    Published at ``GET /__unit/auth``, so the answer crosses the wire and a
+    consumer in another language gets it too. This is a *fake*: the credentials
+    it holds are scenario data, not secrets, and refusing to publish them would
+    only mean every consumer hardcoding the seed document instead.
+
+    ``headers`` is the whole instruction -- header name to header value -- so
+    that a vendor whose scheme is not ``Authorization: Bearer`` needs no new
+    vocabulary here and no reader of this type has to know one.
+    """
+
+    #: Stable, human name for this credential within the unit. Not a secret id.
+    label: str
+    #: The ``Route.auth`` mode this credential satisfies.
+    mode: AuthMode
+    #: Exactly what to put on the request, header name -> header value.
+    headers: Mapping[str, str]
+    #: What presenting it grants, in the same vocabulary as ``Route.scopes``.
+    scopes: Sequence[str] = ()
+    #: One line: where it came from, and what it is for.
+    summary: str = ""
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "mode": self.mode,
+            "headers": dict(self.headers),
+            "scopes": list(self.scopes),
+            "summary": self.summary,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class IdempotencySpec:
     """How a route deduplicates a retried request."""
 
@@ -333,6 +375,19 @@ class Route:
     #: Scopes the token must carry; checked by the kernel, not by the vendor.
     scopes: Sequence[str] = ()
     idempotency: IdempotencySpec | None = None
+    #: A body this route ACCEPTS, published at ``GET /__unit/routes``.
+    #:
+    #: The one thing a language-independent check cannot work out for itself. A
+    #: contract about what a *committed mutation* does -- the journal, the
+    #: version, an idempotent replay -- is unaskable until something has
+    #: actually succeeded, and a probe body assembled by the check can only
+    #: ever be refused by the vendor's own validation. So the vendor publishes
+    #: one request that works, once, and every such contract aims itself at it.
+    #:
+    #: It is written against the scenario the profile loads, and that coupling
+    #: is deliberate rather than hidden: an example that named no seeded entity
+    #: could not be a body the route accepts.
+    example_body: Mapping[str, Any] | None = None
     #: Stable identifier used by the spec-freshness inventory.
     operation_id: str | None = None
     summary: str | None = None
@@ -618,6 +673,17 @@ class SignerProperties:
     body_bound: bool = True
     #: Signature changes when the subscription's secret changes.
     secret_bound: bool = True
+    #: Delivery headers the signature itself occupies, lower-cased.
+    #:
+    #: Declared rather than discovered because a conformance check asserting
+    #: "the signature moved when the secret moved" has to know *which* header
+    #: is the signature. Inferring it -- as the header that differs between two
+    #: deliveries -- works only for whichever binding is being varied and
+    #: cannot separate the signature from a delivery header that varies for its
+    #: own reasons, such as a per-event timestamp. A signer that leaves this
+    #: empty is declaring that it contributes no signature header, and the
+    #: suite skips the signing contract rather than guessing.
+    signature_headers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -705,6 +771,20 @@ class AuthAdapter(Protocol):
 
         ``args.auth`` is still ``None`` at this point; the pipeline sets it from
         the return value.
+        """
+        ...
+
+    def credentials(self, ctx: UnitContext) -> Sequence[AuthCredential]:
+        """Credentials that would resolve right now, published at ``/__unit/auth``.
+
+        A method on the adapter and not a static table, because a credential is
+        state: a token the scenario seeded, a token an OAuth flow just minted, a
+        token that has since been revoked. Taking the context means the answer
+        is computed from the store rather than copied out of it at construction.
+
+        Returning ``()`` is legal and honest for a vendor whose credentials
+        genuinely cannot be enumerated -- the conformance suite skips the
+        contracts it cannot ask rather than pretending it asked them.
         """
         ...
 

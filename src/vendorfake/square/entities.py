@@ -344,6 +344,17 @@ class Tender:
     """One payment against an order.
 
     https://developer.squareup.com/reference/square/objects/Tender
+
+    JUDGMENT -- ``type`` defaults to ``CARD``. It is a real ``TenderType``
+    value (https://developer.squareup.com/reference/square/enums/TenderType)
+    and it is what the PayOrder example response shows
+    (https://developer.squareup.com/reference/square/orders-api/pay-order), but
+    Square derives it from the *payment*, and this unit has no Payments API to
+    derive it from -- see the SHRINK in
+    :mod:`vendorfake.square.surface.orders`. So the value is this unit's
+    choice, not a documented consequence of anything the caller sent, and a
+    consumer must not test that a particular payment produced a particular
+    tender type here. A scenario can state a different one on a seeded tender.
     """
 
     id: str
@@ -542,6 +553,19 @@ class TokenEntity:
     #: RFC 3339, seconds precision -- matching Square's ``expires_at``.
     expires_at: str
     scopes: tuple[str, ...] = ()
+    #: What the SELLER APPROVED at authorize time, carried forward unchanged by
+    #: every refresh. Distinct from ``scopes``, which is what this particular
+    #: token carries after any narrowing.
+    #:
+    #: Square narrows "from the ones granted when the seller approved"
+    #: (https://developer.squareup.com/docs/oauth-api/refresh-revoke-limit-scope),
+    #: so a refresh intersects against the approval and not against whatever the
+    #: last refresh happened to ask for. Intersecting against the current
+    #: token's scopes makes every narrowing permanent: take a narrow token for
+    #: one subtask and the grant can never produce a full one again. Empty means
+    #: "not recorded", and callers fall back to ``scopes`` -- right for a seeded
+    #: token that never came from a grant.
+    authorized_scopes: tuple[str, ...] = ()
     #: PKCE only: "Refresh tokens obtained using the PKCE flow ... expire after
     #: 90 days." Code-flow refresh tokens do not expire, so the key is absent.
     refresh_token_expires_at: str | None = None
@@ -567,6 +591,7 @@ class TokenEntity:
             merchant_id=_str(entity.get("merchant_id")),
             expires_at=_str(entity.get("expires_at")),
             scopes=_str_tuple(entity.get("scopes")),
+            authorized_scopes=_str_tuple(entity.get("authorized_scopes")),
             refresh_token_expires_at=_opt_str(entity.get("refresh_token_expires_at")),
             short_lived=_bool(entity.get("short_lived")),
             revoked_at=_opt_str(entity.get("revoked_at")),
@@ -584,6 +609,7 @@ class TokenEntity:
                 "merchant_id": self.merchant_id,
                 "expires_at": self.expires_at,
                 "scopes": list(self.scopes),
+                "authorized_scopes": list(self.authorized_scopes) or None,
                 "refresh_token_expires_at": self.refresh_token_expires_at,
                 "short_lived": self.short_lived,
                 "revoked_at": self.revoked_at,

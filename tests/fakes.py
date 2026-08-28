@@ -13,6 +13,7 @@ from pathlib import Path
 
 from vendorfake.core.config.models import ProfileDocument
 from vendorfake.core.kernel.types import (
+    AuthCredential,
     AuthResult,
     CapabilityDecl,
     EventMeta,
@@ -86,6 +87,23 @@ class FakeAuth:
         if self.raises is not None:
             raise self.raises
         return AuthResult(principal_id="prn_1", scopes=self.scopes)
+
+    def credentials(self, ctx: object) -> tuple[AuthCredential, ...]:
+        """One credential per declared scope subset the fake knows about.
+
+        A fake vendor still has to answer ``GET /__unit/auth`` -- the route is
+        the core's, not a vendor's -- and answering with an empty tuple in
+        every kernel test would leave the projection untested.
+        """
+        return (
+            AuthCredential(
+                label="test-credential",
+                mode="test",
+                headers={"authorization": "Test prn_1"},
+                scopes=self.scopes,
+                summary="The fake's only credential.",
+            ),
+        )
 
 
 def route(

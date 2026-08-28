@@ -317,9 +317,17 @@ class SquareVendor:
         API version is used."
         https://developer.squareup.com/docs/build-basics/versioning-overview
 
-        The request's own value is echoed when it sent one -- including an empty
-        one, which is what ``??`` does in the reference and is the difference
-        between echoing what was asked for and quietly substituting a default.
+        JUDGMENT -- **whatever the request sent is echoed, unchanged.** An empty
+        ``square-version``, an unsupported date, ``banana`` -- all come back
+        verbatim. The versioning page documents only that "the response always
+        returns the ``Square-Version`` header"; it says nothing about what a
+        request carrying a version this API does not support gets back, and
+        this unit implements exactly one API version, so it has no supported
+        set to check a value against. **NOT VERIFIED**: a consumer must not
+        read the echo as "this version was accepted". The alternative --
+        substituting the configured version whenever the request's value is
+        unrecognised -- would quietly hide a consumer's typo instead, which is
+        the failure mode a fake exists to surface.
         """
         requested = req.headers.get("square-version")
         res.headers["square-version"] = self._config.api_version if requested is None else requested

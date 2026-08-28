@@ -30,7 +30,7 @@ from tests.unit.square.harness import (
 from tests.unit.square.harness import harness as build_harness
 from vendorfake.square.config import DEFAULT_SCOPES
 from vendorfake.square.entities import COL, TokenEntity
-from vendorfake.square.seed.constants import SEED_MERCHANT_ID
+from vendorfake.square.seed.constants import SEED_LOCATION_ID, SEED_MERCHANT_ID, SEED_OPEN_ORDER_ID
 
 DAY_MS = 24 * 60 * 60 * 1000
 
@@ -44,6 +44,16 @@ def h() -> Iterator[Harness]:
 def virtual() -> Iterator[Harness]:
     """A unit on a virtual clock, so expiry is a call rather than a wait."""
     yield from build_harness("oauth-only", env={"VENDORFAKE_CLOCK": "virtual"})
+
+
+@pytest.fixture
+def full() -> Iterator[Harness]:
+    """OAuth *and* Orders, so a minted token can be spent on a real route.
+
+    The scope tests below need both: whether a token was really down-scoped is
+    only answerable by making a call the missing scope would have allowed.
+    """
+    yield from build_harness("full")
 
 
 def query_of(location: str) -> dict[str, list[str]]:
@@ -491,6 +501,134 @@ def test_a_pkce_refresh_issues_a_new_single_use_refresh_token(h: Harness) -> Non
 
 
 # ---------------------------------------------------------------------------
+# `scopes`: the intersection rule
+#
+# One sentence governs every test in this section: "The returned access token
+# is limited to the permissions that are the intersection of these requested
+# permissions and those authorized by the provided `refresh_token`."
+# https://developer.squareup.com/reference/square/oauth-api/obtain-token
+# ---------------------------------------------------------------------------
+
+
+def scopes_of(h: Harness, access_token: str) -> list[str]:
+    """What a minted token actually carries, read back through the API."""
+    response = h.api.post("/oauth2/token/status", {}, headers={"authorization": f"Bearer {access_token}"})
+    assert response.status == 200, response.text
+    return list(response.json()["scopes"])
+
+
+def test_a_code_exchange_cannot_ask_for_more_than_the_seller_approved(h: Harness) -> None:
+    """The escalation, on the exchange path. The seller approved ORDERS_READ;
+    the exchange asks for four permissions and gets the one that is in both
+    sets."""
+    minted = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="authorization_code",
+        code=h.code(scope="ORDERS_READ"),
+        scopes=["ORDERS_READ", "ORDERS_WRITE", "PAYMENTS_WRITE", "BANK_ACCOUNTS_READ"],
+    )
+    assert minted.status == 200, minted.text
+    assert scopes_of(h, minted.json()["access_token"]) == ["ORDERS_READ"]
+
+
+def test_a_refresh_cannot_ask_for_more_than_the_refresh_token_authorizes(h: Harness) -> None:
+    """The same rule on the refresh path, which is the one Square's sentence
+    is literally about."""
+    first = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="authorization_code",
+        code=h.code(scope="ORDERS_READ"),
+    ).json()
+    refreshed = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="refresh_token",
+        refresh_token=first["refresh_token"],
+        scopes=["ORDERS_READ", "ORDERS_WRITE"],
+    )
+    assert refreshed.status == 200, refreshed.text
+    assert scopes_of(h, refreshed.json()["access_token"]) == ["ORDERS_READ"]
+
+
+def test_scopes_narrow_a_grant_which_is_the_documented_direction(h: Harness) -> None:
+    """ "you can create a new access token that has a reduced set of
+    permissions from the ones granted when the seller approved your
+    authorization."
+    https://developer.squareup.com/docs/oauth-api/refresh-revoke-limit-scope
+    """
+    first = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="authorization_code",
+        code=h.code(scope="ORDERS_READ ORDERS_WRITE MERCHANT_PROFILE_READ"),
+    ).json()
+    assert scopes_of(h, first["access_token"]) == ["ORDERS_READ", "ORDERS_WRITE", "MERCHANT_PROFILE_READ"]
+
+    reduced = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="refresh_token",
+        refresh_token=first["refresh_token"],
+        scopes=["ORDERS_READ"],
+    )
+    assert scopes_of(h, reduced.json()["access_token"]) == ["ORDERS_READ"]
+
+
+def test_omitting_scopes_keeps_the_whole_grant(h: Harness) -> None:
+    """Absent is "no opinion", not an empty intersection: the token carries
+    everything the seller approved."""
+    first = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="authorization_code",
+        code=h.code(scope="ORDERS_READ ORDERS_WRITE"),
+    ).json()
+    assert scopes_of(h, first["access_token"]) == ["ORDERS_READ", "ORDERS_WRITE"]
+    refreshed = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="refresh_token",
+        refresh_token=first["refresh_token"],
+    ).json()
+    assert scopes_of(h, refreshed["access_token"]) == ["ORDERS_READ", "ORDERS_WRITE"]
+
+
+def test_an_intersection_with_nothing_in_it_is_refused(h: Harness) -> None:
+    """JUDGMENT, and the test says so: Square publishes no error table for this
+    endpoint at all. Minting a token with an empty scope list would answer 200
+    and then 403 every call made with it, so the request that is wrong is
+    refused instead."""
+    response = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="authorization_code",
+        code=h.code(scope="ORDERS_READ"),
+        scopes=["PAYMENTS_WRITE"],
+    )
+    assert response.status == 400
+    assert first_error(response)["field"] == "scopes"
+
+
+def test_a_down_scoped_token_really_loses_write_access(full: Harness) -> None:
+    """The finding with a security shape, end to end.
+
+    A consumer's test asks "does my down-scoped token actually lose write
+    access?" While `scopes` REPLACED the grant, this passed against the fake --
+    the token came back with ORDERS_WRITE on it -- and failed against Square,
+    where the intersection is empty of it. The 403 is the point: the fake has
+    to be the first thing that fails, not production.
+    """
+    minted = full.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="authorization_code",
+        code=full.code(scope="ORDERS_READ"),
+        scopes=["ORDERS_READ", "ORDERS_WRITE"],
+    )
+    assert minted.status == 200, minted.text
+    token = minted.json()["access_token"]
+    assert scopes_of(full, token) == ["ORDERS_READ"]
+
+    header = {"authorization": f"Bearer {token}"}
+    assert full.api.get(f"/v2/orders/{SEED_OPEN_ORDER_ID}", headers=header).status == 200
+    created = full.api.post("/v2/orders", {"order": {"location_id": SEED_LOCATION_ID}}, headers=header)
+    assert created.status == 403, created.text
+
+
+# ---------------------------------------------------------------------------
 # The code-flow refresh, and the correction this rebuild makes
 # ---------------------------------------------------------------------------
 
@@ -544,18 +682,41 @@ def test_a_second_refresh_mints_from_the_second_record_not_the_first(h: Harness)
     and its flow. The older record is marked superseded by a silent write --
     no version bump, no journal entry, no webhook -- and the lookup filters on
     it, while the older access token stays valid.
+
+    WHAT THIS TEST USED TO ASSERT, AND WHY IT WAS WRONG. It authorized
+    `ORDERS_READ` alone, refreshed asking for `["ORDERS_READ","ORDERS_WRITE"]`,
+    and asserted the minted token carried BOTH -- pinning a privilege
+    escalation as correct behaviour. Square documents the opposite in one
+    sentence: "The returned access token is limited to the permissions that are
+    the intersection of these requested permissions and those authorized by the
+    provided `refresh_token`."
+    https://developer.squareup.com/reference/square/oauth-api/obtain-token
+
+    A test that pins a defect is worse than no test: this one would have failed
+    the fix. The record-supersession behaviour it is really about is asserted
+    here with a scope change that *narrows*, which is the direction Square
+    permits -- and the narrowing is what makes the second mint distinguishable
+    from the first at all.
     """
     first = h.token(
         client_secret=APPLICATION_SECRET,
         grant_type="authorization_code",
-        code=h.code(scope="ORDERS_READ"),
+        code=h.code(scope="ORDERS_READ ORDERS_WRITE"),
     ).json()
+    # `short_lived` is set on refresh and never cleared by it, so it is the
+    # property that distinguishes the two records. Scopes used to serve here,
+    # and cannot any more: a refresh naming none intersects against the
+    # SELLER'S APPROVAL rather than the previous token, so the third mint
+    # legitimately carries both again. That coupling hid the ratchet defect --
+    # this assertion passed precisely because the grant had been narrowed
+    # permanently.
     second = h.token(
         client_secret=APPLICATION_SECRET,
         grant_type="refresh_token",
         refresh_token=first["refresh_token"],
-        scopes=["ORDERS_READ", "ORDERS_WRITE"],
+        short_lived=True,
     ).json()
+    assert second["short_lived"] is True
     third = h.token(
         client_secret=APPLICATION_SECRET,
         grant_type="refresh_token",
@@ -563,14 +724,9 @@ def test_a_second_refresh_mints_from_the_second_record_not_the_first(h: Harness)
     )
     assert third.status == 200, third.text
 
-    status = h.api.post(
-        "/oauth2/token/status",
-        {},
-        headers={"authorization": f"Bearer {third.json()['access_token']}"},
-    )
-    # The scopes of the SECOND mint, not the first: proof the lookup skipped
-    # the superseded record.
-    assert status.json()["scopes"] == ["ORDERS_READ", "ORDERS_WRITE"]
+    # Inherited from the SECOND record: proof the lookup skipped the superseded
+    # one. Had it found the stale first record, short_lived would be false.
+    assert third.json()["short_lived"] is True
     assert second["access_token"] != third.json()["access_token"]
 
     # And the very first access token is still good.
@@ -786,6 +942,46 @@ def test_revoke_requires_one_selector(h: Harness) -> None:
     assert first_error(response)["field"] == "access_token"
 
 
+def test_revoke_never_reports_success_over_a_revocation_that_did_not_happen(h: Harness) -> None:
+    """`success` is documented as "If the request is successful, this is
+    `true`" and nothing else on the page describes a failure
+    (https://developer.squareup.com/reference/square/oauth-api/revoke-token),
+    so it must not be `true` over a request that revoked nothing.
+
+    A `client_id` with a typo in it used to answer `{"success": true}` while
+    the token went on working: a green test and a live credential. The 401 is
+    this unit's convention -- Square publishes no error table here -- and is
+    the same one `obtain_token` already answers for a `client_id` that is not
+    this application.
+    """
+    first = h.token(client_secret=APPLICATION_SECRET, grant_type="authorization_code", code=h.code()).json()
+    header = {"authorization": f"Bearer {first['access_token']}"}
+    assert h.api.post("/oauth2/token/status", {}, headers=header).status == 200
+
+    refused = h.api.post(
+        "/oauth2/revoke",
+        {"client_id": "sq0idb-someone-elses-application", "merchant_id": SEED_MERCHANT_ID},
+        headers=h.client_auth,
+    )
+    assert refused.status == 401
+    assert first_error(refused)["field"] == "client_id"
+    # The token is the assertion that matters: a consumer testing "my revoke
+    # call works" against a typo'd application id must not get a green test.
+    assert h.api.post("/oauth2/token/status", {}, headers=header).status == 200
+
+
+def test_revoke_refuses_a_merchant_this_application_holds_no_token_for(h: Harness) -> None:
+    """The other half of the same rule, and the same 401 the `access_token`
+    branch already answered for a token this application did not issue."""
+    response = h.api.post(
+        "/oauth2/revoke",
+        {"client_id": APPLICATION_ID, "merchant_id": "MLQNOBODY"},
+        headers=h.client_auth,
+    )
+    assert response.status == 401
+    assert first_error(response)["field"] == "merchant_id"
+
+
 def test_revoke_refuses_a_token_this_application_did_not_issue(h: Harness) -> None:
     response = h.api.post(
         "/oauth2/revoke",
@@ -867,3 +1063,82 @@ def test_the_oauth_routes_disappear_with_the_capability() -> None:
         response = harness_.api.call(method="GET", path="/oauth2/authorize", query={"client_id": APPLICATION_ID})
         assert response.status == 501
         assert response.header("x-unit-capability") == "oauth"
+
+
+# ---------------------------------------------------------------------------
+# A refusal must not spend the grant it refused
+# ---------------------------------------------------------------------------
+
+
+def test_a_refused_scope_intersection_leaves_the_code_spendable(h: Harness) -> None:
+    """Found by an adversarial re-attack, as a regression introduced by the fix
+    for the scope-escalation defect itself.
+
+    `_narrowed_scopes` raises when the intersection is empty, and it was being
+    evaluated as an argument to `_mint` -- so Python ran it only after the code
+    had already been marked used. The consumer received a 400 saying nothing
+    had happened, and their next correct attempt received a 401, because the
+    code was spent by the request that failed.
+
+    Every other refusal on this endpoint is ordered before the write. This one
+    is too, now. The general rule -- a 4xx must not leave a mutation behind --
+    is asserted for the whole surface by the conformance suite.
+    """
+    code = h.code(scope="ORDERS_READ")
+
+    refused = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="authorization_code",
+        code=code,
+        scopes=["PAYMENTS_WRITE"],
+    )
+    assert refused.status == 400, refused.text
+
+    accepted = h.token(client_secret=APPLICATION_SECRET, grant_type="authorization_code", code=code)
+    assert accepted.status == 200, "the refused request spent the code it refused"
+    assert accepted.json()["access_token"]
+
+
+def test_a_down_scoped_refresh_does_not_ratchet_the_grant_down_permanently(h: Harness) -> None:
+    """Narrowing is per-token, not per-grant. The reviewer's exact scenario.
+
+    A refresh intersects the request against what the SELLER APPROVED, not
+    against what the current token happens to carry. Square narrows "from the
+    ones granted when the seller approved", so taking a narrow token for one
+    subtask must not stop the grant producing a full one afterwards.
+
+    Intersecting against ``existing.scopes`` made every narrowing permanent,
+    with no path back. It is the mirror image of the escalation this surface
+    was already fixed for -- wrong in the other direction, and it reads as safe
+    because it refuses rather than over-grants, which is exactly why it
+    survived a review that was looking for over-granting.
+    """
+    code = h.code(scope="ORDERS_READ ORDERS_WRITE")
+    first = h.token(client_secret=APPLICATION_SECRET, grant_type="authorization_code", code=code).json()
+    refresh_token = first["refresh_token"]
+
+    narrowed = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="refresh_token",
+        refresh_token=refresh_token,
+        scopes=["ORDERS_READ"],
+    )
+    assert narrowed.status == 200, narrowed.text
+
+    widened = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="refresh_token",
+        refresh_token=refresh_token,
+        scopes=["ORDERS_WRITE"],
+    )
+    assert widened.status == 200, (
+        f"a permission the seller approved became unreachable after one down-scoped refresh: {widened.text}"
+    )
+
+    granted = h.api.post(
+        "/oauth2/token/status",
+        {},
+        headers={"authorization": f"Bearer {widened.json()['access_token']}"},
+    )
+    assert granted.status == 200, granted.text
+    assert "ORDERS_WRITE" in granted.json()["scopes"], granted.text

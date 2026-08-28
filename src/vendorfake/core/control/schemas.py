@@ -73,7 +73,9 @@ __all__ = [
     "RetryPolicyPatchBody",
     "SinkProgramBody",
     "SnapshotDocument",
+    "StatePageBody",
     "StateRestoreBody",
+    "StateUpdateBody",
     "SubscriptionCreateBody",
     "WebhookEmitBody",
     "idempotency_as_json",
@@ -416,11 +418,25 @@ class SinkProgramBody(BaseModel):
 
 
 class ClockAdvanceBody(BaseModel):
-    """``POST /__unit/clock/advance``. Virtual clock only."""
+    """``POST /__unit/clock/advance``. Virtual clock only.
+
+    ``drain`` defaults to true, which is the reference's behaviour and what
+    almost every caller wants: advance, then chase whatever the advance set off
+    until nothing is outstanding. It is a flag rather than a fixed policy
+    because chasing means *advancing further* on a virtual clock, all the way
+    to the last timer -- so "advance ten milliseconds" can silently run a
+    twelve-attempt retry cascade covering twenty-four hours of scheduled time.
+
+    ``drain: false`` advances by exactly ``ms``, fires only what that made due,
+    and settles the delivery worker so the records are readable. It is what
+    makes "nothing had happened one millisecond before the interval, and
+    something had happened at it" an observation anybody can make.
+    """
 
     model_config = _STRICT
 
     ms: float = 0.0
+    drain: bool = True
 
 
 class MachineProbeBody(BaseModel):
@@ -442,6 +458,56 @@ class MachineProbeBody(BaseModel):
     machine: str = Field(min_length=1)
     from_: str = Field(alias="from", min_length=1)
     to: str | None = None
+
+
+class StateUpdateBody(BaseModel):
+    """``POST /__unit/state/update``: one committed mutation, under a version.
+
+    FOR: making the store's optimistic-concurrency rule askable without a
+    vendor request body. "A stale version is refused" is a contract about the
+    CORE -- ``core/state/store.py::Collection.update`` -- and a check that
+    could only reach it through whichever endpoint a particular vendor happens
+    to expose for updating whichever entity it happens to own would be a
+    contract about that vendor instead.
+
+    ``version`` absent means "no opinion", exactly as ``expect_version=None``
+    does in the store; it is not the same request as ``version: 0``.
+
+    ``patch`` may be empty, and empty is the useful default: the entity is
+    rewritten unchanged, the version still moves and the journal still records
+    it, so the concurrency rule can be exercised without editing anything a
+    vendor handler will later read.
+    """
+
+    model_config = _STRICT
+
+    collection: str = Field(min_length=1)
+    id: str = Field(min_length=1)
+    version: int | None = None
+    patch: Mapping[str, Any] = Field(default_factory=dict)
+
+
+class StatePageBody(BaseModel):
+    """``POST /__unit/state/page``: page a collection the way a handler does.
+
+    FOR: making the cursor rules askable. Opacity, the query fingerprint and
+    expiry are all enforced in ``core/state/store.py::Collection.paginate``,
+    and every one of them is a rule a *consumer* gets wrong against a real
+    vendor. Reaching them through a vendor's own search endpoint would mean the
+    check had to know that endpoint's spelling for "cursor" and for "filter",
+    which is precisely the vendor knowledge this suite does not have.
+
+    ``query`` is the fingerprint input, verbatim: any JSON value. Two calls
+    with different ``query`` values are different queries, and a cursor issued
+    for one must be refused by the other.
+    """
+
+    model_config = _STRICT
+
+    collection: str = Field(min_length=1)
+    query: Any = None
+    limit: int | None = None
+    cursor: str | None = None
 
 
 # ---------------------------------------------------------------------------
