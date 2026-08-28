@@ -193,7 +193,7 @@ choices (`vendorfake serve --profile <name>`, or a path to your own JSON):
 | `full` | Every capability on. The default. |
 | `no-faults` | Fault injection off entirely. For happy-path CI. |
 | `no-chaos` | Delivery faults off: a webhook that is sent is sent honestly, once. |
-| `orders-only` | Orders plus reference data. No OAuth dance — use the seeded token. |
+| `orders-only` | Orders plus the reference data they point at. No OAuth dance, no webhooks: authenticate with a seeded token. |
 | `oauth-only` | Only the OAuth dance, for testing token handling alone. |
 | `chaos-demo` | Full surface with a preloaded fault set: rate limits, mid-flow token expiry, duplicate and reordered delivery. |
 
