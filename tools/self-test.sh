@@ -34,6 +34,7 @@ step "mypy --strict"     uv run mypy
 step "import-linter"     uv run lint-imports
 step "boundary check"    uv run python tools/boundary_check.py -v
 step "pytest"            uv run pytest
+step "wheel data"        uv run python tools/check_wheel_data.py
 
 # The conformance suite through its own entry points, which pytest does not
 # exercise: the framework-free CLI a container healthcheck calls, and the

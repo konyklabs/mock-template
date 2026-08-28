@@ -1308,3 +1308,37 @@ def test_a_targeted_send_never_reads_the_store_while_holding_the_request_lock() 
         )
     finally:
         unit.stop()
+
+
+def test_enqueue_is_stopped_by_disable_delivery_too() -> None:
+    """The second door, found by review after the first was closed.
+
+    ``webhooks.disable_delivery`` is a deployment property that
+    ``set_enabled`` deliberately cannot undo. The guard was added to
+    ``enqueue_to`` and the docstring recorded that no other unguarded path
+    existed -- but the control plane's ``POST /__unit/webhooks/emit`` calls
+    ``enqueue`` straight from a route handler, never reaching the journal
+    listener's guard, so a unit whose operator switched delivery off would
+    still emit a fully signed delivery on request.
+
+    Closing one door while recording that only one existed is worse than
+    closing neither: the note is what the next reader trusts.
+    """
+    unit, sink, _ = build(subscribers=[subscriber()], disable_delivery=True)
+    unit.webhooks.enqueue(
+        PreparedEvent(
+            type="order.created",
+            event_id="evt_emit_1",
+            entity_id="o1",
+            created_at="2024-01-01T00:00:00.000Z",
+            body={"type": "order.created"},
+        )
+    )
+    unit.webhooks.drain()
+    assert sink.received == [], (
+        "enqueue delivered on a unit whose profile switched delivery off; the "
+        "kill switch must hold at every entry point, not only the ones that "
+        "arrive through the journal listener"
+    )
+    assert unit.webhooks.deliveries() == ()
+    unit.stop()
