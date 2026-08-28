@@ -18,6 +18,7 @@ format, which is the coupling this architecture exists to refuse.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv
@@ -465,7 +466,12 @@ def the_declared_retry_schedule_is_the_one_followed(env: CheckEnv) -> str:
         declared,
         "the retry schedule published at /__unit/info is empty, so there is nothing to follow.",
     )
-    scaled = [max(1, round(interval * scale)) for interval in declared]
+    # floor(x + 0.5), matching core/util/numbers.py::js_round -- replicated
+    # rather than imported so the check stays independent of the code it
+    # certifies. Python's round() disagrees on exact halves (round(2.5) == 2),
+    # which would put this check one millisecond early precisely when
+    # interval * scale lands on a half.
+    scaled = [max(1, math.floor(interval * scale + 0.5)) for interval in declared]
     if any(interval < 2 for interval in scaled):
         raise ConformanceSkip(
             f"the scaled retry schedule {scaled} contains an interval under 2ms, so 'one "
