@@ -1,7 +1,7 @@
 {
-  "name": "no-chaos",
-  "summary": "Full surface with delivery faults switched off: requests can still be made to fail deliberately, but a webhook that is sent is sent honestly, once.",
-  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "webhooks", "chaos"],
+  "name": "no-faults",
+  "summary": "Full surface with fault injection switched off entirely. What a CI suite that only wants happy paths should run.",
+  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "webhooks"],
   "seed": "seed/default.seed.json",
   "vendor": {
     "application_id": "sandbox-sq0idb-unit-square-application",

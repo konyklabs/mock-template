@@ -54,6 +54,7 @@ __all__ = [
     "SQUARE_RETRY_SCHEDULE_MS",
     "SQUARE_SCOPES",
     "SUPPORTED_GRANT_TYPES",
+    "VENDOR",
     "ErrorCategory",
     "ErrorCode",
     "OrderState",

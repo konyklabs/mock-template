@@ -17,8 +17,10 @@ import pytest
 from tests.unit.square.harness import Harness
 from tests.unit.square.harness import harness as build_harness
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
+from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.square.entities import COL, CatalogObjectEntity, OrderEntity, TokenEntity
 from vendorfake.square.seed import constants as seed_constants
+from vendorfake.square.seed.constants import SEED_LOCATION_ID
 from vendorfake.square.seed.document import parse_seed_document
 from vendorfake.square.seed.hydrate import SEED_META
 
@@ -237,3 +239,50 @@ def test_resetting_a_unit_rebuilds_the_same_world(h: Harness) -> None:
     before = h.unit.context.store.entity_digest()
     h.api.post("/__unit/state/reset", {})
     assert h.unit.context.store.entity_digest() == before
+
+
+def test_a_subscriber_that_existed_before_the_unit_started_receives_no_backlog() -> None:
+    """The sharpest form of the seed rule, and the one a consumer meets first.
+
+    `test_events.py` subscribes and then re-seeds; this subscribes *before the
+    unit has hydrated at all*, through the environment, which is how a
+    container is configured. The scenario contains one OPEN order and one
+    COMPLETED order, so a dispatcher that read the journal without honouring
+    `meta.seed` would push two `order.created` notifications to a handler that
+    has not yet seen a single request -- and a consumer counting webhooks would
+    be counting the scenario rather than their own traffic.
+    """
+    sink = MemorySink()
+    for h in build_harness(
+        "full",
+        sink=sink,
+        env={
+            "VENDORFAKE_WEBHOOK_URL": "https://early.test/hooks",
+            "VENDORFAKE_WEBHOOK_EVENTS": "*",
+            "VENDORFAKE_WEBHOOK_SIGNATURE_KEY": "early-key",
+        },
+    ):
+        subscribers = h.api.get("/__unit/webhooks/subscriptions").json()["subscriptions"]
+        assert [row["notification_url"] for row in subscribers] == ["https://early.test/hooks"]
+
+        h.api.post("/__unit/webhooks/drain", {})
+        assert sink.received == []
+        assert h.api.get("/__unit/webhooks/deliveries").json()["deliveries"] == []
+
+        # The same subscriber does receive an event for traffic the consumer
+        # actually made, which is what stops this test passing for a unit whose
+        # dispatcher is simply not attached.
+        created = h.api.post(
+            "/v2/orders",
+            {
+                "idempotency_key": "after-seed",
+                "order": {
+                    "location_id": SEED_LOCATION_ID,
+                    "line_items": [{"quantity": "1", "base_price_money": {"amount": 100}}],
+                },
+            },
+            headers=h.auth,
+        )
+        assert created.status == 200, created.text
+        h.api.post("/__unit/webhooks/drain", {})
+        assert [json.loads(req.body)["type"] for req in sink.received] == ["order.created"]

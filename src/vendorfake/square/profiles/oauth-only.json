@@ -1,7 +1,7 @@
 {
   "name": "oauth-only",
   "summary": "Only the OAuth dance. For a consumer testing token handling and nothing else.",
-  "capabilities": ["oauth"],
+  "capabilities": ["oauth", "chaos"],
   "seed": "seed/default.seed.json",
   "vendor": {
     "application_id": "sandbox-sq0idb-unit-square-application",
