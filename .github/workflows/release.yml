@@ -18,7 +18,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: konyklabs/.github/.github/workflows/release-please.yml@785936b557e93b013841e10599970795c5687662 # main
+    uses: konyklabs/.github/.github/workflows/release-please.yml@23e6148146eceb8ba4a4a929e6574c099a98d3d9 # main
     with:
       release-type: python
 
