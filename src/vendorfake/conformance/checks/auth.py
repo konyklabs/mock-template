@@ -30,7 +30,7 @@ query parameter would be asked exactly the same three questions.
 
 from __future__ import annotations
 
-from vendorfake.conformance.env import CheckEnv, Credential, RouteRow
+from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv, Credential, RouteRow
 from vendorfake.conformance.registry import check
 from vendorfake.conformance.types import Requires, require
 
@@ -83,6 +83,14 @@ def an_auth_required_route_authenticates(env: CheckEnv) -> str:
     # otherwise, so a vendor with no scope vocabulary still gets the other two.
     route = next((row for row in scoped if _under_scoped(env, row) is not None), None) or (scoped or routes)[0]
     good = env.credential_for(route)
+
+    # A profile may preload a rule on exactly this route -- chaos-demo
+    # rate-limits every third POST /v2/orders, deterministically the accepted
+    # probe below -- and pre-auth faults run before AuthAdapter.resolve, so an
+    # intercepted probe answers with a fault kind instead of an auth kind and
+    # the acceptance clause observes nothing. Same reason C12, C14 and C18
+    # reset first.
+    env.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
 
     anonymous = env.client.call(route.method, route.probe_path, json_body={})
     require(

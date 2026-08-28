@@ -30,12 +30,16 @@ FIVE PROPERTIES, and each of them has caught something real:
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from tests.conformance.mutants import MUTANTS, NULL_MUTANT, Mutant, Provenance, mutant_target
 from tests.conformance.mutants.model import register
+from tests.conformance.mutants.seams import AuthAdapterOverlay, VendorOverlay
 from vendorfake.conformance import CHECKS, Outcome, expected_skips, format_report, run_conformance
 from vendorfake.conformance.report import ConformanceReport
+from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
 _CHECK_IDS = frozenset(spec.id for spec in CHECKS)
 _ALL = [NULL_MUTANT, *MUTANTS]
@@ -99,32 +103,22 @@ def test_a_mutant_trips_the_checks_it_names_and_no_others(mutant: Mutant) -> Non
     skipped = _outcomes(report, Outcome.SKIP)
 
     missed = sorted(mutant.trips - red)
-    assert not missed, (
-        f"{mutant.label} did not trip {missed}, which it declares it must.\n"
-        f"  defect: {mutant.defect}\n"
-        f"A contract that stays green against a unit built to violate it is a contract that is not "
-        f"being enforced -- fix the check in src/vendorfake/conformance/checks/, or, if the mutant "
-        f"no longer reproduces the defect, fix the mutant in "
-        f"tests/conformance/mutants/catalog.py.\n{format_report(report)}"
-    )
+    # Fix the check in src/vendorfake/conformance/checks/, or, if the mutant no
+    # longer reproduces the defect, the mutant in tests/conformance/mutants/.
+    assert not missed, f"{mutant.label} did not trip {missed} (defect: {mutant.defect})\n{format_report(report)}"
 
     collateral = sorted(red - mutant.expected_red)
+    # Narrow the mutation, or declare genuine collateral in `also_trips` with a
+    # written `cascade` reason.
     assert not collateral, (
-        f"{mutant.label} also tripped {collateral}, which it does not declare.\n"
-        f"  defect: {mutant.defect}\n"
-        f"A mutant that reddens contracts it was not aimed at proves nothing about the one it "
-        f"names. Either narrow the mutation, or -- if the defect genuinely violates those "
-        f"contracts too -- add them to `also_trips` with a written `cascade` "
-        f"reason.\n{format_report(report)}"
+        f"{mutant.label} tripped undeclared {collateral}, beyond {sorted(mutant.expected_red)}\n{format_report(report)}"
     )
 
     silenced = sorted(skipped - _tolerated_skips(mutant))
+    # A mutation that removes a contract's precondition hides it. A legitimate
+    # skip is declared in the mutant's `skips_everywhere`.
     assert not silenced, (
-        f"{mutant.label} made {silenced} SKIP rather than fail.\n"
-        f"  defect: {mutant.defect}\n"
-        f"A mutation that removes a contract's precondition hides it: the suite reports green for "
-        f"a unit it never examined. If the skip is legitimate, declare it in the mutant's "
-        f"`skips_everywhere`.\n{format_report(report)}"
+        f"{mutant.label} made {silenced} SKIP; tolerated: {sorted(_tolerated_skips(mutant))}\n{format_report(report)}"
     )
 
 
@@ -169,11 +163,9 @@ def test_every_registered_check_has_a_mutant() -> None:
     """The rule that bites later, when a check is added and nobody is looking."""
     covered = frozenset(check_id for mutant in MUTANTS for check_id in mutant.trips)
     unproven = sorted(_CHECK_IDS - covered)
-    assert not unproven, (
-        f"{unproven} have no mutant, so nothing shows they can fail. A check that has never been "
-        f"seen red is a check nobody has shown to work: add a unit to "
-        f"tests/conformance/mutants/catalog.py that violates it and declare the id in `trips`."
-    )
+    # A check that has never been seen red is a check nobody has shown to work:
+    # add a violating unit to tests/conformance/mutants/catalog.py.
+    assert not unproven, f"checks with no mutant declaring them in trips: {unproven}"
 
 
 @pytest.mark.conformance
@@ -200,19 +192,17 @@ def test_a_contract_skipped_on_every_profile_is_a_suite_level_failure() -> None:
     mutant = next(m for m in MUTANTS if m.skips_everywhere)
     report = _run(mutant)
 
+    # A universally skipped contract is invisible to every check.
     assert not _outcomes(report, Outcome.FAIL), (
-        f"{mutant.label} was expected to produce no failure at all -- the point is that a "
-        f"universally skipped contract is invisible to every check.\n{format_report(report)}"
+        f"{mutant.label} failed {sorted(_outcomes(report, Outcome.FAIL))}, expected none\n{format_report(report)}"
     )
     assert frozenset(report.never_ran) == mutant.skips_everywhere, (
         f"{mutant.label} should leave exactly {sorted(mutant.skips_everywhere)} having passed on no "
         f"profile; report.never_ran is {list(report.never_ran)}.\n{format_report(report)}"
     )
-    assert not report.ok, (
-        "a contract that skipped on every profile was reported as a clean run. "
-        "ConformanceReport.ok must be False when any check passed on no profile at all -- that "
-        "rule is the only thing standing between a gated-out contract and a green build.\n" + format_report(report)
-    )
+    # ConformanceReport.ok must be False when any check passed on no profile:
+    # that rule is what stands between a gated-out contract and a green build.
+    assert not report.ok, f"report.ok is True with never_ran={list(report.never_ran)}\n{format_report(report)}"
     assert any("NEVER RAN C13" in problem for problem in report.problems), (
         f"the report does not name the never-run contract in its problems: {list(report.problems)}"
     )
@@ -250,4 +240,41 @@ def test_tolerated_collateral_must_be_justified() -> None:
                 also_trips=frozenset({"C02"}),
             )
         )
-    assert "M99" not in {mutant.id for mutant in MUTANTS}, "a refused mutant must not reach the registry"
+    # A refused mutant must not reach the registry.
+    assert "M99" not in {mutant.id for mutant in MUTANTS}, f"registry: {sorted(m.id for m in MUTANTS)}"
+
+
+def test_c17_observes_auth_through_a_preloaded_chaos_rule() -> None:
+    """C17 must not let a profile's own chaos rule answer for authentication.
+
+    On chaos-demo the preloaded rate-limit rule fires on every third
+    ``POST /v2/orders`` -- deterministically C17's third, *accepted* probe --
+    and pre-auth faults run before ``AuthAdapter.resolve``, so before C17
+    reset chaos its acceptance clause was satisfied by a ``rate_limited``
+    answer that never reached auth (the gate's blocking finding on
+    konyklabs/vendorfake#17, 2026-08-28). This mutant refuses exactly the
+    credentials that cover ``ORDERS_WRITE``: with the reset in place the
+    accepted probe reaches auth and C17 goes red; without it the 429 answers
+    first and the refusal is certified conformant. Deliberately not
+    ``register()``-ed -- refusing every covering credential would cascade
+    through the order-driving checks in the registry-wide properties above,
+    and this defect is only expressible on a profile that preloads a rule.
+    """
+
+    def denies_the_covered(inner: Any, args: Any, mode: str) -> Any:
+        result = inner.resolve(args, mode)
+        if "ORDERS_WRITE" in result.scopes:
+            raise UnitError(UnitErrorKind.UNAUTHORIZED, detail="mutant: covering credentials are refused")
+        return result
+
+    mutant = Mutant(
+        id="M98",
+        name="auth-denies-the-covered-credential",
+        defect="Any credential that covers ORDERS_WRITE is refused as unauthorized.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C17"}),
+        profiles=("chaos-demo",),
+        vendor=lambda inner: VendorOverlay(inner, auth=AuthAdapterOverlay(inner.auth, resolve=denies_the_covered)),
+    )
+    report = run_conformance(mutant_target(mutant), transports=("inprocess",), check_ids=("C17",), strict=False)
+    assert "C17" in _outcomes(report, Outcome.FAIL), format_report(report)
