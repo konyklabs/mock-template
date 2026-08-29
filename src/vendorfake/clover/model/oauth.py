@@ -33,13 +33,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "AppModel",
     "AuthorizationCodeModel",
+    "RefreshRequest",
+    "TokenRequest",
     "TokenResponse",
 ]
+
+_REQUEST = ConfigDict(extra="ignore", frozen=True)
+"""The parse path, per the package convention on ``model/order.py``: lax and
+tolerant of extra keys. Required strings are ``min_length=1`` so that an empty
+form value and a missing key are the same ``missing_field``; see
+``model/common.py``."""
 
 _RESPONSE = ConfigDict(extra="forbid", frozen=True, strict=True)
 """Projection-only: this unit *emits* the token response and builds the app
@@ -76,6 +84,40 @@ class AuthorizationCodeModel(BaseModel):
     merchant_id: str
     client_id: str
     created_at_ms: int
+
+
+class TokenRequest(BaseModel):
+    """``POST /oauth/v2/token`` -- both documented variants in one model.
+
+    High-trust sends ``{client_id, client_secret, code}``; PKCE sends
+    ``{client_id, code, code_verifier}``
+    (https://docs.clover.com/dev/docs/generate-oauth-expiring-access-and-refresh-token).
+    The two optionals are optional *here* because which one is required
+    depends on how the code was issued -- a code minted with a
+    ``code_challenge`` demands the verifier, any other demands the secret --
+    and that routing lives in the surface, where the code record is.
+    """
+
+    model_config = _REQUEST
+
+    client_id: str = Field(min_length=1)
+    code: str = Field(min_length=1)
+    client_secret: str | None = None
+    code_verifier: str | None = None
+
+
+class RefreshRequest(BaseModel):
+    """``POST /oauth/v2/refresh`` -- ``{client_id, refresh_token}``, and
+    deliberately NO ``client_secret``: the documented refresh body does not
+    carry one (https://docs.clover.com/dev/docs/refresh-access-tokens). One
+    sent anyway is ignored by ``extra="ignore"`` rather than refused, which is
+    where the documentation stops too.
+    """
+
+    model_config = _REQUEST
+
+    client_id: str = Field(min_length=1)
+    refresh_token: str = Field(min_length=1)
 
 
 class TokenResponse(BaseModel):

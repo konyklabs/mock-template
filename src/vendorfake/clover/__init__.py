@@ -20,14 +20,16 @@ core supplies behaviour.
 
 from __future__ import annotations
 
+from vendorfake.clover.auth import CloverAuth
 from vendorfake.clover.capabilities import CLOVER_CAPABILITIES, CLOVER_NOT_MODELED, CLOVER_NOT_SUPPORTED
 from vendorfake.clover.config import DEFAULT_PERMISSIONS, CloverConfig, resolve_clover_config
+from vendorfake.clover.entities import COL
 from vendorfake.clover.errors import CLOVER_ERROR_TABLE, CloverErrorShaper
 from vendorfake.clover.ids import CloverIds
 from vendorfake.clover.machine import ORDER_MACHINE, ORDER_MACHINE_NAME, OrderState
 from vendorfake.clover.model.inventory import ItemWire, PriceType
 from vendorfake.clover.model.merchant import AddressWire, MerchantWire, OwnerWire
-from vendorfake.clover.model.oauth import TokenResponse
+from vendorfake.clover.model.oauth import RefreshRequest, TokenRequest, TokenResponse
 from vendorfake.clover.model.order import (
     ItemRefWire,
     LineItemWire,
@@ -37,6 +39,7 @@ from vendorfake.clover.model.order import (
     PayType,
 )
 from vendorfake.clover.retry import CLOVER_RETRY_SCHEDULE_MS
+from vendorfake.clover.surface.oauth import FAILED_CODE_MESSAGE, oauth_routes
 from vendorfake.clover.vendor import CLOVER_MAGIC, CloverVendor, create_clover_vendor
 from vendorfake.core.kernel.types import VendorDefinition
 
@@ -47,11 +50,14 @@ __all__ = [
     "CLOVER_NOT_MODELED",
     "CLOVER_NOT_SUPPORTED",
     "CLOVER_RETRY_SCHEDULE_MS",
+    "COL",
     "DEFAULT_PERMISSIONS",
+    "FAILED_CODE_MESSAGE",
     "ORDER_MACHINE",
     "ORDER_MACHINE_NAME",
     "VENDOR",
     "AddressWire",
+    "CloverAuth",
     "CloverConfig",
     "CloverErrorShaper",
     "CloverIds",
@@ -67,8 +73,11 @@ __all__ = [
     "PayType",
     "PaymentState",
     "PriceType",
+    "RefreshRequest",
+    "TokenRequest",
     "TokenResponse",
     "create_clover_vendor",
+    "oauth_routes",
     "resolve_clover_config",
 ]
 

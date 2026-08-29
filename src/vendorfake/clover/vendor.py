@@ -21,12 +21,11 @@ construction, then :meth:`CloverVendor.hydrate` re-resolves from
 ``POST /__unit/state/reset`` -- rebuilds what depends on it (the error
 shaper), and re-seeds the id stream from the unit's seed.
 
-PR-A shape: **no surfaces yet.** ``routes`` is empty, ``signer`` and
-``events`` are ``None``, and ``auth`` is a placeholder that refuses everything
--- unreachable while no route exists, replaced wholesale by PR B. The two
-webhook gates sit in ``not_supported`` until PR D ships the seams that would
-make them deliverable (see ``capabilities.py``); the machines, retry
-defaults, error table, id stream and configuration are all final-shape.
+PR-B shape: **the OAuth surface and the real auth adapter are live**; orders,
+inventory and merchant land in PR C. ``signer`` and ``events`` stay ``None``
+and the two webhook gates sit in ``not_supported`` until PR D ships the seams
+that would make them deliverable (see ``capabilities.py``). The machines,
+retry defaults, error table, id stream and configuration are final-shape.
 
 ``api_version`` is ``None``, and that is a statement about Clover rather than
 an omission: Clover documents no version request or response header -- the
@@ -40,22 +39,20 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from vendorfake.clover.auth import CloverAuth
 from vendorfake.clover.capabilities import CLOVER_CAPABILITIES, CLOVER_NOT_SUPPORTED
 from vendorfake.clover.config import CloverConfig, resolve_clover_config
 from vendorfake.clover.errors import CloverErrorShaper
 from vendorfake.clover.ids import CloverIds
 from vendorfake.clover.machine import ORDER_MACHINE, ORDER_MACHINE_NAME
 from vendorfake.clover.retry import clover_retry_defaults
+from vendorfake.clover.surface.oauth import oauth_routes
 from vendorfake.core.config.models import ProfileDocument
 from vendorfake.core.kernel.types import (
     AuthAdapter,
-    AuthCredential,
-    AuthMode,
-    AuthResult,
     CapabilityDecl,
     ErrorShaper,
     EventMapper,
-    HandlerArgs,
     MagicTriggerSpec,
     MutableResponse,
     Route,
@@ -87,8 +84,11 @@ publishes no equivalent, so the mechanism is this project's, flagged by the
 ``chaos:`` prefix no real value would carry."""
 
 _VOLATILE_FIELDS: tuple[str, ...] = (
-    "access_token_expiration",
-    "refresh_token_expiration",
+    "access_token_expiration_ms",
+    "refresh_token_expiration_ms",
+    "expires_at_ms",
+    "used_at_ms",
+    "refresh_used_at_ms",
     "createdTime",
     "modifiedTime",
     "clientCreatedTime",
@@ -96,34 +96,11 @@ _VOLATILE_FIELDS: tuple[str, ...] = (
 )
 """Entity fields excluded from the state digest because they carry wall-clock
 time. Two units seeded identically a second apart must still agree. The core
-already excludes ``created_at``/``updated_at``, but Clover's names are
-camelCase Unix-millisecond fields and its OAuth expirations are Unix-second
-fields, so every one of them must be listed explicitly."""
-
-
-class _PlaceholderAuth:
-    """Refuses every credential. PR B replaces this with the real adapter.
-
-    ``VendorDefinition.auth`` is required by the protocol even though this
-    vendor serves no routes yet, and an adapter that *refuses* is the honest
-    placeholder: nothing can authenticate against a unit that has nothing to
-    authenticate for, and a route added without replacing this fails closed
-    rather than open.
-    """
-
-    __slots__ = ()
-
-    def describe(self) -> Mapping[str, str]:
-        return {"bearer": "No auth surface yet: the OAuth v2 adapter lands with the oauth routes (PR B)."}
-
-    def resolve(self, args: HandlerArgs, mode: AuthMode) -> AuthResult:
-        raise UnitError(
-            UnitErrorKind.UNAUTHORIZED,
-            detail="This Clover unit has no authentication surface yet.",
-        )
-
-    def credentials(self, ctx: UnitContext) -> Sequence[AuthCredential]:
-        return ()
+already excludes ``created_at``/``updated_at``, but every stored instant in
+this package is a camelCase Clover field or a ``_ms``-suffixed internal one
+(see ``entities.py``), so each is listed explicitly. The OAuth expirations
+appear under their stored ``_ms`` names: the digest hashes entities, and the
+Unix-seconds spellings exist only on the wire."""
 
 
 class CloverVendor:
@@ -135,6 +112,7 @@ class CloverVendor:
         "_config",
         "_errors",
         "_ids",
+        "_routes",
         "_seed",
     )
 
@@ -144,7 +122,12 @@ class CloverVendor:
         self._seed = seed
         self._ids = CloverIds(seed)
         self._errors = self._build_errors()
-        self._auth = _PlaceholderAuth()
+        # Holds *this vendor*, not a copy of its configuration, so a profile
+        # resolved in `hydrate` -- which runs after construction -- is in
+        # force on the next request. Same rule as the surfaces; see
+        # `surface/common.py`.
+        self._auth = CloverAuth(self)
+        self._routes: tuple[Route, ...] | None = None
 
     def _build_errors(self) -> CloverErrorShaper:
         return CloverErrorShaper(
@@ -192,10 +175,16 @@ class CloverVendor:
 
     @property
     def routes(self) -> Sequence[Route]:
-        """Empty until the surfaces land (oauth in PR B, orders/inventory/
-        merchant in PR C, webhooks in PR D). The unit still starts, serves its
-        control plane, and 404s every vendor path through the error shaper."""
-        return ()
+        """The vendor surface, built once and cached.
+
+        Cached because ``Route`` handlers are bound methods of a surface
+        object and rebuilding them on every access would make two reads of
+        this property produce routes that compare unequal. OAuth for now;
+        orders, inventory and merchant land in PR C, webhooks in PR D.
+        """
+        if self._routes is None:
+            self._routes = oauth_routes(self)
+        return self._routes
 
     @property
     def errors(self) -> ErrorShaper:
