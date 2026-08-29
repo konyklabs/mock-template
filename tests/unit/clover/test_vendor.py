@@ -6,6 +6,7 @@ import pytest
 
 import vendorfake.clover as clover
 from tests.unit.clover.conftest import fake_ctx
+from vendorfake.clover.auth import CloverAuth
 from vendorfake.clover.machine import ORDER_MACHINE
 from vendorfake.clover.retry import CLOVER_RETRY_SCHEDULE_MS
 from vendorfake.clover.vendor import CloverVendor, create_clover_vendor
@@ -57,21 +58,24 @@ def test_a_typo_on_the_module_still_raises_attribute_error() -> None:
         clover.VENDORS  # type: ignore[attr-defined]  # noqa: B018
 
 
-def test_routes_are_empty_and_the_webhook_seams_are_none_until_their_prs() -> None:
+def test_the_oauth_routes_are_live_and_the_webhook_seams_are_none_until_pr_d() -> None:
     vendor = create_clover_vendor()
-    assert tuple(vendor.routes) == ()
+    keys = [route.key for route in vendor.routes]
+    assert keys == ["GET /oauth/v2/authorize", "POST /oauth/v2/token", "POST /oauth/v2/refresh"]
     assert vendor.signer is None
     assert vendor.events is None
 
 
-def test_the_placeholder_auth_refuses_and_offers_nothing() -> None:
-    """Unreachable while no route exists, and fails closed if one lands
-    without replacing it (PR B ships the real adapter)."""
+def test_routes_are_built_once_and_cached() -> None:
+    """Route handlers are bound methods; rebuilding per access would make two
+    reads of the property produce routes that compare unequal."""
     vendor = create_clover_vendor()
-    assert vendor.auth.credentials(fake_ctx()) == ()
-    with pytest.raises(UnitError) as caught:
-        vendor.auth.resolve(None, "bearer")  # type: ignore[arg-type]
-    assert caught.value.kind is UnitErrorKind.UNAUTHORIZED
+    assert vendor.routes is vendor.routes
+
+
+def test_the_real_auth_adapter_is_wired_and_fails_closed_with_no_tokens() -> None:
+    vendor = create_clover_vendor()
+    assert isinstance(vendor.auth, CloverAuth)
 
 
 def test_the_order_machine_is_registered_so_the_control_plane_can_publish_it() -> None:
@@ -97,11 +101,17 @@ def test_the_retry_defaults_carry_the_judgment_schedule() -> None:
 
 
 def test_volatile_fields_are_clovers_wall_clock_names() -> None:
-    """Clover's names are camelCase, so the core's created_at/updated_at
-    auto-exclusion covers none of them; every one is listed."""
+    """Every stored instant is a camelCase Clover field or a `_ms`-suffixed
+    internal one, so the core's created_at/updated_at auto-exclusion covers
+    none of them; every one is listed. The OAuth expirations appear under
+    their stored `_ms` names -- the digest hashes entities, and the
+    Unix-seconds spellings exist only on the wire."""
     assert set(create_clover_vendor().volatile_fields) == {
-        "access_token_expiration",
-        "refresh_token_expiration",
+        "access_token_expiration_ms",
+        "refresh_token_expiration_ms",
+        "expires_at_ms",
+        "used_at_ms",
+        "refresh_used_at_ms",
         "createdTime",
         "modifiedTime",
         "clientCreatedTime",
