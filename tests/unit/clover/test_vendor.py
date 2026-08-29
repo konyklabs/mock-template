@@ -124,6 +124,23 @@ def test_hydrate_resolves_the_profiles_vendor_block_and_reseeds_the_ids() -> Non
     assert vendor.ids.order() == before  # reseeded: the stream restarts
 
 
+def test_the_id_stream_is_reseeded_from_the_unit_seed_not_the_constructor_arg() -> None:
+    """A unit that re-hydrates on POST /__unit/state/reset mints the ids it
+    minted the first time -- and the seed it restarts from must be the
+    *unit's* chaos seed, because reseeding from the constructor argument would
+    pass every same-seed test while making profiles with different chaos seeds
+    mint identical ids."""
+    vendor = CloverVendor(seed=1)
+    vendor.hydrate(fake_ctx(chaos_seed=99), None)
+    first = [vendor.ids.order() for _ in range(3)]
+    vendor.hydrate(fake_ctx(chaos_seed=99), None)
+    assert [vendor.ids.order() for _ in range(3)] == first
+    # And the seed really is the unit's, not the one the vendor was built with.
+    other = CloverVendor(seed=1)
+    other.hydrate(fake_ctx(chaos_seed=100), None)
+    assert [other.ids.order() for _ in range(3)] != first
+
+
 def test_hydrate_refuses_a_seed_document_until_pr_e_ships_the_parser() -> None:
     with pytest.raises(UnitError) as caught:
         CloverVendor().hydrate(fake_ctx(), {"merchant": {}})
@@ -154,14 +171,7 @@ def test_a_clover_unit_starts_on_the_full_profile_with_an_empty_surface() -> Non
     unit = create_unit(vendor="clover", profile="full")
     assert unit.name == "clover"
     assert unit.context.config.profile == "full"
-    assert set(unit.context.config.capabilities) == {
-        "oauth",
-        "orders",
-        "inventory",
-        "webhooks",
-        "chaos",
-        "webhooks.chaos",
-    }
+    assert set(unit.context.config.capabilities) == {"oauth", "orders", "inventory", "chaos"}
 
 
 def test_two_clover_units_in_one_process_do_not_share_an_id_stream() -> None:

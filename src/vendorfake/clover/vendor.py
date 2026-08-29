@@ -23,9 +23,10 @@ shaper), and re-seeds the id stream from the unit's seed.
 
 PR-A shape: **no surfaces yet.** ``routes`` is empty, ``signer`` and
 ``events`` are ``None``, and ``auth`` is a placeholder that refuses everything
--- unreachable while no route exists, replaced wholesale by PR B. The
-capability declarations, machines, retry defaults, error table, id stream and
-configuration are all final-shape; the surfaces land in PRs B-D.
+-- unreachable while no route exists, replaced wholesale by PR B. The two
+webhook gates sit in ``not_supported`` until PR D ships the seams that would
+make them deliverable (see ``capabilities.py``); the machines, retry
+defaults, error table, id stream and configuration are all final-shape.
 
 ``api_version`` is ``None``, and that is a statement about Clover rather than
 an omission: Clover documents no version request or response header -- the

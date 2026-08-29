@@ -26,9 +26,16 @@ from vendorfake.clover.errors import CLOVER_ERROR_TABLE, CloverErrorShaper
 from vendorfake.clover.ids import CloverIds
 from vendorfake.clover.machine import ORDER_MACHINE, ORDER_MACHINE_NAME, OrderState
 from vendorfake.clover.model.inventory import ItemWire, PriceType
-from vendorfake.clover.model.merchant import MerchantWire
+from vendorfake.clover.model.merchant import AddressWire, MerchantWire, OwnerWire
 from vendorfake.clover.model.oauth import TokenResponse
-from vendorfake.clover.model.order import LineItemWire, OrderWire, PaymentState, PayType
+from vendorfake.clover.model.order import (
+    ItemRefWire,
+    LineItemWire,
+    OrderTypeRefWire,
+    OrderWire,
+    PaymentState,
+    PayType,
+)
 from vendorfake.clover.retry import CLOVER_RETRY_SCHEDULE_MS
 from vendorfake.clover.vendor import CLOVER_MAGIC, CloverVendor, create_clover_vendor
 from vendorfake.core.kernel.types import VendorDefinition
@@ -44,15 +51,19 @@ __all__ = [
     "ORDER_MACHINE",
     "ORDER_MACHINE_NAME",
     "VENDOR",
+    "AddressWire",
     "CloverConfig",
     "CloverErrorShaper",
     "CloverIds",
     "CloverVendor",
+    "ItemRefWire",
     "ItemWire",
     "LineItemWire",
     "MerchantWire",
     "OrderState",
+    "OrderTypeRefWire",
     "OrderWire",
+    "OwnerWire",
     "PayType",
     "PaymentState",
     "PriceType",

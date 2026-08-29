@@ -41,9 +41,12 @@ __all__ = [
     "TokenResponse",
 ]
 
-_WIRE = ConfigDict(extra="forbid", frozen=True, strict=True)
-"""Strict, so an expiration that arrived as a float or a string is refused
-here rather than coerced somewhere on the way to the wire."""
+_RESPONSE = ConfigDict(extra="forbid", frozen=True, strict=True)
+"""Projection-only: this unit *emits* the token response and builds the app
+and code records itself, so these stay strict -- an expiration that arrived as
+a float or a string is this unit's own bug, refused here rather than coerced
+on the way to the wire. The PR-B *request* models (token exchange, refresh)
+will use the lax ``_REQUEST`` convention from ``model/order.py``."""
 
 
 class AppModel(BaseModel):
@@ -51,7 +54,7 @@ class AppModel(BaseModel):
     minted token inherits. JUDGMENT -- internal vocabulary, not a Clover wire
     shape; see the module docstring and ``config.py`` on permissions."""
 
-    model_config = _WIRE
+    model_config = _RESPONSE
 
     client_id: str
     client_secret: str
@@ -67,7 +70,7 @@ class AuthorizationCodeModel(BaseModel):
     bookkeeping for the JUDGMENT ten-minute expiry in ``config.py``.
     """
 
-    model_config = _WIRE
+    model_config = _RESPONSE
 
     code: str
     merchant_id: str
@@ -84,7 +87,7 @@ class TokenResponse(BaseModel):
     optional; all four appear in every documented example.
     """
 
-    model_config = _WIRE
+    model_config = _RESPONSE
 
     access_token: str
     access_token_expiration: int

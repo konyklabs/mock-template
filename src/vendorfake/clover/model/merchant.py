@@ -25,13 +25,16 @@ from vendorfake.core.util.json import compact
 
 __all__ = ["AddressWire", "MerchantWire", "OwnerWire"]
 
-_WIRE = ConfigDict(extra="forbid", frozen=True, strict=True)
+_RESPONSE = ConfigDict(extra="forbid", frozen=True, strict=True)
+"""Projection-only: nothing parses an inbound merchant document (the surface
+is a read-only GET), so these stay strict -- a wrong type here is this unit's
+own bug, not a consumer's body. Contrast ``model/order.py``'s ``_REQUEST``."""
 
 
 class OwnerWire(BaseModel):
     """``owner{...}``. Minimal; JUDGMENT -- see the module docstring."""
 
-    model_config = _WIRE
+    model_config = _RESPONSE
 
     id: str
     name: str | None = None
@@ -43,7 +46,7 @@ class OwnerWire(BaseModel):
 class AddressWire(BaseModel):
     """``address{...}``. Minimal; JUDGMENT -- see the module docstring."""
 
-    model_config = _WIRE
+    model_config = _RESPONSE
 
     address1: str | None = None
     city: str | None = None
@@ -66,7 +69,7 @@ class AddressWire(BaseModel):
 class MerchantWire(BaseModel):
     """One merchant, as this build models it."""
 
-    model_config = _WIRE
+    model_config = _RESPONSE
 
     id: str
     name: str

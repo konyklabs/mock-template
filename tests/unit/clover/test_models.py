@@ -39,9 +39,10 @@ def test_the_documented_pay_type_values() -> None:
     assert {s.value for s in PayType} == {"SPLIT_GUEST", "SPLIT_ITEM", "SPLIT_CUSTOM", "FULL"}
 
 
-def test_money_is_integer_cents_and_floats_are_refused() -> None:
-    """'$20.99 is represented as an amount value of 2099' -- and strict mode
-    means 20.99 is a type error here, never a silent truncation."""
+def test_money_is_integer_cents_and_fractional_amounts_are_refused() -> None:
+    """'$20.99 is represented as an amount value of 2099' -- and even on the
+    lax parse path a fractional 20.99 is a validation error, never a silent
+    truncation: that is the one coercion that would corrupt an amount."""
     assert OrderWire(id="X", currency="USD", total=2099).total == 2099
     with pytest.raises(ValidationError):
         OrderWire(id="X", currency="USD", total=20.99)  # type: ignore[arg-type]
@@ -83,12 +84,57 @@ def test_the_token_response_wire_is_exactly_the_documented_four_fields() -> None
 
 def test_line_item_defaults_and_the_unit_qty_fixed_point() -> None:
     item = LineItemWire(id="L", price=750)
-    assert item.printed is False
+    assert item.printed is None  # documented field, undocumented default: omitted
     assert item.exchanged is False
     assert item.refunded is False
     assert item.unitQty is None
+    assert "printed" not in item.wire()
     # 1.5 units is 1500: "unit quantity multiplied by 1000".
     assert LineItemWire(id="L", price=750, unitQty=1500).unitQty == 1500
+
+
+def test_a_documented_order_body_parses_in_python_mode() -> None:
+    """The parse path must accept what Clover's own examples send: enum values
+    as strings, arrays as lists, and documented fields this build does not
+    model (isVat, unpaidBalance, employee, customers, discounts,
+    serviceCharge) tolerated rather than 400ed."""
+    body = {
+        "id": "ABCDEFGHJKMN1",
+        "orderType": {"id": "KFRPRVCZ73JHM"},
+        "currency": "USD",
+        "total": 1500,
+        "state": "Open",
+        "paymentState": "PAID",
+        "lineItems": [{"id": "L1", "price": 750, "item": {"id": "NEWITEM123ABC"}}],
+        "isVat": False,
+        "unpaidBalance": 0,
+        "employee": {"id": "EMPLOYEE12345"},
+        "customers": [],
+        "discounts": [],
+        "serviceCharge": {"name": "svc"},
+    }
+    order = OrderWire.model_validate(body)
+    assert order.paymentState is PaymentState.PAID
+    assert order.state == "Open"  # stored verbatim; casing is the machine's problem
+    assert order.lineItems[0].price == 750
+    assert order.lineItems[0].item is not None
+    assert order.lineItems[0].item.id == "NEWITEM123ABC"
+    assert order.orderType is not None
+    assert order.orderType.id == "KFRPRVCZ73JHM"
+    assert not hasattr(order, "isVat")  # tolerated on parse, not silently modelled
+
+
+def test_a_documented_item_body_parses_in_python_mode() -> None:
+    body = {
+        "name": "Craft Beer",
+        "price": 750,
+        "id": "NEWITEM123ABC",
+        "priceType": "VARIABLE",
+        "isAgeRestricted": True,
+    }
+    item = ItemWire.model_validate(body)
+    assert item.priceType is PriceType.VARIABLE
+    assert not hasattr(item, "isAgeRestricted")
 
 
 def test_absent_optionals_emit_no_key() -> None:

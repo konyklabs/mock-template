@@ -65,10 +65,22 @@ __all__ = [
     "PaymentState",
 ]
 
-_WIRE = ConfigDict(extra="forbid", frozen=True, strict=True)
-"""Strict, so a money amount that arrived as ``20.99`` is refused here rather
-than coerced to a wrong integer on the way to the wire. Cents are whole
-numbers by definition."""
+_REQUEST = ConfigDict(extra="ignore", frozen=True)
+"""The parse-path configuration, and both halves are deliberate.
+
+``extra="ignore"`` because a documented Clover order carries far more than
+this build models -- ``isVat``, ``unpaidBalance``, ``employee``,
+``customers``, ``discounts``, ``serviceCharge`` and more are all real fields
+on the order reference -- and refusing a body because it mentioned one of
+them would fail on the shrink rather than on the thing under test.
+
+Not strict, because these models validate *decoded* documents (python mode):
+under strict validation ``"paymentState": "PAID"`` would refuse to become the
+enum member and a JSON array would refuse to become the ``lineItems`` tuple,
+so every documented body in Clover's own examples would 400. The money
+guarantee survives without strictness: lax ``int`` still refuses a fractional
+``20.99``, which is the coercion that would actually corrupt an amount.
+"""
 
 
 class PaymentState(StrEnum):
@@ -98,7 +110,7 @@ class ItemRefWire(BaseModel):
     (https://docs.clover.com/dev/docs/ordercreatelineitem).
     """
 
-    model_config = _WIRE
+    model_config = _REQUEST
 
     id: str
 
@@ -111,7 +123,7 @@ class OrderTypeRefWire(BaseModel):
     it: ``{"orderType": {"id": "KFRPRVCZ73JHM"}, ...}``
     (https://docs.clover.com/dev/docs/creating-custom-orders)."""
 
-    model_config = _WIRE
+    model_config = _REQUEST
 
     id: str
 
@@ -122,14 +134,16 @@ class OrderTypeRefWire(BaseModel):
 class LineItemWire(BaseModel):
     """One line item. ``price`` in integer cents; ``unitQty`` fixed-point x1000."""
 
-    model_config = _WIRE
+    model_config = _REQUEST
 
     id: str
     price: int
     name: str | None = None
     note: str | None = None
     unitQty: int | None = None
-    printed: bool = False
+    #: Documented field, undocumented default: optional-and-omitted, like the
+    #: order's own flag fields (module docstring).
+    printed: bool | None = None
     exchanged: bool = False
     refunded: bool = False
     item: ItemRefWire | None = None
@@ -154,7 +168,7 @@ class OrderWire(BaseModel):
     """A whole order, ready to serialise. Field set from the order reference
     pages; see the module docstring for units, enums and defaults."""
 
-    model_config = _WIRE
+    model_config = _REQUEST
 
     id: str
     currency: str

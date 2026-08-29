@@ -40,7 +40,12 @@ from vendorfake.core.util.json import compact
 
 __all__ = ["ItemWire", "PriceType"]
 
-_WIRE = ConfigDict(extra="forbid", frozen=True, strict=True)
+_REQUEST = ConfigDict(extra="ignore", frozen=True)
+"""The parse path: item documents arrive decoded, so ``"priceType":
+"VARIABLE"`` must become the enum member and documented-but-unmodelled fields
+(``isAgeRestricted``, ``itemStock``, ...) must be tolerated rather than
+400ing on the shrink. The full rationale is on ``model/order.py``'s
+``_REQUEST``; lax ``int`` still refuses a fractional price."""
 
 
 class PriceType(StrEnum):
@@ -54,7 +59,7 @@ class PriceType(StrEnum):
 class ItemWire(BaseModel):
     """One inventory item. ``name`` and ``price`` required, as on create."""
 
-    model_config = _WIRE
+    model_config = _REQUEST
 
     id: str
     name: str
