@@ -42,6 +42,7 @@ vendorfake = "vendorfake.cli:main"
 vendorfake-conformance = "vendorfake.conformance.__main__:main"
 
 [project.entry-points."vendorfake.vendors"]
+clover = "vendorfake.clover:VENDOR"
 square = "vendorfake.square:VENDOR"
 
 [project.entry-points.pytest11]

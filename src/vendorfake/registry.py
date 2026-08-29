@@ -62,6 +62,7 @@ which module to import, which happens before a profile exists, so it belongs to
 the registry rather than to configuration."""
 
 _BUILTIN: Mapping[str, str] = {
+    "clover": "vendorfake.clover:VENDOR",
     "square": "vendorfake.square:VENDOR",
 }
 """Vendors shipped in this distribution, as ``module:attribute`` targets.
