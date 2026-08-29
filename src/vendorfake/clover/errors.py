@@ -7,9 +7,11 @@ table rather than error handling scattered through handlers.
 INVARIANT: **the table is exhaustive, and every row says where its status came
 from.** Exhaustiveness is checked at import (see the bottom of this module); a
 missing row would otherwise present as one error kind answering 500 while the
-other nineteen behaved. Provenance is a real field because ``/__unit/errors``
-and the ``unit_error`` sidecar publish it: a consumer can ask this fake which
-of its statuses Clover actually documents and which are this project's reading.
+other nineteen behaved. Provenance is a real field because the ``unit_error``
+sidecar publishes it (when the sidecar is on): a consumer debugging a refusal
+sees which of this unit's statuses Clover actually documents and which are
+this project's reading, and :meth:`CloverErrorShaper.describe` renders the
+whole table for anything that wants it.
 
 The envelope -- JUDGMENT
 ------------------------
@@ -43,6 +45,13 @@ with ``X-RateLimit-*`` headers and, on concurrent-limit trips, ``retry-after``
 -- but no 429 *body* is published anywhere, so the message below is JUDGMENT.
 This unit's 429s are chaos-injected only (no real rate accounting), and the
 ``retry-after`` header is switchable for the same reason Square's is.
+
+The four ``X-RateLimit-*`` headers and their numbers -- 16 req/s per token,
+50 per app, 5 concurrent per token, 10 per app -- are all documented on the
+rate-limits page. JUDGMENT on the *emission*: Clover does not say which
+headers accompany which kind of trip, and a chaos-injected 429 tripped no real
+limit, so this unit stamps all four documented limits as constants on every
+429 rather than inventing a story about which one fired.
 
 The ``unit_error`` sidecar is a deliberate, namespaced deviation from Clover's
 wire format: a consumer that reads only ``message`` never sees it, and a
@@ -242,6 +251,18 @@ provenance -- and note there is deliberately no 403 anywhere in this table."""
 #: ``retry-after: <seconds>`` implies.
 _DEFAULT_RETRY_AFTER = "1"
 
+_RATE_LIMIT_HEADERS: dict[str, str] = {
+    "x-ratelimit-tokenlimit": "16",
+    "x-ratelimit-crosstokenlimit": "50",
+    "x-ratelimit-tokenconcurrentlimit": "5",
+    "x-ratelimit-crosstokenconcurrentlimit": "10",
+}
+"""The four documented rate-limit headers with the documented limits: "50
+requests per second per app, 16 requests per second per token; concurrent
+limits of 10 per app and 5 per token"
+(https://docs.clover.com/dev/docs/api-usage-rate-limits). JUDGMENT on stamping
+all four on every 429; see the module docstring."""
+
 
 class CloverErrorShaper:
     """Turns a :class:`UnitError` into Clover's envelope. Satisfies ``ErrorShaper``.
@@ -270,15 +291,22 @@ class CloverErrorShaper:
         message = err.detail if err.detail else mapping.message
         body: dict[str, Any] = compact({"message": message, "type": mapping.type})
         if self._sidecar:
-            body["unit_error"] = {
-                "kind": err.kind.value,
-                "status_provenance": mapping.provenance,
-                **dict(err.info or {}),
-            }
+            # Reserved keys last, so an `info` document carrying a `kind` of
+            # its own cannot clobber what the sidecar exists to report.
+            body["unit_error"] = compact(
+                {
+                    **dict(err.info or {}),
+                    "kind": err.kind.value,
+                    "status_provenance": mapping.provenance,
+                    "field": err.field or None,
+                }
+            )
         headers: dict[str, str] = {}
-        if err.kind is UnitErrorKind.RATE_LIMITED and self._retry_after_header:
-            info = err.info or {}
-            headers["retry-after"] = as_str(info.get("retry_after_seconds"), _DEFAULT_RETRY_AFTER)
+        if err.kind is UnitErrorKind.RATE_LIMITED:
+            headers.update(_RATE_LIMIT_HEADERS)
+            if self._retry_after_header:
+                info = err.info or {}
+                headers["retry-after"] = as_str(info.get("retry_after_seconds"), _DEFAULT_RETRY_AFTER)
         if err.kind is UnitErrorKind.CAPABILITY_DISABLED:
             info = err.info or {}
             headers["x-unit-capability"] = as_str(info.get("capability"), "")

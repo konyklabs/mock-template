@@ -81,11 +81,49 @@ def test_the_sidecar_carries_kind_and_provenance_and_switches_off() -> None:
     assert "unit_error" not in without.body
 
 
+def test_the_sidecar_reports_the_field_the_error_names() -> None:
+    err = UnitError(UnitErrorKind.MISSING_FIELD, field="price")
+    shaped = CloverErrorShaper().shape(err, fake_ctx())
+    assert shaped.body["unit_error"]["field"] == "price"
+    # No field named -> no key, per the absence-is-absence rule.
+    bare = CloverErrorShaper().shape(UnitError(UnitErrorKind.MISSING_FIELD), fake_ctx())
+    assert "field" not in bare.body["unit_error"]
+
+
+def test_an_info_document_cannot_clobber_the_sidecars_reserved_keys() -> None:
+    """Reserved keys are merged last: an err.info carrying its own `kind` or
+    `status_provenance` must not overwrite what the sidecar exists to report."""
+    err = UnitError(
+        UnitErrorKind.CONFLICT,
+        info={"kind": "spoofed", "status_provenance": "spoofed", "extra": "kept"},
+    )
+    sidecar = CloverErrorShaper().shape(err, fake_ctx()).body["unit_error"]
+    assert sidecar["kind"] == "conflict"
+    assert sidecar["status_provenance"] == "documented"
+    assert sidecar["extra"] == "kept"
+
+
 def test_rate_limited_carries_retry_after_and_the_switch_removes_it() -> None:
     err = UnitError(UnitErrorKind.RATE_LIMITED, info={"retry_after_seconds": 7})
     assert CloverErrorShaper().shape(err, fake_ctx()).headers["retry-after"] == "7"
     assert CloverErrorShaper().shape(UnitError(UnitErrorKind.RATE_LIMITED), fake_ctx()).headers["retry-after"] == "1"
     assert "retry-after" not in CloverErrorShaper(retry_after_header=False).shape(err, fake_ctx()).headers
+
+
+def test_rate_limited_stamps_the_four_documented_rate_limit_headers() -> None:
+    """Headers and numbers documented (api-usage-rate-limits: 16/s per token,
+    50/s per app, 5 and 10 concurrent); stamping all four on a chaos-injected
+    429 is the labelled JUDGMENT. The retry-after switch does not remove them."""
+    for shaper in (CloverErrorShaper(), CloverErrorShaper(retry_after_header=False)):
+        headers = shaper.shape(UnitError(UnitErrorKind.RATE_LIMITED), fake_ctx()).headers
+        assert headers["x-ratelimit-tokenlimit"] == "16"
+        assert headers["x-ratelimit-crosstokenlimit"] == "50"
+        assert headers["x-ratelimit-tokenconcurrentlimit"] == "5"
+        assert headers["x-ratelimit-crosstokenconcurrentlimit"] == "10"
+    # And no other kind carries them.
+    assert (
+        "x-ratelimit-tokenlimit" not in CloverErrorShaper().shape(UnitError(UnitErrorKind.CONFLICT), fake_ctx()).headers
+    )
 
 
 def test_not_found_names_the_route_listing() -> None:
