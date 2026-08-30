@@ -31,6 +31,10 @@ __all__ = ["TOAST_CAPABILITIES", "TOAST_NOT_MODELED", "TOAST_NOT_SUPPORTED"]
 
 TOAST_CAPABILITIES: tuple[CapabilityDecl, ...] = (
     CapabilityDecl(
+        name="auth",
+        summary="The machine-client login: clientId/clientSecret for a Bearer JWT, no refresh.",
+    ),
+    CapabilityDecl(
         name="chaos",
         summary="Request-scope fault injection: rate limits, timeouts, server errors, token expiry.",
         kind="behavior",
