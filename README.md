@@ -18,8 +18,10 @@ the documented 401-for-everything auth behaviour), orders and line items with
 client-owned totals, the atomic order/checkout calculators with taxes,
 inventory with modifier groups, the merchant's employees/tenders/order
 types/default service charge, customers, external-tender payments that lock
-the order, print events, and a seeded scenario — see [Clover
-quickstart](#clover-quickstart). Webhooks land with the next PR.
+the order, print events, webhooks in Clover's aggregate-payload shape with
+the static `X-Clover-Auth` header and the dashboard verification handshake,
+and a seeded scenario — see [Clover quickstart](#clover-quickstart) and [the
+webhook an order fires](#the-webhook-an-order-fires).
 
 Because two vendors are installed, every command names one: `--vendor square`
 (or `--vendor clover`), or set `VENDORFAKE_VENDOR`. With no selector the

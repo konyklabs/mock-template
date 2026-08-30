@@ -356,8 +356,11 @@ class OrderWire(BaseModel):
 
     id: str
     currency: str
-    #: Client-owned on plain orders; never recomputed. Integer cents.
-    total: int
+    #: Client-owned on plain orders; never recomputed. Integer cents, and
+    #: never negative: the requests refuse one and the atomic calculators
+    #: floor at zero, so a negative stored total is a bug this projection
+    #: refuses to serialise rather than emit.
+    total: int = Field(ge=0)
     #: ``open``/``locked`` verbatim as stored, or None for a hidden order.
     state: str | None = None
     paymentState: PaymentState = PaymentState.OPEN
@@ -635,6 +638,13 @@ def line_total(line: Mapping[str, Any]) -> int:
     ``unitQty`` absent means one unit (1000). JUDGMENT on rounding: half-up
     on cents through :func:`~vendorfake.core.util.numbers.js_round`, since
     Clover documents the units and not the rounding of a fractional cent.
+
+    JUDGMENT: floored at zero. A line's own discounts cannot make the line
+    worth less than nothing -- ``DiscountRequest.amount`` is an unbounded
+    signed integer, and without the floor a ``-1000`` discount on a 450 line
+    yielded a negative subtotal, negative tax on it, and a negative persisted
+    total that any positive payment marked PAID. Clover documents no rule;
+    the floor is the same one :func:`atomic_total` applies to the order.
     """
     price = line.get("price")
     base_price = price if isinstance(price, int) and not isinstance(price, bool) else 0
@@ -643,7 +653,7 @@ def line_total(line: Mapping[str, Any]) -> int:
     per_unit = base_price + sum(_int_or_zero(m.get("amount")) for m in line.get("modifications") or [])
     base = js_round(per_unit * unit_qty / 1000)
     discounts = line.get("discounts") or []
-    return base + _discount_total(discounts, base)
+    return max(0, base + _discount_total(discounts, base))
 
 
 def _int_or_zero(value: Any) -> int:
@@ -689,6 +699,13 @@ class AtomicTotals:
     total: int
     totalTaxAmount: int
     taxSummaries: tuple[dict[str, Any], ...]
+
+    def __post_init__(self) -> None:
+        # The floors in line_total and atomic_total make every figure here
+        # non-negative; a negative one is a calculator bug, never a response.
+        for name in ("subtotal", "total", "totalTaxAmount"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"atomic {name} is negative: {getattr(self, name)}")
 
     def wire(self) -> dict[str, Any]:
         return {

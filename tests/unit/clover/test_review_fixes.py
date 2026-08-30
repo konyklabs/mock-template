@@ -15,6 +15,7 @@ from tests.unit.clover.harness import (
     CUSTOMER_ADA,
     EMPLOYEE_BARISTA,
     ITEM_BEER,
+    ITEM_CROISSANT,
     ITEM_ESPRESSO,
     MOD_OAT,
     ORDER_TYPE_DINE_IN,
@@ -346,3 +347,42 @@ def test_another_merchants_employee_is_not_a_reference(h: Harness) -> None:
     customers = h.get("/customers").json()["elements"]
     assert [c["id"] for c in customers] == [CUSTOMER_ADA]
     assert all("merchant_id" not in c for c in customers)
+
+
+# -- #25 gate: a line discount cannot drive an order negative -------------------
+
+
+def test_an_over_discounted_line_persists_a_zero_total_not_a_negative_one(h: Harness) -> None:
+    """The exact repro: a -1000 discount on the 450 croissant, taxed. Before
+    the floor, subtotal -550, tax -40 and total -40 were persisted and any
+    positive payment marked the order PAID."""
+    over = h.post(
+        "/atomic_order/orders",
+        {"orderCart": {"lineItems": [{"item": {"id": ITEM_CROISSANT}, "discounts": [{"amount": -1000}]}]}},
+    )
+    assert over.status == 200, over.text
+    body = over.json()
+    assert (body["subtotal"], body["totalTaxAmount"], body["total"]) == (0, 0, 0)
+    assert all(summary["amount"] == 0 for summary in body["taxSummaries"])
+    assert h.get(f"/orders/{body['id']}").json()["total"] == 0
+    # A line discount that exactly zeroes the line.
+    exact = h.post(
+        "/atomic_order/checkouts",
+        {"orderCart": {"lineItems": [{"item": {"id": ITEM_CROISSANT}, "discounts": [{"amount": -450}]}]}},
+    ).json()
+    assert (exact["subtotal"], exact["totalTaxAmount"], exact["total"]) == (0, 0, 0)
+    # And the other line in the cart is still taxed on its own base.
+    mixed = h.post(
+        "/atomic_order/checkouts",
+        {
+            "orderCart": {
+                "lineItems": [
+                    {"item": {"id": ITEM_CROISSANT}, "discounts": [{"amount": -1000}]},
+                    {"item": {"id": ITEM_CROISSANT}},
+                ]
+            }
+        },
+    ).json()
+    assert mixed["subtotal"] == 450
+    assert mixed["totalTaxAmount"] > 0
+    assert mixed["total"] == 450 + mixed["totalTaxAmount"]

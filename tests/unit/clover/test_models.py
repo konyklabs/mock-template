@@ -184,6 +184,26 @@ def test_the_atomic_total_arithmetic_from_the_documented_units() -> None:
     # A disabled service charge charges nothing; modifications scale with unitQty.
     assert atomic_total([{"price": 1000}], [], {"percentageDecimal": 180000, "enabled": False}) == 1000
     assert line_total({"price": 300, "unitQty": 2000, "modifications": [{"amount": 50}]}) == 700
+    # A line's own discounts floor at zero (JUDGMENT): exactly zeroed, and over-discounted.
+    assert line_total({"price": 450, "discounts": [{"amount": -450}]}) == 0
+    assert line_total({"price": 450, "discounts": [{"amount": -1000}]}) == 0
+    assert line_total({"price": 450, "discounts": [{"percentage": 100}]}) == 0
+
+
+def test_the_totals_block_never_goes_negative() -> None:
+    """The #25 gate repro: a -1000 line discount on a 450 line taxed at
+    7.25% produced subtotal -550, tax -40 and a persisted total of -40. Every
+    figure floors at zero, and the block refuses to exist otherwise."""
+    from vendorfake.clover.model.order import AtomicTotals, atomic_totals
+
+    sales = {"id": "T1", "name": "Sales", "rate": 725000}
+    over = atomic_totals([{"price": 450, "discounts": [{"amount": -1000}]}], [[sales]])
+    assert (over.subtotal, over.totalTaxAmount, over.total) == (0, 0, 0)
+    assert over.taxSummaries[0]["amount"] == 0
+    zeroed = atomic_totals([{"price": 450, "discounts": [{"amount": -450}]}], [[sales]])
+    assert (zeroed.subtotal, zeroed.totalTaxAmount, zeroed.total) == (0, 0, 0)
+    with pytest.raises(ValueError, match="atomic total is negative: -1"):
+        AtomicTotals(subtotal=0, total=-1, totalTaxAmount=0, taxSummaries=())
 
 
 def test_the_totals_block_taxes_each_line_at_its_own_rates() -> None:
