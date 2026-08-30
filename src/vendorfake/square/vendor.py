@@ -81,6 +81,7 @@ from vendorfake.square.machine import ORDER_MACHINE, ORDER_MACHINE_NAME
 from vendorfake.square.retry import square_retry_defaults
 from vendorfake.square.seed.hydrate import hydrate_square
 from vendorfake.square.signer import SquareWebhookSigner
+from vendorfake.square.surface.catalog import catalog_routes
 from vendorfake.square.surface.directory import directory_routes
 from vendorfake.square.surface.oauth import oauth_routes
 from vendorfake.square.surface.orders import order_routes
@@ -95,12 +96,13 @@ SQUARE_SCOPES: tuple[str, ...] = (
     "ORDERS_READ",
     "ORDERS_WRITE",
     "ITEMS_READ",
+    "ITEMS_WRITE",
     "PAYMENTS_WRITE",
     WEBHOOK_SUBSCRIPTIONS_SCOPE,
 )
 """The scopes this unit's routes ask for.
 
-The first five are a subset of Square's published OAuth permissions
+All but the last are a subset of Square's published OAuth permissions
 (https://developer.squareup.com/docs/oauth-api/square-permissions) -- the ones
 the modelled surface actually needs. A route names the scopes it requires and
 the kernel checks them against the token, so this tuple is the vocabulary and
@@ -220,7 +222,13 @@ class SquareVendor:
         capability index and the OpenAPI document would each see differently.
         """
         if self._routes is None:
-            self._routes = oauth_routes(self) + order_routes(self) + directory_routes() + webhook_routes(self)
+            self._routes = (
+                oauth_routes(self)
+                + order_routes(self)
+                + directory_routes()
+                + catalog_routes(self)
+                + webhook_routes(self)
+            )
         return self._routes
 
     @property

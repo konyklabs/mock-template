@@ -104,7 +104,6 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from datetime import UTC, datetime
 from typing import Any
 
 from vendorfake.core.kernel.reply import json_
@@ -145,7 +144,7 @@ from vendorfake.square.model.order import (
     supplied,
 )
 from vendorfake.square.seed.constants import SEED_LOCATION_ID
-from vendorfake.square.surface.common import SquareDeps
+from vendorfake.square.surface.common import SquareDeps, instant_ms
 
 __all__ = [
     "CAPABILITY",
@@ -200,8 +199,6 @@ _CLEARABLE_LINE_FIELDS: tuple[str, ...] = ("name", "note", "catalog_object_id", 
 _LINE_ITEM_PATH = re.compile(r"^line_items\[([^\]]+)\](?:\.(.+))?$")
 """Square's bracket notation for a line item inside ``fields_to_clear``, e.g.
 ``line_items[coffee_uid]`` or ``line_items[coffee_uid].note``."""
-
-_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 @dataclass(frozen=True, slots=True)
@@ -935,24 +932,6 @@ def _is_zero_quantity(line: Mapping[str, Any]) -> bool:
     return quantity == 0.0
 
 
-def _instant(value: str | None) -> float | None:
-    """An RFC 3339 timestamp as epoch milliseconds, or ``None``.
-
-    ``None`` for anything unparseable, which the caller reads as "no opinion" --
-    the direction ``Date.parse`` takes, where every comparison against ``NaN``
-    is false, so a malformed bound never excludes anything.
-    """
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return (parsed - _EPOCH).total_seconds() * 1000.0
-
-
 def _within(value: str | None, start_at: str | None, end_at: str | None) -> bool:
     """Square's range semantics: start inclusive, end exclusive.
 
@@ -962,11 +941,11 @@ def _within(value: str | None, start_at: str | None, end_at: str | None) -> bool
     """
     if not value:
         return False
-    at = _instant(value)
+    at = instant_ms(value)
     if at is None:
         return True
-    start = _instant(start_at)
+    start = instant_ms(start_at)
     if start is not None and at < start:
         return False
-    end = _instant(end_at)
+    end = instant_ms(end_at)
     return not (end is not None and at >= end)

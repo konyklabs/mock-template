@@ -26,7 +26,10 @@ ever asked to decide what a body is.
 :func:`is_expired` is here rather than in either caller because both the auth
 adapter and the OAuth surface answer "has this timestamp passed?", and Square's
 two answers -- an expired access token and an expired authorization code --
-must agree about what the boundary instant means.
+must agree about what the boundary instant means. :func:`instant_ms` is the
+parse underneath it, shared by every surface that compares a stored RFC 3339
+stamp against a bound a caller sent -- an order date filter, a catalog
+``begin_time`` -- so that "malformed bound excludes nothing" is one rule.
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ from vendorfake.core.time.clock import Clock
 from vendorfake.square.config import SquareConfig
 from vendorfake.square.ids import SquareIds
 
-__all__ = ["SquareDeps", "is_expired"]
+__all__ = ["SquareDeps", "instant_ms", "is_expired"]
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -78,3 +81,21 @@ def is_expired(at: str, clock: Clock) -> bool:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return (parsed - _EPOCH).total_seconds() * 1000.0 <= clock.now()
+
+
+def instant_ms(value: str | None) -> float | None:
+    """An RFC 3339 timestamp as epoch milliseconds, or ``None``.
+
+    ``None`` for anything absent or unparseable, which every caller reads as
+    "no opinion" -- the direction ``Date.parse`` takes, where every comparison
+    against ``NaN`` is false, so a malformed bound never excludes anything.
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return (parsed - _EPOCH).total_seconds() * 1000.0
