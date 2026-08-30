@@ -12,11 +12,20 @@ touching a vendor sandbox.
 Two vendors ship today. **Square (Connect v2)** is complete — OAuth2 (code +
 PKCE flows), orders with a real lifecycle, locations and catalog, and webhook
 subscriptions whose deliveries are signed the way Square signs them and
-retried on Square's documented schedule. **Clover (REST v3)** is in progress:
-at this commit the `clover` unit serves the OAuth v2 surface (authorize, token
-exchange, single-use refresh rotation, and the documented 401-for-everything
-auth behaviour) plus the control plane; orders, inventory, webhooks and the
-seed scenario are landing in follow-up PRs.
+retried on Square's documented schedule. **Clover (REST v3)** is in progress.
+At this commit the `clover` unit implements OAuth v2 (authorize, token
+exchange, single-use refresh rotation, the documented 401-for-everything auth
+behaviour), orders and line items with client-owned totals, the atomic
+order/checkout calculators with taxes, inventory with modifier groups, the
+merchant's employees/tenders/order types/default service charge, customers,
+external-tender payments that lock the order, and print events — but its
+shipped `full` profile starts with an **empty store**: no merchant, no items,
+no token. Until the seed scenario lands (the next PR), a bare `curl` against a
+served clover unit reaches only the `/__unit/*` control plane; `GET
+/oauth/v2/authorize` answers 500 naming the missing merchant, and every
+`/v3/merchants/{mId}/…` route needs a bearer nobody can mint yet. The surfaces
+are exercised end to end by the test harness, which seeds the scenario itself.
+Webhooks arrive with the seed.
 
 Because two vendors are installed, every command names one: `--vendor square`
 (or `--vendor clover`), or set `VENDORFAKE_VENDOR`. With no selector the

@@ -23,7 +23,7 @@ it needs a value.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from vendorfake.clover.entities import COL
@@ -75,7 +75,11 @@ class CloverCustomersSurface:
 
     def list_customers(self, args: HandlerArgs) -> ReplyInit:
         merchant_id = require_merchant(args)
-        predicate = _filter(args.query("filter"))
+        # TODO(konyklabs/roadmap#37): once UnitRequest exposes multi-value
+        # query access, pass every `filter=` here; the parser already ANDs a
+        # sequence, so that is the one line that changes.
+        raw = args.query("filter")
+        predicate = _filters([] if raw is None else [raw])
         limit, offset = page_window(args)
         rows = [row for row in args.ctx.store.collection(COL.customers).all() if predicate(row)]
         page = rows[offset : offset + limit]
@@ -120,17 +124,19 @@ def _project(entity: Mapping[str, Any]) -> dict[str, Any]:
     return compact({k: v for k, v in entity.items() if k not in ("version", "created_at", "updated_at")})
 
 
-def _filter(raw: str | None) -> Any:
-    """``filter=firstName=Ada``: equality on firstName, lastName or id."""
-    if raw is None:
-        return lambda row: True
-    field, separator, value = raw.partition("=")
-    field = field.strip()
-    if not separator or field not in _FILTERABLE:
-        raise UnitError(
-            UnitErrorKind.INVALID_VALUE,
-            detail=f"filter {raw!r} is not <field>=<value> on one of {', '.join(sorted(_FILTERABLE))}.",
-            field="filter",
-        )
-    wanted = value.strip()
-    return lambda row: str(row.get(field, "")) == wanted
+def _filters(raws: Sequence[str]) -> Any:
+    """``filter=firstName=Ada`` (repeatable, ANDed): equality on firstName,
+    lastName or id. Takes a sequence so the multi-value query accessor
+    (roadmap#37) plugs in without touching the parser."""
+    clauses: list[tuple[str, str]] = []
+    for raw in raws:
+        field, separator, value = raw.partition("=")
+        field = field.strip()
+        if not separator or field not in _FILTERABLE:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"filter {raw!r} is not <field>=<value> on one of {', '.join(sorted(_FILTERABLE))}.",
+                field="filter",
+            )
+        clauses.append((field, value.strip()))
+    return lambda row: all(str(row.get(field, "")) == wanted for field, wanted in clauses)

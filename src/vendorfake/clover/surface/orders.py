@@ -477,7 +477,10 @@ class CloverOrdersSurface:
     def checkout_atomic_order(self, args: HandlerArgs) -> ReplyInit:
         """The calculator: the same arithmetic, nothing stored, nothing
         journalled. The answer is order-shaped without an id, because no
-        order exists, plus the documented ``total``/``subtotal``/
+        order exists (its lines still draw ids from the unit's stream so the
+        answer is line-shaped -- deterministic, and JUDGMENT-labelled here
+        because it advances the stream without storing anything), plus the
+        documented ``total``/``subtotal``/
         ``totalTaxAmount``/``taxSummaries`` block."""
         merchant_id = require_merchant(args)
         cart = validate_body(AtomicOrderRequest, args.body()).orderCart

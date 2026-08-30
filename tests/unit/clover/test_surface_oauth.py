@@ -82,6 +82,47 @@ def test_a_matching_redirect_uri_is_accepted(h: Harness) -> None:
     assert h.authorize(redirect_uri=CONFIGURED_REDIRECT_URI).status == 302
 
 
+def test_an_explicitly_empty_query_value_is_refused_by_name(h: Harness) -> None:
+    """`?code_challenge=` used to be stored as "" and send the exchange down a
+    PKCE branch no verifier could satisfy. Present-but-empty is a 400 naming
+    the field, for every optional on authorize; absent stays absent."""
+    minted_before = len(h.unit.context.store.collection(COL.codes).all())
+    for name in ("code_challenge", "code_challenge_method", "redirect_uri"):
+        response = h.authorize(**{name: ""})
+        assert response.status == 400, name
+        assert response.json()["unit_error"]["field"] == name
+    empty_client = h.api.call(method="GET", path="/oauth/v2/authorize", query={"client_id": ""})
+    assert empty_client.status == 400
+    assert empty_client.json()["unit_error"]["field"] == "client_id"
+    # And a real challenge with an empty method is the method's failure.
+    assert h.authorize(code_challenge=CHALLENGE, code_challenge_method="").status == 400
+    assert len(h.unit.context.store.collection(COL.codes).all()) == minted_before  # nothing was minted
+
+
+def test_a_code_issued_to_another_app_cannot_be_exchanged_by_this_one(h: Harness) -> None:
+    """The mirror of the refresh binding: the stored code's client_id must
+    match the caller's; same 401 phrase, journal unchanged, code not burned."""
+    h.unit.context.store.collection(COL.codes).insert(
+        AuthorizationCodeEntity(
+            id="other-app-code-0001",
+            client_id="OTHERAPP12345",
+            merchant_id=MERCHANT_ID,
+            expires_at_ms=2**53,
+        ).to_entity(),
+        {"operation_id": "TestSeed", "seed": True},
+    )
+    before = h.journal_len()
+    response = h.token(client_secret=CLIENT_SECRET, code="other-app-code-0001")
+    assert response.status == 401
+    assert response.json()["message"] == "Failed to validate authentication code"
+    assert response.json()["unit_error"]["reason"] == "other_client"
+    assert h.journal_len() == before
+    stored = AuthorizationCodeEntity.from_entity(
+        h.unit.context.store.collection(COL.codes).require("other-app-code-0001")
+    )
+    assert stored.used_at_ms is None
+
+
 # ---------------------------------------------------------------------------
 # POST /oauth/v2/token -- high-trust
 # ---------------------------------------------------------------------------
