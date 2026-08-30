@@ -150,8 +150,14 @@ class CloverOAuthSurface:
         (https://docs.clover.com/dev/docs/high-trust-app-auth-flow).
         """
         config = self._deps.config
-        client_id = args.query("client_id")
-        if not client_id:
+        # A query key that is present but empty (`?code_challenge=`) is
+        # neither absent nor a value: every optional below is read through
+        # `_query`, which refuses the empty spelling by name, so an empty
+        # challenge cannot be stored as "" and route the exchange down a PKCE
+        # branch no verifier could ever satisfy. Same rule as the request
+        # models' absent-vs-empty invariant (model/common.py).
+        client_id = _query(args, "client_id")
+        if client_id is None:
             raise UnitError(UnitErrorKind.MISSING_FIELD, detail="client_id is required.", field="client_id")
         if client_id != config.client_id:
             raise UnitError(
@@ -160,8 +166,8 @@ class CloverOAuthSurface:
                 field="client_id",
             )
 
-        supplied_redirect = args.query("redirect_uri")
-        if supplied_redirect and supplied_redirect != config.redirect_uri:
+        supplied_redirect = _query(args, "redirect_uri")
+        if supplied_redirect is not None and supplied_redirect != config.redirect_uri:
             # The mismatch this parameter exists to catch. JUDGMENT on the
             # status -- Clover documents no error for it -- but not on the
             # refusal: redirecting a code to an unregistered URI is the attack.
@@ -172,9 +178,9 @@ class CloverOAuthSurface:
             )
         redirect_uri = supplied_redirect or config.redirect_uri
 
-        challenge = args.query("code_challenge")
-        method = args.query("code_challenge_method")
-        if challenge and method != "S256":
+        challenge = _query(args, "code_challenge")
+        method = _query(args, "code_challenge_method")
+        if challenge is not None and method != "S256":
             # JUDGMENT: an omitted method is refused, not defaulted to S256.
             # RFC 7636 s4.3 makes `plain` the default when the method is
             # absent, and this unit refuses `plain`; silently upgrading an
@@ -221,6 +227,12 @@ class CloverOAuthSurface:
         if stored is None:
             raise _failed_code("unknown")
         record = AuthorizationCodeEntity.from_entity(stored)
+        if record.client_id != request.client_id:
+            # The code was issued to another app. Unreachable while one app is
+            # configured (`_check_client` matched the request to it), but a
+            # second seeded app must not redeem the first app's code. Same
+            # 401 as any other code failure, above every write.
+            raise _failed_code("other_client")
         if record.used_at_ms is not None:
             raise _failed_code("already_used")
         if is_past_ms(record.expires_at_ms, ctx.clock):
@@ -408,6 +420,22 @@ class CloverOAuthSurface:
 def oauth_routes(deps: CloverDeps) -> tuple[Route, ...]:
     """The OAuth routes for one vendor."""
     return CloverOAuthSurface(deps).routes()
+
+
+def _query(args: HandlerArgs, name: str) -> str | None:
+    """A query parameter, with an explicitly empty value refused by name.
+
+    ``None`` when the key is absent; the value when it is non-empty; a 400
+    when it is present and empty (``?code_challenge=``). Query strings have
+    no request model to carry the absent-vs-empty invariant, so it is
+    written out here once.
+    """
+    raw = args.query(name)
+    if raw is None:
+        return None
+    if raw.strip() == "":
+        raise UnitError(UnitErrorKind.INVALID_VALUE, detail=f"{name} must not be empty.", field=name)
+    return raw
 
 
 def _failed_code(reason: str) -> UnitError:

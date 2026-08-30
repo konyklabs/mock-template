@@ -39,11 +39,26 @@ CLOVER_CAPABILITIES: tuple[CapabilityDecl, ...] = (
         name="oauth",
         summary="OAuth v2 authorization-code flow with expiring access tokens and single-use refresh rotation.",
     ),
-    # `orders` and `inventory` are declared in PR C, together with their
-    # routes. A `surface` capability that owns no route is refused by the
-    # conformance suite (C02: "declared kind='surface' and owns no route"),
-    # and neither is core-gated, so they cannot be excused in
-    # CLOVER_NOT_SUPPORTED either -- they are simply not declared yet.
+    CapabilityDecl(
+        name="orders",
+        summary="Orders, line items, print events and the atomic order/checkout calculators, with client-owned totals.",
+    ),
+    CapabilityDecl(
+        name="inventory",
+        summary="Inventory items (with tax rates and modifier groups) and modifiers -- what a line item points at.",
+    ),
+    CapabilityDecl(
+        name="merchant",
+        summary="The merchant record and its configuration: employees, tenders, order types, default service charge.",
+    ),
+    CapabilityDecl(
+        name="customers",
+        summary="Customer records: list, filter and create.",
+    ),
+    CapabilityDecl(
+        name="payments",
+        summary="External-tender payment records on an order; paying locks the order.",
+    ),
     CapabilityDecl(
         name="webhooks",
         summary=(
@@ -74,17 +89,23 @@ this fake omits outright are a different kind of fact and are recorded in
 """
 
 CLOVER_NOT_MODELED: Mapping[str, str] = {
-    "payments": (
-        "No payments surface. Orders carry paymentState as a plain field; nothing moves it. "
-        "Modelling Clover's payment/tender flows is out of scope for this build."
+    "card-payments": (
+        "Only external-tender payment records (POST .../orders/{orderId}/payments) are modelled -- "
+        "'This endpoint references external tenders and logs them for bookkeeping purposes. This is not "
+        "for Clover credits/debit tenders.' Card processing, refunds, voids and the Ecommerce API are not."
     ),
-    "customers": "The customers API is not modelled; orders here never reference a customer.",
-    "employees": "The employees API is not modelled; orders here never reference an employee.",
-    "tax-rates": (
-        "Tax rates are not modelled. Items keep their documented defaultTaxRates flag, but no tax "
-        "is ever computed -- atomic-order totals cover line items, discounts and service charge only."
+    "customer-contact-details": (
+        "Customers carry firstName, lastName and addresses. Email addresses, phone numbers and cards are not modelled."
     ),
-    "modifier-groups": "Modifier groups and line-item modifiers are not modelled.",
+    "employee-management": "Employees, tenders and order types are read-only reference data from the seed.",
+    "tax-exemption-rules": (
+        "Tax rates are applied per item (explicit associations or the merchant's defaults) by the atomic "
+        "calculator only. Tax exemption rules, VAT-inclusive pricing and flat taxAmount rates are not modelled."
+    ),
+    "modifier-management": (
+        "Modifier groups and modifiers are read-only reference data from the seed; line-item "
+        "modifications are priced but groups cannot be created or edited."
+    ),
     "token-migration": (
         "POST /oauth/token/migrate_v2 and the legacy v1 (non-expiring token) flow are not modelled; "
         "this unit speaks only the v2 expiring-token flow."

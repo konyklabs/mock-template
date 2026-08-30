@@ -59,6 +59,10 @@ DEFAULT_PERMISSIONS: tuple[str, ...] = (
     "INVENTORY_R",
     "INVENTORY_W",
     "MERCHANT_R",
+    "EMPLOYEES_R",
+    "CUSTOMERS_R",
+    "CUSTOMERS_W",
+    "PAYMENTS_W",
 )
 """The permission set the modelled surface needs.
 
@@ -85,6 +89,16 @@ class CloverConfig(BaseModel):
     #: consumer who leaks one into a log can see at a glance it is not real.
     client_secret: str = "unit-clover-app-secret"
     redirect_uri: str = "https://example.test/oauth/callback"
+
+    #: The origin every list element's ``href`` self-URL is built on. Clover's
+    #: documented sandbox API host
+    #: (https://docs.clover.com/dev/docs/oauth-flows-in-clover names
+    #: ``apisandbox.dev.clover.com``), so an href from this unit is shaped
+    #: like one from the real sandbox. JUDGMENT on emitting it at all: the
+    #: docs show absolute hrefs and this fake cannot know where it is being
+    #: served from, so a consumer following one must rewrite the origin --
+    #: or set this to their own base in the profile's ``vendor`` block.
+    base_url: str = "https://apisandbox.dev.clover.com"
 
     #: The permission set the app was "installed" with; every minted token
     #: inherits it. See the module docstring for why this is a fixed set

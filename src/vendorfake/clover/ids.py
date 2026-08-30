@@ -99,6 +99,16 @@ class CloverIds:
     def order_type(self) -> str:
         return self._entity()
 
+    def customer(self) -> str:
+        return self._entity()
+
+    def payment(self) -> str:
+        return self._entity()
+
+    def print_event(self) -> str:
+        """``P5WWTQ44VRY74`` in https://docs.clover.com/dev/docs/printing-orders-rest-api."""
+        return self._entity()
+
     # -- tokens and codes: UUID-format (JUDGMENT) ---------------------------
 
     def access_token(self) -> str:

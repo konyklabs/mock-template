@@ -34,16 +34,15 @@ def test_the_webhook_gates_are_declared_together_with_their_seams() -> None:
     assert set(chaos.requires) == {"webhooks", "chaos"}
 
 
-def test_only_surfaces_that_own_routes_are_declared() -> None:
-    """Conformance C02 refuses a `surface` capability that owns no route, so
-    `orders` and `inventory` are declared in PR C with their routes, not
-    before. Every declared surface capability owns at least one route now."""
+def test_every_declared_surface_owns_routes_and_every_route_is_owned() -> None:
+    """Conformance C02 refuses a `surface` capability that owns no route and
+    a route whose capability is undeclared; both directions pinned here."""
     from vendorfake.clover.vendor import create_clover_vendor
 
     surface = {decl.name for decl in CLOVER_CAPABILITIES if decl.kind == "surface"}
-    assert surface == {"oauth", "webhooks"}
+    assert surface == {"oauth", "orders", "payments", "inventory", "merchant", "customers", "webhooks"}
     owned = {route.capability for route in create_clover_vendor().routes}
-    assert surface <= owned, (surface, owned)
+    assert surface == owned, (surface, owned)
 
 
 def test_a_disabled_capability_answers_explicitly_and_never_with_a_404() -> None:
@@ -84,11 +83,11 @@ def test_the_not_modelled_record_covers_the_briefed_omissions_with_reasons() -> 
     """Informational, never handed to the core -- the core would refuse names
     it does not gate on. Every entry carries prose a consumer can read."""
     assert set(CLOVER_NOT_MODELED) == {
-        "payments",
-        "customers",
-        "employees",
-        "tax-rates",
-        "modifier-groups",
+        "card-payments",
+        "customer-contact-details",
+        "employee-management",
+        "tax-exemption-rules",
+        "modifier-management",
         "token-migration",
         "rate-limit-accounting",
         "90-day-filter-restriction",

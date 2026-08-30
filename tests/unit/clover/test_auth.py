@@ -53,7 +53,10 @@ def test_a_minted_token_resolves_with_its_app_inherited_permissions(h: Harness) 
     result = auth.resolve(_args_with(h, f"Bearer {body['access_token']}"), "bearer")
     assert result.principal_id == "HRVSTRYE12345"
     # The app's fixed set, inherited at mint -- Clover has no per-token scopes.
-    assert set(result.scopes) == {"ORDERS_R", "ORDERS_W", "INVENTORY_R", "INVENTORY_W", "MERCHANT_R"}
+    from vendorfake.clover.config import DEFAULT_PERMISSIONS
+
+    assert set(result.scopes) == set(DEFAULT_PERMISSIONS)
+    assert {"ORDERS_R", "ORDERS_W", "INVENTORY_R", "INVENTORY_W", "MERCHANT_R", "PAYMENTS_W"} <= set(result.scopes)
     assert result.token_id is not None
 
 
@@ -91,7 +94,6 @@ def _protected_unit(*, sidecar: bool) -> Harness:
     from tests.conformance.mutants.seams import VendorOverlay
     from tests.unit.clover.harness import MERCHANT_ID, Silent
     from vendorfake import create_unit
-    from vendorfake.clover.entities import MerchantEntity
     from vendorfake.clover.vendor import create_clover_vendor
     from vendorfake.core.kernel.reply import json_
     from vendorfake.core.kernel.types import Route
@@ -99,22 +101,19 @@ def _protected_unit(*, sidecar: bool) -> Harness:
 
     guarded = Route(
         method="GET",
-        path="/v3/merchants/{mId}/payments",
+        path="/v3/merchants/{mId}/refunds",
         capability="oauth",
         handler=lambda args: json_({"ok": True}),
         auth="bearer",
-        scopes=("PAYMENTS_W",),
+        scopes=("REFUNDS_W",),
         operation_id="TestGuarded",
-        summary="Test-only: needs a permission the app's set does not grant.",
+        summary="Test-only: needs REFUNDS_W, a permission the app's set never grants.",
     )
     inner = create_clover_vendor(vendor_config={"error_sidecar": sidecar})
     overlay = VendorOverlay(inner, routes=lambda routes: (*routes, guarded))
-    unit = create_unit(vendor=overlay, profile="full", logger=Silent())
-    unit.context.store.collection(COL.merchants).insert(
-        MerchantEntity(id=MERCHANT_ID, name="Harvest & Rye").to_entity(),
-        {"operation_id": "TestSeed", "seed": True},
-    )
-    return Harness(unit=unit, api=in_process(unit))
+    unit = create_unit(vendor=overlay, profile="full", logger=Silent())  # the shipped seed supplies the merchant
+    assert unit.context.store.collection(COL.merchants).get(MERCHANT_ID) is not None
+    return Harness(unit=unit, api=in_process(unit), auth={})
 
 
 def _three_failures(p: Harness) -> list:  # type: ignore[type-arg]
@@ -122,7 +121,7 @@ def _three_failures(p: Harness) -> list:  # type: ignore[type-arg]
     kernel's real permission check, not a hand-built error."""
     live = p.exchange()
     expired = _insert_token(p, access_expiry_ms=1)
-    path = "/v3/merchants/HRVSTRYE12345/payments"
+    path = "/v3/merchants/HRVSTRYE12345/refunds"
     return [
         p.api.get(path, headers={"authorization": "Bearer never-minted"}),
         p.api.get(path, headers={"authorization": f"Bearer {expired.access_token}"}),
@@ -142,7 +141,7 @@ def test_the_conflation_makes_every_auth_failure_byte_identical_with_the_sidecar
         assert [r.headers["x-unit-error"] for r in responses] == ["unauthorized", "token_expired", "forbidden_scope"]
         bodies = {r.body for r in responses}
         assert bodies == {b'{"message":"401 Unauthorized"}'}, bodies
-        assert b"PAYMENTS_W" not in responses[2].body
+        assert b"REFUNDS_W" not in responses[2].body
     finally:
         p.unit.stop()
 
@@ -156,10 +155,38 @@ def test_the_conflation_is_still_debuggable_with_the_sidecar_on() -> None:
         assert {r.json()["message"] for r in responses} == {"401 Unauthorized"}
         kinds = [r.json()["unit_error"]["kind"] for r in responses]
         assert kinds == ["unauthorized", "token_expired", "forbidden_scope"]
-        assert "PAYMENTS_W" in responses[2].json()["unit_error"]["detail"]
+        assert "REFUNDS_W" in responses[2].json()["unit_error"]["detail"]
         assert {r.status for r in responses} == {401}
     finally:
         p.unit.stop()
+
+
+def test_a_token_without_orders_w_gets_the_byte_identical_401_on_a_real_write_route() -> None:
+    """The kernel's permission check on a shipped route, not a test-only one:
+    ORDERS_R alone cannot POST /orders, and with the sidecar off the body is
+    the same bytes a bad token gets. Nothing is journalled."""
+    from tests.unit.clover.harness import Silent, seed
+    from vendorfake import create_unit
+    from vendorfake.clover.vendor import create_clover_vendor
+    from vendorfake.core.transport.inprocess import in_process
+
+    vendor = create_clover_vendor(vendor_config={"error_sidecar": False})
+    unit = create_unit(vendor=vendor, profile="full", logger=Silent())
+    try:
+        seed(unit)
+        p = Harness(unit=unit, api=in_process(unit), auth={})
+        reader = p.restricted_token("ORDERS_R")
+        before = p.journal_len()
+        denied = p.api.post(p.path("/orders"), {"total": 1}, headers=reader)
+        bad = p.api.post(p.path("/orders"), {"total": 1}, headers={"authorization": "Bearer never-minted"})
+        assert denied.status == bad.status == 401
+        assert denied.body == bad.body == b'{"message":"401 Unauthorized"}'
+        assert denied.headers["x-unit-error"] == "forbidden_scope"
+        assert p.journal_len() == before
+        # And the same token reads fine: the permission set is real, not a switch.
+        assert p.api.get(p.path("/orders"), headers=reader).status == 200
+    finally:
+        unit.stop()
 
 
 def test_a_rotated_refresh_does_not_end_the_access_token_here_either(h: Harness) -> None:

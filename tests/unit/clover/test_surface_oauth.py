@@ -82,6 +82,47 @@ def test_a_matching_redirect_uri_is_accepted(h: Harness) -> None:
     assert h.authorize(redirect_uri=CONFIGURED_REDIRECT_URI).status == 302
 
 
+def test_an_explicitly_empty_query_value_is_refused_by_name(h: Harness) -> None:
+    """`?code_challenge=` used to be stored as "" and send the exchange down a
+    PKCE branch no verifier could satisfy. Present-but-empty is a 400 naming
+    the field, for every optional on authorize; absent stays absent."""
+    minted_before = len(h.unit.context.store.collection(COL.codes).all())
+    for name in ("code_challenge", "code_challenge_method", "redirect_uri"):
+        response = h.authorize(**{name: ""})
+        assert response.status == 400, name
+        assert response.json()["unit_error"]["field"] == name
+    empty_client = h.api.call(method="GET", path="/oauth/v2/authorize", query={"client_id": ""})
+    assert empty_client.status == 400
+    assert empty_client.json()["unit_error"]["field"] == "client_id"
+    # And a real challenge with an empty method is the method's failure.
+    assert h.authorize(code_challenge=CHALLENGE, code_challenge_method="").status == 400
+    assert len(h.unit.context.store.collection(COL.codes).all()) == minted_before  # nothing was minted
+
+
+def test_a_code_issued_to_another_app_cannot_be_exchanged_by_this_one(h: Harness) -> None:
+    """The mirror of the refresh binding: the stored code's client_id must
+    match the caller's; same 401 phrase, journal unchanged, code not burned."""
+    h.unit.context.store.collection(COL.codes).insert(
+        AuthorizationCodeEntity(
+            id="other-app-code-0001",
+            client_id="OTHERAPP12345",
+            merchant_id=MERCHANT_ID,
+            expires_at_ms=2**53,
+        ).to_entity(),
+        {"operation_id": "TestSeed", "seed": True},
+    )
+    before = h.journal_len()
+    response = h.token(client_secret=CLIENT_SECRET, code="other-app-code-0001")
+    assert response.status == 401
+    assert response.json()["message"] == "Failed to validate authentication code"
+    assert response.json()["unit_error"]["reason"] == "other_client"
+    assert h.journal_len() == before
+    stored = AuthorizationCodeEntity.from_entity(
+        h.unit.context.store.collection(COL.codes).require("other-app-code-0001")
+    )
+    assert stored.used_at_ms is None
+
+
 # ---------------------------------------------------------------------------
 # POST /oauth/v2/token -- high-trust
 # ---------------------------------------------------------------------------
@@ -341,15 +382,39 @@ def test_an_expired_refresh_token_is_refused(h: Harness) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_without_a_merchant_the_error_says_the_seed_is_coming() -> None:
-    """A unit nobody seeded cannot mint a code against anybody; the 500 names
-    the gap instead of guessing."""
+def test_the_shipped_seed_makes_the_oauth_dance_work_out_of_the_box() -> None:
+    """`vendorfake serve --vendor clover` with no test harness: the full
+    profile's seed hydrates one merchant, so authorize -> token -> refresh
+    complete against a unit nobody else touched."""
     from tests.unit.clover.harness import Silent
     from vendorfake import create_unit
     from vendorfake.core.transport.inprocess import in_process
 
     unit = create_unit(vendor="clover", profile="full", logger=Silent())
     try:
+        api = in_process(unit)
+        redirect = api.call(method="GET", path="/oauth/v2/authorize", query={"client_id": CLIENT_ID})
+        assert redirect.status == 302
+        code = parse_qs(urlsplit(redirect.headers["location"]).query)["code"][0]
+        token = api.post("/oauth/v2/token", {"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "code": code})
+        assert token.status == 200
+        bearer = {"authorization": f"Bearer {token.json()['access_token']}"}
+        assert api.get(f"/v3/merchants/{MERCHANT_ID}", headers=bearer).json()["name"] == "Harvest & Rye"
+        assert api.get(f"/v3/merchants/{MERCHANT_ID}/items", headers=bearer).json() == {"elements": []}
+    finally:
+        unit.stop()
+
+
+def test_without_a_merchant_the_error_names_the_gap() -> None:
+    """A unit whose merchant is gone cannot mint a code against anybody; the
+    500 names the gap instead of guessing."""
+    from tests.unit.clover.harness import Silent
+    from vendorfake import create_unit
+    from vendorfake.core.transport.inprocess import in_process
+
+    unit = create_unit(vendor="clover", profile="full", logger=Silent())
+    try:
+        unit.context.store.collection(COL.merchants).delete(MERCHANT_ID)
         response = in_process(unit).call(method="GET", path="/oauth/v2/authorize", query={"client_id": CLIENT_ID})
         assert response.status == 500
         assert "merchant" in response.json()["message"]
