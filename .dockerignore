@@ -1,0 +1,12 @@
+# The build context is the wheel's inputs and nothing else. Everything the
+# Dockerfile COPYs is listed there explicitly; this keeps the rest -- the
+# checkout's own environment, tests, examples, caches -- from being sent to
+# the daemon and from invalidating the build cache when it changes.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!src/
+src/**/__pycache__/
+src/**/*.py[cod]

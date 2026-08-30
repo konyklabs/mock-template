@@ -1,0 +1,44 @@
+# NOT YET ENABLED. Publishing to ghcr.io/konyklabs/vendorfake is a Red action
+# under the workspace authority model (.claude/rules/agentic-sdlc.md): it goes
+# outward, so Oleg approves it separately. This workflow therefore has no
+# automatic trigger -- no push, no release, no schedule -- and can only be run
+# by a human pressing "Run workflow" and typing the confirmation. Until that
+# approval is recorded, treat this file as the *shape* of the publish step,
+# verified only as far as `docker build` (tools/verify_image_build.sh).
+name: publish-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish (a release tag such as v0.1.0)"
+        required: true
+      confirm:
+        description: 'Type "publish" to confirm. Publishing is approved by Oleg, not by CI.'
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    if: ${{ inputs.confirm == 'publish' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Verify the image before it leaves
+        run: bash tools/verify_image_build.sh ghcr.io/${{ github.repository }}:${{ inputs.tag }}
+
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push
+        run: |
+          docker tag ghcr.io/${{ github.repository }}:${{ inputs.tag }} ghcr.io/${{ github.repository }}:latest
+          docker push ghcr.io/${{ github.repository }}:${{ inputs.tag }}
+          docker push ghcr.io/${{ github.repository }}:latest
