@@ -57,6 +57,8 @@ from vendorfake.core.logging import JsonLogger
 from vendorfake.core.transport.inprocess import in_process
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.registry import create_unit
+from vendorfake.testing.conformance import CLOVER_EXPECTED_SKIPS as _CLOVER_EXPECTED_SKIPS
+from vendorfake.testing.conformance import CLOVER_INAPPLICABLE as _CLOVER_INAPPLICABLE
 
 VENDOR = "square"
 
@@ -298,25 +300,10 @@ CLOVER_PROFILES: tuple[str, ...] = PROFILES
 vendors and ``--strict`` is satisfiable on either."""
 
 
-CLOVER_EXPECTED_SKIPS: dict[str, tuple[str, ...]] = {
-    # The same shape as the manifest's Square matrix: a profile that lacks
-    # the capability a contract needs.
-    "C07": ("oauth-only",),
-    "C08": ("no-faults",),
-    "C09": ("oauth-only", "orders-only"),
-    "C12": ("no-faults",),
-    "C16": ("oauth-only", "orders-only"),
-    "C17": ("oauth-only",),
-    "C18": ("oauth-only", "orders-only"),
-    "C21": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
-}
-
-CLOVER_INAPPLICABLE: dict[str, str] = {
-    "C19": (
-        "Clover's REST API documents no idempotency key on any endpoint, so no clover route carries an "
-        "IdempotencySpec and the replay contract can never be asked of this vendor."
-    ),
-}
+CLOVER_EXPECTED_SKIPS = _CLOVER_EXPECTED_SKIPS
+CLOVER_INAPPLICABLE = _CLOVER_INAPPLICABLE
+"""Clover's skip matrix, owned by the wheel's own target so that the target a
+consumer runs and the one CI runs cannot disagree about what a skip means."""
 
 
 def clover_target(

@@ -1,0 +1,214 @@
+"""``vendorfake.testing``: the consumer's fixtures, driven the way a consumer would.
+
+Each test here is the smallest thing a consumer's own suite would do first --
+hold a unit, make a seeded call, subscribe a receiver, arm a fault -- because
+the module's whole job is that those things work on the first try.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+
+import pytest
+
+from vendorfake.conformance.runner import resolve_target, run_check, select_checks
+from vendorfake.conformance.types import Outcome
+from vendorfake.core.webhooks.sink import MemorySink
+from vendorfake.square.signer import verify_square_signature
+from vendorfake.testing import (
+    CloverSeed,
+    Driver,
+    ServedUnit,
+    SquareSeed,
+    StartedUnit,
+    serve_in_thread,
+    served,
+    unit,
+    webhook_receiver,
+)
+
+# ---------------------------------------------------------------------------
+# In process.
+# ---------------------------------------------------------------------------
+
+
+def test_a_square_unit_answers_a_seeded_call_through_httpx() -> None:
+    with unit("square") as square:
+        assert isinstance(square, StartedUnit)
+        assert isinstance(square.seed, SquareSeed)
+        assert square.vendor == "square"
+        assert square.profile == "full"
+        locations = square.client.get("/v2/locations", headers=square.seed.auth)
+        assert locations.status_code == 200
+        assert square.seed.location_id in [row["id"] for row in locations.json()["locations"]]
+        assert square.health()["status"] == "ok"
+
+
+def test_a_clover_unit_answers_a_seeded_call_under_its_merchant() -> None:
+    with unit("clover") as clover:
+        assert isinstance(clover.seed, CloverSeed)
+        items = clover.client.get(clover.seed.path("/items"), headers=clover.seed.auth)
+        assert items.status_code == 200
+        assert clover.seed.item_beer_id in [row["id"] for row in items.json()["elements"]]
+
+
+def test_the_transport_carries_query_strings_and_repeated_keys() -> None:
+    with unit("clover") as clover:
+        # `expand` is a query parameter Clover reads; a transport that dropped
+        # the query string would return the bare item.
+        item = clover.client.get(
+            clover.seed.path(f"/items/{clover.seed.item_espresso_id}"),
+            params={"expand": "modifierGroups"},
+            headers=clover.seed.auth,
+        ).json()
+        assert "modifierGroups" in item
+    with unit("square") as square:
+        # `types` repeated: the last value wins in the scalar view, and both
+        # reach the unit through query_all.
+        catalog = square.client.get(
+            "/v2/catalog/list",
+            params=[("types", "ITEM"), ("types", "ITEM_VARIATION")],
+            headers=square.seed.auth,
+        )
+        assert catalog.status_code == 200, catalog.text
+
+
+def test_a_vendor_error_comes_back_as_the_vendor_shapes_it() -> None:
+    with unit("square") as square:
+        refused = square.client.get("/v2/locations")
+        assert refused.status_code == 401
+        assert refused.json()["errors"][0]["category"] == "AUTHENTICATION_ERROR"
+        assert refused.headers["x-unit-error"]
+
+
+def test_the_profile_is_the_one_asked_for_and_the_environment_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VENDORFAKE_PROFILE", "oauth-only")
+    with unit("square") as square:
+        assert square.profile == "full"
+    with unit("square", "oauth-only") as square:
+        assert square.profile == "oauth-only"
+        assert square.client.get("/v2/locations", headers=square.seed.auth).status_code == 501
+    assert os.environ["VENDORFAKE_PROFILE"] == "oauth-only"
+
+
+def test_a_memory_sink_captures_instead_of_delivering() -> None:
+    sink = MemorySink()
+    with unit("square", sink=sink) as square:
+        square.subscribe("http://127.0.0.1:1/never", ["order.created"], "k")
+        _create_square_order(square)
+        square.drain()
+        assert len(sink.received) == 1
+        assert sink.received[0].url == "http://127.0.0.1:1/never"
+
+
+def test_a_receiver_on_loopback_gets_a_signed_delivery_and_a_retry() -> None:
+    with unit("square") as square, webhook_receiver() as receiver:
+        receiver.respond_with = lambda index: 500 if index == 0 else 200
+        square.subscribe(receiver.url, ["order.created"], "receiver-key")
+        _create_square_order(square)
+        square.drain()
+
+        first, retry = receiver.received
+        for delivery in (first, retry):
+            assert verify_square_signature(
+                "receiver-key", receiver.url, delivery.body, delivery.header("x-square-hmacsha256-signature") or ""
+            )
+        assert json.loads(first.body)["event_id"] == json.loads(retry.body)["event_id"]
+        assert retry.header("square-retry-number") == "1"
+        assert [row["status"] for row in square.deliveries()] == ["failed", "delivered"]
+
+
+def test_a_chaos_rule_and_a_reset_through_the_driver() -> None:
+    with unit("square") as square:
+        square.add_chaos_rule(
+            {
+                "id": "t-429",
+                "scope": "request",
+                "fault": "rate_limit",
+                "match": {"route": "GET /v2/locations"},
+                "when": {"nth": [1]},
+            }
+        )
+        auth = square.seed.auth
+        assert square.client.get("/v2/locations", headers=auth).status_code == 429
+        assert square.client.get("/v2/locations", headers=auth).status_code == 200
+        square.reset_chaos()
+        assert square.client.get("/v2/locations", headers=auth).status_code == 200
+
+        _create_square_order(square)
+        assert square.reset()["entities"]["orders"] == 2
+
+
+def test_a_driver_refuses_loudly_when_the_control_plane_does() -> None:
+    with unit("square") as square, pytest.raises(RuntimeError, match="answered 400"):
+        square.advance_clock(1000)  # a real clock cannot be advanced
+
+
+# ---------------------------------------------------------------------------
+# A URL: in a thread, and in a child process.
+# ---------------------------------------------------------------------------
+
+
+def test_serve_in_thread_shares_state_with_the_in_process_client() -> None:
+    with unit("square") as square, serve_in_thread(square) as over_http:
+        assert isinstance(over_http, Driver)
+        assert over_http.base_url.startswith("http://127.0.0.1:")
+        order = _create_square_order(square)
+        fetched = over_http.client.get(f"/v2/orders/{order['id']}", headers=square.seed.auth)
+        assert fetched.status_code == 200
+        assert fetched.json()["order"]["id"] == order["id"]
+        assert over_http.health()["framework_answered"] == 0
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("vendor", ["square", "clover"])
+def test_served_runs_the_shipped_command_in_a_child(vendor: str) -> None:
+    with served(vendor, "no-faults") as child:
+        assert isinstance(child, ServedUnit)
+        assert child.pid != os.getpid()
+        assert child.vendor == vendor
+        assert child.profile == "no-faults"
+        assert child.seed is not None
+        assert child.health()["vendor"] == vendor
+        chaos = next(row for row in child.info()["capabilities"] if row["name"] == "chaos")
+        assert chaos["enabled"] is False
+    assert child.process.poll() is not None
+
+
+# ---------------------------------------------------------------------------
+# The shipped conformance targets.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "spec", ["vendorfake.testing.conformance:square_target", "vendorfake.testing.conformance:clover_target"]
+)
+def test_the_shipped_targets_resolve_and_pass_a_contract_on_both_bindings(spec: str) -> None:
+    target = resolve_target(spec)
+    first = select_checks(["C01"])[0]
+    for transport in ("inprocess", "http"):
+        result = run_check(first, target, "full", transport)
+        assert result.outcome is Outcome.PASS, result.detail
+
+
+# ---------------------------------------------------------------------------
+
+
+def _create_square_order(square: Driver) -> dict[str, object]:
+    seed = square.seed
+    assert isinstance(seed, SquareSeed)
+    created = square.client.post(
+        "/v2/orders",
+        headers=seed.auth,
+        json={
+            "idempotency_key": f"t-{id(square)}-{len(square.deliveries())}",
+            "order": {
+                "location_id": seed.location_id,
+                "line_items": [{"catalog_object_id": seed.tea_mug_variation_id, "quantity": "1"}],
+            },
+        },
+    )
+    assert created.status_code == 200, created.text
+    order: dict[str, object] = created.json()["order"]
+    return order
