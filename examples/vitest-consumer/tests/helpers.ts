@@ -53,7 +53,14 @@ export interface Delivery {
   body: Buffer;
 }
 
-/** Everything the receiver has been sent so far, oldest first. */
+/**
+ * Everything the receiver has been sent so far, oldest first.
+ *
+ * The receiver appends whole lines, but a read can still land mid-write on
+ * the last one; a line that does not parse is treated as not yet there, the
+ * same way a missing file is. Complete records are never affected because
+ * every earlier line ends with a newline the writer already flushed.
+ */
 export function deliveries(log: string): Delivery[] {
   let text: string;
   try {
@@ -61,13 +68,18 @@ export function deliveries(log: string): Delivery[] {
   } catch {
     return [];
   }
-  return text
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .map((line) => {
-      const record = JSON.parse(line) as { path: string; headers: Delivery["headers"]; bodyBase64: string };
-      return { path: record.path, headers: record.headers, body: Buffer.from(record.bodyBase64, "base64") };
-    });
+  const records: Delivery[] = [];
+  for (const line of text.split("\n")) {
+    if (line.length === 0) continue;
+    let record: { path: string; headers: Delivery["headers"]; bodyBase64: string };
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue; // torn line: the writer has not finished it yet
+    }
+    records.push({ path: record.path, headers: record.headers, body: Buffer.from(record.bodyBase64, "base64") });
+  }
+  return records;
 }
 
 export function header(delivery: Delivery, name: string): string | undefined {

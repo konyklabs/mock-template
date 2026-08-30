@@ -44,7 +44,10 @@ export default async function setup(project: TestProject): Promise<() => Promise
   const image = process.env.VENDORFAKE_IMAGE;
   const mode = image ? "container" : "subprocess";
   const log = join(mkdtempSync(join(tmpdir(), "vendorfake-receiver-")), "deliveries.jsonl");
-  const receiver = await startReceiver(log);
+  // Loopback unless a container has to reach it: a receiver that records
+  // whatever is posted to it should not be listening on every interface
+  // when nothing but this machine needs it.
+  const receiver = await startReceiver(log, mode === "container" ? "0.0.0.0" : "127.0.0.1");
   const stops: Array<() => Promise<void>> = [async () => new Promise((done) => receiver.server.close(() => done()))];
   const urls = {} as Record<Vendor, string>;
 
@@ -130,7 +133,7 @@ async function startSubprocess(vendor: Vendor): Promise<Started> {
   };
 }
 
-async function startReceiver(log: string): Promise<{ server: Server; port: number }> {
+async function startReceiver(log: string, host: string): Promise<{ server: Server; port: number }> {
   const server = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -144,7 +147,7 @@ async function startReceiver(log: string): Promise<{ server: Server; port: numbe
       response.writeHead(200, { "content-length": "0" }).end();
     });
   });
-  await new Promise<void>((done) => server.listen(0, "0.0.0.0", done));
+  await new Promise<void>((done) => server.listen(0, host, done));
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("receiver did not bind a port");
   return { server, port: address.port };
