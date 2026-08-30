@@ -21,7 +21,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from vendorfake import create_unit
-from vendorfake.clover.entities import COL, ItemEntity, MerchantEntity, TokenEntity
+from vendorfake.clover.entities import COL, ItemEntity, TokenEntity
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.transport.inprocess import InProcessClient, InProcessResponse, in_process
 
@@ -147,18 +147,11 @@ class Harness:
 
 
 def seed(unit: Unit) -> None:
-    """The scenario the surfaces need, until PR E ships the real one."""
+    """The scenario the surfaces need beyond the shipped seed's one merchant
+    (HRVSTRYE12345, which ``profiles/full.json`` already hydrates), until PR E
+    ships the real one."""
     store = unit.context.store
-    store.collection(COL.merchants).insert(
-        MerchantEntity(
-            id=MERCHANT_ID,
-            name="Harvest & Rye",
-            currency="USD",
-            owner={"id": "OWNERHRVST001", "name": "R. Harvest"},
-            address={"address1": "1 Main St", "city": "Springfield", "state": "IL", "zip": "62701", "country": "US"},
-        ).to_entity(),
-        SEED_META,
-    )
+    assert store.collection(COL.merchants).get(MERCHANT_ID) is not None
     # Tax rates: the merchant default (isDefault) and a beverage rate an item
     # opts into explicitly with defaultTaxRates=false.
     store.collection(COL.tax_rates).insert(

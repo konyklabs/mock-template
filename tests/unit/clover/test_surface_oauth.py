@@ -382,15 +382,39 @@ def test_an_expired_refresh_token_is_refused(h: Harness) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_without_a_merchant_the_error_says_the_seed_is_coming() -> None:
-    """A unit nobody seeded cannot mint a code against anybody; the 500 names
-    the gap instead of guessing."""
+def test_the_shipped_seed_makes_the_oauth_dance_work_out_of_the_box() -> None:
+    """`vendorfake serve --vendor clover` with no test harness: the full
+    profile's seed hydrates one merchant, so authorize -> token -> refresh
+    complete against a unit nobody else touched."""
     from tests.unit.clover.harness import Silent
     from vendorfake import create_unit
     from vendorfake.core.transport.inprocess import in_process
 
     unit = create_unit(vendor="clover", profile="full", logger=Silent())
     try:
+        api = in_process(unit)
+        redirect = api.call(method="GET", path="/oauth/v2/authorize", query={"client_id": CLIENT_ID})
+        assert redirect.status == 302
+        code = parse_qs(urlsplit(redirect.headers["location"]).query)["code"][0]
+        token = api.post("/oauth/v2/token", {"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "code": code})
+        assert token.status == 200
+        bearer = {"authorization": f"Bearer {token.json()['access_token']}"}
+        assert api.get(f"/v3/merchants/{MERCHANT_ID}", headers=bearer).json()["name"] == "Harvest & Rye"
+        assert api.get(f"/v3/merchants/{MERCHANT_ID}/items", headers=bearer).json() == {"elements": []}
+    finally:
+        unit.stop()
+
+
+def test_without_a_merchant_the_error_names_the_gap() -> None:
+    """A unit whose merchant is gone cannot mint a code against anybody; the
+    500 names the gap instead of guessing."""
+    from tests.unit.clover.harness import Silent
+    from vendorfake import create_unit
+    from vendorfake.core.transport.inprocess import in_process
+
+    unit = create_unit(vendor="clover", profile="full", logger=Silent())
+    try:
+        unit.context.store.collection(COL.merchants).delete(MERCHANT_ID)
         response = in_process(unit).call(method="GET", path="/oauth/v2/authorize", query={"client_id": CLIENT_ID})
         assert response.status == 500
         assert "merchant" in response.json()["message"]

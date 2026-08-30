@@ -179,11 +179,43 @@ def test_the_id_stream_is_reseeded_from_the_unit_seed_not_the_constructor_arg() 
     assert [other.ids.order() for _ in range(3)] != first
 
 
-def test_hydrate_refuses_a_seed_document_until_pr_e_ships_the_parser() -> None:
+def test_hydrate_loads_the_seed_merchant_and_refuses_a_malformed_document() -> None:
+    """The one-merchant seed: a valid document inserts the merchant with the
+    seed meta; a wrong one is refused by name at startup; no seed loads
+    nothing and is legal."""
+    from vendorfake.clover.entities import COL, MerchantEntity
+
+    unit = create_unit(vendor="clover", profile="full")
+    ctx = unit.context
+    stored = ctx.store.collection(COL.merchants).require("HRVSTRYE12345")
+    assert MerchantEntity.from_entity(stored).name == "Harvest & Rye"
+    seeded = [e for e in ctx.store.journal() if e.collection == COL.merchants]
+    assert seeded and all(e.meta.get("seed") is True for e in seeded)
+    vendor = CloverVendor()
+    vendor.hydrate(ctx, {"merchant": {"id": "SECONDMERCH01", "name": "Second"}})
+    assert ctx.store.collection(COL.merchants).get("SECONDMERCH01") is not None
     with pytest.raises(UnitError) as caught:
-        CloverVendor().hydrate(fake_ctx(), {"merchant": {}})
+        vendor.hydrate(ctx, {"merchant": {"id": "X"}, "unknown": 1})
     assert caught.value.kind is UnitErrorKind.INVALID_VALUE
-    assert "seed" in str(caught.value)
+    assert caught.value.field == "seed"
+    with pytest.raises(UnitError):
+        vendor.hydrate(ctx, {"merchant": {}})
+    vendor.hydrate(ctx, None)  # a profile with no seed
+
+
+def test_two_fresh_units_seed_identically_and_reset_reseeds() -> None:
+    """The determinism the conformance C06 contract asserts, pinned here too:
+    identical digests across two units, and after a control-plane reset."""
+    from vendorfake.core.transport.inprocess import in_process
+
+    first = create_unit(vendor="clover", profile="full")
+    second = create_unit(vendor="clover", profile="full")
+    digest = first.context.store.entity_digest()
+    assert digest == second.context.store.entity_digest()
+    api = in_process(first)
+    assert api.post("/__unit/state/reset").status == 200
+    assert first.context.store.entity_digest() == digest
+    assert first.context.store.collection("merchants").get("HRVSTRYE12345") is not None
 
 
 # ---------------------------------------------------------------------------

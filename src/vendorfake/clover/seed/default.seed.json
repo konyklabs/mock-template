@@ -1,0 +1,15 @@
+{
+  "merchant": {
+    "id": "HRVSTRYE12345",
+    "name": "Harvest & Rye",
+    "currency": "USD",
+    "owner": { "id": "OWNERHRVST001", "name": "R. Harvest" },
+    "address": {
+      "address1": "1 Main St",
+      "city": "Springfield",
+      "state": "IL",
+      "zip": "62701",
+      "country": "US"
+    }
+  }
+}

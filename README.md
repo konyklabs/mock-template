@@ -18,14 +18,16 @@ exchange, single-use refresh rotation, the documented 401-for-everything auth
 behaviour), orders and line items with client-owned totals, the atomic
 order/checkout calculators with taxes, inventory with modifier groups, the
 merchant's employees/tenders/order types/default service charge, customers,
-external-tender payments that lock the order, and print events — but its
-shipped `full` profile starts with an **empty store**: no merchant, no items,
-no token. Until the seed scenario lands (the next PR), a bare `curl` against a
-served clover unit reaches only the `/__unit/*` control plane; `GET
-/oauth/v2/authorize` answers 500 naming the missing merchant, and every
-`/v3/merchants/{mId}/…` route needs a bearer nobody can mint yet. The surfaces
-are exercised end to end by the test harness, which seeds the scenario itself.
-Webhooks arrive with the seed.
+external-tender payments that lock the order, and print events. The shipped
+`full` profile seeds **one merchant** (`HRVSTRYE12345`, "Harvest & Rye"), so
+out of the box `GET /oauth/v2/authorize?client_id=UNITCLOVERAPP` redirects
+with a code, `POST /oauth/v2/token` with `client_secret`
+`unit-clover-app-secret` mints a bearer, and every
+`/v3/merchants/HRVSTRYE12345/…` route then accepts it — but the store holds
+nothing else yet: no items, employees, tenders, order types, tax rates or
+seeded token, so the reference lists come back empty and a line item must
+carry its own `price` until the full scenario lands (the next PR). The test
+harness seeds that scenario itself today. Webhooks arrive with it.
 
 Because two vendors are installed, every command names one: `--vendor square`
 (or `--vendor clover`), or set `VENDORFAKE_VENDOR`. With no selector the

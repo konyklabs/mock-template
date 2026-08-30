@@ -1,7 +1,8 @@
 {
   "name": "full",
-  "summary": "Every declared capability on. The default profile. Webhooks arrive in PR D, the seed scenario in PR E; until then the unit starts empty.",
+  "summary": "Every declared capability on. The default profile. Seeds one merchant so the OAuth dance works out of the box; the full scenario arrives in PR E, webhooks in PR D.",
   "capabilities": ["oauth", "orders", "payments", "inventory", "merchant", "customers", "chaos"],
+  "seed": "seed/default.seed.json",
   "vendor": {
     "client_id": "UNITCLOVERAPP",
     "client_secret": "unit-clover-app-secret",

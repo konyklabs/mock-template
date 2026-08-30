@@ -46,6 +46,7 @@ from vendorfake.clover.errors import CloverErrorShaper
 from vendorfake.clover.ids import CloverIds
 from vendorfake.clover.machine import ORDER_MACHINE, ORDER_MACHINE_NAME
 from vendorfake.clover.retry import clover_retry_defaults
+from vendorfake.clover.seed.hydrate import hydrate_clover
 from vendorfake.clover.surface.customers import customer_routes
 from vendorfake.clover.surface.inventory import inventory_routes
 from vendorfake.clover.surface.merchant import merchant_routes
@@ -63,8 +64,6 @@ from vendorfake.core.kernel.types import (
     Route,
     Signer,
     UnitContext,
-    UnitError,
-    UnitErrorKind,
     UnitRequest,
     VendorDefinition,
 )
@@ -248,24 +247,14 @@ class CloverVendor:
     # -- lifecycle ---------------------------------------------------------
 
     def hydrate(self, ctx: UnitContext, seed: object) -> None:
-        """Phase two of configuration; the seed scenario lands in PR E.
+        """Phase two of configuration, then load the seed scenario.
 
         The configuration step happens first and unconditionally, so that a
-        profile's ``vendor`` block is in force even with nothing to seed. A
-        profile that *does* name a seed document is refused loudly rather than
-        silently ignored -- a scenario that "loaded" into nothing would be the
-        worst version of this gap.
+        profile's ``vendor`` block is in force even when hydration fails. The
+        scenario is one merchant at this commit (``seed/``); PR E extends it.
         """
         self._resolve_config(ctx)
-        if seed is not None:
-            raise UnitError(
-                UnitErrorKind.INVALID_VALUE,
-                detail=(
-                    "This Clover vendor has no seed parser yet (the scenario lands in PR E); "
-                    "remove the profile's seed path."
-                ),
-                field="seed",
-            )
+        hydrate_clover(ctx, seed)
 
     def _resolve_config(self, ctx: UnitContext) -> None:
         """Re-resolve from the profile, then rebuild what depends on it.

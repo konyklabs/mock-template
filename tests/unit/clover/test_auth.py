@@ -94,7 +94,6 @@ def _protected_unit(*, sidecar: bool) -> Harness:
     from tests.conformance.mutants.seams import VendorOverlay
     from tests.unit.clover.harness import MERCHANT_ID, Silent
     from vendorfake import create_unit
-    from vendorfake.clover.entities import MerchantEntity
     from vendorfake.clover.vendor import create_clover_vendor
     from vendorfake.core.kernel.reply import json_
     from vendorfake.core.kernel.types import Route
@@ -112,11 +111,8 @@ def _protected_unit(*, sidecar: bool) -> Harness:
     )
     inner = create_clover_vendor(vendor_config={"error_sidecar": sidecar})
     overlay = VendorOverlay(inner, routes=lambda routes: (*routes, guarded))
-    unit = create_unit(vendor=overlay, profile="full", logger=Silent())
-    unit.context.store.collection(COL.merchants).insert(
-        MerchantEntity(id=MERCHANT_ID, name="Harvest & Rye").to_entity(),
-        {"operation_id": "TestSeed", "seed": True},
-    )
+    unit = create_unit(vendor=overlay, profile="full", logger=Silent())  # the shipped seed supplies the merchant
+    assert unit.context.store.collection(COL.merchants).get(MERCHANT_ID) is not None
     return Harness(unit=unit, api=in_process(unit), auth={})
 
 
