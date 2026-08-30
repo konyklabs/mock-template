@@ -67,9 +67,15 @@ def test_the_three_surfaces_are_live_and_the_webhook_seams_are_none_until_pr_d()
     assert "DELETE /v3/merchants/{mId}/orders/{orderId}" in keys
     assert "POST /v3/merchants/{mId}/atomic_order/checkouts" in keys
     assert "GET /v3/merchants/{mId}/items/{itemId}" in keys
+    assert "POST /v3/merchants/{mId}/items/{itemId}" in keys
     assert "GET /v3/merchants/{mId}" in keys
-    assert len(keys) == 16
-    assert len(set(keys)) == 16
+    assert "POST /v3/merchants/{mId}/orders/{orderId}/payments" in keys
+    assert "POST /v3/merchants/{mId}/print_event" in keys
+    assert "GET /v3/merchants/{mId}/default_service_charge" in keys
+    assert "GET /v3/merchants/{mId}/modifier_groups/{modGroupId}/modifiers/{modId}" in keys
+    assert "POST /v3/merchants/{mId}/customers" in keys
+    assert len(keys) == 27
+    assert len(set(keys)) == 27
     # Every merchant-scoped route authenticates and names a permission.
     for route in vendor.routes:
         if route.path.startswith("/v3/"):
@@ -203,7 +209,15 @@ def test_a_clover_unit_starts_on_the_full_profile_with_an_empty_surface() -> Non
     unit = create_unit(vendor="clover", profile="full")
     assert unit.name == "clover"
     assert unit.context.config.profile == "full"
-    assert set(unit.context.config.capabilities) == {"oauth", "orders", "inventory", "chaos"}
+    assert set(unit.context.config.capabilities) == {
+        "oauth",
+        "orders",
+        "payments",
+        "inventory",
+        "merchant",
+        "customers",
+        "chaos",
+    }
 
 
 def test_two_clover_units_in_one_process_do_not_share_an_id_stream() -> None:

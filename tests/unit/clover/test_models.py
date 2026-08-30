@@ -181,6 +181,32 @@ def test_the_atomic_total_arithmetic_from_the_documented_units() -> None:
     assert atomic_total([{"price": 1000}], [], {"percentageDecimal": 180000}) == 1180
     assert atomic_total([{"price": 1000}], [{"amount": -200}], {"percentageDecimal": 180000}) == 944
     assert atomic_total([]) == 0
+    # A disabled service charge charges nothing; modifications scale with unitQty.
+    assert atomic_total([{"price": 1000}], [], {"percentageDecimal": 180000, "enabled": False}) == 1000
+    assert line_total({"price": 300, "unitQty": 2000, "modifications": [{"amount": 50}]}) == 700
+
+
+def test_the_totals_block_taxes_each_line_at_its_own_rates() -> None:
+    """subtotal, totalTaxAmount, taxSummaries and a receipt total; tax is
+    per line on the line's discounted total at rate / TAX_RATE_SCALE percent
+    (JUDGMENT scale, one constant)."""
+    from vendorfake.clover.model.order import TAX_RATE_SCALE, atomic_totals
+
+    assert TAX_RATE_SCALE == 100000
+    sales = {"id": "T1", "name": "Sales", "rate": 725000}
+    beverage = {"id": "T2", "name": "Beverage", "rate": 1000000}
+    totals = atomic_totals(
+        [{"price": 1500}, {"price": 300}, {"price": 1000, "discounts": [{"percentage": 50}]}],
+        [[beverage], [sales], [sales]],
+        [{"amount": -200}],
+        {"percentageDecimal": 180000},
+    )
+    assert totals.subtotal == 2300
+    # tax: 150 + 22 (21.75) + 36 (36.25) = 208
+    assert totals.totalTaxAmount == 208
+    assert {s["id"]: s["amount"] for s in totals.taxSummaries} == {"T2": 150, "T1": 58}
+    assert totals.total == (2300 - 200) + round(2100 * 0.18) + 208
+    assert set(totals.wire()) == {"subtotal", "total", "totalTaxAmount", "taxSummaries"}
 
 
 def test_projection_omits_unexpanded_nested_collections_and_caps_at_100() -> None:

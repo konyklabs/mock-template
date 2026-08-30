@@ -231,7 +231,7 @@ def test_expansions_govern_the_nested_collections(h: Harness) -> None:
     assert "discounts" not in dotted  # not asked for
     too_many = h.get(f"/orders/{order['id']}", query={"expand": "lineItems,discounts,serviceCharge,orderType"})
     assert too_many.status == 400
-    unknown = h.get(f"/orders/{order['id']}", query={"expand": "employee"})
+    unknown = h.get(f"/orders/{order['id']}", query={"expand": "categories"})
     assert unknown.status == 400
     listed = h.get("/orders", query={"expand": "discounts"}).json()["elements"][0]
     assert listed["discounts"] == [{"name": "order", "amount": -100}]
@@ -303,6 +303,48 @@ def test_bulk_line_items_take_at_most_100_each_with_a_price(h: Harness) -> None:
     assert after["total"] == 1500
 
 
+def test_employee_and_customers_round_trip_through_update(h: Harness) -> None:
+    """Consumers attach both before paying; a fake that dropped them under
+    extra=ignore would lose the field silently."""
+    from tests.unit.clover.harness import CUSTOMER_ADA, EMPLOYEE_BARISTA
+
+    order = h.create_order()
+    updated = h.post(
+        f"/orders/{order['id']}", {"employee": {"id": EMPLOYEE_BARISTA}, "customers": [{"id": CUSTOMER_ADA}]}
+    )
+    assert updated.status == 200
+    assert updated.json()["employee"] == {"id": EMPLOYEE_BARISTA}
+    fetched = h.get(f"/orders/{order['id']}", query={"expand": "customers,employee"}).json()
+    assert fetched["employee"] == {"id": EMPLOYEE_BARISTA}
+    assert fetched["customers"] == [{"id": CUSTOMER_ADA}]
+    assert "customers" not in h.get(f"/orders/{order['id']}").json()  # a nested collection, expanded on demand
+    cleared = h.post(f"/orders/{order['id']}", {"customers": None}).json()
+    assert "customers" not in h.get(f"/orders/{order['id']}", query={"expand": "customers"}).json()
+    assert cleared["employee"] == {"id": EMPLOYEE_BARISTA}  # untouched by a sparse update
+
+
+def test_print_event_echoes_the_documented_response_and_only_journals(h: Harness) -> None:
+    """The documented response (printing-orders-rest-api) minus deviceRef,
+    which this unit has none of; unknown order -> 404; nothing but a journal
+    entry happens."""
+    order = h.create_order()
+    before = h.journal_len()
+    response = h.post("/print_event", {"orderRef": {"id": order["id"]}})
+    assert response.status == 200
+    event = response.json()
+    assert len(event["id"]) == 13
+    assert event["orderRef"] == {"id": order["id"]}
+    assert event["state"] == "CREATED"
+    assert event["createdTime"] == event["modifiedTime"] == event["printTime"] > 10**12
+    assert "deviceRef" not in event
+    entries = h.api.get("/__unit/journal").json()["entries"][before:]
+    assert [(e["collection"], e["meta"]["operation_id"]) for e in entries] == [("print_events", "CreatePrintEvent")]
+    assert h.get(f"/orders/{order['id']}").json()["modifiedTime"] == order["modifiedTime"]
+    assert h.post("/print_event", {"orderRef": {"id": "NOSUCHORDER01"}}).status == 404
+    assert h.post("/print_event", {}).status == 400
+    assert h.journal_len() == before + 1
+
+
 # ---------------------------------------------------------------------------
 # Atomic orders and checkouts
 # ---------------------------------------------------------------------------
@@ -335,11 +377,14 @@ def _expected(cart: dict[str, Any]) -> int:
 def test_an_atomic_order_creates_and_totals(h: Harness) -> None:
     """DOCUMENTED: /atomic_order/orders 'calculate[s] the order totals' --
     the one create path that does. Units: price x unitQty/1000, negative
-    amounts and percentages, percentageDecimal = percent x 10000."""
+    amounts and percentages, percentageDecimal = percent x 10000. Tax on
+    top: beer 1500 at 10% = 150, espresso 300 at 7.25% = 22, the bare
+    'Special' line untaxed."""
     response = h.post("/atomic_order/orders", CART)
     assert response.status == 200
     order = response.json()
-    assert order["total"] == _expected(CART) == 2478
+    assert order["totalTaxAmount"] == 172
+    assert order["total"] == _expected(CART) + 172 == 2650
     assert order["state"] == "open"
     assert order["title"] == "Party of 4"
     assert order["orderType"] == {"id": "KFRPRVCZ73JHM"}
@@ -349,7 +394,7 @@ def test_an_atomic_order_creates_and_totals(h: Harness) -> None:
     assert order["discounts"] == [{"name": "loyalty", "amount": -200}]
     assert order["serviceCharge"]["percentageDecimal"] == 180000
     fetched = h.get(f"/orders/{order['id']}").json()
-    assert fetched["total"] == 2478  # persisted
+    assert fetched["total"] == 2650  # persisted
     assert h.get(f"/orders/{order['id']}", query={"expand": "lineItems"}).json()["lineItems"][1]["price"] == 300
 
 
@@ -359,11 +404,78 @@ def test_an_atomic_checkout_totals_and_creates_nothing(h: Harness) -> None:
     response = h.post("/atomic_order/checkouts", CART)
     assert response.status == 200
     body = response.json()
-    assert body["total"] == 2478
+    assert body["total"] == 2650
+    assert body["totalTaxAmount"] == 172
     assert "id" not in body  # nothing exists to have an id
     assert [line["price"] for line in body["lineItems"]] == [750, 300, 1000]
     assert h.journal_len() == before
     assert len(h.get("/orders").json()["elements"]) == count
+
+
+def test_atomic_responses_carry_the_documented_totals_block_with_taxes(h: Harness) -> None:
+    """Checkout reference: top-level total, subtotal, totalTaxAmount and
+    taxSummaries[{id, name, rate, amount}]. Beer carries the explicit 10%
+    beverage rate; espresso takes the merchant default 7.25%; a bare-price
+    line with no taxRates carries none. Rate scale is the labelled JUDGMENT."""
+    from tests.unit.clover.harness import TAX_BEVERAGE, TAX_DEFAULT
+
+    cart = {
+        "orderCart": {
+            "lineItems": [
+                {"item": {"id": ITEM_BEER}, "unitQty": 2000},  # 1500 -> 10% = 150
+                {"item": {"id": ITEM_ESPRESSO}},  # 300 -> 7.25% = 21.75 -> 22
+                {"price": 1000, "name": "Untaxed"},
+            ]
+        }
+    }
+    body = h.post("/atomic_order/checkouts", cart).json()
+    assert body["subtotal"] == 2800
+    assert body["totalTaxAmount"] == 172
+    assert body["total"] == 2972
+    summaries = {s["id"]: s for s in body["taxSummaries"]}
+    assert summaries[TAX_BEVERAGE] == {"id": TAX_BEVERAGE, "name": "Beverage Tax", "rate": 1000000, "amount": 150}
+    assert summaries[TAX_DEFAULT]["amount"] == 22
+    created = h.post("/atomic_order/orders", cart).json()
+    assert created["total"] == 2972 and created["totalTaxAmount"] == 172 and created["subtotal"] == 2800
+    assert h.get(f"/orders/{created['id']}").json()["total"] == 2972
+
+
+def test_atomic_carts_apply_the_default_service_charge_by_reference_and_price_modifications(h: Harness) -> None:
+    from tests.unit.clover.harness import MOD_OAT, SERVICE_CHARGE_DEFAULT
+
+    cart = {
+        "orderCart": {
+            "lineItems": [
+                {"item": {"id": ITEM_ESPRESSO}, "unitQty": 2000, "modifications": [{"modifier": {"id": MOD_OAT}}]},
+            ],
+            "serviceCharge": {"id": SERVICE_CHARGE_DEFAULT},
+        }
+    }
+    body = h.post("/atomic_order/checkouts", cart).json()
+    # (300 + 50 oat) x 2 = 700 subtotal; 18% service = 126; tax 7.25% of 700 = 50.75 -> 51
+    assert body["subtotal"] == 700
+    assert body["serviceCharge"] == {
+        "id": SERVICE_CHARGE_DEFAULT,
+        "name": "Service",
+        "percentageDecimal": 180000,
+        "enabled": True,
+    }
+    assert body["totalTaxAmount"] == 51
+    assert body["total"] == 700 + 126 + 51
+    line = body["lineItems"][0]
+    assert line["modifications"][0]["modifier"] == {"id": MOD_OAT, "name": "Oat milk", "available": True}
+    assert line["modifications"][0]["amount"] == 50
+    unknown = h.post(
+        "/atomic_order/checkouts", {"orderCart": {"lineItems": [], "serviceCharge": {"id": "NOSUCHCHARGE1"}}}
+    )
+    assert unknown.status == 400
+    assert unknown.json()["unit_error"]["field"] == "orderCart.serviceCharge.id"
+    bad_modifier = h.post(
+        "/atomic_order/checkouts",
+        {"orderCart": {"lineItems": [{"price": 1, "modifications": [{"modifier": {"id": "NOSUCHMOD0001"}}]}]}},
+    )
+    assert bad_modifier.status == 400
+    assert bad_modifier.json()["unit_error"]["field"] == "orderCart.lineItems[0].modifications[0].modifier.id"
 
 
 def test_atomic_carts_are_validated_before_anything_is_written(h: Harness) -> None:

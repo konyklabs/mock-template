@@ -14,15 +14,6 @@ def h() -> Iterator[Harness]:
     yield from harness()
 
 
-def test_the_merchant_record_carries_id_name_owner_and_address(h: Harness) -> None:
-    body = h.get("").json()
-    assert body["id"] == MERCHANT_ID
-    assert body["name"] == "Harvest & Rye"
-    assert body["owner"]["id"] == "OWNERHRVST001"
-    assert body["address"]["city"] == "Springfield"
-    assert "currency" not in body  # internal to this unit, not a documented merchant field
-
-
 def test_create_item_matches_the_documented_example_shape(h: Harness) -> None:
     """The verbatim create-item response: id, hidden false, available true,
     name, price, priceType FIXED, defaultTaxRates true, isRevenue (JUDGMENT
@@ -76,6 +67,59 @@ def test_list_items_is_the_elements_envelope_with_hrefs_and_paging(h: Harness) -
     assert h.get("/items", query={"limit": "x"}).status == 400
 
 
+def test_update_item_is_post_sparse_and_journalled_as_update_item(h: Harness) -> None:
+    """The sold-out reconciliation path: flip `available`, nothing else moves."""
+    before = h.journal_len()
+    response = h.post(f"/items/{ITEM_BEER}", {"available": False})
+    assert response.status == 200
+    item = response.json()
+    assert item["available"] is False
+    assert item["name"] == "Craft Beer" and item["price"] == 750
+    assert h.get(f"/items/{ITEM_BEER}").json()["available"] is False
+    entries = h.api.get("/__unit/journal").json()["entries"][before:]
+    assert [(e["collection"], e["op"], e["meta"]["operation_id"]) for e in entries] == [
+        ("items", "update", "UpdateItem")
+    ]
+    assert h.post(f"/items/{ITEM_BEER}", {"name": ""}).status == 400
+    assert h.post("/items/NOSUCHITEM001", {"available": True}).status == 404
+
+
+def test_items_expand_modifier_groups_and_tax_rates(h: Harness) -> None:
+    """`GET /items?expand=modifierGroups&limit=1000` is the menu-sync call;
+    the expansion is the documented elements shape with `modifierIds` as the
+    comma-joined string the example shows."""
+    from tests.unit.clover.harness import ITEM_ESPRESSO, MOD_GROUP_MILK, MOD_OAT, MOD_SOY, TAX_BEVERAGE
+
+    body = h.get("/items", query={"expand": "modifierGroups", "limit": "1000"}).json()
+    by_id = {e["id"]: e for e in body["elements"]}
+    assert by_id[ITEM_ESPRESSO]["modifierGroups"] == {
+        "elements": [
+            {"id": MOD_GROUP_MILK, "name": "Milk", "showByDefault": True, "modifierIds": f"{MOD_OAT},{MOD_SOY}"}
+        ]
+    }
+    assert by_id[ITEM_BEER]["modifierGroups"] == {"elements": []}
+    single = h.get(f"/items/{ITEM_BEER}", query={"expand": "modifierGroups,taxRates"}).json()
+    assert single["taxRates"]["elements"][0]["id"] == TAX_BEVERAGE
+    assert "modifierGroups" not in h.get(f"/items/{ITEM_BEER}").json()
+    assert h.get("/items", query={"expand": "categories"}).status == 400
+
+
+def test_modifiers_of_a_group_and_the_available_flag(h: Harness) -> None:
+    from tests.unit.clover.harness import MOD_GROUP_MILK, MOD_OAT, MOD_SOY
+
+    body = h.get(f"/modifier_groups/{MOD_GROUP_MILK}/modifiers").json()
+    assert [(e["id"], e["name"], e["price"], e["available"]) for e in body["elements"]] == [
+        (MOD_OAT, "Oat milk", 50, True),
+        (MOD_SOY, "Soy milk", 50, False),
+    ]
+    assert body["elements"][0]["href"].endswith(f"/modifier_groups/{MOD_GROUP_MILK}/modifiers/{MOD_OAT}")
+    soy = h.get(f"/modifier_groups/{MOD_GROUP_MILK}/modifiers/{MOD_SOY}").json()
+    assert soy["available"] is False
+    assert soy["modifierGroup"] == {"id": MOD_GROUP_MILK}
+    assert h.get("/modifier_groups/NOSUCHGROUP01/modifiers").status == 404
+    assert h.get(f"/modifier_groups/{MOD_GROUP_MILK}/modifiers/NOSUCHMOD0001").status == 404
+
+
 def test_get_item_and_its_404(h: Harness) -> None:
     assert h.get(f"/items/{ITEM_BEER}").json()["name"] == "Craft Beer"
     missing = h.get("/items/NOSUCHITEM001")
@@ -91,7 +135,7 @@ def test_inventory_routes_need_their_own_permissions(h: Harness) -> None:
     for method, suffix, body in (
         ("GET", "/items", None),
         ("POST", "/items", {"name": "x", "price": 1}),
-        ("GET", "", None),
+        ("POST", f"/items/{ITEM_BEER}", {"available": False}),
     ):
         response = h.api.call(method=method, path=h.path(suffix), body=body, headers=auth)
         assert response.status == 401, suffix

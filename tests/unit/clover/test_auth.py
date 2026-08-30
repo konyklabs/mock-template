@@ -53,7 +53,10 @@ def test_a_minted_token_resolves_with_its_app_inherited_permissions(h: Harness) 
     result = auth.resolve(_args_with(h, f"Bearer {body['access_token']}"), "bearer")
     assert result.principal_id == "HRVSTRYE12345"
     # The app's fixed set, inherited at mint -- Clover has no per-token scopes.
-    assert set(result.scopes) == {"ORDERS_R", "ORDERS_W", "INVENTORY_R", "INVENTORY_W", "MERCHANT_R"}
+    from vendorfake.clover.config import DEFAULT_PERMISSIONS
+
+    assert set(result.scopes) == set(DEFAULT_PERMISSIONS)
+    assert {"ORDERS_R", "ORDERS_W", "INVENTORY_R", "INVENTORY_W", "MERCHANT_R", "PAYMENTS_W"} <= set(result.scopes)
     assert result.token_id is not None
 
 
@@ -99,13 +102,13 @@ def _protected_unit(*, sidecar: bool) -> Harness:
 
     guarded = Route(
         method="GET",
-        path="/v3/merchants/{mId}/payments",
+        path="/v3/merchants/{mId}/refunds",
         capability="oauth",
         handler=lambda args: json_({"ok": True}),
         auth="bearer",
-        scopes=("PAYMENTS_W",),
+        scopes=("REFUNDS_W",),
         operation_id="TestGuarded",
-        summary="Test-only: needs a permission the app's set does not grant.",
+        summary="Test-only: needs REFUNDS_W, a permission the app's set never grants.",
     )
     inner = create_clover_vendor(vendor_config={"error_sidecar": sidecar})
     overlay = VendorOverlay(inner, routes=lambda routes: (*routes, guarded))
@@ -122,7 +125,7 @@ def _three_failures(p: Harness) -> list:  # type: ignore[type-arg]
     kernel's real permission check, not a hand-built error."""
     live = p.exchange()
     expired = _insert_token(p, access_expiry_ms=1)
-    path = "/v3/merchants/HRVSTRYE12345/payments"
+    path = "/v3/merchants/HRVSTRYE12345/refunds"
     return [
         p.api.get(path, headers={"authorization": "Bearer never-minted"}),
         p.api.get(path, headers={"authorization": f"Bearer {expired.access_token}"}),
@@ -142,7 +145,7 @@ def test_the_conflation_makes_every_auth_failure_byte_identical_with_the_sidecar
         assert [r.headers["x-unit-error"] for r in responses] == ["unauthorized", "token_expired", "forbidden_scope"]
         bodies = {r.body for r in responses}
         assert bodies == {b'{"message":"401 Unauthorized"}'}, bodies
-        assert b"PAYMENTS_W" not in responses[2].body
+        assert b"REFUNDS_W" not in responses[2].body
     finally:
         p.unit.stop()
 
@@ -156,7 +159,7 @@ def test_the_conflation_is_still_debuggable_with_the_sidecar_on() -> None:
         assert {r.json()["message"] for r in responses} == {"401 Unauthorized"}
         kinds = [r.json()["unit_error"]["kind"] for r in responses]
         assert kinds == ["unauthorized", "token_expired", "forbidden_scope"]
-        assert "PAYMENTS_W" in responses[2].json()["unit_error"]["detail"]
+        assert "REFUNDS_W" in responses[2].json()["unit_error"]["detail"]
         assert {r.status for r in responses} == {401}
     finally:
         p.unit.stop()

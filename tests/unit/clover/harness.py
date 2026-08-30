@@ -42,6 +42,24 @@ SEED_ITEMS: tuple[tuple[str, str, int], ...] = (
     (ITEM_CROISSANT, "Croissant", 450),
 )
 
+EMPLOYEE_OWNER = "OWNERHRVST001"
+EMPLOYEE_BARISTA = "EMPLBARISTA01"
+TENDER_CASH = "TENDERCASH001"
+TENDER_EXTERNAL = "TENDEREXTRN01"
+ORDER_TYPE_DINE_IN = "KFRPRVCZ73JHM"
+ORDER_TYPE_TAKEOUT = "ORDTYPETAKE01"
+SERVICE_CHARGE_DEFAULT = "SVCCHARGE0001"
+TAX_DEFAULT = "TAXDEFAULT001"
+TAX_DEFAULT_RATE = 725000
+"""7.25% at the JUDGMENT scale of percent x 100000 (model/order.py)."""
+TAX_BEVERAGE = "TAXBEVERAGE01"
+TAX_BEVERAGE_RATE = 1000000
+"""10%."""
+MOD_GROUP_MILK = "MODGROUPMILK1"
+MOD_OAT = "MODIFIEROAT01"
+MOD_SOY = "MODIFIERSOY01"
+CUSTOMER_ADA = "CUSTOMERADA01"
+
 SEED_META = {"operation_id": "TestSeed", "seed": True}
 
 
@@ -141,11 +159,125 @@ def seed(unit: Unit) -> None:
         ).to_entity(),
         SEED_META,
     )
-    for item_id, name, price in SEED_ITEMS:
-        store.collection(COL.items).insert(
-            ItemEntity(id=item_id, name=name, price=price, modifiedTime=1755786102000).to_entity(),
-            SEED_META,
-        )
+    # Tax rates: the merchant default (isDefault) and a beverage rate an item
+    # opts into explicitly with defaultTaxRates=false.
+    store.collection(COL.tax_rates).insert(
+        {"id": TAX_DEFAULT, "name": "Sales Tax", "rate": TAX_DEFAULT_RATE, "isDefault": True}, SEED_META
+    )
+    store.collection(COL.tax_rates).insert(
+        {"id": TAX_BEVERAGE, "name": "Beverage Tax", "rate": TAX_BEVERAGE_RATE, "isDefault": False}, SEED_META
+    )
+    # Items: beer opts into the beverage rate; espresso carries the milk
+    # modifier group; croissant takes the merchant defaults.
+    store.collection(COL.items).insert(
+        ItemEntity(
+            id=ITEM_BEER,
+            name="Craft Beer",
+            price=750,
+            modifiedTime=1755786102000,
+            defaultTaxRates=False,
+            taxRates=({"id": TAX_BEVERAGE},),
+        ).to_entity(),
+        SEED_META,
+    )
+    store.collection(COL.items).insert(
+        ItemEntity(
+            id=ITEM_ESPRESSO, name="Espresso", price=300, modifiedTime=1755786102000, modifierGroupIds=(MOD_GROUP_MILK,)
+        ).to_entity(),
+        SEED_META,
+    )
+    store.collection(COL.items).insert(
+        ItemEntity(id=ITEM_CROISSANT, name="Croissant", price=450, modifiedTime=1755786102000).to_entity(),
+        SEED_META,
+    )
+    store.collection(COL.modifier_groups).insert(
+        {"id": MOD_GROUP_MILK, "name": "Milk", "showByDefault": True, "modifierIds": [MOD_OAT, MOD_SOY]},
+        SEED_META,
+    )
+    store.collection(COL.modifiers).insert(
+        {"id": MOD_OAT, "name": "Oat milk", "price": 50, "available": True, "modifierGroup": {"id": MOD_GROUP_MILK}},
+        SEED_META,
+    )
+    store.collection(COL.modifiers).insert(
+        {"id": MOD_SOY, "name": "Soy milk", "price": 50, "available": False, "modifierGroup": {"id": MOD_GROUP_MILK}},
+        SEED_META,
+    )
+    store.collection(COL.employees).insert(
+        {"id": EMPLOYEE_OWNER, "name": "R. Harvest", "nickname": "Rye", "role": "ADMIN", "isOwner": True}, SEED_META
+    )
+    store.collection(COL.employees).insert(
+        {"id": EMPLOYEE_BARISTA, "name": "B. Rista", "role": "EMPLOYEE", "isOwner": False}, SEED_META
+    )
+    store.collection(COL.tenders).insert(
+        {
+            "id": TENDER_CASH,
+            "label": "Cash",
+            "labelKey": "com.clover.tender.cash",
+            "enabled": True,
+            "visible": True,
+            "opensCashDrawer": True,
+            "editable": False,
+        },
+        SEED_META,
+    )
+    store.collection(COL.tenders).insert(
+        {
+            "id": TENDER_EXTERNAL,
+            "label": "Online Order",
+            "labelKey": "com.clover.tender.external_payment",
+            "enabled": True,
+            "visible": True,
+            "opensCashDrawer": False,
+            "editable": True,
+        },
+        SEED_META,
+    )
+    store.collection(COL.order_types).insert(
+        {
+            "id": ORDER_TYPE_DINE_IN,
+            "label": "Dine In",
+            "labelKey": "com.clover.order_type.dine_in",
+            "taxable": True,
+            "isDefault": True,
+            "filterCategories": False,
+            "isHidden": False,
+            "fee": 0,
+        },
+        SEED_META,
+    )
+    store.collection(COL.order_types).insert(
+        {
+            "id": ORDER_TYPE_TAKEOUT,
+            "label": "Take Out",
+            "labelKey": "com.clover.order_type.take_out",
+            "taxable": True,
+            "isDefault": False,
+            "filterCategories": False,
+            "isHidden": False,
+            "fee": 0,
+        },
+        SEED_META,
+    )
+    store.collection(COL.service_charges).insert(
+        {
+            "id": SERVICE_CHARGE_DEFAULT,
+            "name": "Service",
+            "percentageDecimal": 180000,
+            "enabled": True,
+            "isDefault": True,
+        },
+        SEED_META,
+    )
+    store.collection(COL.customers).insert(
+        {
+            "id": CUSTOMER_ADA,
+            "firstName": "Ada",
+            "lastName": "Lovelace",
+            "customerSince": 1755786102000,
+            "addresses": [{"address1": "12 Analytical Way", "city": "London", "country": "GB"}],
+        },
+        SEED_META,
+    )
 
 
 def harness(profile: str = "full", **kwargs: Any) -> Iterator[Harness]:
