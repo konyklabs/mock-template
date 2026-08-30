@@ -1,4 +1,4 @@
-"""C02, C03, C11 -- capabilities are real, explicit, and completely declared.
+"""C02, C03, C11, C28 -- capabilities are real, explicit, completely declared, and switchable.
 
 The three contracts are one idea seen from three sides. C02: the route table
 and the capability table describe the same unit. C03: switching a capability
@@ -14,11 +14,12 @@ from typing import Any
 
 from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv, ancestors
 from vendorfake.conformance.registry import check
-from vendorfake.conformance.types import Requires, require
+from vendorfake.conformance.types import ConformanceSkip, Requires, require
 
 __all__ = [
     "capability_declaration_is_complete",
     "disabled_capability_answers_explicitly",
+    "every_capability_verb_has_its_effect",
     "routes_and_capabilities_describe_one_unit",
 ]
 
@@ -302,3 +303,103 @@ def capability_declaration_is_complete(env: CheckEnv) -> str:
         f"the core gates on {len(gated)} ({', '.join(sorted(gated))}): "
         f"{len(covered)} declared, {len(excused)} excused with reasons"
     )
+
+
+# ---------------------------------------------------------------------------
+# C28 -- all four verbs of POST /__unit/capabilities do what they say.
+# ---------------------------------------------------------------------------
+
+
+def _toggleable(env: CheckEnv) -> tuple[str, str, str]:
+    """A capability this check may switch off alone, and one route it owns.
+
+    Enabled, surface, owning an enabled route, with no enabled dotted child
+    and no enabled capability requiring it -- so switching it off changes
+    exactly one thing and every verb's effect is attributable to that verb.
+    """
+    rows = env.capabilities()
+    enabled = [row for row in rows if row.enabled]
+    table = [route for route in env.routes() if not route.internal]
+    for row in enabled:
+        if row.kind != "surface":
+            continue
+        if any(other.name.startswith(f"{row.name}.") or row.name in other.requires for other in enabled):
+            continue
+        owned = next((route for route in table if route.capability == row.name), None)
+        if owned is not None:
+            return row.name, owned.method, owned.probe_path
+    raise ConformanceSkip(
+        f"profile {env.profile!r} enables no surface capability that can be switched off on its own "
+        f"(one with routes, no enabled dotted child and no enabled dependent)"
+    )
+
+
+@check(
+    id="C28",
+    name="control plane: set, delta, enable and disable each change what the unit does",
+    asserts=(
+        "Each of the four verbs of POST /__unit/capabilities has its declared effect, observed both "
+        "in the capability table and at a route the capability owns; and the verbs compose in the "
+        "declared order, set before enable."
+    ),
+    requires=Requires(surface_route=True),
+)
+def every_capability_verb_has_its_effect(env: CheckEnv) -> str:
+    """Three verbs nothing exercised, and the one that did.
+
+    ``POST /__unit/capabilities`` takes ``set``, ``delta``, ``enable`` and
+    ``disable``. Every contract that toggled a capability -- C03, C14, C18 --
+    restored it with ``set``, so making ``enable`` a no-op left the matrix
+    green and a foreign implementation could stub three of four verbs and be
+    certified (konyklabs/roadmap#10, N-5; tracked as konyklabs/roadmap#15).
+
+    Every step observes two things: what the table says and what a route
+    does. A verb that updated the table and not the gate, or the gate and not
+    the table, is a verb whose answer cannot be trusted either way.
+    """
+    name, method, path = _toggleable(env)
+    original = [row.name for row in env.capabilities() if row.enabled]
+    without = [item for item in original if item != name]
+    steps: list[str] = []
+
+    def observe(verb: str, body: dict[str, Any], expect_on: bool) -> None:
+        answered = env.client.call("POST", f"{CONTROL_PREFIX}capabilities", json_body=body)
+        require(
+            answered.status == 200,
+            f"POST /__unit/capabilities {body} answered {answered.status}: {answered.text[:200]}. "
+            f"Every one of the four verbs is contract; a unit that refuses one has three.",
+        )
+        reported = {str(row["name"]): bool(row["enabled"]) for row in answered.json()["capabilities"]}
+        listed = env.capability_enabled(name)
+        require(
+            reported.get(name) is expect_on and listed is expect_on,
+            f"after {verb} {body}, {name!r} is enabled={reported.get(name)} in the POST's own answer and "
+            f"enabled={listed} at GET /__unit/capabilities, expected {expect_on}. The verb is applied "
+            f"in core/control/plane.py::capabilities_post against the live registry; both views are "
+            f"built from it and cannot disagree with it or with each other.",
+        )
+        probe = env.client.call(method, path, json_body={})
+        gated = probe.error_kind == _DISABLED
+        require(
+            gated is (not expect_on),
+            f"after {verb} {body}, {method} {path} (owned by {name!r}) answered {probe.status} "
+            f"x-unit-error={probe.error_kind!r}: the gate at step 2 of core/kernel/unit.py::_run_pipeline "
+            f"{'still refuses' if gated else 'no longer refuses'} the route while the table says "
+            f"enabled={expect_on}. A verb that moves the table and not the gate has changed a "
+            f"document, not the unit.",
+        )
+        steps.append(f"{verb} -> {'on' if expect_on else 'off'}")
+
+    try:
+        observe("disable", {"disable": [name]}, False)
+        observe("enable", {"enable": [name]}, True)
+        observe("delta", {"delta": f"-{name}"}, False)
+        observe("delta", {"delta": f"+{name}"}, True)
+        observe("set", {"set": without}, False)
+        observe("set", {"set": original}, True)
+        # Order is contract: set replaces, THEN enable adds. Read the other way
+        # round the same body would leave the capability off.
+        observe("set+enable", {"set": without, "enable": [name]}, True)
+    finally:
+        env.set_capabilities(original)
+    return f"{name!r} via {method} {path}: {', '.join(steps)}; table and gate agreed at every step"

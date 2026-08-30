@@ -1359,6 +1359,36 @@ rule and C12 one rule, so no contract had ever read the counter of a rule that
 did not fire."""
 
 
+def _enable_is_a_no_op(handler: Handler) -> Handler:
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        body = args.body()
+        if not isinstance(body, Mapping) or "enable" not in body:
+            return handler(args)
+        stripped = {name: value for name, value in body.items() if name != "enable"}
+        if not stripped:
+            return ReplyInit(json={"capabilities": [view.as_json() for view in args.ctx.capabilities.view()]})
+        # The other verbs still run; only `enable` is dropped on the floor.
+        request = dataclasses.replace(args.req, raw_body=dump_json(stripped))
+        return handler(HandlerArgs(req=request, params=args.params, ctx=args.ctx, route=args.route, auth=args.auth))
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M38",
+        name="capability-enable-verb-is-a-no-op",
+        defect="POST /__unit/capabilities accepts `enable` and does nothing with it; `set`, `delta` and `disable` still work.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C28"}),
+        control=replace_control_route("POST", "/__unit/capabilities", _enable_is_a_no_op),
+    )
+)
+"""N-5. The control plane takes four verbs and every contract restored
+capabilities with `set`, so three of the four could be stubbed out and a
+foreign implementation certified with them missing."""
+
+
 _REPLAY_MARKER = "x-unit-idempotent-replay"
 
 
