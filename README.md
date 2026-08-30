@@ -296,12 +296,12 @@ Clover documents no 403 — and the `unit_error` sidecar says which it was.
 ### The webhook an order fires
 
 Clover has no subscription API — callbacks are configured in the developer
-dashboard — so the unit ships a pre-verified subscriber (pointed at
-`https://example.test/webhooks/clover`, where nothing listens) and two ways
-to add your own: the control plane, pre-verified with the auth code you
-choose, or the dashboard stand-in at `POST /__clover/webhooks/subscriptions`,
-which runs the documented verification handshake. With a receiver on
-`localhost:19999`:
+dashboard — so the unit ships one pre-verified subscriber as a template
+(`wbhk_seed_quickstart`, pointed at `https://example.test/webhooks/clover`
+where nothing listens, and therefore **disabled**) and two ways to add your
+own: the control plane, pre-verified with the auth code you choose, or the
+dashboard stand-in at `POST /__clover/webhooks/subscriptions`, which runs the
+documented verification handshake. With a receiver on `localhost:19999`:
 
 ```sh
 curl -s -X POST http://localhost:8080/__unit/webhooks/subscriptions -H 'Content-Type: application/json' -d '{

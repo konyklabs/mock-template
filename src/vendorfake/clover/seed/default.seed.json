@@ -12,7 +12,7 @@
     "The open order's total is client-set (750, its one line): Clover leaves",
     "totals to the app, and so does this fake. Timestamps are fixed (ms) so",
     "list filters are reproducible; token expirations are stamped at hydrate.",
-    "The webhook subscriber is pre-verified (no `verified` key); its signature_key is the X-Clover-Auth code."
+    "The webhook subscriber is pre-verified (no `verified` key), shipped DISABLED so a served unit does not retry into its dead .test host; its signature_key is the X-Clover-Auth code."
   ],
   "merchant": {
     "id": "HRVSTRYE12345",
@@ -240,7 +240,7 @@
         "P:*"
       ],
       "signature_key": "unit-seeded-clover-webhook-auth-code",
-      "enabled": true
+      "enabled": false
     }
   ]
 }

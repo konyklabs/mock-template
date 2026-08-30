@@ -127,10 +127,11 @@ minting anything."""
 SEED_WEBHOOK_SUBSCRIPTION_ID = "wbhk_seed_quickstart"
 SEED_WEBHOOK_URL = "https://example.test/webhooks/clover"
 SEED_WEBHOOK_AUTH_CODE = "unit-seeded-clover-webhook-auth-code"
-"""The pre-verified subscriber the scenario ships: every event key, delivered
-with ``X-Clover-Auth: unit-seeded-clover-webhook-auth-code``. Clover's real
-auth code is a UUID shown once in the dashboard; this one is readable and
-obviously fake for the same reason the seeded bearers are. The callback host
-is the reserved ``.test`` domain, so a served unit's deliveries to it fail and
-retry on the declared schedule rather than reaching anybody -- point a
-subscriber of your own at a local receiver to watch a delivery land (README)."""
+"""The pre-verified subscriber the scenario ships -- every event key, auth
+code ``unit-seeded-clover-webhook-auth-code`` -- **disabled**. Its callback
+host is the reserved ``.test`` domain where nothing listens, so an enabled
+one would fire the whole retry cascade into a dead host on every mutation a
+consumer makes: noise in the delivery log and a misleading dead-man. It
+ships as the shape of a verified subscription (readable auth code, like the
+seeded bearers), and the quickstart registers a live one of its own through
+the control plane (README)."""

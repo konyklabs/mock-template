@@ -167,3 +167,22 @@ def test_two_units_seeded_alike_hash_alike_and_reset_rebuilds_the_same_world() -
         assert h.unit.context.store.entity_digest() != before
         assert h.api.post("/__unit/state/reset").status == 200
         assert h.unit.context.store.entity_digest() == before
+
+
+def test_the_seeded_webhook_subscriber_ships_disabled_and_receives_nothing() -> None:
+    """Its callback is a dead `.test` host: enabled, every mutation a consumer
+    makes would fire the whole retry cascade into it. It ships as the shape of
+    a verified subscription and nothing else."""
+    from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION
+    from vendorfake.core.webhooks.sink import MemorySink
+
+    sink = MemorySink()
+    for h in harness(sink=sink):
+        stored = h.unit.context.store.collection(SUBSCRIPTION_COLLECTION).require(c.SEED_WEBHOOK_SUBSCRIPTION_ID)
+        assert stored["enabled"] is False
+        assert stored["signature_key"] == c.SEED_WEBHOOK_AUTH_CODE
+        assert stored["notification_url"] == c.SEED_WEBHOOK_URL
+        assert "verified" not in stored  # pre-verified to the dashboard stand-in
+        h.create_order()
+        h.api.post("/__unit/webhooks/drain", {})
+        assert sink.received == []
