@@ -1,0 +1,46 @@
+# pytest consumer example
+
+A restaurant-ordering integration's test suite, written the way you would write
+it against the vendor sandboxes, run against `vendorfake` instead. Ten tests,
+about a second:
+
+```sh
+cd examples/pytest-consumer
+uv sync            # installs vendorfake from the checkout two levels up
+uv run pytest
+```
+
+From your own project, depend on the public source instead of the path in
+`pyproject.toml`:
+
+```toml
+dependencies = ["vendorfake @ git+https://github.com/konyklabs/vendorfake"]
+```
+
+## What is here
+
+| File | Vendor | What it rehearses |
+|---|---|---|
+| `conftest.py` | – | One in-process unit per test (`vendorfake.testing.unit`) and a loopback webhook receiver |
+| `test_square.py` | Square | OAuth exchange → create order → `POST /v2/payments` → read back COMPLETED; `GET /v2/catalog/list`; an `order.created` webhook verified with `verify_square_signature`; a 429 your retry loop survives with the idempotency key holding; a transient 401 that must not deactivate the connection |
+| `test_clover.py` | Clover | Token exchange → atomic order → payment → `locked`/`PAID`; `items?expand=modifierGroups`; an `O:CREATE` webhook verified with `verify_clover_auth`; the documented 429 with `X-RateLimit-*`; a transient 401 |
+| `test_container.py` | both | The order-and-pay path against the image, via Testcontainers. Skipped unless `VENDORFAKE_IMAGE` is set |
+
+Against the container (needs Docker and a built image — `docker build -t vendorfake:verify ../..`):
+
+```sh
+VENDORFAKE_IMAGE=vendorfake:verify uv run --extra container pytest test_container.py
+```
+
+On a Mac with colima, Testcontainers' reaper sidecar needs to be told where
+the socket really is: prefix the command with
+`TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock`.
+
+## Why in-process by default
+
+`vendorfake.testing.unit("square")` builds the fake in the test process and
+drives it through `httpx.Client` with no socket; the conformance suite proves
+that binding answers byte-for-byte what the served one does. Webhooks still go
+out over real HTTP to the receiver, so signature verification is exercised
+on real bytes. When your service needs a URL, `vendorfake.testing.served()`
+runs `vendorfake serve` in a child process and yields one.
