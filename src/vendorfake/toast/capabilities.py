@@ -59,6 +59,10 @@ TOAST_CAPABILITIES: tuple[CapabilityDecl, ...] = (
         summary="Payments on a check: OTHER and pre-authorised CREDIT, tips, and the payment reads.",
     ),
     CapabilityDecl(
+        name="stock",
+        summary="Stock API v1: what is out or counted, search, and updates; orders refuse OUT_OF_STOCK items.",
+    ),
+    CapabilityDecl(
         name="chaos",
         summary="Request-scope fault injection: rate limits, timeouts, server errors, token expiry.",
         kind="behavior",

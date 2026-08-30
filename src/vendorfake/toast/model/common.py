@@ -22,7 +22,7 @@ from pydantic import BaseModel, ValidationError
 
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
-__all__ = ["MISSING_ERROR_TYPES", "unit_error_from_validation", "validate_body"]
+__all__ = ["MISSING_ERROR_TYPES", "unit_error_from_validation", "validate_body", "validate_items"]
 
 _M = TypeVar("_M", bound=BaseModel)
 
@@ -66,3 +66,27 @@ def validate_body(model: type[_M], body: Any) -> _M:
         return model.model_validate(body)
     except ValidationError as exc:
         raise unit_error_from_validation(exc) from exc
+
+
+def validate_items(model: type[_M], body: Any, *, what: str) -> list[_M]:
+    """Validate a non-empty JSON array of ``model``; a failure names ``[i].field``.
+
+    Several Toast routes take a bare array (payments, selections, applied
+    discounts, stock updates). The index prefix is what lets a consumer see
+    which element was refused.
+    """
+    if not isinstance(body, list) or not body:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"The request body must be a non-empty array of {what}.",
+            field="body",
+        )
+    out: list[_M] = []
+    for index, row in enumerate(body):
+        try:
+            out.append(model.model_validate(row))
+        except ValidationError as exc:
+            err = unit_error_from_validation(exc)
+            field = f"[{index}].{err.field}" if err.field else f"[{index}]"
+            raise UnitError(err.kind, detail=f"{field}: {err.detail}", field=field) from exc
+    return out

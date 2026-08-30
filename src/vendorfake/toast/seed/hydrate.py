@@ -50,9 +50,34 @@ def hydrate_toast(ctx: UnitContext, seed: object, config: ToastConfig) -> SeedDo
     _insert_config(ctx, doc)
     _insert_menu(ctx, doc)
     _insert_credit_authorizations(ctx, doc)
+    _insert_stock(ctx, doc)
     _insert_orders(ctx, doc, config)
     _insert_tokens(ctx, doc, config)
     return doc
+
+
+def _insert_stock(ctx: UnitContext, doc: SeedDocument) -> None:
+    """One row per seeded item or option, under the item's guid, with the
+    item's ``multiLocationId`` read off the menu."""
+    if doc.menu_v3 is None:
+        return
+    index = MenuIndex.from_store(ctx.store, doc.restaurant.guid)
+    for row in doc.stock:
+        source = index.items.get(row.guid) or index.options.get(row.guid) or {}
+        ctx.store.collection(COL.stock).insert(
+            compact(
+                {
+                    "id": row.guid,
+                    "restaurant_guid": doc.restaurant.guid,
+                    "multiLocationId": source.get("multiLocationId"),
+                    "status": row.status,
+                    "quantity": row.quantity,
+                    "versionId": row.versionId,
+                    "modifiedDate": doc.config_modified_ms,
+                }
+            ),
+            SEED_META,
+        )
 
 
 def _insert_credit_authorizations(ctx: UnitContext, doc: SeedDocument) -> None:

@@ -157,6 +157,7 @@ def test_a_toast_unit_starts_on_the_full_profile_with_an_empty_surface() -> None
             "config",
             "restaurants",
             "partners",
+            "stock",
             "chaos",
         }
         assert unit.context.store.collection(COL.restaurants).size == 1

@@ -53,7 +53,7 @@ from vendorfake.core.util.json import compact
 from vendorfake.toast.entities import COL, RestaurantEntity
 from vendorfake.toast.errors import CODE_PAYMENT_AMOUNT_EMPTY, TOAST_CODE_INFO_KEY
 from vendorfake.toast.machine import CHECK_MACHINE, CheckPaymentStatus
-from vendorfake.toast.model.common import validate_body
+from vendorfake.toast.model.common import validate_body, validate_items
 from vendorfake.toast.model.dates import business_date, parse_business_date, parse_rest_date
 from vendorfake.toast.model.money import opt_cents, to_cents
 from vendorfake.toast.model.order import PaymentRequest, TipRequest, project_payment
@@ -136,14 +136,7 @@ class ToastPaymentsSurface:
 
         ctx = args.ctx
         restaurant = require_restaurant(args)
-        raw = args.json()
-        if not isinstance(raw, list) or not raw:
-            raise UnitError(
-                UnitErrorKind.INVALID_VALUE,
-                detail="The request body must be a non-empty array of payments.",
-                field="body",
-            )
-        requests = [validate_body(PaymentRequest, row) for row in raw]
+        requests = validate_items(PaymentRequest, args.json(), what="payments")
         order = load_order(args, restaurant, args.params["guid"])
         _assert_not_voided(order)
         check = _check_of(order, args.params["checkGuid"])

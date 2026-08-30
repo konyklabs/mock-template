@@ -14,7 +14,8 @@
     "Token expirations are stamped at hydrate from the configured TTL (19168 s, the documented example).",
     "config_modified_ms is the fixed instant every config entity reports to a lastModified filter.",
     "The seeded order (one Lemonade, unpaid, RECEIVED) is priced at hydrate by the same builder /prices uses.",
-    "credit_authorizations stands in for the credit-cards API: a CREDIT payment names one of these guids (7c65cc16... echoes the documented example)."
+    "credit_authorizations stands in for the credit-cards API: a CREDIT payment names one of these guids (7c65cc16... echoes the documented example).",
+    "stock: one row per item and option (apiUsingTheStockApi.html); Lemonade at 3 is under the documented low_quantity threshold of 5."
   ],
   "restaurant": {
     "guid": "e6a4a8d2-0000-4000-8000-000000000001",
@@ -342,6 +343,35 @@
       "cardType": "VISA",
       "last4Digits": "4242",
       "cardEntryMode": "PRE_AUTHED"
+    }
+  ],
+  "stock": [
+    {
+      "guid": "3c9a1f00-0000-4000-8000-00000000c201",
+      "status": "IN_STOCK",
+      "versionId": "14707576-0000-4000-8000-00000000a201"
+    },
+    {
+      "guid": "3c9a1f00-0000-4000-8000-00000000c202",
+      "status": "QUANTITY",
+      "quantity": 12,
+      "versionId": "14707576-0000-4000-8000-00000000a202"
+    },
+    {
+      "guid": "3c9a1f00-0000-4000-8000-00000000c203",
+      "status": "QUANTITY",
+      "quantity": 3,
+      "versionId": "14707576-0000-4000-8000-00000000a203"
+    },
+    {
+      "guid": "3c9a1f00-0000-4000-8000-00000000c401",
+      "status": "IN_STOCK",
+      "versionId": "14707576-0000-4000-8000-00000000a401"
+    },
+    {
+      "guid": "3c9a1f00-0000-4000-8000-00000000c402",
+      "status": "IN_STOCK",
+      "versionId": "14707576-0000-4000-8000-00000000a402"
     }
   ]
 }
