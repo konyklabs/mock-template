@@ -57,7 +57,14 @@ from enum import StrEnum
 
 from vendorfake.core.state.machine import MachineDef, StateDef
 
-__all__ = ["ORDER_MACHINE", "ORDER_MACHINE_NAME", "OrderState"]
+__all__ = [
+    "FULFILLMENT_MACHINE",
+    "FULFILLMENT_MACHINE_NAME",
+    "ORDER_MACHINE",
+    "ORDER_MACHINE_NAME",
+    "FulfillmentState",
+    "OrderState",
+]
 
 
 class OrderState(StrEnum):
@@ -97,3 +104,83 @@ ORDER_MACHINE = MachineDef(
 )
 """The order lifecycle. ``COMPLETED`` and ``CANCELED`` list no transitions,
 which is what makes them terminal."""
+
+
+class FulfillmentState(StrEnum):
+    """The six documented ``FulfillmentState`` values.
+    https://developer.squareup.com/reference/square/enums/FulfillmentState
+    """
+
+    PROPOSED = "PROPOSED"
+    RESERVED = "RESERVED"
+    PREPARED = "PREPARED"
+    COMPLETED = "COMPLETED"
+    CANCELED = "CANCELED"
+    FAILED = "FAILED"
+
+
+FULFILLMENT_MACHINE_NAME = "fulfillment"
+"""The key the fulfillment machine is registered under."""
+
+FULFILLMENT_MACHINE = MachineDef(
+    field="state",
+    initial=FulfillmentState.PROPOSED.value,
+    states={
+        FulfillmentState.PROPOSED.value: StateDef(
+            summary="Proposed by the buyer; not yet accepted by the seller.",
+            to=(
+                FulfillmentState.RESERVED.value,
+                FulfillmentState.PREPARED.value,
+                FulfillmentState.COMPLETED.value,
+                FulfillmentState.CANCELED.value,
+                FulfillmentState.FAILED.value,
+            ),
+            allow_self=True,
+        ),
+        FulfillmentState.RESERVED.value: StateDef(
+            summary="Accepted by the seller; being prepared.",
+            to=(
+                FulfillmentState.PREPARED.value,
+                FulfillmentState.COMPLETED.value,
+                FulfillmentState.CANCELED.value,
+                FulfillmentState.FAILED.value,
+            ),
+            allow_self=True,
+        ),
+        FulfillmentState.PREPARED.value: StateDef(
+            summary="Ready for the buyer, the courier or the carrier.",
+            to=(
+                FulfillmentState.COMPLETED.value,
+                FulfillmentState.CANCELED.value,
+                FulfillmentState.FAILED.value,
+            ),
+            allow_self=True,
+        ),
+        FulfillmentState.COMPLETED.value: StateDef(summary="Picked up, delivered or shipped. Terminal."),
+        FulfillmentState.CANCELED.value: StateDef(summary="Canceled. Terminal."),
+        FulfillmentState.FAILED.value: StateDef(summary="Could not be completed. Terminal."),
+    },
+)
+"""The fulfillment lifecycle.
+
+The states and their meanings are Square's
+(https://developer.squareup.com/reference/square/enums/FulfillmentState), and
+the forward path -- PROPOSED, RESERVED, PREPARED, COMPLETED, with CANCELED
+reachable until completion -- is the one the fulfillments guide walks through
+(https://developer.squareup.com/docs/orders-api/manage-fulfillments).
+
+JUDGMENT, twice. First, a forward move may **skip** states: PROPOSED straight
+to COMPLETED is accepted, because the guide describes the states an
+integration *may* report and publishes no rule that each must be visited, and
+a counter-service order that is accepted, made and handed over in one motion
+has no RESERVED moment to report. Second, FAILED is reachable from every
+non-terminal state for the same reason. Neither is verified against an error
+Square would return for the corresponding move; a consumer must not read this
+unit's acceptance of a skip as Square's.
+
+The three terminal states list no transitions, which is what makes them
+terminal, and every non-terminal state allows a self-transition because
+UpdateOrder is a read-modify-write of the whole fulfillment -- echoing the
+current state back with a changed ``picked_up_at`` is the ordinary case, not
+an error.
+"""

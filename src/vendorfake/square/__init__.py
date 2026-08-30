@@ -30,7 +30,14 @@ from vendorfake.square.entities import COL
 from vendorfake.square.errors import SQUARE_ERROR_TABLE, ErrorCategory, ErrorCode, SquareErrorShaper
 from vendorfake.square.events import SQUARE_EVENT_TYPES, SquareEventMapper
 from vendorfake.square.ids import SquareIds
-from vendorfake.square.machine import ORDER_MACHINE, ORDER_MACHINE_NAME, OrderState
+from vendorfake.square.machine import (
+    FULFILLMENT_MACHINE,
+    FULFILLMENT_MACHINE_NAME,
+    ORDER_MACHINE,
+    ORDER_MACHINE_NAME,
+    FulfillmentState,
+    OrderState,
+)
 from vendorfake.square.model.oauth import SQUARE_GRANT_TYPES, SUPPORTED_GRANT_TYPES
 from vendorfake.square.model.order import project_order, project_order_entry
 from vendorfake.square.retry import SQUARE_RETRY_SCHEDULE_MS
@@ -42,6 +49,8 @@ from vendorfake.square.vendor import SQUARE_MAGIC, SQUARE_SCOPES, SquareVendor, 
 __all__ = [
     "COL",
     "DEFAULT_SCOPES",
+    "FULFILLMENT_MACHINE",
+    "FULFILLMENT_MACHINE_NAME",
     "ORDER_MACHINE",
     "ORDER_MACHINE_NAME",
     "SQUARE_API_VERSION",
@@ -57,6 +66,7 @@ __all__ = [
     "VENDOR",
     "ErrorCategory",
     "ErrorCode",
+    "FulfillmentState",
     "OrderState",
     "SeedDocument",
     "SquareAuth",

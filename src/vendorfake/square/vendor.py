@@ -77,7 +77,7 @@ from vendorfake.square.config import (
 from vendorfake.square.errors import SquareErrorShaper
 from vendorfake.square.events import SquareEventMapper
 from vendorfake.square.ids import SquareIds
-from vendorfake.square.machine import ORDER_MACHINE, ORDER_MACHINE_NAME
+from vendorfake.square.machine import FULFILLMENT_MACHINE, FULFILLMENT_MACHINE_NAME, ORDER_MACHINE, ORDER_MACHINE_NAME
 from vendorfake.square.retry import square_retry_defaults
 from vendorfake.square.seed.hydrate import hydrate_square
 from vendorfake.square.signer import SquareWebhookSigner
@@ -261,14 +261,14 @@ class SquareVendor:
 
     @property
     def machines(self) -> Mapping[str, MachineDef]:
-        """The order lifecycle, reachable at ``GET /__unit/machines``.
+        """The order and fulfillment lifecycles, reachable at ``GET /__unit/machines``.
 
         This is the registration the reference lacks: its ``orderMachine`` is a
         module-level singleton nothing publishes, so "every declared terminal
         state really is terminal" could not be asserted from outside the vendor
         package.
         """
-        return {ORDER_MACHINE_NAME: ORDER_MACHINE}
+        return {ORDER_MACHINE_NAME: ORDER_MACHINE, FULFILLMENT_MACHINE_NAME: FULFILLMENT_MACHINE}
 
     @property
     def retry_defaults(self) -> ProfileDocument:

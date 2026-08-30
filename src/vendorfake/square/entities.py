@@ -53,6 +53,7 @@ __all__ = [
     "COL",
     "AuthorizationCodeEntity",
     "CatalogObjectEntity",
+    "Fulfillment",
     "LocationEntity",
     "MerchantEntity",
     "Money",
@@ -391,6 +392,64 @@ class Tender:
 
 
 @dataclass(frozen=True, slots=True)
+class Fulfillment:
+    """One fulfillment of an order: how the buyer receives it.
+
+    https://developer.squareup.com/reference/square/objects/Fulfillment --
+    ``uid``, ``type`` (``PICKUP``, ``SHIPMENT``, ``DELIVERY``), ``state``
+    (https://developer.squareup.com/reference/square/enums/FulfillmentState),
+    ``line_item_application`` (``ALL`` when the fulfillment covers the whole
+    order) and one details object named for the type.
+
+    The details are stored as the mapping the request models produced --
+    documented field names only, absent keys absent -- because each of the
+    three details objects has twenty-odd optional fields and a typed view of
+    every one would be a page of readers nothing else consults. The request
+    models in :mod:`vendorfake.square.model.order` are where the field lists
+    live.
+    """
+
+    uid: str
+    type: str
+    state: str = "PROPOSED"
+    line_item_application: str = "ALL"
+    pickup_details: dict[str, Any] | None = None
+    delivery_details: dict[str, Any] | None = None
+    shipment_details: dict[str, Any] | None = None
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> Fulfillment:
+        return cls(
+            uid=_str(entity.get("uid")),
+            type=_str(entity.get("type"), "PICKUP"),
+            state=_str(entity.get("state"), "PROPOSED"),
+            line_item_application=_str(entity.get("line_item_application"), "ALL"),
+            pickup_details=_details(entity.get("pickup_details")),
+            delivery_details=_details(entity.get("delivery_details")),
+            shipment_details=_details(entity.get("shipment_details")),
+        )
+
+    def to_entity(self) -> dict[str, Any]:
+        return compact(
+            {
+                "uid": self.uid,
+                "type": self.type,
+                "state": self.state,
+                "line_item_application": self.line_item_application,
+                "pickup_details": self.pickup_details,
+                "delivery_details": self.delivery_details,
+                "shipment_details": self.shipment_details,
+            }
+        )
+
+
+def _details(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, Mapping):
+        return {str(k): v for k, v in value.items()}
+    return None
+
+
+@dataclass(frozen=True, slots=True)
 class OrderEntity:
     """An order, as stored.
 
@@ -408,6 +467,7 @@ class OrderEntity:
     state: str = "OPEN"
     line_items: tuple[OrderLineItem, ...] = ()
     tenders: tuple[Tender, ...] = ()
+    fulfillments: tuple[Fulfillment, ...] = ()
     reference_id: str | None = None
     customer_id: str | None = None
     source_name: str | None = None
@@ -422,6 +482,7 @@ class OrderEntity:
     def from_entity(cls, entity: Mapping[str, Any]) -> OrderEntity:
         raw_lines = entity.get("line_items")
         raw_tenders = entity.get("tenders")
+        raw_fulfillments = entity.get("fulfillments")
         return cls(
             id=_str(entity["id"]),
             location_id=_str(entity.get("location_id")),
@@ -437,6 +498,15 @@ class OrderEntity:
                 Tender.from_entity(item)
                 for item in (
                     raw_tenders if isinstance(raw_tenders, Sequence) and not isinstance(raw_tenders, str) else ()
+                )
+                if isinstance(item, Mapping)
+            ),
+            fulfillments=tuple(
+                Fulfillment.from_entity(item)
+                for item in (
+                    raw_fulfillments
+                    if isinstance(raw_fulfillments, Sequence) and not isinstance(raw_fulfillments, str)
+                    else ()
                 )
                 if isinstance(item, Mapping)
             ),
@@ -467,6 +537,7 @@ class OrderEntity:
                 "state": self.state,
                 "line_items": [item.to_entity() for item in self.line_items],
                 "tenders": [tender.to_entity() for tender in self.tenders],
+                "fulfillments": [fulfillment.to_entity() for fulfillment in self.fulfillments] or None,
                 "reference_id": self.reference_id,
                 "customer_id": self.customer_id,
                 "source_name": self.source_name,

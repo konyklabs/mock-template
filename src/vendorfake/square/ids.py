@@ -78,6 +78,10 @@ class SquareIds:
     def line_item_uid(self) -> str:
         return self._pick(_MIXED, 22)
 
+    def fulfillment_uid(self) -> str:
+        """The same shape as a line-item uid: 22 mixed-case alphanumerics."""
+        return self._pick(_MIXED, 22)
+
     def location(self) -> str:
         return self._pick(_UPPER_ALNUM, 13)
 

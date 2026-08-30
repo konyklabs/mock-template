@@ -9,6 +9,9 @@ query fingerprint.
 =====================  =========================================================
 CreateOrder            ``POST /v2/orders``
                        https://developer.squareup.com/reference/square/orders-api/create-order
+CreateOrder (legacy)   ``POST /v2/locations/{location_id}/orders``
+                       the path CreateOrder had before ``location_id`` moved
+                       into the body; see :meth:`OrdersSurface.create_order_at_location`
 RetrieveOrder          ``GET  /v2/orders/{order_id}``
                        https://developer.squareup.com/reference/square/orders-api/retrieve-order
 UpdateOrder            ``PUT  /v2/orders/{order_id}``
@@ -88,14 +91,35 @@ which is exactly what a cart UI does when a customer zeroes an item -- reads
 back an order Square would not have returned. Both completion paths now drop
 them; see :func:`_drop_zero_quantity_lines`.
 
+Fulfillments
+------------
+An order carries ``fulfillments`` -- how the buyer receives it -- each with a
+``type`` and a ``state`` that moves through the fulfillment machine in
+:mod:`vendorfake.square.machine`. UpdateOrder merges them sparsely by ``uid``
+exactly as it merges line items: a known uid updates in place, an unknown one
+appends and must name a ``type``, a details field that is present and null is
+cleared. A state change is asserted against the machine before anything is
+written, so an illegal move is a 400 with no version bump.
+
+JUDGMENT -- **a transition stamps the timestamp Square would stamp**, when the
+caller did not supply it: ``placed_at`` on creation, ``accepted_at`` on
+RESERVED, ``ready_at`` / ``packaged_at`` on PREPARED, ``picked_up_at`` /
+``delivered_at`` / ``shipped_at`` on COMPLETED, ``canceled_at`` on CANCELED,
+``failed_at`` on FAILED -- each in the details object named for the type. The
+field descriptions on the three details pages say what each stamp records
+("The timestamp indicating when the fulfillment was picked up by the
+recipient"); that Square sets them itself on the corresponding move is the
+reading, and it is NOT VERIFIED which of them Square would also accept from a
+caller. See :func:`_stamp_transition`.
+
 SHRINK (prototype): CalculateOrder and CloneOrder are not implemented -- they
-add no state behaviour over the six above. Taxes, discounts, service charges,
-fulfillments, returns and refunds are not modelled; see
-:mod:`vendorfake.square.model.order`. There is no Payments API here, so
-PayOrder's ``payment_ids`` are opaque references and the tender total is taken
-from the order rather than from stored payments -- Square requires the payment
-sum to equal the order total, which is trivially true when it is the order
-total.
+add no state behaviour over the routes above. Taxes, discounts, service
+charges, returns and refunds are not modelled, and a fulfillment's
+``entries`` (``line_item_application: ENTRY_LIST``) is not; see
+:mod:`vendorfake.square.model.order`. PayOrder's ``payment_ids`` resolve
+against the Payments surface when they name stored payments and are otherwise
+opaque references whose tender total is taken from the order; see
+:meth:`OrdersSurface.pay_order`.
 """
 
 from __future__ import annotations
@@ -123,17 +147,20 @@ from vendorfake.core.util.numbers import js_parse_float
 from vendorfake.square.entities import (
     COL,
     CatalogObjectEntity,
+    Fulfillment,
     LocationEntity,
     Money,
     OrderEntity,
     OrderLineItem,
     Tender,
 )
-from vendorfake.square.machine import ORDER_MACHINE, OrderState
+from vendorfake.square.machine import FULFILLMENT_MACHINE, ORDER_MACHINE, FulfillmentState, OrderState
 from vendorfake.square.model.common import validate_body
 from vendorfake.square.model.order import (
+    FULFILLMENT_TYPES,
     BatchRetrieveOrdersRequest,
     CreateOrderRequest,
+    FulfillmentRequest,
     LineItemRequest,
     PayOrderRequest,
     SearchOrdersRequest,
@@ -175,6 +202,31 @@ _MACHINE = StateMachine(ORDER_MACHINE)
 """One instance, at module level, because a :class:`StateMachine` holds no
 entity and no store -- it is the definition plus the two assertions over it."""
 
+_FULFILLMENT_MACHINE = StateMachine(FULFILLMENT_MACHINE)
+
+_DETAILS_KEY: Mapping[str, str] = {
+    "PICKUP": "pickup_details",
+    "DELIVERY": "delivery_details",
+    "SHIPMENT": "shipment_details",
+}
+"""The details object each fulfillment type carries."""
+
+_TRANSITION_STAMPS: Mapping[tuple[str, str], str] = {
+    ("PICKUP", FulfillmentState.RESERVED.value): "accepted_at",
+    ("PICKUP", FulfillmentState.PREPARED.value): "ready_at",
+    ("PICKUP", FulfillmentState.COMPLETED.value): "picked_up_at",
+    ("PICKUP", FulfillmentState.CANCELED.value): "canceled_at",
+    ("DELIVERY", FulfillmentState.PREPARED.value): "ready_at",
+    ("DELIVERY", FulfillmentState.COMPLETED.value): "delivered_at",
+    ("DELIVERY", FulfillmentState.CANCELED.value): "canceled_at",
+    ("SHIPMENT", FulfillmentState.PREPARED.value): "packaged_at",
+    ("SHIPMENT", FulfillmentState.COMPLETED.value): "shipped_at",
+    ("SHIPMENT", FulfillmentState.CANCELED.value): "canceled_at",
+    ("SHIPMENT", FulfillmentState.FAILED.value): "failed_at",
+}
+"""Which details stamp a transition sets when the caller did not. JUDGMENT;
+see the module docstring."""
+
 _CREATABLE_STATES: tuple[str, ...] = (OrderState.OPEN.value, OrderState.DRAFT.value)
 """CreateOrder accepts these two. The terminal pair cannot be a starting state:
 "Completed orders are fully paid" and "Canceled orders are not paid" both
@@ -215,8 +267,19 @@ class _LinePatch:
     clear: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class _FulfillmentPatch:
+    """One sparse fulfillment change: top-level assignments, and per-details
+    assignments and clears, in the same two-collection shape as a line patch."""
+
+    uid: str
+    assign: dict[str, Any] = dataclass_field(default_factory=dict)
+    details_assign: dict[str, Any] = dataclass_field(default_factory=dict)
+    details_clear: tuple[str, ...] = ()
+
+
 class OrdersSurface:
-    """The six Orders routes, bound to one vendor's config and id stream."""
+    """The seven Orders routes, bound to one vendor's config and id stream."""
 
     __slots__ = ("_deps",)
 
@@ -255,6 +318,19 @@ class OrdersSurface:
                 # body supplies their own, and a shipped constant would make
                 # every caller of the example collide with every other.
                 example_body={"order": {"location_id": SEED_LOCATION_ID}},
+            ),
+            Route(
+                method="POST",
+                path="/v2/locations/{location_id}/orders",
+                capability=CAPABILITY,
+                handler=self.create_order_at_location,
+                auth="bearer",
+                scopes=("ORDERS_WRITE",),
+                # The same scope as CreateOrder: one key, one order, whichever
+                # path a client used to send it.
+                idempotency=IdempotencySpec(key_path="idempotency_key", scope="orders.create"),
+                operation_id="CreateOrderAtLocation",
+                summary="CreateOrder on its pre-2019 path; the location comes from the URL.",
             ),
             Route(
                 method="POST",
@@ -317,7 +393,46 @@ class OrdersSurface:
     # -- POST /v2/orders ----------------------------------------------------
 
     def create_order(self, args: HandlerArgs) -> ReplyInit:
-        request = validate_body(CreateOrderRequest, args.body())
+        return self._create(args, validate_body(CreateOrderRequest, args.body()))
+
+    # -- POST /v2/locations/{location_id}/orders ----------------------------
+
+    def create_order_at_location(self, args: HandlerArgs) -> ReplyInit:
+        """CreateOrder, on the path it had before the location moved into the body.
+
+        Raw clients built against an older ``Square-Version`` still send
+        ``POST /v2/locations/{location_id}/orders`` with the same body, and the
+        current reference documents only the new path
+        (https://developer.squareup.com/reference/square/orders-api/create-order).
+        The move is recorded in Square's changelog
+        (https://developer.squareup.com/docs/changelog/connect); the exact
+        version that made it is NOT VERIFIED here.
+
+        JUDGMENT -- the URL's location is authoritative. A body that omits
+        ``order.location_id`` takes it from the path; a body that states a
+        *different* one is refused with ``invalid_value`` rather than silently
+        overridden either way, because an order created at a location the
+        caller did not name in one of the two places is the bug this route
+        would otherwise hide. Everything else -- validation, pricing, the
+        idempotency scope -- is CreateOrder's, by delegation.
+        """
+        raw = args.body()
+        order = raw.get("order")
+        if not isinstance(order, Mapping):
+            raise UnitError(UnitErrorKind.MISSING_FIELD, detail="order is required.", field="order")
+        path_location = args.params["location_id"]
+        stated = order.get("location_id")
+        if stated is not None and stated != path_location:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"order.location_id {stated!r} does not match the location in the path, {path_location!r}.",
+                field="order.location_id",
+                info={"path": path_location, "body": stated},
+            )
+        merged = {**raw, "order": {**order, "location_id": path_location}}
+        return self._create(args, validate_body(CreateOrderRequest, merged))
+
+    def _create(self, args: HandlerArgs, request: CreateOrderRequest) -> ReplyInit:
         spec = request.order
         location = _require_location(args.ctx, spec.location_id)
 
@@ -339,6 +454,7 @@ class OrdersSurface:
             currency=location.currency,
             state=state,
             line_items=self._new_line_items(args.ctx, spec.line_items or [], location.currency),
+            fulfillments=self._new_fulfillments(spec.fulfillments or [], args.ctx.clock.iso_ms()),
             reference_id=spec.reference_id,
             customer_id=spec.customer_id,
             ticket_name=spec.ticket_name,
@@ -389,11 +505,24 @@ class OrdersSurface:
 
         clears_line_items = patch.line_items is None and supplied(patch, "line_items")
 
+        fulfillment_patches: tuple[_FulfillmentPatch, ...] | None = None
+        if supplied(patch, "fulfillments"):
+            if patch.fulfillments is None:
+                raise _cannot_be_cleared("order.fulfillments")
+            fulfillment_patches = self._fulfillment_patches(current, patch.fulfillments)
+        now = args.ctx.clock.iso_ms()
+
         def mutate(draft: Entity) -> None:
             if clears_line_items:
                 draft["line_items"] = []
             elif patches is not None:
                 draft["line_items"] = _merge_line_items(_lines_of(draft), patches)
+            if fulfillment_patches is not None:
+                merged = _merge_fulfillments(_fulfillments_of(draft), fulfillment_patches, now)
+                if merged:
+                    draft["fulfillments"] = merged
+                else:
+                    draft.pop("fulfillments", None)
             _assign_or_clear(draft, patch, "reference_id")
             _assign_or_clear(draft, patch, "customer_id")
             _assign_or_clear(draft, patch, "ticket_name")
@@ -734,6 +863,81 @@ class OrdersSurface:
             )
         return tuple(patches)
 
+    # -- fulfillments -------------------------------------------------------
+
+    def _new_fulfillments(self, items: Sequence[FulfillmentRequest], now: str) -> tuple[Fulfillment, ...]:
+        """Fulfillments for CreateOrder: a type each, PROPOSED unless stated.
+
+        A state other than PROPOSED on creation is accepted when the machine
+        allows the move from PROPOSED -- a seller's own app can create an order
+        that is already RESERVED -- and stamped as such a move would be.
+        """
+        built: list[Fulfillment] = []
+        seen: set[str] = set()
+        for index, item in enumerate(items):
+            path = f"order.fulfillments[{index}]"
+            kind = _require_fulfillment_type(item.type, f"{path}.type")
+            uid = item.uid or self._deps.ids.fulfillment_uid()
+            if uid in seen:
+                raise UnitError(
+                    UnitErrorKind.INVALID_VALUE, detail=f"Fulfillment uid {uid} appears twice.", field=f"{path}.uid"
+                )
+            seen.add(uid)
+            state = (item.state or FulfillmentState.PROPOSED.value).upper()
+            if state != FulfillmentState.PROPOSED.value:
+                _FULFILLMENT_MACHINE.assert_transition(FulfillmentState.PROPOSED.value, state, f"Fulfillment {uid}")
+            details = _details_assignments(item, kind, f"{path}")[0]
+            details.setdefault("placed_at", now)
+            if state != FulfillmentState.PROPOSED.value:
+                _stamp_transition(details, kind, state, now)
+            built.append(_fulfillment(uid, kind, state, details))
+        return tuple(built)
+
+    def _fulfillment_patches(
+        self, current: OrderEntity, items: Sequence[FulfillmentRequest]
+    ) -> tuple[_FulfillmentPatch, ...]:
+        """Fulfillments for UpdateOrder: only what the caller mentioned.
+
+        Transitions are asserted *here*, against the stored state, before
+        ``Collection.update`` runs -- so an illegal move is refused with no
+        version bump, the same guarantee a bad line item has.
+        """
+        by_uid = {f.uid: f for f in current.fulfillments}
+        patches: list[_FulfillmentPatch] = []
+        for index, item in enumerate(items):
+            path = f"order.fulfillments[{index}]"
+            uid = item.uid or self._deps.ids.fulfillment_uid()
+            prior = by_uid.get(uid)
+            assign: dict[str, Any] = {}
+            if prior is None:
+                kind = _require_fulfillment_type(item.type, f"{path}.type")
+                assign["type"] = kind
+                state = (item.state or FulfillmentState.PROPOSED.value).upper()
+                if state != FulfillmentState.PROPOSED.value:
+                    _FULFILLMENT_MACHINE.assert_transition(FulfillmentState.PROPOSED.value, state, f"Fulfillment {uid}")
+                assign["state"] = state
+            else:
+                kind = prior.type
+                if supplied(item, "type") and item.type is not None and item.type.upper() != kind:
+                    raise UnitError(
+                        UnitErrorKind.INVALID_VALUE,
+                        detail=f"Fulfillment {uid} is a {kind} fulfillment; its type cannot change.",
+                        field=f"{path}.type",
+                    )
+                if supplied(item, "state"):
+                    if item.state is None:
+                        raise _cannot_be_cleared(f"{path}.state")
+                    state = item.state.upper()
+                    _FULFILLMENT_MACHINE.assert_transition(prior.state, state, f"Fulfillment {uid}")
+                    assign["state"] = state
+            details_assign, details_clear = _details_assignments(item, kind, path)
+            patches.append(
+                _FulfillmentPatch(
+                    uid=uid, assign=assign, details_assign=details_assign, details_clear=tuple(details_clear)
+                )
+            )
+        return tuple(patches)
+
 
 # ---------------------------------------------------------------------------
 # Module-level helpers: pure where they can be, and testable on their own.
@@ -896,6 +1100,125 @@ def _apply_fields_to_clear(draft: Entity, paths: Sequence[str]) -> None:
             draft["line_items"] = []
         elif path in _CLEARABLE_ORDER_FIELDS:
             draft.pop(path, None)
+
+
+def _require_fulfillment_type(raw: str | None, field: str) -> str:
+    if not raw:
+        raise UnitError(UnitErrorKind.MISSING_FIELD, detail="A new fulfillment needs a type.", field=field)
+    kind = raw.upper()
+    if kind not in FULFILLMENT_TYPES:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"type must be one of {', '.join(FULFILLMENT_TYPES)}.",
+            field=field,
+            info={"allowed": list(FULFILLMENT_TYPES)},
+        )
+    return kind
+
+
+def _details_assignments(item: FulfillmentRequest, kind: str, path: str) -> tuple[dict[str, Any], list[str]]:
+    """The details fields a request sets and the ones it clears, for the
+    details object the fulfillment's type carries.
+
+    A details object for a *different* type is refused: a PICKUP fulfillment
+    with ``delivery_details`` is a request Square's object cannot represent,
+    and storing it would echo a shape no consumer could act on.
+    """
+    wanted = _DETAILS_KEY[kind]
+    for other in _DETAILS_KEY.values():
+        if other != wanted and supplied(item, other) and getattr(item, other) is not None:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"{path}.{other} does not apply to a {kind} fulfillment; send {wanted}.",
+                field=f"{path}.{other}",
+            )
+    details = getattr(item, wanted)
+    assign: dict[str, Any] = {}
+    clear: list[str] = []
+    if details is None:
+        return assign, clear
+    for name in details.model_fields_set:
+        value = getattr(details, name)
+        if value is None:
+            clear.append(name)
+        elif hasattr(value, "model_dump"):
+            assign[name] = compact(value.model_dump())
+        else:
+            assign[name] = value
+    return assign, clear
+
+
+def _fulfillment(uid: str, kind: str, state: str, details: dict[str, Any]) -> Fulfillment:
+    """A fulfillment whose one details object is the one its type carries."""
+    return Fulfillment(
+        uid=uid,
+        type=kind,
+        state=state,
+        pickup_details=details if kind == "PICKUP" else None,
+        delivery_details=details if kind == "DELIVERY" else None,
+        shipment_details=details if kind == "SHIPMENT" else None,
+    )
+
+
+def _stamp_transition(details: dict[str, Any], kind: str, state: str, now: str) -> None:
+    """Set the stamp a transition implies, unless the caller already did.
+    JUDGMENT; see the module docstring."""
+    stamp = _TRANSITION_STAMPS.get((kind, state))
+    if stamp is not None and not details.get(stamp):
+        details[stamp] = now
+
+
+def _fulfillments_of(draft: Entity) -> list[dict[str, Any]]:
+    stored = draft.get("fulfillments")
+    if not isinstance(stored, list):
+        return []
+    return [dict(f) for f in stored if isinstance(f, dict)]
+
+
+def _merge_fulfillments(
+    existing: Sequence[dict[str, Any]], patches: Sequence[_FulfillmentPatch], now: str
+) -> list[dict[str, Any]]:
+    """Sparse merge by uid, in place, with the details merged one level down.
+
+    Position is preserved as it is for line items. A transition stamps its
+    details field when the patch did not set it, and ``placed_at`` is stamped
+    on a fulfillment that is new.
+    """
+    by_uid: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for f in existing:
+        uid = str(f.get("uid", ""))
+        by_uid[uid] = f
+        order.append(uid)
+    for patch in patches:
+        prior = by_uid.get(patch.uid)
+        if prior is None:
+            kind = str(patch.assign["type"])
+            details = dict(patch.details_assign)
+            details.setdefault("placed_at", now)
+            state = str(patch.assign.get("state", FulfillmentState.PROPOSED.value))
+            if state != FulfillmentState.PROPOSED.value:
+                _stamp_transition(details, kind, state, now)
+            by_uid[patch.uid] = _fulfillment(patch.uid, kind, state, details).to_entity()
+            order.append(patch.uid)
+            continue
+        merged = {**prior, **patch.assign}
+        kind = str(merged.get("type", "PICKUP"))
+        key = _DETAILS_KEY.get(kind, "pickup_details")
+        stored_details = merged.get(key)
+        details = dict(stored_details) if isinstance(stored_details, dict) else {}
+        details.update(patch.details_assign)
+        for name in patch.details_clear:
+            details.pop(name, None)
+        new_state = patch.assign.get("state")
+        if new_state is not None and new_state != prior.get("state"):
+            _stamp_transition(details, kind, str(new_state), now)
+        if details:
+            merged[key] = details
+        else:
+            merged.pop(key, None)
+        by_uid[patch.uid] = merged
+    return [by_uid[uid] for uid in order]
 
 
 def _drop_zero_quantity_lines(draft: Entity) -> None:

@@ -301,9 +301,9 @@ def test_a_conflicting_variation_leaves_the_whole_request_unwritten(h: Harness) 
     assert response.status == 400
     assert first_error(response)["code"] == "VERSION_MISMATCH"
     assert journal_seq(h) == seq
-    assert search(h, query={"exact_query": {"attribute_name": "name", "attribute_value": "Scone"}}).json()[
-        "objects"
-    ] == []
+    assert (
+        search(h, query={"exact_query": {"attribute_name": "name", "attribute_value": "Scone"}}).json()["objects"] == []
+    )
 
 
 def test_upsert_requires_an_idempotency_key_and_replays_under_it(h: Harness) -> None:

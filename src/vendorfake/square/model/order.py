@@ -25,10 +25,13 @@ timestamp for when the order reached a terminal state, in RFC 3339 format") and
 documented read-only, which is why they are computed here rather than accepted
 from a request.
 
-SHRINK (prototype): taxes, discounts, service charges, fulfillments, returns
-and refunds are not modelled. The corresponding roll-up fields are emitted as
-zero money so a consumer deserialising the full ``Order`` shape still works,
-and ``net_amounts`` is therefore always equal to ``total_money``.
+SHRINK (prototype): taxes, discounts, service charges, returns and refunds are
+not modelled. The corresponding roll-up fields are emitted as zero money so a
+consumer deserialising the full ``Order`` shape still works, and
+``net_amounts`` is therefore always equal to ``total_money``. Fulfillments are
+modelled -- type, state and the three details objects -- and ``entries`` (the
+``ENTRY_LIST`` application) are not: every fulfillment here covers the whole
+order.
 
 Money arithmetic
 ----------------
@@ -125,12 +128,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from vendorfake.core.util.json import compact
 from vendorfake.core.util.numbers import js_parse_float, js_round
-from vendorfake.square.entities import Money, OrderEntity, OrderLineItem, Tender
+from vendorfake.square.entities import Fulfillment, Money, OrderEntity, OrderLineItem, Tender
 
 __all__ = [
+    "FULFILLMENT_TYPES",
     "BatchRetrieveOrdersRequest",
     "CreateOrderRequest",
     "DateTimeFilterRequest",
+    "DeliveryDetailsRequest",
+    "FulfillmentRecipientRequest",
+    "FulfillmentRequest",
+    "FulfillmentWire",
     "LineItemRequest",
     "LineItemWire",
     "MoneyRequest",
@@ -143,9 +151,11 @@ __all__ = [
     "OrderWire",
     "OrdersSortRequest",
     "PayOrderRequest",
+    "PickupDetailsRequest",
     "SearchOrdersFilterRequest",
     "SearchOrdersQueryRequest",
     "SearchOrdersRequest",
+    "ShipmentDetailsRequest",
     "StateFilterRequest",
     "TenderWire",
     "TimeRangeRequest",
@@ -153,6 +163,7 @@ __all__ = [
     "line_item_total",
     "money",
     "order_total",
+    "project_fulfillment",
     "project_line_item",
     "project_order",
     "project_order_entry",
@@ -269,6 +280,36 @@ class TenderWire(BaseModel):
         }
 
 
+class FulfillmentWire(BaseModel):
+    """One ``Fulfillment``. The details object is emitted only when present,
+    and only the one named for the type is ever stored.
+    https://developer.squareup.com/reference/square/objects/Fulfillment
+    """
+
+    model_config = _WIRE
+
+    uid: str
+    type: str
+    state: str
+    line_item_application: str
+    pickup_details: dict[str, Any] | None = None
+    delivery_details: dict[str, Any] | None = None
+    shipment_details: dict[str, Any] | None = None
+
+    def wire(self) -> dict[str, Any]:
+        return compact(
+            {
+                "uid": self.uid,
+                "type": self.type,
+                "state": self.state,
+                "line_item_application": self.line_item_application,
+                "pickup_details": self.pickup_details,
+                "delivery_details": self.delivery_details,
+                "shipment_details": self.shipment_details,
+            }
+        )
+
+
 class NetAmountsWire(BaseModel):
     """``net_amounts``: "The net money amounts (sale money - return money)"."""
 
@@ -313,6 +354,7 @@ class OrderWire(BaseModel):
     ticket_name: str | None = None
     source_name: str | None = None
     line_items: tuple[LineItemWire, ...] = ()
+    fulfillments: tuple[FulfillmentWire, ...] = ()
     tenders: tuple[TenderWire, ...] = ()
     metadata: dict[str, str] | None = None
     closed_at: str | None = None
@@ -320,11 +362,11 @@ class OrderWire(BaseModel):
     def wire(self) -> dict[str, Any]:
         """The order as JSON, with every absent optional omitted.
 
-        ``line_items`` and ``tenders`` are omitted when empty rather than sent
-        as ``[]`` -- the entity half of the one empty-array rule in the module
-        docstring, which also says why the envelope half goes the other way and
-        that Square documents neither. ``source`` is a nested object built from
-        a single stored name.
+        ``line_items``, ``fulfillments`` and ``tenders`` are omitted when empty
+        rather than sent as ``[]`` -- the entity half of the one empty-array
+        rule in the module docstring, which also says why the envelope half
+        goes the other way and that Square documents neither. ``source`` is a
+        nested object built from a single stored name.
         """
         return compact(
             {
@@ -335,6 +377,7 @@ class OrderWire(BaseModel):
                 "ticket_name": self.ticket_name,
                 "source": None if self.source_name is None else {"name": self.source_name},
                 "line_items": [item.wire() for item in self.line_items] if self.line_items else None,
+                "fulfillments": [f.wire() for f in self.fulfillments] if self.fulfillments else None,
                 "metadata": self.metadata,
                 "tenders": [tender.wire() for tender in self.tenders] if self.tenders else None,
                 "created_at": self.created_at,
@@ -445,6 +488,19 @@ def project_line_item(item: OrderLineItem, currency: str) -> LineItemWire:
     )
 
 
+def project_fulfillment(fulfillment: Fulfillment) -> FulfillmentWire:
+    """One stored fulfillment as Square's ``Fulfillment``."""
+    return FulfillmentWire(
+        uid=fulfillment.uid,
+        type=fulfillment.type,
+        state=fulfillment.state,
+        line_item_application=fulfillment.line_item_application,
+        pickup_details=fulfillment.pickup_details,
+        delivery_details=fulfillment.delivery_details,
+        shipment_details=fulfillment.shipment_details,
+    )
+
+
 def _project_tender(tender: Tender) -> TenderWire:
     return TenderWire(
         id=tender.id,
@@ -471,6 +527,7 @@ def project_order(order: OrderEntity) -> dict[str, Any]:
         ticket_name=order.ticket_name,
         source_name=order.source_name,
         line_items=tuple(project_line_item(item, currency) for item in order.line_items),
+        fulfillments=tuple(project_fulfillment(f) for f in order.fulfillments),
         metadata=order.metadata,
         tenders=tuple(_project_tender(tender) for tender in order.tenders),
         created_at=order.created_at,
@@ -601,6 +658,144 @@ class LineItemRequest(BaseModel):
     base_price_money: MoneyRequest | None = None
 
 
+FULFILLMENT_TYPES: tuple[str, ...] = ("PICKUP", "SHIPMENT", "DELIVERY")
+"""The three ``FulfillmentType`` values.
+https://developer.squareup.com/reference/square/enums/FulfillmentType"""
+
+_DETAILS = ConfigDict(extra="ignore", frozen=True, strict=True)
+"""The three details models below list every field their reference page
+documents as writable-or-readable, so that a consumer's request round-trips
+field for field; a key not on the page is dropped, per ``extra="ignore"``,
+rather than stored as though Square would keep it."""
+
+
+class FulfillmentRecipientRequest(BaseModel):
+    """``recipient`` on any of the three details objects.
+    https://developer.squareup.com/reference/square/objects/FulfillmentRecipient
+    """
+
+    model_config = _DETAILS
+
+    customer_id: str | None = None
+    display_name: str | None = None
+    email_address: str | None = None
+    phone_number: str | None = None
+    address: dict[str, Any] | None = None
+
+
+class PickupDetailsRequest(BaseModel):
+    """``pickup_details``, every documented field.
+    https://developer.squareup.com/reference/square/objects/FulfillmentPickupDetails
+
+    JUDGMENT -- the ``*_at`` stamps are accepted from the caller. Square's
+    reference marks several of them read-only (``placed_at``, ``accepted_at``,
+    ``ready_at``, ``picked_up_at``, ...) and stamps them itself as the
+    fulfillment moves; a consumer nonetheless sends ``picked_up_at`` alongside
+    ``state: COMPLETED`` and expects to read it back. This unit stores what was
+    sent and stamps only what was not -- see
+    :func:`vendorfake.square.surface.orders._stamp_transition`. Which fields
+    the real API would silently ignore is NOT VERIFIED.
+    """
+
+    model_config = _DETAILS
+
+    recipient: FulfillmentRecipientRequest | None = None
+    expires_at: str | None = None
+    auto_complete_duration: str | None = None
+    schedule_type: str | None = None
+    pickup_at: str | None = None
+    pickup_window_duration: str | None = None
+    prep_time_duration: str | None = None
+    note: str | None = None
+    placed_at: str | None = None
+    accepted_at: str | None = None
+    rejected_at: str | None = None
+    ready_at: str | None = None
+    expired_at: str | None = None
+    picked_up_at: str | None = None
+    canceled_at: str | None = None
+    cancel_reason: str | None = None
+    is_curbside_pickup: bool | None = None
+    curbside_pickup_details: dict[str, Any] | None = None
+
+
+class DeliveryDetailsRequest(BaseModel):
+    """``delivery_details``, every documented field.
+    https://developer.squareup.com/reference/square/objects/FulfillmentDeliveryDetails
+    The same JUDGMENT on the ``*_at`` stamps as :class:`PickupDetailsRequest`.
+    """
+
+    model_config = _DETAILS
+
+    recipient: FulfillmentRecipientRequest | None = None
+    schedule_type: str | None = None
+    placed_at: str | None = None
+    deliver_at: str | None = None
+    prep_time_duration: str | None = None
+    delivery_window_duration: str | None = None
+    note: str | None = None
+    completed_at: str | None = None
+    in_progress_at: str | None = None
+    rejected_at: str | None = None
+    ready_at: str | None = None
+    delivered_at: str | None = None
+    canceled_at: str | None = None
+    cancel_reason: str | None = None
+    courier_pickup_at: str | None = None
+    courier_pickup_window_duration: str | None = None
+    is_no_contact_delivery: bool | None = None
+    dropoff_notes: str | None = None
+    courier_provider_name: str | None = None
+    courier_support_phone_number: str | None = None
+    square_delivery_id: str | None = None
+    external_delivery_id: str | None = None
+    managed_delivery: bool | None = None
+
+
+class ShipmentDetailsRequest(BaseModel):
+    """``shipment_details``, every documented field.
+    https://developer.squareup.com/reference/square/objects/FulfillmentShipmentDetails
+    """
+
+    model_config = _DETAILS
+
+    recipient: FulfillmentRecipientRequest | None = None
+    carrier: str | None = None
+    shipping_note: str | None = None
+    shipping_type: str | None = None
+    tracking_number: str | None = None
+    tracking_url: str | None = None
+    placed_at: str | None = None
+    in_progress_at: str | None = None
+    packaged_at: str | None = None
+    expected_shipped_at: str | None = None
+    shipped_at: str | None = None
+    canceled_at: str | None = None
+    cancel_reason: str | None = None
+    failed_at: str | None = None
+    failure_reason: str | None = None
+
+
+class FulfillmentRequest(BaseModel):
+    """One entry of ``order.fulfillments``, on create or on a sparse update.
+
+    Every field optional for the reason :class:`LineItemRequest` gives: the
+    same model serves both modes, and the surface enforces that a new
+    fulfillment names a ``type``. ``state`` on create defaults to
+    ``PROPOSED``, the machine's initial state.
+    https://developer.squareup.com/reference/square/objects/Fulfillment
+    """
+
+    model_config = _REQUEST
+
+    uid: str | None = Field(default=None, max_length=60)
+    type: str | None = None
+    state: str | None = None
+    pickup_details: PickupDetailsRequest | None = None
+    delivery_details: DeliveryDetailsRequest | None = None
+    shipment_details: ShipmentDetailsRequest | None = None
+
+
 class NewOrderRequest(BaseModel):
     """``order`` on CreateOrder.
 
@@ -617,6 +812,7 @@ class NewOrderRequest(BaseModel):
     state: str | None = None
     source: OrderSourceRequest | None = None
     line_items: list[LineItemRequest] | None = None
+    fulfillments: list[FulfillmentRequest] | None = None
     metadata: dict[str, str] | None = None
 
 
@@ -652,6 +848,7 @@ class OrderPatch(BaseModel):
     ticket_name: str | None = None
     metadata: dict[str, str] | None = None
     line_items: list[LineItemRequest] | None = None
+    fulfillments: list[FulfillmentRequest] | None = None
 
 
 class UpdateOrderRequest(BaseModel):
