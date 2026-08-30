@@ -28,8 +28,12 @@ from vendorfake.core.kernel.types import UnitContext
 from vendorfake.core.util.json import compact
 from vendorfake.toast.config import ToastConfig
 from vendorfake.toast.entities import COL, RestaurantEntity, TokenEntity
+from vendorfake.toast.model.build import MenuIndex, build_check
 from vendorfake.toast.model.config import MODIFIED_KEY
-from vendorfake.toast.seed.document import SeedDocument, SeedMenuGroup, parse_seed_document
+from vendorfake.toast.model.dates import business_date
+from vendorfake.toast.model.order import CheckRequest, SelectionRequest
+from vendorfake.toast.model.references import RefRequest
+from vendorfake.toast.seed.document import SeedDocument, SeedMenuGroup, SeedSelection, parse_seed_document
 
 __all__ = ["SEED_META", "hydrate_toast"]
 
@@ -45,8 +49,97 @@ def hydrate_toast(ctx: UnitContext, seed: object, config: ToastConfig) -> SeedDo
     _insert_partner(ctx, doc)
     _insert_config(ctx, doc)
     _insert_menu(ctx, doc)
+    _insert_credit_authorizations(ctx, doc)
+    _insert_orders(ctx, doc, config)
     _insert_tokens(ctx, doc, config)
     return doc
+
+
+def _insert_credit_authorizations(ctx: UnitContext, doc: SeedDocument) -> None:
+    for authorization in doc.credit_authorizations:
+        ctx.store.collection(COL.credit_authorizations).insert(
+            {"id": authorization.guid, **authorization.model_dump(exclude={"guid"})}, SEED_META
+        )
+
+
+def _seed_selection(selection: SeedSelection) -> SelectionRequest:
+    return SelectionRequest(
+        item=RefRequest(guid=selection.item),
+        quantity=selection.quantity,
+        externalId=selection.externalId,
+        preModifier=None if selection.preModifier is None else RefRequest(guid=selection.preModifier),
+        modifiers=[_seed_selection(modifier) for modifier in selection.modifiers],
+    )
+
+
+def _assign_guids(built: dict[str, Any], seeded: SeedSelection) -> None:
+    built["guid"] = seeded.guid
+    for built_modifier, seeded_modifier in zip(built.get("modifiers", []), seeded.modifiers, strict=True):
+        _assign_guids(built_modifier, seeded_modifier)
+
+
+def _insert_orders(ctx: UnitContext, doc: SeedDocument, config: ToastConfig) -> None:
+    """Seeded orders are priced by the same builder the surfaces use, with
+    the seed's guids written over the builder's ``None``s -- so a seeded
+    amount can never disagree with what ``/prices`` would say."""
+    if not doc.orders:
+        return
+    restaurant = doc.restaurant
+    index = MenuIndex.from_store(ctx.store, restaurant.guid)
+    dining = {option.guid: option for option in doc.dining_options}
+    tables = {table.guid: table for table in doc.tables}
+    for position, order in enumerate(doc.orders):
+        checks = []
+        for check in order.checks:
+            request = CheckRequest(
+                externalId=check.externalId,
+                tabName=check.tabName,
+                selections=[_seed_selection(selection) for selection in check.selections],
+            )
+            built = build_check(
+                index, request, now=order.openedDate, mint=None, field="", display_number=str(position + 1)
+            )
+            built["guid"] = check.guid
+            for built_selection, seeded in zip(built["selections"], check.selections, strict=True):
+                _assign_guids(built_selection, seeded)
+            checks.append(built)
+        table = None if order.table is None else tables[order.table]
+        ctx.store.collection(COL.orders).insert(
+            compact(
+                {
+                    "id": order.guid,
+                    "restaurant_guid": restaurant.guid,
+                    "client_id": config.client_id,
+                    "externalId": order.externalId,
+                    "openedDate": order.openedDate,
+                    "modifiedDate": order.openedDate,
+                    "createdDate": order.openedDate,
+                    "businessDate": business_date(
+                        order.openedDate,
+                        time_zone=restaurant.general.timeZone,
+                        closeout_hour=restaurant.general.closeoutHour,
+                    ),
+                    "diningOption": {
+                        "guid": order.diningOption,
+                        "entityType": "DiningOption",
+                        "externalId": dining[order.diningOption].externalId,
+                    },
+                    "checks": checks,
+                    "table": None if table is None else {"guid": table.guid, "entityType": "Table"},
+                    "serviceArea": None if table is None else _ref(table.serviceArea, "ServiceArea"),
+                    "revenueCenter": None if table is None else _ref(table.revenueCenter, "RevenueCenter"),
+                    "source": "API",
+                    "approvalStatus": "APPROVED",
+                    "guestOrderStatus": "RECEIVED",
+                    "voided": False,
+                    "numberOfGuests": order.numberOfGuests,
+                    "pricingFeatures": [],
+                    "createdInTestMode": False,
+                    "displayNumber": str(position + 1),
+                }
+            ),
+            SEED_META,
+        )
 
 
 def _insert_restaurant(ctx: UnitContext, doc: SeedDocument) -> None:

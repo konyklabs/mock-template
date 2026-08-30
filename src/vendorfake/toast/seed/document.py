@@ -30,6 +30,8 @@ from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
 __all__ = [
     "SeedAlternatePaymentType",
+    "SeedCheck",
+    "SeedCreditAuthorization",
     "SeedDiningOption",
     "SeedDiscount",
     "SeedDocument",
@@ -39,6 +41,7 @@ __all__ = [
     "SeedMenuV3",
     "SeedModifierGroup",
     "SeedModifierOption",
+    "SeedOrder",
     "SeedPartner",
     "SeedPreModifier",
     "SeedPreModifierGroup",
@@ -46,6 +49,7 @@ __all__ = [
     "SeedRestaurantGeneral",
     "SeedRestaurantService",
     "SeedRevenueCenter",
+    "SeedSelection",
     "SeedServiceArea",
     "SeedServiceCharge",
     "SeedTable",
@@ -340,6 +344,60 @@ class SeedMenuV3(BaseModel):
     preModifierGroups: list[SeedPreModifierGroup] = Field(default_factory=list)
 
 
+# -- orders ------------------------------------------------------------------
+
+
+class SeedSelection(BaseModel):
+    """A seeded selection is priced at hydrate through the same builder the
+    surfaces use; the seed states what was ordered, never an amount."""
+
+    model_config = _SEED
+
+    guid: str = Field(min_length=1)
+    item: str = Field(min_length=1)
+    quantity: float = Field(default=1.0, gt=0)
+    externalId: str | None = None
+    preModifier: str | None = None
+    modifiers: list[SeedSelection] = Field(default_factory=list)
+
+
+class SeedCheck(BaseModel):
+    model_config = _SEED
+
+    guid: str = Field(min_length=1)
+    externalId: str | None = None
+    tabName: str | None = None
+    selections: list[SeedSelection] = Field(min_length=1)
+
+
+class SeedOrder(BaseModel):
+    """An existing, unpaid order with fixed instants (ms) so list filters are
+    reproducible; ``client_id`` defaults to the configured client at hydrate."""
+
+    model_config = _SEED
+
+    guid: str = Field(min_length=1)
+    externalId: str | None = None
+    diningOption: str = Field(min_length=1)
+    table: str | None = None
+    openedDate: int
+    numberOfGuests: int | None = None
+    checks: list[SeedCheck] = Field(min_length=1)
+
+
+class SeedCreditAuthorization(BaseModel):
+    """A pre-authorised card payment, as ``PUT /merchants/{m}/payments/{p}``
+    would have created one (authorizingCcPayments.html); ``amount`` in cents."""
+
+    model_config = _SEED
+
+    guid: str = Field(min_length=1)
+    amount: int = Field(gt=0)
+    cardType: str = "VISA"
+    last4Digits: str = Field(min_length=4, max_length=4)
+    cardEntryMode: str = "PRE_AUTHED"
+
+
 class SeedDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -347,6 +405,8 @@ class SeedDocument(BaseModel):
     restaurant: SeedRestaurant
     partner: SeedPartner | None = None
     tokens: list[SeedToken] = Field(default_factory=list)
+    orders: list[SeedOrder] = Field(default_factory=list)
+    credit_authorizations: list[SeedCreditAuthorization] = Field(default_factory=list)
     #: The instant every config entity reports as last modified (epoch ms).
     config_modified_ms: int = 0
     dining_options: list[SeedDiningOption] = Field(default_factory=list)
@@ -395,7 +455,28 @@ def _check_references(doc: SeedDocument) -> None:
             raise _refuse(f"tables[{i}].revenueCenter", f"revenue center {table.revenueCenter!r} is absent")
     if len([rate for rate in doc.tax_rates if rate.isDefault]) > 1:
         raise _refuse("tax_rates", "at most one tax rate may be the default")
+    dining_ids = {option.guid for option in doc.dining_options}
+    table_ids = {table.guid for table in doc.tables}
     menu = doc.menu_v3
+    item_ids = set() if menu is None else {item.guid for m in menu.menus for _, item in _walk_items(m.menuGroups, "")}
+    option_ids = set() if menu is None else {option.guid for option in menu.modifierOptions}
+    for i, order in enumerate(doc.orders):
+        if order.diningOption not in dining_ids:
+            raise _refuse(f"orders[{i}].diningOption", f"dining option {order.diningOption!r} is absent")
+        if order.table is not None and order.table not in table_ids:
+            raise _refuse(f"orders[{i}].table", f"table {order.table!r} is absent")
+        for j, check in enumerate(order.checks):
+            for k, selection in enumerate(check.selections):
+                if selection.item not in item_ids:
+                    raise _refuse(
+                        f"orders[{i}].checks[{j}].selections[{k}].item", f"menu item {selection.item!r} is absent"
+                    )
+                for m, modifier in enumerate(selection.modifiers):
+                    if modifier.item not in option_ids:
+                        raise _refuse(
+                            f"orders[{i}].checks[{j}].selections[{k}].modifiers[{m}].item",
+                            f"modifier option {modifier.item!r} is absent",
+                        )
     if menu is None:
         return
     group_refs = {group.referenceId for group in menu.modifierGroups}

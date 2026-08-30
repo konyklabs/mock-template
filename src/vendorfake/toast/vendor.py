@@ -62,7 +62,9 @@ from vendorfake.toast.seed.hydrate import hydrate_toast
 from vendorfake.toast.surface.auth import auth_routes
 from vendorfake.toast.surface.config import config_routes
 from vendorfake.toast.surface.menus import menu_routes
+from vendorfake.toast.surface.orders import order_routes
 from vendorfake.toast.surface.partners import partner_routes
+from vendorfake.toast.surface.payments import payment_routes
 from vendorfake.toast.surface.restaurants import restaurant_routes
 
 __all__ = ["TOAST_MAGIC", "ToastVendor", "create_toast_vendor"]
@@ -181,6 +183,8 @@ class ToastVendor:
         if self._routes is None:
             self._routes = (
                 auth_routes(self)
+                + order_routes(self)
+                + payment_routes(self)
                 + menu_routes(self)
                 + config_routes(self)
                 + restaurant_routes(self)

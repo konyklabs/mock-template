@@ -66,7 +66,7 @@ def test_the_documented_shapes_and_money_in_dollars(h: Harness) -> None:
     (table,) = [t for t in h.get("/config/v2/tables").json() if t["guid"] == c.TABLE_1_GUID]
     assert table["serviceArea"] == {"guid": c.SERVICE_AREA_GUID, "entityType": "ServiceArea"}
     assert table["revenueCenter"] == {"guid": c.REVENUE_CENTER_GUID, "entityType": "RevenueCenter"}
-    (discount,) = h.get("/config/v2/discounts").json()
+    discount = next(d for d in h.get("/config/v2/discounts").json() if d["guid"] == c.DISCOUNT_SOUP_GUID)
     assert (
         discount["name"] == "Enjoy more soup." and discount["percentage"] == 100 and discount["promoCodes"] == ["SOUP"]
     )

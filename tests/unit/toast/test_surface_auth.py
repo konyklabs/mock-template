@@ -129,13 +129,13 @@ def test_a_token_lacking_the_scope_gets_the_documented_403_through_the_kernel() 
 
     guarded = Route(
         method="POST",
-        path="/orders/v2/prices",
+        path="/test/guarded",
         capability="auth",
         handler=lambda args: json_({"ok": True}),
         auth="restaurant",
         scopes=("orders:read",),
         operation_id="TestGuarded",
-        summary="Test-only stand-in for the documented 403 on /prices.",
+        summary="Test-only route demanding a scope the read-only token lacks.",
     )
     overlay = VendorOverlay(create_toast_vendor(), routes=lambda routes: (*routes, guarded))
     unit = create_unit(vendor=overlay, profile="full", logger=Silent())
@@ -143,14 +143,14 @@ def test_a_token_lacking_the_scope_gets_the_documented_403_through_the_kernel() 
         api = in_process(unit)
         p = Harness(unit=unit, api=api, auth={})
         weak = p.restricted_token("menus:read")
-        forbidden = api.post("/orders/v2/prices", {}, headers=weak)
+        forbidden = api.post("/test/guarded", {}, headers=weak)
         assert forbidden.status == 403
         assert forbidden.headers["x-unit-error"] == "forbidden_scope"
         assert forbidden.json()["status"] == 403
         assert "orders:read" in forbidden.json()["message"]
-        bad = api.post("/orders/v2/prices", {}, headers={"authorization": "Bearer nope", RESTAURANT_HEADER: RESTAURANT})
+        bad = api.post("/test/guarded", {}, headers={"authorization": "Bearer nope", RESTAURANT_HEADER: RESTAURANT})
         assert bad.status == 401
-        assert api.post("/orders/v2/prices", {}, headers=p.read_auth).status == 200
+        assert api.post("/test/guarded", {}, headers=p.read_auth).status == 200
     finally:
         unit.stop()
 

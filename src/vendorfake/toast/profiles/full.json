@@ -3,6 +3,8 @@
   "summary": "Every capability on. The default profile. Seeds the whole scenario.",
   "capabilities": [
     "auth",
+    "orders",
+    "payments",
     "menus",
     "config",
     "restaurants",

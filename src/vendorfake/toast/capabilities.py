@@ -51,6 +51,14 @@ TOAST_CAPABILITIES: tuple[CapabilityDecl, ...] = (
         summary="Partners API: the restaurants connected to this client, in the documented page envelope.",
     ),
     CapabilityDecl(
+        name="orders",
+        summary="Orders v2: prices, create, read, bulk list, selections, void, discounts, delivery info.",
+    ),
+    CapabilityDecl(
+        name="payments",
+        summary="Payments on a check: OTHER and pre-authorised CREDIT, tips, and the payment reads.",
+    ),
+    CapabilityDecl(
         name="chaos",
         summary="Request-scope fault injection: rate limits, timeouts, server errors, token expiry.",
         kind="behavior",
