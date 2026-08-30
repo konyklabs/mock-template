@@ -152,6 +152,12 @@ class InventorySurface:
                 scopes=("INVENTORY_READ",),
                 operation_id="BatchRetrieveInventoryCounts",
                 summary="Counts filtered by object, location, state or change time.",
+                # Deliberately no PaginationSpec, though this route pages: an
+                # InventoryCount has no id -- Square keys it on the
+                # (object, location, state) triple and documents no identifier
+                # -- and the conformance walk compares rows by the single
+                # declared id_path, so declaring one here would either invent
+                # a field or false-fail on two locations counting one object.
             ),
             Route(
                 method="GET",

@@ -60,6 +60,7 @@ from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import (
     HandlerArgs,
     IdempotencySpec,
+    PaginationSpec,
     ReplyInit,
     Route,
     UnitContext,
@@ -132,6 +133,7 @@ class LoyaltySurface:
                 scopes=("LOYALTY_READ",),
                 operation_id="SearchLoyaltyAccounts",
                 summary="Accounts by phone-number mapping or by customer id.",
+                pagination=PaginationSpec(style="cursor", where="body", items_path="loyalty_accounts"),
             ),
             Route(
                 method="POST",

@@ -54,6 +54,7 @@ from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import (
     HandlerArgs,
     IdempotencySpec,
+    PaginationSpec,
     ReplyInit,
     Route,
     UnitError,
@@ -149,6 +150,10 @@ class CatalogSurface:
                 scopes=("ITEMS_READ",),
                 operation_id="SearchCatalogObjects",
                 summary="Catalog objects by type, by name prefix or exactly, or changed since a time.",
+                # Every filter is optional, so the page walk needs no example
+                # body: an empty query lists the whole catalog, which is what
+                # the walk compares its pages against.
+                pagination=PaginationSpec(style="cursor", where="body", items_path="objects"),
             ),
             Route(
                 method="POST",
