@@ -40,6 +40,83 @@ def test_the_shipped_scenario_parses_and_matches_the_constants(document: dict[st
     assert tuple(tokens[c.SEED_READ_ONLY_ACCESS_TOKEN].scopes or ()) == c.SEED_READ_ONLY_SCOPES
 
 
+def test_every_constant_names_something_the_document_contains(document: dict[str, Any]) -> None:
+    """The constants and the file agree, or this goes red."""
+    guids = {
+        "dining": {d["guid"] for d in document["dining_options"]},
+        "alt": {a["guid"] for a in document["alternate_payment_types"]},
+        "tax": {t["guid"] for t in document["tax_rates"]},
+        "revenue": {r["guid"] for r in document["revenue_centers"]},
+        "area": {s["guid"] for s in document["service_areas"]},
+        "tables": {t["guid"] for t in document["tables"]},
+        "services": {s["guid"] for s in document["restaurant_services"]},
+        "discounts": {d["guid"] for d in document["discounts"]},
+        "charges": {s["guid"] for s in document["service_charges"]},
+        "void": {v["guid"] for v in document["void_reasons"]},
+    }
+    assert {c.DINING_OPTION_DINE_IN_GUID, c.DINING_OPTION_TAKE_OUT_GUID} == guids["dining"]
+    assert {c.ALT_PAYMENT_EXTERNAL_GUID} == guids["alt"]
+    assert {c.TAX_RATE_DEFAULT_GUID} == guids["tax"]
+    assert {c.REVENUE_CENTER_GUID} == guids["revenue"]
+    assert {c.SERVICE_AREA_GUID} == guids["area"]
+    assert {c.TABLE_1_GUID, c.TABLE_2_GUID} == guids["tables"]
+    assert {c.RESTAURANT_SERVICE_DINNER_GUID} == guids["services"]
+    assert {c.DISCOUNT_SOUP_GUID} == guids["discounts"]
+    assert {c.SERVICE_CHARGE_GRATUITY_GUID} == guids["charges"]
+    assert {c.VOID_REASON_GUID} == guids["void"]
+    assert document["tax_rates"][0]["rate"] == c.TAX_RATE_DEFAULT_RATE
+    assert document["config_modified_ms"] == c.SEED_CONFIG_MODIFIED_MS
+    menu = document["menu_v3"]
+    assert menu["lastUpdated"] == c.MENU_LAST_UPDATED_MS
+    assert menu["menus"][0]["guid"] == c.MENU_GUID
+    groups = {g["guid"]: g for g in menu["menus"][0]["menuGroups"]}
+    assert set(groups) == {c.GROUP_MAINS_GUID, c.GROUP_DRINKS_GUID}
+    items = {i["guid"]: i for g in groups.values() for i in g["menuItems"]}
+    assert set(items) == {c.ITEM_SOUP_GUID, c.ITEM_BURGER_GUID, c.ITEM_LEMONADE_GUID}
+    assert items[c.ITEM_SOUP_GUID]["price"] == c.ITEM_SOUP_PRICE_CENTS
+    assert items[c.ITEM_SOUP_GUID]["multiLocationId"] == c.ITEM_SOUP_MULTI_LOCATION_ID
+    assert [g["referenceId"] for g in menu["modifierGroups"]] == [c.MODIFIER_GROUP_SIDES_REF]
+    assert menu["modifierGroups"][0]["guid"] == c.MODIFIER_GROUP_SIDES_GUID
+    assert {o["referenceId"]: o["guid"] for o in menu["modifierOptions"]} == {
+        c.MODIFIER_OPTION_FRIES_REF: c.MODIFIER_OPTION_FRIES_GUID,
+        c.MODIFIER_OPTION_SALAD_REF: c.MODIFIER_OPTION_SALAD_GUID,
+    }
+    assert menu["preModifierGroups"][0]["referenceId"] == c.PRE_MODIFIER_GROUP_REF
+    assert {p["guid"] for p in menu["preModifierGroups"][0]["preModifiers"]} == {
+        c.PRE_MODIFIER_NO_GUID,
+        c.PRE_MODIFIER_EXTRA_GUID,
+    }
+    every_guid = {document["restaurant"]["guid"], *(g for group in guids.values() for g in group), *items, *groups}
+    assert all(len(g) == 36 and g == g.lower() for g in every_guid)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "path"),
+    [
+        (lambda d: d["service_areas"][0].update(revenueCenter="nope"), "service_areas[0].revenueCenter"),
+        (lambda d: d["tables"][0].update(serviceArea="nope"), "tables[0].serviceArea"),
+        (
+            lambda d: d["menu_v3"]["menus"][0]["menuGroups"][0]["menuItems"][0]["taxInfo"].append("nope"),
+            "menu_v3.menus[0].menuGroups[0].menuItems[0].taxInfo[1]",
+        ),
+        (
+            lambda d: d["menu_v3"]["modifierGroups"][0]["modifierOptionReferences"].append(99),
+            "menu_v3.modifierGroups[0].modifierOptionReferences[2]",
+        ),
+        (
+            lambda d: d["menu_v3"]["menus"][0]["menuGroups"][0]["menuItems"][1]["modifierGroupReferences"].append(99),
+            "menu_v3.menus[0].menuGroups[0].menuItems[1].modifierGroupReferences[1]",
+        ),
+    ],
+)
+def test_a_reference_that_does_not_resolve_is_refused_by_path(document: dict[str, Any], mutate: Any, path: str) -> None:
+    broken = copy.deepcopy(document)
+    mutate(broken)
+    with pytest.raises(UnitError) as caught:
+        parse_seed_document(broken)
+    assert caught.value.info is not None and caught.value.info["path"] == path
+
+
 def test_a_misspelled_key_is_a_startup_failure_naming_it(document: dict[str, Any]) -> None:
     broken = copy.deepcopy(document)
     broken["tokns"] = broken.pop("tokens")
@@ -68,6 +145,12 @@ def test_the_store_holds_the_restaurant_and_the_two_tokens(h: Harness) -> None:
     assert restaurant.wire()["guid"] == c.SEED_RESTAURANT_GUID
     assert list(restaurant.wire())[:2] == ["guid", "general"]
     assert store.collection(COL.tokens).size == 2
+    assert store.collection(COL.menus).size == 1
+    assert store.collection(COL.menu_items).size == 3
+    assert store.collection(COL.menu_groups).size == 2
+    assert store.collection(COL.config_menus).size == 1
+    assert store.collection(COL.partners).size == 1
+    assert store.collection(COL.tables).size == 2
 
 
 def test_seeded_writes_are_marked_as_seeded(h: Harness) -> None:

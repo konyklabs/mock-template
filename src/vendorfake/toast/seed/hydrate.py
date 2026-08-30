@@ -11,14 +11,25 @@ started.
 SECOND INVARIANT: **seeded ids come from the document, never from the id
 stream.** The only hydrate-time values are the token expirations and creation
 instants, both volatile fields the digest ignores.
+
+Derived collections -- JUDGMENT: the config API's ``menuItems``,
+``menuGroups`` and ``menus`` are derived from the V3 menu at hydrate, so the
+scenario has one menu and the two APIs agree by construction. The shapes are
+the documented config ones (``model/config.py``); the derivation is this
+project's. The partners row is likewise derived from the restaurant plus the
+seed's ``partner`` block.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 from vendorfake.core.kernel.types import UnitContext
+from vendorfake.core.util.json import compact
 from vendorfake.toast.config import ToastConfig
 from vendorfake.toast.entities import COL, RestaurantEntity, TokenEntity
-from vendorfake.toast.seed.document import SeedDocument, parse_seed_document
+from vendorfake.toast.model.config import MODIFIED_KEY
+from vendorfake.toast.seed.document import SeedDocument, SeedMenuGroup, parse_seed_document
 
 __all__ = ["SEED_META", "hydrate_toast"]
 
@@ -31,6 +42,9 @@ def hydrate_toast(ctx: UnitContext, seed: object, config: ToastConfig) -> SeedDo
         return None
     doc = parse_seed_document(seed)
     _insert_restaurant(ctx, doc)
+    _insert_partner(ctx, doc)
+    _insert_config(ctx, doc)
+    _insert_menu(ctx, doc)
     _insert_tokens(ctx, doc, config)
     return doc
 
@@ -50,6 +64,162 @@ def _insert_restaurant(ctx: UnitContext, doc: SeedDocument) -> None:
         ).to_entity(),
         SEED_META,
     )
+
+
+def _insert_partner(ctx: UnitContext, doc: SeedDocument) -> None:
+    if doc.partner is None:
+        return
+    general = doc.restaurant.general
+    ctx.store.collection(COL.partners).insert(
+        {
+            "id": doc.restaurant.guid,
+            "managementGroupGuid": general.managementGroupGuid,
+            "restaurantName": general.name,
+            "locationName": general.locationName,
+            "createdByEmailAddress": doc.partner.createdByEmailAddress,
+            "externalGroupRef": doc.partner.externalGroupRef,
+            "externalRestaurantRef": doc.partner.externalRestaurantRef,
+            "modifiedDate": doc.partner.modifiedDate,
+            "createdDate": doc.partner.createdDate,
+            "deleted": False,
+        },
+        SEED_META,
+    )
+
+
+def _ref(guid: str, entity_type: str) -> dict[str, str]:
+    return {"guid": guid, "entityType": entity_type}
+
+
+def _insert_config(ctx: UnitContext, doc: SeedDocument) -> None:
+    """The reference lists, stored as the config specification shapes them
+    (``model/config.py``), money in cents, plus the internal modified instant."""
+    store = ctx.store
+    stamp = {MODIFIED_KEY: doc.config_modified_ms}
+
+    def put(collection: str, guid: str, fields: dict[str, Any]) -> None:
+        store.collection(collection).insert({"id": guid, **fields, **stamp}, SEED_META)
+
+    for option in doc.dining_options:
+        put(COL.dining_options, option.guid, option.model_dump(exclude={"guid"}))
+    for kind in doc.alternate_payment_types:
+        put(COL.alternate_payment_types, kind.guid, kind.model_dump(exclude={"guid"}))
+    for rate in doc.tax_rates:
+        put(COL.tax_rates, rate.guid, rate.model_dump(exclude={"guid"}))
+    for center in doc.revenue_centers:
+        put(COL.revenue_centers, center.guid, center.model_dump(exclude={"guid"}))
+    for area in doc.service_areas:
+        put(
+            COL.service_areas,
+            area.guid,
+            {
+                **area.model_dump(exclude={"guid", "revenueCenter"}),
+                "revenueCenter": _ref(area.revenueCenter, "RevenueCenter"),
+            },
+        )
+    for table in doc.tables:
+        put(
+            COL.tables,
+            table.guid,
+            {
+                **table.model_dump(exclude={"guid", "serviceArea", "revenueCenter"}),
+                "serviceArea": _ref(table.serviceArea, "ServiceArea"),
+                "revenueCenter": _ref(table.revenueCenter, "RevenueCenter"),
+            },
+        )
+    for service in doc.restaurant_services:
+        put(COL.restaurant_services, service.guid, service.model_dump(exclude={"guid"}))
+    for discount in doc.discounts:
+        put(COL.discounts, discount.guid, discount.model_dump(exclude={"guid"}))
+    for charge in doc.service_charges:
+        put(COL.service_charges, charge.guid, charge.model_dump(exclude={"guid"}))
+    for reason in doc.void_reasons:
+        put(COL.void_reasons, reason.guid, reason.model_dump(exclude={"guid"}))
+
+
+def _insert_menu(ctx: UnitContext, doc: SeedDocument) -> None:
+    """The V3 document as one entity, then the config-API views derived from it."""
+    menu = doc.menu_v3
+    if menu is None:
+        return
+    store = ctx.store
+    store.collection(COL.menus).insert(
+        {
+            "id": doc.restaurant.guid,
+            "lastUpdated": menu.lastUpdated,
+            "menus": [m.model_dump() for m in menu.menus],
+            "modifierGroups": [g.model_dump() for g in menu.modifierGroups],
+            "modifierOptions": [o.model_dump() for o in menu.modifierOptions],
+            "preModifierGroups": [p.model_dump() for p in menu.preModifierGroups],
+        },
+        SEED_META,
+    )
+    stamp = {MODIFIED_KEY: doc.config_modified_ms}
+    groups_by_ref = {group.referenceId: group for group in menu.modifierGroups}
+    for menu_doc in menu.menus:
+        store.collection(COL.config_menus).insert(
+            {
+                "id": menu_doc.guid,
+                "externalId": None,
+                "name": menu_doc.name,
+                "groups": [_ref(group.guid, "MenuGroup") for group in menu_doc.menuGroups],
+                **stamp,
+            },
+            SEED_META,
+        )
+        _insert_groups(ctx, doc, menu_doc.guid, menu_doc.menuGroups, groups_by_ref, stamp)
+
+
+def _insert_groups(
+    ctx: UnitContext,
+    doc: SeedDocument,
+    menu_guid: str,
+    groups: list[SeedMenuGroup],
+    groups_by_ref: dict[int, Any],
+    stamp: dict[str, Any],
+) -> None:
+    store = ctx.store
+    for group in groups:
+        store.collection(COL.menu_groups).insert(
+            {
+                "id": group.guid,
+                "externalId": None,
+                "name": group.name,
+                "menu": _ref(menu_guid, "Menu"),
+                "items": [
+                    compact({"guid": item.guid, "entityType": "MenuItem", "multiLocationId": item.multiLocationId})
+                    for item in group.menuItems
+                ],
+                "subgroups": [_ref(sub.guid, "MenuGroup") for sub in group.menuGroups],
+                "optionGroups": [],
+                **stamp,
+            },
+            SEED_META,
+        )
+        for item in group.menuItems:
+            option_groups = [
+                _ref(groups_by_ref[ref].guid, "MenuOptionGroup")
+                for ref in item.modifierGroupReferences
+                if ref in groups_by_ref
+            ]
+            store.collection(COL.menu_items).insert(
+                {
+                    "id": item.guid,
+                    "externalId": None,
+                    "name": item.name,
+                    "calories": item.calories,
+                    "sku": item.sku,
+                    "plu": item.plu,
+                    "type": "NONE",
+                    "optionGroups": option_groups,
+                    "inheritOptionGroups": False,
+                    "unitOfMeasure": item.unitOfMeasure,
+                    "inheritUnitOfMeasure": False,
+                    **stamp,
+                },
+                SEED_META,
+            )
+        _insert_groups(ctx, doc, menu_guid, group.menuGroups, groups_by_ref, stamp)
 
 
 def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: ToastConfig) -> None:

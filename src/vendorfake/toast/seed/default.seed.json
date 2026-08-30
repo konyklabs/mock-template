@@ -2,11 +2,17 @@
   "_comment": [
     "Seed scenario for the Toast unit. Fork-owned data, not code.",
     "Entity documents use Toast's own camelCase field names; the top level is snake_case.",
-    "Guids are lowercase UUIDs, the one documented shape (apiUnderstandingGuidsEntityIdentifiersAndMultilocationIds_V2.html).",
-    "  restaurant shape   toast-restaurants-api.yaml (general/location/urls/schedules/delivery/onlineOrdering/prepTimes)",
+    "Guids are lowercase UUIDs, the one documented shape (apiUnderstandingGuidsEntityIdentifiersAndMultilocationIds_V2.html);",
+    "multiLocationIds are 18-digit numeric strings like the documented 100000000171239701; referenceIds are the small ints the V3 maps use.",
+    "MONEY IS INTEGER CENTS HERE: the wire converts to decimal dollars (model/money.py).",
+    "  restaurant shape   toast-restaurants-api.yaml",
     "  closeoutHour 4     JUDGMENT business-date arithmetic, see model/dates.py",
+    "  Tomato Soup 899    the documented /prices example: 8.99 at 0.0625 -> tax 0.56, total 9.55 (apiOrderPrices.html)",
+    "  'Enjoy more soup.' the documented AppliedDiscount name (apiDiscountingOrders.html), a 100% ITEM discount",
+    "  tax rate 0.0625    PERCENT, HALF_UP, isDefault",
     "The seeded tokens are readable strings a human types into curl; minted tokens are JWT-shaped.",
-    "Token expirations are stamped at hydrate from the configured TTL (19168 s, the documented example)."
+    "Token expirations are stamped at hydrate from the configured TTL (19168 s, the documented example).",
+    "config_modified_ms is the fixed instant every config entity reports to a lastModified filter."
   ],
   "restaurant": {
     "guid": "e6a4a8d2-0000-4000-8000-000000000001",
@@ -31,6 +37,13 @@
       "longitude": -89.6501
     }
   },
+  "partner": {
+    "createdByEmailAddress": "owner@example.test",
+    "externalGroupRef": "harvest-rye",
+    "externalRestaurantRef": "harvest-rye-springfield",
+    "createdDate": 1755786102000,
+    "modifiedDate": 1755786102000
+  },
   "tokens": [
     {
       "id": "b1a2c3d4-0000-4000-8000-0000000000f1",
@@ -48,5 +61,243 @@
         "stock:read"
       ]
     }
-  ]
+  ],
+  "config_modified_ms": 1755786102000,
+  "dining_options": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d001",
+      "name": "Dine In",
+      "behavior": "DINE_IN",
+      "curbside": false
+    },
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d002",
+      "name": "Take Out",
+      "behavior": "TAKE_OUT",
+      "curbside": false
+    }
+  ],
+  "alternate_payment_types": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d101",
+      "name": "External"
+    }
+  ],
+  "tax_rates": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d201",
+      "name": "Sales Tax",
+      "isDefault": true,
+      "rate": 0.0625,
+      "type": "PERCENT",
+      "roundingType": "HALF_UP"
+    }
+  ],
+  "revenue_centers": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d301",
+      "name": "Dining Room",
+      "description": "The main floor."
+    }
+  ],
+  "service_areas": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d401",
+      "name": "Main Floor",
+      "revenueCenter": "5d0e2b11-0000-4000-8000-00000000d301"
+    }
+  ],
+  "tables": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d501",
+      "name": "1",
+      "serviceArea": "5d0e2b11-0000-4000-8000-00000000d401",
+      "revenueCenter": "5d0e2b11-0000-4000-8000-00000000d301"
+    },
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d502",
+      "name": "2",
+      "serviceArea": "5d0e2b11-0000-4000-8000-00000000d401",
+      "revenueCenter": "5d0e2b11-0000-4000-8000-00000000d301"
+    }
+  ],
+  "restaurant_services": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d601",
+      "name": "Dinner"
+    }
+  ],
+  "discounts": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d701",
+      "name": "Enjoy more soup.",
+      "active": true,
+      "type": "PERCENT",
+      "percentage": 100,
+      "selectionType": "ITEM",
+      "nonExclusive": false,
+      "promoCodes": [
+        "SOUP"
+      ]
+    }
+  ],
+  "service_charges": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d801",
+      "name": "Gratuity",
+      "amountType": "PERCENT",
+      "percent": 18,
+      "gratuity": true,
+      "taxable": false,
+      "serviceChargeCalculation": "PRE_DISCOUNT",
+      "destination": "SERVER"
+    }
+  ],
+  "void_reasons": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d901",
+      "name": "Guest changed mind"
+    }
+  ],
+  "menu_v3": {
+    "lastUpdated": 1755786102000,
+    "menus": [
+      {
+        "name": "Dinner",
+        "guid": "3c9a1f00-0000-4000-8000-00000000c001",
+        "multiLocationId": "100000000171238001",
+        "description": "The evening menu.",
+        "availability": {
+          "alwaysAvailable": true
+        },
+        "menuGroups": [
+          {
+            "name": "Mains",
+            "guid": "3c9a1f00-0000-4000-8000-00000000c101",
+            "multiLocationId": "100000000171238101",
+            "menuItems": [
+              {
+                "name": "Tomato Soup",
+                "kitchenName": "SOUP",
+                "guid": "3c9a1f00-0000-4000-8000-00000000c201",
+                "multiLocationId": "100000000171238879",
+                "description": "A bowl of tomato soup.",
+                "price": 899,
+                "pricingStrategy": "BASE_PRICE",
+                "taxInfo": [
+                  "5d0e2b11-0000-4000-8000-00000000d201"
+                ],
+                "plu": "1001",
+                "sku": "SOUP-01",
+                "calories": 180,
+                "modifierGroupReferences": []
+              },
+              {
+                "name": "Rye Burger",
+                "kitchenName": "BURGER",
+                "guid": "3c9a1f00-0000-4000-8000-00000000c202",
+                "multiLocationId": "100000000171238202",
+                "description": "A burger on rye, with a side.",
+                "price": 1250,
+                "pricingStrategy": "BASE_PRICE",
+                "taxInfo": [
+                  "5d0e2b11-0000-4000-8000-00000000d201"
+                ],
+                "plu": "1002",
+                "sku": "BURG-01",
+                "calories": 820,
+                "modifierGroupReferences": [
+                  2
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Drinks",
+            "guid": "3c9a1f00-0000-4000-8000-00000000c102",
+            "multiLocationId": "100000000171238102",
+            "menuItems": [
+              {
+                "name": "Lemonade",
+                "guid": "3c9a1f00-0000-4000-8000-00000000c203",
+                "multiLocationId": "100000000171238203",
+                "price": 325,
+                "pricingStrategy": "BASE_PRICE",
+                "taxInfo": [
+                  "5d0e2b11-0000-4000-8000-00000000d201"
+                ],
+                "plu": "2001",
+                "sku": "LEMN-01",
+                "calories": 120
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "modifierGroups": [
+      {
+        "referenceId": 2,
+        "name": "Sides",
+        "guid": "3c9a1f00-0000-4000-8000-00000000c301",
+        "multiLocationId": "100000000171238301",
+        "pricingStrategy": "NONE",
+        "minSelections": 0,
+        "maxSelections": 1,
+        "requiredMode": "OPTIONAL",
+        "isMultiSelect": false,
+        "preModifierGroupReference": 10,
+        "modifierOptionReferences": [
+          6,
+          7
+        ]
+      }
+    ],
+    "modifierOptions": [
+      {
+        "referenceId": 6,
+        "name": "Fries",
+        "guid": "3c9a1f00-0000-4000-8000-00000000c401",
+        "multiLocationId": "100000000171238401",
+        "price": 0,
+        "pricingStrategy": "BASE_PRICE",
+        "isDefault": true
+      },
+      {
+        "referenceId": 7,
+        "name": "Side Salad",
+        "guid": "3c9a1f00-0000-4000-8000-00000000c402",
+        "multiLocationId": "100000000171238402",
+        "price": 150,
+        "pricingStrategy": "BASE_PRICE",
+        "isDefault": false
+      }
+    ],
+    "preModifierGroups": [
+      {
+        "referenceId": 10,
+        "name": "Portion",
+        "guid": "3c9a1f00-0000-4000-8000-00000000c500",
+        "multiLocationId": "100000000171238500",
+        "preModifiers": [
+          {
+            "name": "NO",
+            "guid": "3c9a1f00-0000-4000-8000-00000000c501",
+            "multiLocationId": "100000000171238501",
+            "multiplicationFactor": 0,
+            "displayMode": "PREFIX",
+            "chargeAsExtra": false
+          },
+          {
+            "name": "EXTRA",
+            "guid": "3c9a1f00-0000-4000-8000-00000000c502",
+            "multiLocationId": "100000000171238502",
+            "multiplicationFactor": 2,
+            "displayMode": "PREFIX",
+            "chargeAsExtra": true
+          }
+        ]
+      }
+    ]
+  }
 }

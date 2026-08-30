@@ -35,6 +35,22 @@ TOAST_CAPABILITIES: tuple[CapabilityDecl, ...] = (
         summary="The machine-client login: clientId/clientSecret for a Bearer JWT, no refresh.",
     ),
     CapabilityDecl(
+        name="menus",
+        summary="Menus API V3: the published menu document and its metadata.",
+    ),
+    CapabilityDecl(
+        name="config",
+        summary="Configuration API v2: thirteen reference lists, by guid, with lastModified and page tokens.",
+    ),
+    CapabilityDecl(
+        name="restaurants",
+        summary="Restaurants API: one restaurant, and a management group's restaurants.",
+    ),
+    CapabilityDecl(
+        name="partners",
+        summary="Partners API: the restaurants connected to this client, in the documented page envelope.",
+    ),
+    CapabilityDecl(
         name="chaos",
         summary="Request-scope fault injection: rate limits, timeouts, server errors, token expiry.",
         kind="behavior",
