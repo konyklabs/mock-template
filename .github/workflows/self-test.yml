@@ -31,3 +31,15 @@ jobs:
 
       - name: Self-test
         run: bash tools/self-test.sh
+
+  # The wheel, installed into a clean venv with no source tree beside it, as
+  # the container. This is the only run that can catch a data file the wheel
+  # does not carry: everything above works from the checkout.
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build and verify the image
+        run: bash tools/verify_image_build.sh
