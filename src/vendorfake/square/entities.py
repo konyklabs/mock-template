@@ -442,6 +442,20 @@ class Fulfillment:
     every one would be a page of readers nothing else consults. The request
     models in :mod:`vendorfake.square.model.order` are where the field lists
     live.
+
+    ``supplied_stamps`` is the one field that is **stored and digested but
+    never on the wire**. The details stamps (``placed_at``, ``picked_up_at``,
+    ...) are volatile to the state digest because this unit sets them from
+    its clock, and two units driven alike on different clocks must digest
+    alike. A caller may send the same stamps, though, and a value the caller
+    sent is state -- two orders whose consumers sent different ``picked_up_at``
+    values are different orders. So every caller-supplied value for a name
+    the digest treats as volatile is mirrored here, where the digest sees it;
+    the wire projection (``project_fulfillment``) never reads it. It is a
+    sequence of ``(name, value)`` pairs and not a mapping on purpose: the
+    digest scrubs a volatile *name* at any depth, so a mirror keyed
+    ``placed_at`` would be scrubbed along with the stamp it mirrors. See
+    ``surface/orders.py``, "Stamps and the digest".
     """
 
     uid: str
@@ -451,6 +465,7 @@ class Fulfillment:
     pickup_details: dict[str, Any] | None = None
     delivery_details: dict[str, Any] | None = None
     shipment_details: dict[str, Any] | None = None
+    supplied_stamps: tuple[tuple[str, Any], ...] | None = None
 
     @classmethod
     def from_entity(cls, entity: Mapping[str, Any]) -> Fulfillment:
@@ -462,6 +477,7 @@ class Fulfillment:
             pickup_details=_details(entity.get("pickup_details")),
             delivery_details=_details(entity.get("delivery_details")),
             shipment_details=_details(entity.get("shipment_details")),
+            supplied_stamps=_pairs(entity.get("supplied_stamps")),
         )
 
     def to_entity(self) -> dict[str, Any]:
@@ -474,6 +490,7 @@ class Fulfillment:
                 "pickup_details": self.pickup_details,
                 "delivery_details": self.delivery_details,
                 "shipment_details": self.shipment_details,
+                "supplied_stamps": [list(pair) for pair in self.supplied_stamps] if self.supplied_stamps else None,
             }
         )
 
@@ -481,6 +498,13 @@ class Fulfillment:
 def _details(value: Any) -> dict[str, Any] | None:
     if isinstance(value, Mapping):
         return {str(k): v for k, v in value.items()}
+    return None
+
+
+def _pairs(value: Any) -> tuple[tuple[str, Any], ...] | None:
+    """A stored ``[[name, value], ...]`` list back as pairs; anything else is absent."""
+    if isinstance(value, list) and value:
+        return tuple((str(pair[0]), pair[1]) for pair in value if isinstance(pair, list | tuple) and len(pair) == 2)
     return None
 
 

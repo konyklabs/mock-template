@@ -283,11 +283,21 @@ def control_plane_routes(
         shaped: list[dict[str, Any]] = []
         for kind in UnitErrorKind:
             result = ctx.vendor.errors.shape(UnitError(kind, detail=f"conformance probe for {kind.value}"), ctx)
+            provenance = described.get(kind.value, {}).get("provenance")
+            if provenance is None:
+                # Unreachable after the unit's startup check of describe();
+                # a 500 that says what is missing rather than a 200 with null.
+                raise UnitError(
+                    UnitErrorKind.INTERNAL,
+                    detail=f"ErrorShaper.describe() publishes no provenance for {kind.value!r}; the unit's "
+                    "startup check should have refused this vendor.",
+                    info={"kind": kind.value},
+                )
             shaped.append(
                 {
                     "kind": kind.value,
                     "status": result.status,
-                    "provenance": described.get(kind.value, {}).get("provenance"),
+                    "provenance": provenance,
                     "body": result.body,
                     "headers": dict(result.headers),
                 }

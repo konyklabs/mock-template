@@ -93,7 +93,7 @@ from vendorfake.square.surface.directory import directory_routes
 from vendorfake.square.surface.inventory import inventory_routes
 from vendorfake.square.surface.loyalty import loyalty_routes
 from vendorfake.square.surface.oauth import oauth_routes
-from vendorfake.square.surface.orders import order_routes
+from vendorfake.square.surface.orders import FULFILLMENT_STAMPS, order_routes
 from vendorfake.square.surface.payments import payment_routes
 from vendorfake.square.surface.webhooks import webhook_routes
 
@@ -156,42 +156,36 @@ _VOLATILE_FIELDS: tuple[str, ...] = (
     "calculated_at",
     "enrolled_at",
     "mapping_created_at",
-    # Fulfillment-details stamps, one level down inside `fulfillments[]`: the
-    # creation stamp and every transition stamp `_TRANSITION_STAMPS` in
-    # surface/orders.py can set. The digest matches names at any depth, so a
-    # name here covers `tenders[].created_at` too without listing it (the
-    # core already covers `created_at`).
-    "placed_at",
-    "accepted_at",
-    "rejected_at",
-    "ready_at",
-    "expired_at",
-    "picked_up_at",
-    "canceled_at",
-    "packaged_at",
-    "shipped_at",
-    "failed_at",
-    "delivered_at",
-    "completed_at",
-    "in_progress_at",
+    # Fulfillment-details stamps, one level down inside `fulfillments[]`:
+    # `placed_at` on creation and every transition stamp, exactly the set
+    # surface/orders.py can write from the clock. The digest matches names at
+    # any depth, so a name here covers `tenders[].created_at` too without
+    # listing it (the core already covers `created_at`).
+    *sorted(FULFILLMENT_STAMPS),
 )
-"""Entity fields whose values are excluded from the state digest because they
-carry wall-clock time. Two units seeded identically a second apart, and driven
-with the same traffic, must still agree, and these are the fields that would
-otherwise make them differ.
+"""Entity fields whose values are excluded from the state digest because this
+unit writes them from its clock. Two units seeded identically a second apart,
+and driven with the same traffic, must still agree, and these are the fields
+that would otherwise make them differ.
 
-Two properties of the digest matter here, both the core's
-(``Store.entity_digest``): a name matches **at any depth**, so the stamps
-inside ``tenders[]``, ``fulfillments[].pickup_details`` and
-``reward_tiers[]`` are covered; and a set field still hashes as *set*, so a
-spent authorization code (``used_at``) and a fresh one digest differently
-although the instant itself is ignored. ``tests/unit/square/test_digest_determinism.py``
-drives every write path that stamps something against two units an hour apart.
+The rule, stated once: **a stamp the unit set is volatile; a value the caller
+sent is state.** Two properties of the core digest (``Store.entity_digest``)
+carry the first half -- a name matches at any depth, so the stamps inside
+``tenders[]``, ``fulfillments[].pickup_details`` and ``reward_tiers[]`` are
+covered, and a set field still hashes as *set*, so a spent authorization code
+(``used_at``) and a fresh one digest differently although the instant itself
+is ignored. The second half is the vendor's: a fulfillment stamp the *caller*
+supplied under one of these names (``picked_up_at`` beside ``state:
+COMPLETED``, ``expires_at`` on pickup details) is mirrored into the
+fulfillment's ``supplied_stamps`` -- ``[name, value]`` pairs, so no volatile
+name appears as a key -- which the digest hashes and the wire never shows -- so two orders that differ only in a caller-sent
+instant digest differently. ``tests/unit/square/test_digest_determinism.py``
+pins both halves.
 
 Not listed on purpose: ``pickup_at``, ``deliver_at``, ``courier_pickup_at``
-and the other caller-supplied *schedule* instants. They are what the consumer
-asked for, not what the clock said, and two consumers asking for different
-pickup times are different state."""
+and the other *schedule* instants, which only a caller ever sets. They are
+what the consumer asked for, not what the clock said, and stay in the digest
+under their own names."""
 
 
 class SquareVendor:

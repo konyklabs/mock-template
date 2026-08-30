@@ -394,6 +394,11 @@ class SquareErrorShaper:
             ]
         }
         if self._sidecar:
+            # Since konyklabs/roadmap#35 the sidecar is the core's: `info`
+            # keys come first and the reserved `kind`/`status_provenance` last
+            # (so an info document cannot clobber them), and None-valued info
+            # keys are compacted away. Before, this vendor wrote the reserved
+            # keys first and kept None values. Nothing pinned either detail.
             body["unit_error"] = unit_error_sidecar(err, mapping.provenance)
         headers = mechanism_headers(err, retry_after_header=self._retry_after_header)
         return ShapedError(status=mapping.status, body=body, headers=headers)

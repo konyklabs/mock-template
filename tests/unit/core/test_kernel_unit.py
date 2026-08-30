@@ -8,10 +8,11 @@ checked auth first; these assert the *other* step did not run.
 from __future__ import annotations
 
 import threading
+from typing import Any
 
 import pytest
 
-from tests.fakes import FakeAuth, FakeVendor, capability, make_unit, route
+from tests.fakes import FakeAuth, FakeErrors, FakeVendor, capability, make_unit, route
 from vendorfake.core.kernel.reply import json_, no_content
 from vendorfake.core.kernel.types import (
     IdempotencySpec,
@@ -589,6 +590,48 @@ def test_declaring_webhooks_with_a_schedule_starts() -> None:
         capabilities=("orders", "chaos", "webhooks", "webhooks.chaos"),
     )
     assert unit.name == "acme"
+
+
+class _NoDescribe:
+    shape = FakeErrors.shape
+    not_found = FakeErrors.not_found
+
+
+class _ShortDescribe(FakeErrors):
+    def describe(self) -> dict[str, dict[str, Any]]:
+        rows = super().describe()
+        del rows["timeout"]
+        return rows
+
+
+class _UnlabelledDescribe(FakeErrors):
+    def describe(self) -> dict[str, dict[str, Any]]:
+        rows = super().describe()
+        rows["timeout"] = {"status": 504}
+        return rows
+
+
+def test_a_shaper_without_describe_is_a_startup_failure() -> None:
+    """Otherwise the first GET /__unit/errors 500s with a leaked
+    `'NoneType' object is not callable`."""
+    with pytest.raises(UnitError) as caught:
+        make_unit([route("GET", "/v2/orders", _handler([]))], vendor=FakeVendor(errors=_NoDescribe()))  # type: ignore[arg-type]
+    assert caught.value.field == "vendor.errors.describe"
+    assert "no describe()" in str(caught.value)
+
+
+def test_a_describe_table_short_of_a_kind_is_a_startup_failure_naming_it() -> None:
+    with pytest.raises(UnitError) as caught:
+        make_unit([route("GET", "/v2/orders", _handler([]))], vendor=FakeVendor(errors=_ShortDescribe()))
+    assert caught.value.field == "vendor.errors.describe"
+    assert "missing: ['timeout']" in str(caught.value)
+
+
+def test_a_describe_row_without_provenance_is_a_startup_failure_naming_it() -> None:
+    with pytest.raises(UnitError) as caught:
+        make_unit([route("GET", "/v2/orders", _handler([]))], vendor=FakeVendor(errors=_UnlabelledDescribe()))
+    assert caught.value.field == "vendor.errors.describe"
+    assert caught.value.info == {"kinds": ["timeout"]}
 
 
 def test_a_vendor_route_under_the_control_plane_prefix_refuses_to_start() -> None:

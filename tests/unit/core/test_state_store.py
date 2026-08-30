@@ -697,6 +697,40 @@ def test_a_nested_volatile_field_still_counts_as_present() -> None:
     assert order_store(placed=True).entity_digest() != order_store(placed=False).entity_digest()
 
 
+def test_a_container_under_a_volatile_name_is_walked_not_collapsed() -> None:
+    """Only a scalar becomes the marker. A dict that merely shares a volatile
+    name keeps its own fields in the digest, so a change inside it moves the
+    digest -- while a volatile scalar inside it is still ignored."""
+
+    def store_with(inner: dict[str, object]) -> Store:
+        store = make_store()
+        store.mark_volatile("expires_at")
+        store.collection("things").insert({"id": "t1", "expires_at": inner})
+        return store
+
+    a = store_with({"policy": "strict", "expires_at": "2024-01-01T00:00:00Z"})
+    b = store_with({"policy": "lax", "expires_at": "2024-01-01T00:00:00Z"})
+    c = store_with({"policy": "strict", "expires_at": "2030-06-06T06:06:06Z"})
+    assert a.entity_digest() != b.entity_digest()
+    assert a.entity_digest() == c.entity_digest()
+
+    listed = make_store()
+    listed.mark_volatile("expires_at")
+    listed.collection("things").insert({"id": "t1", "expires_at": [{"n": 1, "expires_at": "x"}]})
+    expected = {
+        "things": {
+            "t1": {
+                "id": "t1",
+                "version": 1,
+                "created_at": VOLATILE_PRESENT,
+                "updated_at": VOLATILE_PRESENT,
+                "expires_at": [{"n": 1, "expires_at": VOLATILE_PRESENT}],
+            }
+        }
+    }
+    assert listed.entity_digest() == _digest_of_literal(expected)
+
+
 def test_the_digest_is_the_canonical_hash_of_the_scrubbed_entities() -> None:
     """Pinned against the literal so the marker and the scrub shape are part
     of the contract, not an implementation detail a port may vary."""

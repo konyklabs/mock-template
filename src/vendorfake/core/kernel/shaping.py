@@ -66,15 +66,19 @@ Provenance = Literal["documented", "judgment"]
 DEFAULT_RETRY_AFTER = "1"
 
 
-def assert_error_table_total(table: Mapping[UnitErrorKind, object], *, name: str) -> None:
+def assert_error_table_total(table: Mapping[UnitErrorKind, object] | Mapping[str, object], *, name: str) -> None:
     """Raise unless ``table`` maps every :class:`UnitErrorKind` exactly once.
 
-    Called at module import by every vendor's ``errors`` module; ``name`` is
-    the table's own so the failure names the file to fix.
+    Called at module import by every vendor's ``errors`` module on its table,
+    and at unit construction on what ``ErrorShaper.describe()`` returns --
+    which is keyed by the kinds' *values*, so either spelling of a key is
+    accepted. ``name`` is the table's own so the failure names what to fix.
     """
-    if set(table) != set(UnitErrorKind):
-        missing = sorted(kind.value for kind in UnitErrorKind if kind not in table)
-        extra = sorted(str(kind) for kind in table if kind not in set(UnitErrorKind))
+    present = {kind.value if isinstance(kind, UnitErrorKind) else str(kind) for kind in table}
+    expected = {kind.value for kind in UnitErrorKind}
+    if present != expected:
+        missing = sorted(expected - present)
+        extra = sorted(present - expected)
         raise RuntimeError(
             f"{name} must map every UnitErrorKind exactly once; "
             f"missing: {missing or 'none'}; unknown: {extra or 'none'}"

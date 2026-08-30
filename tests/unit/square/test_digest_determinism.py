@@ -166,6 +166,32 @@ def order_with_fulfillment(h: Harness) -> None:
     order(h, fulfillments=[{"uid": "f1", "type": "PICKUP", "pickup_details": {"note": "x"}}])
 
 
+SUPPLIED_STAMP = "2026-08-30T10:00:00Z"
+
+
+def order_with_supplied_stamps(h: Harness, stamp: str = SUPPLIED_STAMP) -> str:
+    """A fulfillment whose `placed_at` and `expires_at` the caller sent, then
+    a completion whose `picked_up_at` the caller sent too: three values the
+    unit would otherwise have stamped from its clock."""
+    created = order(
+        h,
+        fulfillments=[{"uid": "f1", "type": "PICKUP", "pickup_details": {"placed_at": stamp, "expires_at": stamp}}],
+    )
+    response = h.api.put(
+        f"/v2/orders/{created}",
+        {
+            "idempotency_key": "det-complete",
+            "order": {
+                "version": 1,
+                "fulfillments": [{"uid": "f1", "state": "COMPLETED", "pickup_details": {"picked_up_at": stamp}}],
+            },
+        },
+        headers=h.auth,
+    )
+    assert response.status == 200, response.text
+    return created
+
+
 def digest_after(traffic: Traffic, *, advance_ms: int) -> str:
     for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
         if advance_ms:
@@ -190,6 +216,7 @@ HOUR_MS = 60 * 60 * 1000
         pytest.param(payment_against_order, id="payment-tenders-order"),
         pytest.param(pay_order_opaque, id="pay-order"),
         pytest.param(order_with_fulfillment, id="order-with-fulfillment"),
+        pytest.param(order_with_supplied_stamps, id="order-with-caller-supplied-stamps"),
     ],
 )
 def test_two_units_driven_alike_an_hour_apart_digest_alike(traffic: Traffic) -> None:
@@ -261,3 +288,88 @@ def test_a_spent_code_and_a_revoked_token_move_the_digest_by_their_mark_alone() 
         with_mark = store.entity_digest()
         record.pop("revoked_at")
         assert store.entity_digest() != with_mark
+
+
+# ---------------------------------------------------------------------------
+# A stamp the unit set is volatile; a value the caller sent is state.
+# ---------------------------------------------------------------------------
+
+
+def digest_with_supplied(stamp: str) -> str:
+    for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
+        order_with_supplied_stamps(h, stamp)
+        return str(h.api.get("/__unit/state").json()["digest"])
+    raise AssertionError("harness yielded nothing")
+
+
+def test_two_units_differing_only_in_a_caller_supplied_stamp_digest_differently() -> None:
+    """The reviewer's A/B: same clock, same traffic, and the only difference
+    is the instant the *caller* sent for `placed_at`/`expires_at`/`picked_up_at`.
+    Those names are volatile -- the unit sets them from its clock -- but a
+    value the caller sent is state, mirrored into `supplied_stamps`, so the
+    digests must differ."""
+    assert digest_with_supplied("2026-08-30T10:00:00Z") != digest_with_supplied("2026-08-30T11:00:00Z")
+
+
+def test_the_mirror_is_stored_and_digested_but_never_on_the_wire() -> None:
+    from vendorfake.square.entities import COL
+
+    for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
+        order_id = order_with_supplied_stamps(h)
+        stored = h.unit.context.store.raw(COL.orders)[order_id]["fulfillments"][0]
+        assert stored["supplied_stamps"] == [
+            ["expires_at", SUPPLIED_STAMP],
+            ["picked_up_at", SUPPLIED_STAMP],
+            ["placed_at", SUPPLIED_STAMP],
+        ]
+        wire = h.api.get(f"/v2/orders/{order_id}", headers=h.auth).json()["order"]["fulfillments"][0]
+        assert "supplied_stamps" not in wire
+        assert wire["pickup_details"]["picked_up_at"] == SUPPLIED_STAMP
+        listed = h.api.post("/v2/orders/search", {"location_ids": [SEED_LOCATION_ID]}, headers=h.auth).json()
+        assert all("supplied_stamps" not in f for o in listed["orders"] for f in o.get("fulfillments", []))
+
+        # The mirror is what the digest sees: drop it from the live map and
+        # the digest moves, while the volatile stamp beside it is ignored.
+        with_mirror = h.unit.context.store.entity_digest()
+        stored["pickup_details"]["picked_up_at"] = "1999-01-01T00:00:00Z"
+        assert h.unit.context.store.entity_digest() == with_mirror
+        stored.pop("supplied_stamps")
+        assert h.unit.context.store.entity_digest() != with_mirror
+
+
+def test_a_unit_set_stamp_is_not_mirrored_and_a_cleared_one_leaves_the_mirror() -> None:
+    from vendorfake.square.entities import COL
+
+    for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
+        created = order(h, fulfillments=[{"uid": "f1", "type": "PICKUP", "pickup_details": {"note": "x"}}])
+        stored = h.unit.context.store.raw(COL.orders)[created]["fulfillments"][0]
+        assert "placed_at" in stored["pickup_details"]  # the unit stamped it
+        assert "supplied_stamps" not in stored  # and mirrored nothing
+
+        sent = h.api.put(
+            f"/v2/orders/{created}",
+            {
+                "idempotency_key": "send",
+                "order": {
+                    "version": 1,
+                    "fulfillments": [{"uid": "f1", "pickup_details": {"expires_at": SUPPLIED_STAMP}}],
+                },
+            },
+            headers=h.auth,
+        )
+        assert sent.status == 200, sent.text
+        stored = h.unit.context.store.raw(COL.orders)[created]["fulfillments"][0]
+        assert stored["supplied_stamps"] == [["expires_at", SUPPLIED_STAMP]]
+
+        cleared = h.api.put(
+            f"/v2/orders/{created}",
+            {
+                "idempotency_key": "clear",
+                "order": {"version": 2, "fulfillments": [{"uid": "f1", "pickup_details": {"expires_at": None}}]},
+            },
+            headers=h.auth,
+        )
+        assert cleared.status == 200, cleared.text
+        stored = h.unit.context.store.raw(COL.orders)[created]["fulfillments"][0]
+        assert "supplied_stamps" not in stored
+        assert "expires_at" not in stored["pickup_details"]

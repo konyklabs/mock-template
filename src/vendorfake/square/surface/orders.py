@@ -72,6 +72,22 @@ clear naming the uid a new *unnamed* line in the same request is about to be
 minted under is ignored too, because the tendered-floor probe below cannot
 see that uid and the commit must not disagree with the probe.
 
+Stamps and the digest
+---------------------
+The details stamps are set from the unit's clock, so they are volatile to
+the state digest (``_VOLATILE_FIELDS`` in ``vendor.py`` names exactly
+:data:`FULFILLMENT_STAMPS`): two units driven alike on different clocks must
+digest alike, and the digest's presence marker still catches a stamp that
+stopped being set. A caller may send the same stamps -- ``picked_up_at``
+beside ``state: COMPLETED`` -- and a value the caller sent is state, not
+clock. The rule is therefore: **a stamp the unit set is volatile; a value the
+caller supplied is digested**, and it is kept by mirroring every supplied
+value for a volatile name into the fulfillment's ``supplied_stamps`` -- a
+list of ``[name, value]`` pairs the wire projection never emits, and pairs
+rather than a mapping because a mirror *keyed* by the stamp's name would be
+scrubbed at any depth exactly like the stamp. Clearing the stamp with a null
+clears the mirror too.
+
 The tendered floor
 ------------------
 An OPEN order that has been partly tendered cannot be shrunk below what its
@@ -257,6 +273,18 @@ _TRANSITION_STAMPS: Mapping[tuple[str, str], str] = {
 }
 """Which details stamp a transition sets when the caller did not. JUDGMENT;
 see the module docstring."""
+
+FULFILLMENT_STAMPS: frozenset[str] = frozenset({"placed_at", *_TRANSITION_STAMPS.values()})
+"""Every details stamp this unit can set from its clock: ``placed_at`` on
+creation and each transition stamp above. The vendor declares exactly these
+volatile to the state digest -- see "Stamps and the digest"."""
+
+_SHADOWED_STAMPS: frozenset[str] = FULFILLMENT_STAMPS | {"expires_at"}
+"""Details fields whose *name* the digest treats as volatile: the unit-set
+stamps, plus ``expires_at``, which is volatile at the top level for OAuth
+tokens and is matched at any depth. A caller-supplied value under any of
+these names is mirrored into ``Fulfillment.supplied_stamps`` so the digest
+still sees it."""
 
 _CREATABLE_STATES: tuple[str, ...] = (OrderState.OPEN.value, OrderState.DRAFT.value)
 """CreateOrder accepts these two. The terminal pair cannot be a starting state:
@@ -1021,7 +1049,7 @@ class OrdersSurface:
         the caller mints after everything in the request has passed -- the
         discipline PayOrder keeps for tender ids.
         """
-        checked: list[tuple[str | None, str, str, dict[str, Any]]] = []
+        checked: list[tuple[str | None, str, str, dict[str, Any], tuple[tuple[str, Any], ...] | None]] = []
         seen: set[str] = set()
         for index, item in enumerate(items):
             path = f"order.fulfillments[{index}]"
@@ -1039,11 +1067,14 @@ class OrdersSurface:
             if state != FulfillmentState.PROPOSED.value:
                 _FULFILLMENT_MACHINE.assert_transition(FulfillmentState.PROPOSED.value, state, f"{path}")
             details = _details_assignments(item, kind, f"{path}")[0]
+            supplied = _supplied_stamps(None, details, ())
             details.setdefault("placed_at", now)
             if state != FulfillmentState.PROPOSED.value:
                 _stamp_transition(details, kind, state, now)
-            checked.append((item.uid, kind, state, details))
-        return tuple(_fulfillment(uid or "", kind, state, details) for uid, kind, state, details in checked)
+            checked.append((item.uid, kind, state, details, supplied))
+        return tuple(
+            _fulfillment(uid or "", kind, state, details, supplied) for uid, kind, state, details, supplied in checked
+        )
 
     def _fulfillment_patches(
         self, current: OrderEntity, items: Sequence[FulfillmentRequest]
@@ -1441,7 +1472,9 @@ def _details_assignments(item: FulfillmentRequest, kind: str, path: str) -> tupl
     return assign, clear
 
 
-def _fulfillment(uid: str, kind: str, state: str, details: dict[str, Any]) -> Fulfillment:
+def _fulfillment(
+    uid: str, kind: str, state: str, details: dict[str, Any], supplied: tuple[tuple[str, Any], ...] | None
+) -> Fulfillment:
     """A fulfillment whose one details object is the one its type carries."""
     return Fulfillment(
         uid=uid,
@@ -1450,7 +1483,23 @@ def _fulfillment(uid: str, kind: str, state: str, details: dict[str, Any]) -> Fu
         pickup_details=details if kind == "PICKUP" else None,
         delivery_details=details if kind == "DELIVERY" else None,
         shipment_details=details if kind == "SHIPMENT" else None,
+        supplied_stamps=supplied,
     )
+
+
+def _supplied_stamps(prior: Any, assign: Mapping[str, Any], clear: Sequence[str]) -> tuple[tuple[str, Any], ...] | None:
+    """The caller-supplied values for volatile stamp names, after this
+    request: the prior mirror (as stored, ``[[name, value], ...]``), plus what
+    the request set, minus what it cleared -- as pairs sorted by name, or
+    ``None`` when nothing is left. Pairs and not a mapping because the digest
+    scrubs a volatile name at any depth; see "Stamps and the digest"."""
+    mirror: dict[str, Any] = {}
+    if isinstance(prior, list | tuple):
+        mirror.update({str(pair[0]): pair[1] for pair in prior if isinstance(pair, list | tuple) and len(pair) == 2})
+    mirror.update({k: v for k, v in assign.items() if k in _SHADOWED_STAMPS})
+    for name in clear:
+        mirror.pop(name, None)
+    return tuple(sorted(mirror.items())) or None
 
 
 def _stamp_transition(details: dict[str, Any], kind: str, state: str, now: str) -> None:
@@ -1488,11 +1537,12 @@ def _merge_fulfillments(
         if prior is None:
             kind = str(patch.assign["type"])
             details = dict(patch.details_assign)
+            supplied = _supplied_stamps(None, details, ())
             details.setdefault("placed_at", now)
             state = str(patch.assign.get("state", FulfillmentState.PROPOSED.value))
             if state != FulfillmentState.PROPOSED.value:
                 _stamp_transition(details, kind, state, now)
-            by_uid[patch.uid] = _fulfillment(patch.uid, kind, state, details).to_entity()
+            by_uid[patch.uid] = _fulfillment(patch.uid, kind, state, details, supplied).to_entity()
             order.append(patch.uid)
             continue
         merged = {**prior, **patch.assign}
@@ -1510,6 +1560,11 @@ def _merge_fulfillments(
             merged[key] = details
         else:
             merged.pop(key, None)
+        supplied = _supplied_stamps(prior.get("supplied_stamps"), patch.details_assign, patch.details_clear)
+        if supplied:
+            merged["supplied_stamps"] = [list(pair) for pair in supplied]
+        else:
+            merged.pop("supplied_stamps", None)
         by_uid[patch.uid] = merged
     return [by_uid[uid] for uid in order]
 

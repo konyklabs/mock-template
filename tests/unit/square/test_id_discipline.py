@@ -240,7 +240,13 @@ def reserved_uid_rejected(method: str, body: dict[str, Any], field: str) -> Reje
                 headers=h.auth,
             )
         assert response.status == 400, response.text
-        assert response.json()["errors"][0]["field"] == field
+        error = response.json()["errors"][0]
+        assert error["field"] == field
+        # The guard's *own* refusal, not the next check's (an unknown uid on
+        # update also 400s naming the same field): the detail and the
+        # sidecar's `supplied` are what only `_require_uid_unreserved` says.
+        assert "may not start with '#'" in error["detail"], error
+        assert response.json()["unit_error"]["supplied"] == "#mine"
 
     return reject
 

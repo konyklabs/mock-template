@@ -531,15 +531,24 @@ plain."""
 
 def _scrub_volatile(value: Any, volatile: set[str]) -> Any:
     """``value`` with every volatile field, at any depth, reduced to whether it
-    is set. Dicts and lists are walked; everything else is returned as is."""
+    is set. Dicts and lists are walked; everything else is returned as is.
+
+    Only a **scalar** under a volatile name becomes the marker. A dict or list
+    under a volatile name is recursed into like any other container -- its own
+    keys apply -- because "volatile" describes a wall-clock value, and a
+    subtree that merely shares the name is not one; collapsing it would hide
+    every non-volatile field inside it from the digest.
+    """
     if isinstance(value, Mapping):
         out: dict[str, Any] = {}
         for key, inner in value.items():
-            if key in volatile:
+            if isinstance(inner, Mapping | list | tuple):
+                out[key] = _scrub_volatile(inner, volatile)
+            elif key in volatile:
                 if inner is not None:
                     out[key] = VOLATILE_PRESENT
             else:
-                out[key] = _scrub_volatile(inner, volatile)
+                out[key] = inner
         return out
     if isinstance(value, list | tuple):
         return [_scrub_volatile(inner, volatile) for inner in value]

@@ -34,6 +34,14 @@ def test_an_unknown_row_raises_too() -> None:
         assert_error_table_total(table, name="T")  # type: ignore[arg-type]
 
 
+def test_a_table_keyed_by_kind_values_is_checked_the_same_way() -> None:
+    """What `describe()` returns is keyed by the kinds' values; the unit's
+    startup check hands that straight here."""
+    assert_error_table_total({kind.value: {} for kind in UnitErrorKind}, name="D")
+    with pytest.raises(RuntimeError, match=r"missing: \['timeout'\]"):
+        assert_error_table_total({kind.value: {} for kind in UnitErrorKind if kind.value != "timeout"}, name="D")
+
+
 def test_the_check_is_a_raise_and_not_an_assert() -> None:
     """`python -O` strips assert statements; a raise survives it. The test
     reads the source rather than trusting the docstring."""

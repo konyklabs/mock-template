@@ -102,6 +102,7 @@ from vendorfake.core.config.models import ResolvedConfig
 from vendorfake.core.kernel.magic import MagicExtraction, extract_magic
 from vendorfake.core.kernel.reply import normalize
 from vendorfake.core.kernel.router import Match, MethodNotAllowed, Router
+from vendorfake.core.kernel.shaping import assert_error_table_total
 from vendorfake.core.kernel.types import (
     AuthResult,
     HandlerArgs,
@@ -345,6 +346,38 @@ class _Context:
         self.log = log
 
 
+def _assert_error_shaper_describes(vendor: VendorDefinition) -> None:
+    """``GET /__unit/errors`` reads every row's provenance from
+    ``ErrorShaper.describe()``. A shaper without the method would fail at
+    request time with a leaked ``'NoneType' object is not callable``; one
+    whose table is short would publish ``provenance: null`` and 200. Both are
+    startup failures here, naming the vendor and the kinds, so the plane can
+    treat a missing provenance as the unreachable case it then is.
+    """
+    describe = getattr(vendor.errors, "describe", None)
+    if not callable(describe):
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"vendor {vendor.name!r}: its ErrorShaper has no describe(); the control plane publishes "
+            "every error row's provenance from it.",
+            field="vendor.errors.describe",
+        )
+    rows = describe()
+    try:
+        assert_error_table_total(rows, name=f"vendor {vendor.name!r} ErrorShaper.describe()")
+    except RuntimeError as exc:
+        raise UnitError(UnitErrorKind.INVALID_VALUE, detail=str(exc), field="vendor.errors.describe") from exc
+    bad = sorted(kind for kind, row in rows.items() if row.get("provenance") not in ("documented", "judgment"))
+    if bad:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"vendor {vendor.name!r} ErrorShaper.describe(): every row needs provenance 'documented' or "
+            f"'judgment'; missing or invalid on {bad}",
+            field="vendor.errors.describe",
+            info={"kinds": bad},
+        )
+
+
 class Unit:
     """One running fake: a vendor surface, a profile, and the pipeline.
 
@@ -396,6 +429,7 @@ class Unit:
         # never declared would have that behaviour silently off. This is a
         # startup failure naming every problem at once.
         assert_capability_declarations(vendor.capabilities, vendor.not_supported)
+        _assert_error_shaper_describes(vendor)
 
         self._clock = Clock(config.clock.mode, config.clock.start)
         # One stream for the unit, seeded from the profile and reported by the
