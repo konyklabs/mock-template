@@ -14,12 +14,14 @@ RetrieveInventoryCount         ``GET  /v2/inventory/{catalog_object_id}``
                                https://developer.squareup.com/reference/square/inventory-api/retrieve-inventory-count
 =============================  ===============================================
 
-INVARIANT: **a batch is validated whole before its first write.** Every change
-names a variation and a location that exist, a decimal quantity and states
-this unit can apply; the first that does not is a 400 naming
-``changes[i].<field>`` and nothing has been written -- so a consumer never
-reads back half a batch, and no ``inventory.count.updated`` fires for a
-request that failed. Each count that does change is one journalled update,
+INVARIANT: **a batch is validated whole before its first write, and before
+its first id.** Every change names a variation and a location that exist, a
+decimal quantity and states this unit can apply; the first that does not is a
+400 naming ``changes[i].<field>`` and nothing has been written -- so a consumer
+never reads back half a batch, and no ``inventory.count.updated`` fires for a
+request that failed. The change ids in the echo are minted after that
+validation, so a rejected batch draws nothing from the id stream and the next
+accepted one mints what it would have minted anyway. Each count that does change is one journalled update,
 hence one event, which is what the webhook page shows: an array of counts,
 one per change.
 
@@ -100,16 +102,21 @@ ListCatalog's."""
 @dataclass(frozen=True, slots=True)
 class _Planned:
     """One change, resolved: the count it touches, the quantity it leaves,
-    and the ``changes`` echo it produces."""
+    and the body of the ``changes`` echo it produces -- without its id, which
+    is minted only once every change in the batch has been validated."""
 
     count_id: str
     catalog_object_id: str
     location_id: str
     quantity: Decimal
-    echo: dict[str, Any]
+    kind: str
+    inner: dict[str, Any]
     #: A physical count equal to the current quantity, under
     #: ``ignore_unchanged_counts``: echoed, never written.
     unchanged: bool = False
+
+
+_ECHO_KEY: Mapping[str, str] = {"PHYSICAL_COUNT": "physical_count", "ADJUSTMENT": "adjustment"}
 
 
 class InventorySurface:
@@ -192,6 +199,12 @@ class InventorySurface:
             else:
                 planned.append(self._plan_adjustment(ctx, counts, change.adjustment, path, pending, now))
 
+        # Validation is over; mint the change ids in request order.
+        echoes = [
+            {"type": plan.kind, _ECHO_KEY[plan.kind]: {"id": self._deps.ids.inventory_change(), **plan.inner}}
+            for plan in planned
+        ]
+
         written: dict[str, Entity] = {}
         for plan in planned:
             if plan.unchanged:
@@ -224,7 +237,7 @@ class InventorySurface:
                     for count_id in touched
                     if count_id in written or counts.has(count_id)
                 ],
-                "changes": [plan.echo for plan in planned],
+                "changes": echoes,
             }
         )
 
@@ -259,22 +272,16 @@ class InventorySurface:
         current = _current_quantity(counts, count_id, pending)
         unchanged = request.ignore_unchanged_counts and current is not None and current == quantity
         pending[count_id] = quantity
-        echo = compact(
+        inner = compact(
             {
-                "type": "PHYSICAL_COUNT",
-                "physical_count": compact(
-                    {
-                        "id": self._deps.ids.inventory_change(),
-                        "reference_id": spec.reference_id,
-                        "catalog_object_id": spec.catalog_object_id,
-                        "catalog_object_type": "ITEM_VARIATION",
-                        "state": IN_STOCK,
-                        "location_id": spec.location_id,
-                        "quantity": format_quantity(quantity),
-                        "occurred_at": spec.occurred_at or now,
-                        "created_at": now,
-                    }
-                ),
+                "reference_id": spec.reference_id,
+                "catalog_object_id": spec.catalog_object_id,
+                "catalog_object_type": "ITEM_VARIATION",
+                "state": IN_STOCK,
+                "location_id": spec.location_id,
+                "quantity": format_quantity(quantity),
+                "occurred_at": spec.occurred_at or now,
+                "created_at": now,
             }
         )
         return _Planned(
@@ -282,7 +289,8 @@ class InventorySurface:
             catalog_object_id=spec.catalog_object_id,
             location_id=spec.location_id,
             quantity=quantity,
-            echo=echo,
+            kind="PHYSICAL_COUNT",
+            inner=inner,
             unchanged=unchanged,
         )
 
@@ -334,23 +342,17 @@ class InventorySurface:
         current = _current_quantity(counts, count_id, pending) or Decimal(0)
         quantity = current + delta if to_state == IN_STOCK else current - delta
         pending[count_id] = quantity
-        echo = compact(
+        inner = compact(
             {
-                "type": "ADJUSTMENT",
-                "adjustment": compact(
-                    {
-                        "id": self._deps.ids.inventory_change(),
-                        "reference_id": spec.reference_id,
-                        "from_state": from_state,
-                        "to_state": to_state,
-                        "location_id": spec.location_id,
-                        "catalog_object_id": spec.catalog_object_id,
-                        "catalog_object_type": "ITEM_VARIATION",
-                        "quantity": format_quantity(delta),
-                        "occurred_at": spec.occurred_at or now,
-                        "created_at": now,
-                    }
-                ),
+                "reference_id": spec.reference_id,
+                "from_state": from_state,
+                "to_state": to_state,
+                "location_id": spec.location_id,
+                "catalog_object_id": spec.catalog_object_id,
+                "catalog_object_type": "ITEM_VARIATION",
+                "quantity": format_quantity(delta),
+                "occurred_at": spec.occurred_at or now,
+                "created_at": now,
             }
         )
         return _Planned(
@@ -358,7 +360,8 @@ class InventorySurface:
             catalog_object_id=spec.catalog_object_id,
             location_id=spec.location_id,
             quantity=quantity,
-            echo=echo,
+            kind="ADJUSTMENT",
+            inner=inner,
         )
 
     # -- POST /v2/inventory/counts/batch-retrieve ---------------------------

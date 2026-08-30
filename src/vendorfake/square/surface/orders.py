@@ -460,6 +460,11 @@ class OrdersSurface:
                 info={"allowed": list(_CREATABLE_STATES)},
             )
 
+        # Validate the lines and the fulfillments before minting the order
+        # id, so a refused create draws nothing from the id stream and the
+        # next accepted one mints the id it would have minted anyway.
+        line_items = self._new_line_items(args.ctx, spec.line_items or [], location.currency)
+        fulfillments = self._new_fulfillments(spec.fulfillments or [], args.ctx.clock.iso_ms())
         entity = OrderEntity(
             id=self._deps.ids.order(),
             location_id=location.id,
@@ -468,8 +473,8 @@ class OrdersSurface:
             # cannot be denominated in something the seller does not take.
             currency=location.currency,
             state=state,
-            line_items=self._new_line_items(args.ctx, spec.line_items or [], location.currency),
-            fulfillments=self._new_fulfillments(spec.fulfillments or [], args.ctx.clock.iso_ms()),
+            line_items=line_items,
+            fulfillments=fulfillments,
             reference_id=spec.reference_id,
             customer_id=spec.customer_id,
             ticket_name=spec.ticket_name,
@@ -930,27 +935,37 @@ class OrdersSurface:
         A state other than PROPOSED on creation is accepted when the machine
         allows the move from PROPOSED -- a seller's own app can create an order
         that is already RESERVED -- and stamped as such a move would be.
+
+        Every fulfillment is validated before any uid is minted, so a request
+        refused on its third fulfillment draws nothing from the id stream and
+        the next accepted request mints the uids it would have minted anyway
+        -- the discipline PayOrder keeps for tender ids.
         """
-        built: list[Fulfillment] = []
+        checked: list[tuple[str | None, str, str, dict[str, Any]]] = []
         seen: set[str] = set()
         for index, item in enumerate(items):
             path = f"order.fulfillments[{index}]"
             kind = _require_fulfillment_type(item.type, f"{path}.type")
-            uid = item.uid or self._deps.ids.fulfillment_uid()
-            if uid in seen:
-                raise UnitError(
-                    UnitErrorKind.INVALID_VALUE, detail=f"Fulfillment uid {uid} appears twice.", field=f"{path}.uid"
-                )
-            seen.add(uid)
+            if item.uid is not None:
+                if item.uid in seen:
+                    raise UnitError(
+                        UnitErrorKind.INVALID_VALUE,
+                        detail=f"Fulfillment uid {item.uid} appears twice.",
+                        field=f"{path}.uid",
+                    )
+                seen.add(item.uid)
             state = (item.state or FulfillmentState.PROPOSED.value).upper()
             if state != FulfillmentState.PROPOSED.value:
-                _FULFILLMENT_MACHINE.assert_transition(FulfillmentState.PROPOSED.value, state, f"Fulfillment {uid}")
+                _FULFILLMENT_MACHINE.assert_transition(FulfillmentState.PROPOSED.value, state, f"{path}")
             details = _details_assignments(item, kind, f"{path}")[0]
             details.setdefault("placed_at", now)
             if state != FulfillmentState.PROPOSED.value:
                 _stamp_transition(details, kind, state, now)
-            built.append(_fulfillment(uid, kind, state, details))
-        return tuple(built)
+            checked.append((item.uid, kind, state, details))
+        return tuple(
+            _fulfillment(uid or self._deps.ids.fulfillment_uid(), kind, state, details)
+            for uid, kind, state, details in checked
+        )
 
     def _fulfillment_patches(
         self, current: OrderEntity, items: Sequence[FulfillmentRequest]
@@ -960,42 +975,68 @@ class OrdersSurface:
         Transitions are asserted *here*, against the stored state, before
         ``Collection.update`` runs -- so an illegal move is refused with no
         version bump, the same guarantee a bad line item has.
+
+        A ``uid`` names an existing fulfillment, and one that names none is
+        refused -- ``invalid_value`` on ``order.fulfillments[i].uid`` -- while
+        an entry with **no** uid is a new fulfillment and is minted one.
+        JUDGMENT, and deliberately unlike line items, where an unknown uid
+        appends: a fulfillment is a thing in flight through a state machine,
+        and a retry carrying a stale or mistyped uid that silently created a
+        second PROPOSED fulfillment beside the one it meant to advance is the
+        duplicate no kitchen can tell from a real second order. A line item
+        under a caller-chosen uid is idempotent data with no such consequence.
+        Square publishes no sentence for either case.
+
+        Minting happens after every entry is validated, as on create.
         """
         by_uid = {f.uid: f for f in current.fulfillments}
-        patches: list[_FulfillmentPatch] = []
+        checked: list[tuple[str | None, dict[str, Any], dict[str, Any], tuple[str, ...]]] = []
         for index, item in enumerate(items):
             path = f"order.fulfillments[{index}]"
-            uid = item.uid or self._deps.ids.fulfillment_uid()
-            prior = by_uid.get(uid)
+            prior = None if item.uid is None else by_uid.get(item.uid)
             assign: dict[str, Any] = {}
+            if item.uid is not None and prior is None:
+                raise UnitError(
+                    UnitErrorKind.INVALID_VALUE,
+                    detail=(
+                        f"{path}.uid {item.uid} names no fulfillment on this order. Omit uid to add a new "
+                        "fulfillment; a uid is minted for it."
+                    ),
+                    field=f"{path}.uid",
+                    info={"known": [f.uid for f in current.fulfillments]},
+                )
             if prior is None:
                 kind = _require_fulfillment_type(item.type, f"{path}.type")
                 assign["type"] = kind
                 state = (item.state or FulfillmentState.PROPOSED.value).upper()
                 if state != FulfillmentState.PROPOSED.value:
-                    _FULFILLMENT_MACHINE.assert_transition(FulfillmentState.PROPOSED.value, state, f"Fulfillment {uid}")
+                    _FULFILLMENT_MACHINE.assert_transition(FulfillmentState.PROPOSED.value, state, path)
                 assign["state"] = state
             else:
                 kind = prior.type
                 if supplied(item, "type") and item.type is not None and item.type.upper() != kind:
                     raise UnitError(
                         UnitErrorKind.INVALID_VALUE,
-                        detail=f"Fulfillment {uid} is a {kind} fulfillment; its type cannot change.",
+                        detail=f"Fulfillment {prior.uid} is a {kind} fulfillment; its type cannot change.",
                         field=f"{path}.type",
                     )
                 if supplied(item, "state"):
                     if item.state is None:
                         raise _cannot_be_cleared(f"{path}.state")
                     state = item.state.upper()
-                    _FULFILLMENT_MACHINE.assert_transition(prior.state, state, f"Fulfillment {uid}")
+                    _FULFILLMENT_MACHINE.assert_transition(prior.state, state, f"Fulfillment {prior.uid}")
                     assign["state"] = state
             details_assign, details_clear = _details_assignments(item, kind, path)
-            patches.append(
-                _FulfillmentPatch(
-                    uid=uid, assign=assign, details_assign=details_assign, details_clear=tuple(details_clear)
-                )
+            checked.append((item.uid, assign, details_assign, tuple(details_clear)))
+        return tuple(
+            _FulfillmentPatch(
+                uid=uid or self._deps.ids.fulfillment_uid(),
+                assign=assign,
+                details_assign=details_assign,
+                details_clear=details_clear,
             )
-        return tuple(patches)
+            for uid, assign, details_assign, details_clear in checked
+        )
 
 
 # ---------------------------------------------------------------------------

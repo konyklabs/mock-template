@@ -45,7 +45,12 @@ Two more, each carrying what its page documents and nothing more:
     Every committed change to a stock count, with the count under
     ``data.object.inventory_counts`` -- an array, as the page shows
     (https://developer.squareup.com/reference/square/webhooks/inventory.count.updated),
-    holding the one count that changed. ``data.id`` is the count's store id.
+    holding the one count that changed. JUDGMENT, NOT VERIFIED -- ``data.id``
+    is this unit's count key, ``<variation id>:<location id>``, a shape Square
+    never emits: its example carries an opaque id and the page says nothing
+    about what it identifies, and a count has no id of its own in Square's
+    object model. A consumer must key on the payload's ``catalog_object_id``
+    and ``location_id``, never on ``data.id``.
 
 SHRINK (prototype): the OAuth, location and loyalty collections emit nothing.
 Square publishes ``oauth.authorization.revoked`` and the ``loyalty.*`` events;

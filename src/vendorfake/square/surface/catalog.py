@@ -25,7 +25,11 @@ INVARIANT: **a rejected upsert changes nothing.** The write goes through
 ``Collection.insert``/``update`` per object, and the whole request is validated
 -- every id resolved, every version checked -- before the first write. A version
 conflict on the object therefore leaves no partial catalog behind and, because
-the journal is the event source, no ``catalog.version.updated`` either.
+the journal is the event source, no ``catalog.version.updated`` either. Nor
+does a rejected request draw from the id stream: temporary ids are minted only
+after the last object has been validated, so the next accepted upsert mints
+exactly the ids it would have minted had the rejected one never been sent --
+the discipline PayOrder keeps for tender ids.
 
 SHRINK (prototype): of Square's eleven ``CatalogQuery`` kinds only
 ``prefix_query`` and ``exact_query`` are answered, and only on the ``name``
@@ -334,8 +338,19 @@ class CatalogSurface:
         request = validate_body(UpsertCatalogObjectRequest, args.body())
         collection = args.ctx.store.collection(COL.catalog)
         now_version = int(args.ctx.clock.now())
+        planned = self._plan(collection, request.object, now_version, set(), path="object")
+
+        # Everything above could refuse; nothing below can. Mint now, in
+        # request order, and resolve the temporary ids the plans refer to.
         mappings: dict[str, str] = {}
-        planned = self._plan(collection, request.object, now_version, mappings, path="object")
+        for plan in planned:
+            if plan.client_object_id is not None:
+                mappings[plan.client_object_id] = self._deps.ids.catalog_object()
+                plan.entity["id"] = mappings[plan.client_object_id]
+        for plan in planned:
+            parent = plan.entity.get("item_id")
+            if isinstance(parent, str) and parent in mappings:
+                plan.entity["item_id"] = mappings[parent]
 
         written: list[Entity] = []
         for plan in planned:
@@ -371,13 +386,14 @@ class CatalogSurface:
         collection: Collection,
         spec: CatalogObjectRequest,
         version: int,
-        mappings: dict[str, str],
+        temporaries: set[str],
         *,
         path: str,
         parent_item_id: str | None = None,
     ) -> list[_Planned]:
         """Resolve one request object -- and an ITEM's nested variations --
-        into the entities to write, minting ids and checking versions.
+        into the entities to write, checking versions and leaving temporary
+        ids in place for the caller to mint once everything has passed.
 
         Recursion carries ``parent_item_id`` so a nested variation is bound to
         the item that encloses it whatever ``item_id`` it states; a variation
@@ -398,7 +414,7 @@ class CatalogSurface:
                 field=f"{path}.type",
             )
 
-        object_id, client_id = self._resolve_id(collection, spec.id, mappings, path)
+        object_id, client_id = _classify_id(collection, spec.id, temporaries, path)
         current = None if client_id is not None else collection.get(object_id)
         if current is not None:
             stored_kind = str(current.get("object_type", ""))
@@ -451,7 +467,7 @@ class CatalogSurface:
                         collection,
                         child,
                         version,
-                        mappings,
+                        temporaries,
                         path=f"{path}.item_data.variations[{index}]",
                         parent_item_id=object_id,
                     )
@@ -474,8 +490,10 @@ class CatalogSurface:
                     detail=f"{path}.item_variation_data.item_id is required on a top-level ITEM_VARIATION.",
                     field=f"{path}.item_variation_data.item_id",
                 )
-            item_id = mappings.get(stated, stated)
-            parent = collection.get(item_id)
+            item_id = stated
+            # The one top-level object is this variation, so a temporary
+            # item id can name nothing in this request.
+            parent = None if stated.startswith(TEMPORARY_ID_PREFIX) else collection.get(item_id)
             if parent is None or parent.get("object_type") != ITEM:
                 raise UnitError(
                     UnitErrorKind.INVALID_VALUE,
@@ -509,40 +527,39 @@ class CatalogSurface:
         ).to_entity()
         return [_Planned(entity=entity, client_object_id=client_id, replaces_version=replaces)]
 
-    def _resolve_id(
-        self, collection: Collection, raw: str, mappings: dict[str, str], path: str
-    ) -> tuple[str, str | None]:
-        """``(object id, temporary id or None)`` for one request object.
-
-        A temporary id is minted once per request: a second object naming the
-        same ``#tmp`` is refused, since ``id_mappings`` could carry only one
-        answer for it.
-        """
-        if raw.startswith(TEMPORARY_ID_PREFIX):
-            if raw in mappings:
-                raise UnitError(
-                    UnitErrorKind.INVALID_VALUE,
-                    detail=f"{path}.id {raw} is used twice in this request.",
-                    field=f"{path}.id",
-                )
-            minted = self._deps.ids.catalog_object()
-            mappings[raw] = minted
-            return minted, raw
-        if not collection.has(raw):
-            raise UnitError(
-                UnitErrorKind.INVALID_VALUE,
-                detail=(
-                    f"{path}.id {raw} does not exist. To create a new object, use a temporary ID "
-                    f"prefixed with {TEMPORARY_ID_PREFIX!r}."
-                ),
-                field=f"{path}.id",
-            )
-        return raw, None
-
 
 def catalog_routes(deps: SquareDeps) -> tuple[Route, ...]:
     """The catalog routes beyond the listing, for one vendor."""
     return CatalogSurface(deps).routes()
+
+
+def _classify_id(collection: Collection, raw: str, temporaries: set[str], path: str) -> tuple[str, str | None]:
+    """``(id as sent, temporary id or None)`` for one request object.
+
+    A temporary id may appear once per request: a second object naming the
+    same ``#tmp`` is refused, since ``id_mappings`` could carry only one
+    answer for it. Nothing is minted here; the surface mints after the whole
+    request has passed.
+    """
+    if raw.startswith(TEMPORARY_ID_PREFIX):
+        if raw in temporaries:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"{path}.id {raw} is used twice in this request.",
+                field=f"{path}.id",
+            )
+        temporaries.add(raw)
+        return raw, raw
+    if not collection.has(raw):
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                f"{path}.id {raw} does not exist. To create a new object, use a temporary ID "
+                f"prefixed with {TEMPORARY_ID_PREFIX!r}."
+            ),
+            field=f"{path}.id",
+        )
+    return raw, None
 
 
 def _flag(raw: str | None) -> bool:

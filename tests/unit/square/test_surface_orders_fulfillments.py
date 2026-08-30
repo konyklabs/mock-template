@@ -243,20 +243,41 @@ def test_a_fulfillment_update_is_guarded_by_the_order_version(h: Harness) -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_an_unmentioned_fulfillment_survives_and_a_new_uid_appends(h: Harness) -> None:
+def test_an_unmentioned_fulfillment_survives_and_an_entry_without_a_uid_appends(h: Harness) -> None:
+    """A new fulfillment on update carries no uid and is minted one."""
     order = create(h, [PICKUP])
     response = update(
         h,
         order,
-        {"fulfillments": [{"uid": "ship-1", "type": "SHIPMENT", "shipment_details": {"carrier": "USPS"}}]},
+        {"fulfillments": [{"type": "SHIPMENT", "shipment_details": {"carrier": "USPS"}}]},
         key="ff-append",
     )
     assert response.status == 200, response.text
     fulfillments = response.json()["order"]["fulfillments"]
-    assert [f["uid"] for f in fulfillments] == ["pickup-1", "ship-1"]
+    assert fulfillments[0]["uid"] == "pickup-1"
     assert fulfillments[0]["pickup_details"]["note"] == "no lid"
+    assert len(fulfillments[1]["uid"]) == 22
     assert fulfillments[1]["shipment_details"]["carrier"] == "USPS"
     assert fulfillments[1]["state"] == "PROPOSED"
+
+
+def test_an_unknown_uid_on_update_is_refused_rather_than_created(h: Harness) -> None:
+    """JUDGMENT, stated in `_fulfillment_patches` and unlike line items: a
+    retry carrying a stale uid must not create a second fulfillment beside
+    the one it meant to advance. Nothing is written and the version holds."""
+    order = create(h, [PICKUP])
+    response = update(
+        h,
+        order,
+        {"fulfillments": [{"uid": "pickup-9", "type": "PICKUP", "state": "RESERVED"}]},
+        key="ff-stale",
+    )
+    assert response.status == 400
+    assert first_error(response)["field"] == "order.fulfillments[0].uid"
+    assert response.json()["unit_error"]["known"] == ["pickup-1"]
+    current = h.api.get(f"/v2/orders/{order['id']}", headers=h.auth).json()["order"]
+    assert current["version"] == order["version"]
+    assert [f["uid"] for f in current["fulfillments"]] == ["pickup-1"]
 
 
 def test_a_null_details_field_is_cleared_and_an_absent_one_kept(h: Harness) -> None:
