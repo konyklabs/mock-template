@@ -17,3 +17,8 @@ htmlcov/
 
 # Local working notes — never committed (see workspace CLAUDE.md)
 .local/
+
+# The pytest example resolves vendorfake from the checkout by path, so its
+# lockfile is machine-specific; node_modules is never committed anywhere.
+examples/*/uv.lock
+examples/*/node_modules/
