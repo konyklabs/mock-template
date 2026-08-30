@@ -64,6 +64,9 @@ __all__ = [
     "SEED_RESTAURANT_GUID",
     "SEED_RESTAURANT_NAME",
     "SEED_SCOPES",
+    "SEED_WEBHOOK_SECRET",
+    "SEED_WEBHOOK_SUBSCRIPTION_ID",
+    "SEED_WEBHOOK_URL",
     "SERVICE_AREA_GUID",
     "SERVICE_CHARGE_GRATUITY_GUID",
     "STOCK_BURGER_QUANTITY",
@@ -182,3 +185,10 @@ STOCK_LEMONADE_QUANTITY = 3.0
 """Seeded QUANTITY rows: the burger is comfortably stocked; the lemonade sits
 under the documented ``low_quantity`` threshold (5), so an update that lowers
 it further is a ``low_quantity`` event and one that empties it is refused."""
+
+SEED_WEBHOOK_SUBSCRIPTION_ID = "sub_seed_quickstart"
+SEED_WEBHOOK_URL = "https://example.test/webhooks/toast"
+SEED_WEBHOOK_SECRET = "unit-seeded-toast-webhook-secret"
+"""The subscriber the scenario ships -- every category, a readable secret --
+**disabled**: its callback host is the reserved ``.test`` domain where nothing
+listens. The quickstart registers a live one of its own (README)."""

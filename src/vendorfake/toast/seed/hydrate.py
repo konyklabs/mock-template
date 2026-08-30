@@ -26,6 +26,7 @@ from typing import Any
 
 from vendorfake.core.kernel.types import UnitContext
 from vendorfake.core.util.json import compact
+from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION
 from vendorfake.toast.config import ToastConfig
 from vendorfake.toast.entities import COL, RestaurantEntity, TokenEntity
 from vendorfake.toast.model.build import MenuIndex, build_check
@@ -53,7 +54,28 @@ def hydrate_toast(ctx: UnitContext, seed: object, config: ToastConfig) -> SeedDo
     _insert_stock(ctx, doc)
     _insert_orders(ctx, doc, config)
     _insert_tokens(ctx, doc, config)
+    _insert_subscriptions(ctx, doc)
     return doc
+
+
+def _insert_subscriptions(ctx: UnitContext, doc: SeedDocument) -> None:
+    """Subscribers declared by the scenario, as plain dicts: the subscription
+    entity belongs to the core."""
+    subscriptions = ctx.store.collection(SUBSCRIPTION_COLLECTION)
+    for subscription in doc.webhook_subscriptions:
+        subscriptions.insert(
+            compact(
+                {
+                    "id": subscription.id,
+                    "name": subscription.name or "Seeded subscription",
+                    "notification_url": subscription.notification_url,
+                    "event_types": list(subscription.event_types),
+                    "signature_key": subscription.signature_key,
+                    "enabled": subscription.enabled,
+                }
+            ),
+            SEED_META,
+        )
 
 
 def _insert_stock(ctx: UnitContext, doc: SeedDocument) -> None:

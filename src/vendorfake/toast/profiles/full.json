@@ -1,6 +1,6 @@
 {
   "name": "full",
-  "summary": "Every capability on. The default profile. Seeds the whole scenario.",
+  "summary": "Every capability on. The default profile. Seeds the whole scenario: restaurant, partner row, config lists, the V3 menu, stock, an open order, a credit authorisation, two bearers and a pre-registered (disabled) webhook subscriber.",
   "capabilities": [
     "auth",
     "orders",
@@ -10,7 +10,9 @@
     "restaurants",
     "partners",
     "stock",
-    "chaos"
+    "webhooks",
+    "chaos",
+    "webhooks.chaos"
   ],
   "seed": "seed/default.seed.json",
   "vendor": {

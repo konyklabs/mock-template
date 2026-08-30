@@ -19,10 +19,14 @@ and reseeds both id streams from the unit's seed.
 ``api_version`` is ``None``: Toast documents no version request or response
 header -- the version lives in the path (``/orders/v2``, ``/menus/v3``).
 
-Step 1 of the build (konyklabs/roadmap#39): the foundation. No routes yet; the
-auth adapter, the error table, the machines, the id streams, the retry
-defaults, the seed and the configuration are final-shape. The surfaces, the
-signer and the event mapper land in the following steps.
+The webhook seams, and why they are two
+--------------------------------------
+``signer`` and ``events`` are separate properties because they answer separate
+questions: what a mutation *means* on the wire, and how a delivery is proven to
+have come from here. The dispatcher requires both before it will deliver
+anything. The subscription stand-in is last in the route table so every real
+Toast path matches first and the conformance suite's "first mutating route"
+is a real endpoint.
 """
 
 from __future__ import annotations
@@ -50,6 +54,7 @@ from vendorfake.toast.auth import ToastAuth
 from vendorfake.toast.capabilities import TOAST_CAPABILITIES, TOAST_NOT_SUPPORTED
 from vendorfake.toast.config import ToastConfig, resolve_toast_config
 from vendorfake.toast.errors import ToastErrorShaper
+from vendorfake.toast.events import ToastEventMapper
 from vendorfake.toast.ids import ToastIds, ToastRequestIds
 from vendorfake.toast.machine import (
     CHECK_MACHINE,
@@ -59,6 +64,7 @@ from vendorfake.toast.machine import (
 )
 from vendorfake.toast.retry import toast_retry_defaults
 from vendorfake.toast.seed.hydrate import hydrate_toast
+from vendorfake.toast.signer import ToastWebhookSigner
 from vendorfake.toast.surface.auth import auth_routes
 from vendorfake.toast.surface.config import config_routes
 from vendorfake.toast.surface.menus import menu_routes
@@ -67,6 +73,7 @@ from vendorfake.toast.surface.partners import partner_routes
 from vendorfake.toast.surface.payments import payment_routes
 from vendorfake.toast.surface.restaurants import restaurant_routes
 from vendorfake.toast.surface.stock import stock_routes
+from vendorfake.toast.surface.webhooks import webhook_routes
 
 __all__ = ["TOAST_MAGIC", "ToastVendor", "create_toast_vendor"]
 
@@ -118,10 +125,12 @@ class ToastVendor:
         "_base_config",
         "_config",
         "_errors",
+        "_events",
         "_ids",
         "_request_ids",
         "_routes",
         "_seed",
+        "_signer",
     )
 
     def __init__(self, *, config: ToastConfig | None = None, seed: int = 1) -> None:
@@ -132,6 +141,8 @@ class ToastVendor:
         self._request_ids = ToastRequestIds(seed)
         self._errors = self._build_errors()
         self._auth = ToastAuth(self)
+        self._signer = ToastWebhookSigner()
+        self._events = ToastEventMapper(self)
         self._routes: tuple[Route, ...] | None = None
 
     def _build_errors(self) -> ToastErrorShaper:
@@ -179,8 +190,8 @@ class ToastVendor:
 
     @property
     def routes(self) -> Sequence[Route]:
-        """The vendor surface, built once and cached: the login first, so the
-        first route of the table is the one a consumer calls first."""
+        """The vendor surface, built once and cached: the login first, the
+        subscription stand-in last."""
         if self._routes is None:
             self._routes = (
                 auth_routes(self)
@@ -191,6 +202,7 @@ class ToastVendor:
                 + restaurant_routes(self)
                 + partner_routes(self)
                 + stock_routes(self)
+                + webhook_routes(self)
             )
         return self._routes
 
@@ -204,11 +216,13 @@ class ToastVendor:
 
     @property
     def signer(self) -> Signer | None:
-        return None
+        """``Toast-Signature`` and every delivery header. See :mod:`.signer`."""
+        return self._signer
 
     @property
     def events(self) -> EventMapper | None:
-        return None
+        """Journal entry to the documented envelope. See :mod:`.events`."""
+        return self._events
 
     @property
     def magic(self) -> MagicTriggerSpec | None:

@@ -57,6 +57,7 @@ __all__ = [
     "SeedTaxRate",
     "SeedToken",
     "SeedVoidReason",
+    "SeedWebhookSubscription",
     "parse_seed_document",
 ]
 
@@ -411,6 +412,20 @@ class SeedCreditAuthorization(BaseModel):
     cardEntryMode: str = "PRE_AUTHED"
 
 
+class SeedWebhookSubscription(BaseModel):
+    """A subscriber in the core's vocabulary (``notification_url``,
+    ``event_types``, ``signature_key`` = the per-subscription secret)."""
+
+    model_config = _SEED
+
+    id: str = Field(min_length=1)
+    name: str | None = None
+    notification_url: str = Field(min_length=1)
+    event_types: list[str] = Field(default_factory=lambda: ["*"])
+    signature_key: str = Field(min_length=1)
+    enabled: bool = True
+
+
 class SeedDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -421,6 +436,7 @@ class SeedDocument(BaseModel):
     orders: list[SeedOrder] = Field(default_factory=list)
     credit_authorizations: list[SeedCreditAuthorization] = Field(default_factory=list)
     stock: list[SeedStock] = Field(default_factory=list)
+    webhook_subscriptions: list[SeedWebhookSubscription] = Field(default_factory=list)
     #: The instant every config entity reports as last modified (epoch ms).
     config_modified_ms: int = 0
     dining_options: list[SeedDiningOption] = Field(default_factory=list)

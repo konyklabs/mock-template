@@ -168,6 +168,11 @@ def test_the_store_holds_the_restaurant_and_the_two_tokens(h: Harness) -> None:
     assert store.collection(COL.credit_authorizations).size == 1
     assert store.collection(COL.discounts).size == 2
     assert store.collection(COL.stock).size == 5
+    from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION
+
+    seeded = store.collection(SUBSCRIPTION_COLLECTION).require(c.SEED_WEBHOOK_SUBSCRIPTION_ID)
+    assert seeded["enabled"] is False and seeded["signature_key"] == c.SEED_WEBHOOK_SECRET
+    assert seeded["notification_url"] == c.SEED_WEBHOOK_URL
 
 
 def test_seeded_writes_are_marked_as_seeded(h: Harness) -> None:

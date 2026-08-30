@@ -33,6 +33,7 @@ from vendorfake.toast.machine import (
 from vendorfake.toast.model.dates import business_date, parse_rest_date, rest_date, webhook_date
 from vendorfake.toast.model.money import to_cents, to_dollars
 from vendorfake.toast.retry import TOAST_RETRY_SCHEDULE_MS, TOAST_TIMEOUT_MS
+from vendorfake.toast.signer import SIGNATURE_HEADER, ToastWebhookSigner, toast_signature, verify_toast_signature
 from vendorfake.toast.vendor import TOAST_MAGIC, ToastVendor, create_toast_vendor
 
 __all__ = [
@@ -42,6 +43,7 @@ __all__ = [
     "DEFAULT_SCOPES",
     "GUEST_ORDER_MACHINE",
     "GUEST_ORDER_MACHINE_NAME",
+    "SIGNATURE_HEADER",
     "TOAST_CAPABILITIES",
     "TOAST_ERROR_TABLE",
     "TOAST_MAGIC",
@@ -58,6 +60,7 @@ __all__ = [
     "ToastIds",
     "ToastRequestIds",
     "ToastVendor",
+    "ToastWebhookSigner",
     "business_date",
     "create_toast_vendor",
     "parse_rest_date",
@@ -65,6 +68,8 @@ __all__ = [
     "rest_date",
     "to_cents",
     "to_dollars",
+    "toast_signature",
+    "verify_toast_signature",
     "webhook_date",
 ]
 
