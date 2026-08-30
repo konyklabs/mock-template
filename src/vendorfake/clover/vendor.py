@@ -269,11 +269,12 @@ class CloverVendor:
         """Phase two of configuration, then load the seed scenario.
 
         The configuration step happens first and unconditionally, so that a
-        profile's ``vendor`` block is in force even when hydration fails. The
-        scenario is one merchant at this commit (``seed/``); PR E extends it.
+        profile's ``vendor`` block is in force even when hydration fails --
+        and so that the tokens the scenario seeds are stamped with the expiry
+        the *profile's* TTL implies rather than the built-in default's.
         """
         self._resolve_config(ctx)
-        hydrate_clover(ctx, seed)
+        hydrate_clover(ctx, seed, self._config)
 
     def _resolve_config(self, ctx: UnitContext) -> None:
         """Re-resolve from the profile, then rebuild what depends on it.

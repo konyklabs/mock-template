@@ -1,7 +1,17 @@
 {
   "name": "full",
-  "summary": "Every declared capability on. The default profile. Seeds one merchant so the OAuth dance works out of the box; the full scenario arrives in PR E. Webhooks are exercised through the dashboard stand-in and the control plane.",
-  "capabilities": ["oauth", "orders", "payments", "inventory", "merchant", "customers", "webhooks", "chaos", "webhooks.chaos"],
+  "summary": "Every capability on. The default profile. Seeds the whole scenario: merchant, items, modifiers, employees, tenders, order types, tax rates, a customer, an open order and two bearers. Webhooks are exercised through the dashboard stand-in and the control plane.",
+  "capabilities": [
+    "oauth",
+    "orders",
+    "payments",
+    "inventory",
+    "merchant",
+    "customers",
+    "webhooks",
+    "chaos",
+    "webhooks.chaos"
+  ],
   "seed": "seed/default.seed.json",
   "vendor": {
     "client_id": "UNITCLOVERAPP",
@@ -12,6 +22,6 @@
     "retry": { "time_scale": 0.000167, "timeout_ms": 2000 },
     "subscribers": []
   },
-  "chaos": { "seed": 20260829, "rules": [], "strict_rules": true },
-  "clock": { "mode": "real" }
+  "clock": { "mode": "real" },
+  "chaos": { "seed": 20260829, "strict_rules": true, "rules": [] }
 }

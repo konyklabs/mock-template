@@ -1,0 +1,24 @@
+{
+  "name": "no-chaos",
+  "summary": "Full surface with delivery faults switched off: requests can still be made to fail deliberately, but a webhook that is sent is sent honestly, once. Identical to full until the webhook surface merges and webhooks.chaos exists to switch off.",
+  "capabilities": [
+    "oauth",
+    "orders",
+    "payments",
+    "inventory",
+    "merchant",
+    "customers",
+    "chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "UNITCLOVERAPP",
+    "client_secret": "unit-clover-app-secret",
+    "redirect_uri": "https://example.test/oauth/callback"
+  },
+  "chaos": {
+    "seed": 20260829,
+    "strict_rules": true,
+    "rules": []
+  }
+}

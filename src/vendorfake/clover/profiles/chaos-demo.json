@@ -1,0 +1,58 @@
+{
+  "name": "chaos-demo",
+  "summary": "Full surface with a preloaded fault set: rate limiting on every third order create and a mid-flow token expiry on the fourth order read. Runs on a virtual clock. Delivery faults join when the webhook surface merges.",
+  "capabilities": [
+    "oauth",
+    "orders",
+    "payments",
+    "inventory",
+    "merchant",
+    "customers",
+    "chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "UNITCLOVERAPP",
+    "client_secret": "unit-clover-app-secret",
+    "redirect_uri": "https://example.test/oauth/callback"
+  },
+  "clock": {
+    "mode": "virtual",
+    "start": "2026-08-29T12:00:00.000Z"
+  },
+  "chaos": {
+    "seed": 20260829,
+    "strict_rules": true,
+    "rules": [
+      {
+        "id": "rate-limit-every-third-create",
+        "scope": "request",
+        "fault": "rate_limit",
+        "match": {
+          "route": "POST /v3/merchants/{mId}/orders"
+        },
+        "when": {
+          "every": 3
+        },
+        "params": {
+          "retry_after_seconds": 2
+        },
+        "note": "Every third CreateOrder is refused with the documented 429 and X-RateLimit headers."
+      },
+      {
+        "id": "token-expires-on-fourth-read",
+        "scope": "request",
+        "fault": "token_expiry",
+        "match": {
+          "route": "GET /v3/merchants/{mId}/orders/{orderId}"
+        },
+        "when": {
+          "nth": [
+            4
+          ]
+        },
+        "note": "The fourth GetOrder sees the conflated 401 mid-flow without the stored token changing."
+      }
+    ]
+  }
+}

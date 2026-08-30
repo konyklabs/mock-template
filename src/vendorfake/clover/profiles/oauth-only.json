@@ -1,0 +1,19 @@
+{
+  "name": "oauth-only",
+  "summary": "Only the OAuth dance. For a consumer testing token handling and nothing else.",
+  "capabilities": [
+    "oauth",
+    "chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "UNITCLOVERAPP",
+    "client_secret": "unit-clover-app-secret",
+    "redirect_uri": "https://example.test/oauth/callback"
+  },
+  "chaos": {
+    "seed": 20260829,
+    "strict_rules": true,
+    "rules": []
+  }
+}
