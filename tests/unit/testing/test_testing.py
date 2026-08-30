@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import time
+from typing import Any
 
+import httpx
 import pytest
 
 from vendorfake.conformance.runner import resolve_target, run_check, select_checks
@@ -17,6 +21,7 @@ from vendorfake.conformance.types import Outcome
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.square.signer import verify_square_signature
 from vendorfake.testing import (
+    LOG_LINES,
     CloverSeed,
     Driver,
     ServedUnit,
@@ -159,6 +164,83 @@ def test_serve_in_thread_shares_state_with_the_in_process_client() -> None:
         assert fetched.status_code == 200
         assert fetched.json()["order"]["id"] == order["id"]
         assert over_http.health()["framework_answered"] == 0
+
+
+def test_repeated_headers_reach_the_unit_identically_through_the_transport_and_the_server() -> None:
+    """UnitTransport is a third binding, so its parity with HTTP is pinned
+    here: the same request with two ``accept`` and two ``x-forwarded-for``
+    headers, once through the transport and once through a real server, must
+    be echoed byte for byte. A last-wins dict on the transport side would
+    drop one value in process and keep both over the socket."""
+    from tests.fakes import make_unit, route
+    from vendorfake.asgi import create_app
+    from vendorfake.asgi import serve_in_thread as serve_app
+    from vendorfake.core.kernel.reply import json_
+    from vendorfake.testing.transport import UnitTransport
+
+    def reflect(args: Any) -> Any:
+        return json_({name: args.req.headers[name] for name in ("accept", "x-forwarded-for", "x-one")})
+
+    fake = make_unit([route("GET", "/v2/headers", reflect)])
+    try:
+        headers = [
+            ("Accept", "text/plain"),
+            ("accept", "application/json"),
+            ("X-Forwarded-For", "10.0.0.1"),
+            ("X-Forwarded-For", "10.0.0.2"),
+            ("X-One", "only"),
+        ]
+        with httpx.Client(transport=UnitTransport(fake), base_url="http://unit.local") as direct:
+            in_process = direct.get("/v2/headers", headers=headers)
+        with serve_app(create_app(fake)) as base_url, httpx.Client(base_url=base_url) as over_http:
+            served_reply = over_http.get("/v2/headers", headers=headers)
+        assert in_process.status_code == served_reply.status_code == 200
+        assert in_process.content == served_reply.content
+        assert in_process.json() == {
+            "accept": "text/plain, application/json",
+            "x-forwarded-for": "10.0.0.1, 10.0.0.2",
+            "x-one": "only",
+        }
+    finally:
+        fake.stop()
+
+
+def test_subscribe_refuses_an_event_type_the_vendor_never_sends() -> None:
+    with unit("clover") as clover:
+        with pytest.raises(
+            ValueError, match=r"'clover' sends none of \['order.created'\]; its event types are \['O:CREATE'"
+        ):
+            clover.subscribe("http://127.0.0.1:1/x", ["order.created"], "code")
+        # Globs the dispatcher honours pass, and so does the exact vocabulary.
+        clover.subscribe("http://127.0.0.1:1/x", ["O:*"], "code")
+        clover.subscribe("http://127.0.0.1:1/y", ["*"], "code")
+        clover.subscribe("http://127.0.0.1:1/z", ["P:CREATE", "O:UPDATE"], "code")
+    with unit("square") as square:
+        with pytest.raises(ValueError, match="'square' sends none of"):
+            square.subscribe("http://127.0.0.1:1/x", ["O:CREATE"], "k")
+        square.subscribe("http://127.0.0.1:1/x", ["order.*", "payment.created"], "k")
+
+
+def test_served_enforces_its_startup_deadline_on_a_child_that_never_announces(monkeypatch: pytest.MonkeyPatch) -> None:
+    import vendorfake.testing as testing
+
+    monkeypatch.setattr(testing, "SERVE_COMMAND", (sys.executable, "-c", "import time; time.sleep(60)", "--"))
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match=r"did not announce a port within 1\.0s"), served("square", timeout_s=1.0):
+        pass  # pragma: no cover - never entered
+    assert time.monotonic() - started < 10
+
+
+def test_served_keeps_the_child_output_readable_and_never_blocks_on_it() -> None:
+    with served("square", "no-faults", log_level="debug") as child:
+        # Debug logging for the life of the child. Whatever it writes, the
+        # pipe is drained on a thread, so the child keeps answering, and the
+        # tail stays bounded and keeps the startup line.
+        for _ in range(400):
+            assert child.client.get("/__unit/health").status_code == 200
+        lines = child.logs()
+    assert any('"msg":"unit started"' in line for line in lines)
+    assert len(lines) <= LOG_LINES
 
 
 @pytest.mark.integration
