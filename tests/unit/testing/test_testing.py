@@ -124,6 +124,28 @@ def test_a_receiver_on_loopback_gets_a_signed_delivery_and_a_retry() -> None:
         assert [row["status"] for row in square.deliveries()] == ["failed", "delivered"]
 
 
+def test_a_receiver_answers_404_off_its_path_and_records_nothing() -> None:
+    """A handler mounted on one path and subscribed on another must fail,
+    as it would against the vendor -- not record the delivery anyway."""
+    with webhook_receiver(path="/hooks/square") as receiver:
+        wrong = receiver.url.replace("/hooks/square", "/webhooks")
+        assert httpx.post(wrong, content=b'{"nope": true}').status_code == 404
+        assert receiver.received == []
+        assert httpx.post(receiver.url, content=b'{"yes": true}').status_code == 200
+        assert [delivery.body for delivery in receiver.received] == [b'{"yes": true}']
+
+
+def test_two_units_mint_the_same_ids_unless_reseeded() -> None:
+    with unit("square") as first, unit("square") as second, unit("square", seed=2) as diverged:
+        same = _create_square_order(first)["id"], _create_square_order(second)["id"]
+        assert same[0] == same[1]
+        assert _create_square_order(diverged)["id"] != same[0]
+        # Separate stores: the order first minted is not visible to second.
+        assert second.client.get(f"/v2/orders/{same[0]}", headers=second.seed.auth).status_code == 200
+        assert first.reset()["entities"]["orders"] == 2
+        assert second.client.get(f"/v2/orders/{same[0]}", headers=second.seed.auth).status_code == 200
+
+
 def test_a_chaos_rule_and_a_reset_through_the_driver() -> None:
     with unit("square") as square:
         square.add_chaos_rule(

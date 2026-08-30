@@ -227,6 +227,7 @@ def unit(
     sink: DeliverySink | None = None,
     env: Mapping[str, str] | None = None,
     logger: Logger | None = None,
+    seed: int | None = None,
 ) -> Iterator[StartedUnit]:
     """A unit in this process, stopped however the block ends.
 
@@ -236,11 +237,23 @@ def unit(
     instead. ``env`` is the ``VENDORFAKE_*`` layer, empty by default -- the
     process environment is never read here, so one test's variables cannot
     change another test's profile.
+
+    **Ids are deterministic per unit.** Two units on the same profile mint the
+    same order ids, tokens and codes in the same order, because each starts
+    its id stream from the profile's seed -- that is what makes an id
+    assertion stable across runs. Their stores are separate, so nothing
+    collides; but a test that compares ids *between* two units, or keeps
+    ids across a unit's lifetime as if they were unique, will be surprised.
+    ``seed`` restarts the stream (and the fault engine's RNG) from another
+    number, for the rare test that needs two units to diverge; it is the
+    ``VENDORFAKE_CHAOS_SEED`` layer, so an explicit ``env`` entry wins.
     """
+    environ: dict[str, str] = {} if seed is None else {"VENDORFAKE_CHAOS_SEED": str(seed)}
+    environ.update(env or {})
     built = create_unit(
         vendor=vendor,
         profile=profile,
-        env=env,
+        env=environ,
         sink=sink,
         logger=JsonLogger("warn") if logger is None else logger,
     )

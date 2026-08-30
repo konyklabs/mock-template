@@ -49,8 +49,11 @@ vendorfake vendors            # -> clover, square
 vendorfake serve --vendor square
 ```
 
-From a checkout, `uv sync && uv run vendorfake serve --vendor square`. Once
-v0.1 is out this becomes `pip install vendorfake`.
+That resolves `main`. `vendorfake.testing`, the container and the examples
+arrive with the change that ships this README, so if the `main` you are
+reading predates it, pin the branch or tag that carries it
+(`...vendorfake@<ref>`). From a checkout, `uv sync && uv run vendorfake serve
+--vendor square`. Once v0.1 is out this becomes `pip install vendorfake`.
 
 ### Run it as a container
 
@@ -142,6 +145,13 @@ def test_a_clover_order_fires_a_webhook_with_the_auth_code():
 `subscribe` checks the event types against the vendor's vocabulary and
 refuses one it will never send — a Square type on a Clover unit would
 otherwise register happily and never fire.
+
+Ids are deterministic per unit: two `unit("square")` blocks mint the same
+order ids, tokens and codes in the same order, from separate stores. That is
+what makes an id assertion stable run to run; it also means ids are not
+unique *across* units. Pass `unit("square", seed=2)` when a test needs two
+units to diverge.
+
 When your service needs a URL, `served("square")` runs the shipped
 `vendorfake serve` in a child process and yields one, and
 `serve_in_thread(started)` gives a URL onto an in-process unit. Every driver

@@ -36,7 +36,10 @@ class Delivery:
 
 @dataclass
 class WebhookReceiver:
-    """Started by :func:`webhook_receiver`; ``url`` is what to subscribe."""
+    """Started by :func:`webhook_receiver`; ``url`` is what to subscribe.
+
+    Only ``path`` is served; any other path answers 404 and records nothing.
+    """
 
     path: str = "/webhooks"
     #: Arrival index -> HTTP status to answer with. Defaults to 200 for all.
@@ -64,6 +67,15 @@ class WebhookReceiver:
             def do_POST(self) -> None:
                 length = int(self.headers.get("content-length", "0"))
                 body = self.rfile.read(length)
+                if self.path != receiver.path:
+                    # A delivery to the wrong path is recorded nowhere and
+                    # answered 404, as a real receiver would: a consumer who
+                    # mounted their handler on one path and subscribed another
+                    # must see it fail, not a green test.
+                    self.send_response(404)
+                    self.send_header("content-length", "0")
+                    self.end_headers()
+                    return
                 with receiver._lock:
                     index = len(receiver.received)
                     receiver.received.append(Delivery({k.lower(): v for k, v in self.headers.items()}, body))
