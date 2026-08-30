@@ -52,8 +52,10 @@ JUDGMENT, each labelled at its site
 * **PKCE at authorize** -- the *token* side of PKCE is documented
   (``code_verifier`` in the exchange body); the authorize-side
   ``code_challenge`` parameter is not shown on the v2 pages, so accepting it
-  here follows RFC 7636 (S256 only). A code issued with a challenge demands
-  the verifier at exchange; one issued without demands the secret.
+  here follows RFC 7636, S256 only -- and an omitted ``code_challenge_method``
+  is refused rather than defaulted, because the RFC's default is ``plain``.
+  A code issued with a challenge demands the verifier at exchange; one issued
+  without demands the secret.
 * **Prior access tokens survive a refresh.** Clover's docs invalidate only
   the *refresh* token on rotation and say nothing about access tokens minted
   earlier, so this unit keeps them valid to their own expiry. Inventing
@@ -172,10 +174,18 @@ class CloverOAuthSurface:
 
         challenge = args.query("code_challenge")
         method = args.query("code_challenge_method")
-        if challenge and method not in (None, "S256"):
+        if challenge and method != "S256":
+            # JUDGMENT: an omitted method is refused, not defaulted to S256.
+            # RFC 7636 s4.3 makes `plain` the default when the method is
+            # absent, and this unit refuses `plain`; silently upgrading an
+            # absent method to S256 would accept a request the RFC reads as
+            # the one method we reject. Clover documents nothing either way.
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
-                detail="Only the S256 code_challenge_method is supported.",
+                detail=(
+                    "code_challenge_method must be S256. An omitted method means 'plain' (RFC 7636 s4.3), "
+                    "which is not supported."
+                ),
                 field="code_challenge_method",
             )
 
@@ -256,6 +266,16 @@ class CloverOAuthSurface:
                 field="refresh_token",
             )
         existing = TokenEntity.from_entity(found)
+        if existing.client_id != request.client_id:
+            # Unreachable while one app is configured (`_check_client` already
+            # matched the request to it), but a second seeded app must not be
+            # able to rotate the first app's grant. Same 401 as any other
+            # credential failure, and above every write.
+            raise UnitError(
+                UnitErrorKind.UNAUTHORIZED,
+                detail="The refresh token was not issued to this client_id.",
+                field="refresh_token",
+            )
         if existing.refresh_used_at_ms is not None:
             # "Refresh token is for single use and becomes invalid immediately
             # after a new access_token and refresh_token pair is generated."

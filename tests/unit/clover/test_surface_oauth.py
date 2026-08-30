@@ -170,16 +170,25 @@ def test_a_pkce_exchange_proves_the_verifier_and_needs_no_secret(h: Harness) -> 
 
 
 def test_a_wrong_verifier_is_401_and_a_missing_one_names_the_field(h: Harness) -> None:
-    code = h.code(code_challenge=CHALLENGE)
+    code = h.code(code_challenge=CHALLENGE, code_challenge_method="S256")
     assert h.token(code=code, code_verifier="not-the-verifier").status == 401
     missing = h.token(code=code)
     assert missing.status == 400
     assert missing.json()["unit_error"]["field"] == "code_verifier"
 
 
-def test_only_s256_is_accepted_at_authorize(h: Harness) -> None:
-    response = h.authorize(code_challenge=CHALLENGE, code_challenge_method="plain")
-    assert response.status == 400
+def test_only_an_explicit_s256_is_accepted_at_authorize(h: Harness) -> None:
+    """JUDGMENT: `plain` is refused, and so is an omitted method -- RFC 7636
+    s4.3 makes `plain` the default, so defaulting to S256 instead would accept
+    the one method this unit rejects."""
+    plain = h.authorize(code_challenge=CHALLENGE, code_challenge_method="plain")
+    assert plain.status == 400
+    omitted = h.authorize(code_challenge=CHALLENGE)
+    assert omitted.status == 400
+    assert omitted.json()["unit_error"]["field"] == "code_challenge_method"
+    assert "plain" in omitted.json()["message"]
+    # No method is fine when there is no challenge: that is the high-trust path.
+    assert h.authorize().status == 302
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +209,7 @@ def test_a_refused_exchange_journals_nothing_and_the_code_survives(h: Harness) -
 
 
 def test_a_refused_pkce_exchange_journals_nothing_and_the_code_survives(h: Harness) -> None:
-    code = h.code(code_challenge=CHALLENGE)
+    code = h.code(code_challenge=CHALLENGE, code_challenge_method="S256")
     before = h.journal_len()
     assert h.token(code=code, code_verifier="wrong").status == 401
     assert h.journal_len() == before
@@ -283,6 +292,33 @@ def test_a_refresh_journals_both_its_writes_as_a_refresh(h: Harness) -> None:
     entries = h.api.get("/__unit/journal").json()["entries"][before:]
     assert [(entry["collection"], entry["op"]) for entry in entries] == [("tokens", "update"), ("tokens", "insert")]
     assert {entry["meta"]["operation_id"] for entry in entries} == {"RefreshToken"}
+
+
+def test_a_refresh_token_issued_to_another_app_is_refused_before_any_write(h: Harness) -> None:
+    """Unreachable with one configured app; reachable the day a seed adds a
+    second. The stored token's client_id must match the caller's, the refusal
+    is the same 401 as any credential failure, and nothing is rotated."""
+    tokens = h.unit.context.store.collection(COL.tokens)
+    tokens.insert(
+        TokenEntity(
+            id="tok_otherapp0001",
+            access_token="cccccccc-1111-4222-8333-444444444444",
+            refresh_token="dddddddd-1111-4222-8333-444444444444",
+            client_id="OTHERAPP12345",
+            merchant_id=MERCHANT_ID,
+            access_token_expiration_ms=2**53,
+            refresh_token_expiration_ms=2**53,
+            permissions=("ORDERS_R",),
+        ).to_entity(),
+        {"operation_id": "TestSeed", "seed": True},
+    )
+    before = h.journal_len()
+    response = h.refresh(refresh_token="dddddddd-1111-4222-8333-444444444444")
+    assert response.status == 401
+    assert "client_id" in response.json()["message"]
+    assert h.journal_len() == before
+    stored = TokenEntity.from_entity(tokens.require("tok_otherapp0001"))
+    assert stored.refresh_used_at_ms is None  # not rotated
 
 
 def test_an_expired_refresh_token_is_refused(h: Harness) -> None:
