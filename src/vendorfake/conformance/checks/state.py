@@ -1,4 +1,5 @@
-"""C06, C07, C13 -- state is reproducible, append-only, and honestly gated.
+"""C06, C07, C13, C19, C20, C22, C24, C25 -- state is reproducible,
+append-only, honestly gated, and deduplicated per operation.
 
 C06 is the property a consumer's CI depends on: two units built the same way
 hold the same entities, so a test that passed this morning is not going to fail
@@ -13,13 +14,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv
+from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv, RouteRow
 from vendorfake.conformance.registry import check
 from vendorfake.conformance.types import ConformanceSkip, Requires, require
 
 __all__ = [
     "a_cursor_belongs_to_the_query_that_issued_it",
     "a_replayed_idempotency_key_does_not_run_twice",
+    "a_reused_key_with_a_different_body_answers_as_declared",
+    "an_idempotency_key_is_scoped_to_its_operation",
     "journal_is_append_only",
     "seed_is_deterministic_across_processes",
     "seed_is_deterministic_across_units",
@@ -31,6 +34,8 @@ _VERSION_CONFLICT = "version_conflict"
 _INVALID_CURSOR = "invalid_cursor"
 _MUTATING_METHODS = frozenset({"POST", "PUT"})
 _REPLAY_HEADER = "x-unit-idempotent-replay"
+_IGNORED_BODY_HEADER = "x-unit-idempotent-ignored-body"
+_IDEMPOTENCY_CONFLICT = "idempotency_conflict"
 
 _QUERY_A: dict[str, str] = {"conformance": "query-a"}
 _QUERY_B: dict[str, str] = {"conformance": "query-b"}
@@ -575,3 +580,206 @@ def seed_is_deterministic_across_processes(env: CheckEnv) -> str:
         f"{sum(entities.values())} entities across {len(entities)} collections; this process and a "
         f"unit built over the {transport!r} transport both digest to {here['digest']}"
     )
+
+
+# ---------------------------------------------------------------------------
+# C24, C25 -- what an idempotency declaration promises beyond "twice is once".
+# ---------------------------------------------------------------------------
+
+
+def _keyed(route: RouteRow, key: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The route's example body (or nothing) carrying ``key`` at its declared path."""
+    body = dict(route.example_body or {})
+    body[str(dict(route.idempotency or {})["key_path"])] = key
+    if extra:
+        body.update(extra)
+    return body
+
+
+@check(
+    id="C24",
+    name="state: an idempotency key is scoped to its operation",
+    asserts=(
+        "A key that succeeded on one route, sent to a route declaring a different idempotency "
+        "scope, is not replayed: the second route answers for itself, with no replay marker and "
+        "different bytes, while the first route still replays the same key."
+    ),
+    requires=Requires(idempotency_scopes=True, credentials=True),
+)
+def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
+    """The ``scope`` field of every IdempotencySpec, asked rather than read.
+
+    Collapsing the store's key from ``f"{scope} {key}"`` to ``key`` made a
+    PayOrder sent under a key a CreateOrder had used answer with the
+    CreateOrder body and a 200, and the matrix stayed green (the third
+    adversarial round, konyklabs/roadmap#10, N-3c; tracked as
+    konyklabs/roadmap#15): C19 sends its key to one route and never to a
+    second. A consumer who reuses a key across operations -- which real
+    clients do, because "idempotency key" reads as "request id" -- would be
+    handed another operation's answer with nothing to notice it by.
+
+    The second route is driven with its own example body where it has one, so
+    the request is one the route would accept; otherwise with the key alone.
+    Either is enough: a replay is decided at step 7 of the pipeline, before
+    the handler, so the collapsed scope answers the stored response whether or
+    not the second request would have validated. The two things a scoped key
+    must produce are a second answer that is the second route's own -- no
+    marker, different bytes -- and a first route that still replays.
+    """
+    first_route = next(
+        row
+        for row in env.example_routes(methods=_MUTATING_METHODS, idempotent=True)
+        if env.other_idempotency_scope(row) is not None
+    )
+    second_route = env.other_idempotency_scope(first_route)
+    if second_route is None:  # pragma: no cover - the precondition already refused this
+        raise ConformanceSkip("no second idempotency scope")
+    first_scope = str(dict(first_route.idempotency or {})["scope"])
+    second_scope = str(dict(second_route.idempotency or {})["scope"])
+    key = "conformance-idempotency-scope-probe"
+
+    first = env.client.call(
+        first_route.method,
+        first_route.probe_path,
+        json_body=_keyed(first_route, key),
+        headers=env.authorized(first_route),
+    )
+    require(
+        200 <= first.status < 300,
+        f"{first_route.key} refused its own published example_body: {first.status} "
+        f"{first.error_kind!r} {first.text[:300]}. Nothing is stored under a key until something "
+        f"has succeeded, so the scope contract cannot be asked.",
+    )
+    seq_after_first = int(env.get_json(f"{CONTROL_PREFIX}journal")["seq"])
+
+    second = env.client.call(
+        second_route.method,
+        second_route.probe_path,
+        json_body=_keyed(second_route, key),
+        headers=env.authorized(second_route),
+    )
+    require(
+        _REPLAY_HEADER not in second.headers,
+        f"{second_route.key} (scope {second_scope!r}) answered {second.status} carrying "
+        f"{_REPLAY_HEADER}={second.headers.get(_REPLAY_HEADER)!r} to a key it had never seen -- the "
+        f"key was spent on {first_route.key} (scope {first_scope!r}). The idempotency table in "
+        f"core/state/store.py is keyed on (scope, key) and the scope is the route's own declaration; "
+        f"a table keyed on the key alone hands one operation another operation's answer.",
+    )
+    require(
+        second.body != first.body,
+        f"{second_route.key} (scope {second_scope!r}) answered the exact bytes {first_route.key} "
+        f"(scope {first_scope!r}) had answered under the same key. That is the first operation's "
+        f"stored response served for the second: a consumer reusing a key across operations "
+        f"receives a body from the wrong endpoint with a 200 attached.",
+    )
+    seq_after_second = int(env.get_json(f"{CONTROL_PREFIX}journal")["seq"])
+    if 200 <= second.status < 300:
+        require(
+            seq_after_second > seq_after_first,
+            f"{second_route.key} answered {second.status} and the journal did not move from seq "
+            f"{seq_after_first}: nothing executed, so the answer was not the route's own.",
+        )
+
+    again = env.client.call(
+        first_route.method,
+        first_route.probe_path,
+        json_body=_keyed(first_route, key),
+        headers=env.authorized(first_route),
+    )
+    require(
+        again.headers.get(_REPLAY_HEADER) and again.body == first.body,
+        f"after the key was sent to {second_route.key}, {first_route.key} no longer replays it "
+        f"({again.status}, {_REPLAY_HEADER}={again.headers.get(_REPLAY_HEADER)!r}). The second "
+        f"operation overwrote or evicted the first's record; scopes must isolate in both directions.",
+    )
+    executed = "executed" if 200 <= second.status < 300 else f"refused as {second.error_kind}"
+    return (
+        f"key {key!r}: {first_route.key} [{first_scope}] -> {first.status}; the same key on "
+        f"{second_route.key} [{second_scope}] -> {second.status} ({executed}, no replay marker, "
+        f"different bytes); {first_route.key} still replays it"
+    )
+
+
+@check(
+    id="C25",
+    name="state: a reused idempotency key with a different body answers as the route declares",
+    asserts=(
+        "On every driveable idempotent route: a key reused with a different body is refused with "
+        "idempotency_conflict where the route declares on_mismatch=conflict, and replays the stored "
+        "answer marked as ignoring the body where it declares replay -- and executes nothing either way."
+    ),
+    requires=Requires(idempotent_example=True, credentials=True),
+)
+def a_reused_key_with_a_different_body_answers_as_declared(env: CheckEnv) -> str:
+    """``on_mismatch``, in the direction each route declares.
+
+    The ``conflict`` branch of the kernel's ``_replay`` was deleted outright
+    and the matrix stayed green (konyklabs/roadmap#10, N-3d; tracked as
+    konyklabs/roadmap#15): a reused key with new data was handed the old
+    answer and a 200, which is precisely the silent wrong answer the 409
+    exists to prevent. C19 sends the same body twice and cannot see it.
+
+    Asked in the declared direction, like C09's signer bindings, because
+    ``replay`` is real documented vendor behaviour and not a defect -- but a
+    route that declares one and does the other has published a lie. The
+    differing body is the example plus one extra field: the digest is taken
+    at step 7 of the pipeline, before any handler could refuse the field, so
+    the comparison sees a different request without the vendor's validation
+    ever being involved.
+    """
+    driven: list[str] = []
+    for index, route in enumerate(env.example_routes(methods=_MUTATING_METHODS, idempotent=True)):
+        spec = dict(route.idempotency or {})
+        declared = str(spec.get("on_mismatch", "conflict"))
+        key = f"conformance-mismatch-probe-{index}"
+        headers = env.authorized(route)
+        first = env.client.call(route.method, route.probe_path, json_body=_keyed(route, key), headers=headers)
+        require(
+            200 <= first.status < 300,
+            f"{route.key} refused its own published example_body: {first.status} "
+            f"{first.error_kind!r} {first.text[:300]}. Nothing is stored under a key until something "
+            f"has succeeded, so the mismatch contract cannot be asked of this route.",
+        )
+        seq_after_first = int(env.get_json(f"{CONTROL_PREFIX}journal")["seq"])
+
+        changed = _keyed(route, key, {"conformance_mismatch": "a field the first request did not carry"})
+        second = env.client.call(route.method, route.probe_path, json_body=changed, headers=headers)
+        if declared == "conflict":
+            require(
+                second.error_kind == _IDEMPOTENCY_CONFLICT,
+                f"{route.key} declares on_mismatch='conflict' and answered {second.status} with "
+                f"x-unit-error={second.error_kind!r} to its key reused with a DIFFERENT body, expected "
+                f"{_IDEMPOTENCY_CONFLICT!r}. core/kernel/unit.py::_replay compares the stored request "
+                f"digest and must refuse a mismatch on a conflict route; replaying instead hands a "
+                f"consumer who changed their request the answer to the one they did not send.",
+            )
+            require(
+                _REPLAY_HEADER not in second.headers,
+                f"{route.key} refused the mismatched body and still stamped {_REPLAY_HEADER}: a "
+                f"refusal replays nothing.",
+            )
+        elif declared == "replay":
+            require(
+                second.status == first.status and second.body == first.body,
+                f"{route.key} declares on_mismatch='replay' and answered {second.status} with different "
+                f"bytes to its key reused with a different body; the declaration promises the stored "
+                f"answer, status and body, with the new request dropped.",
+            )
+            require(
+                second.headers.get(_REPLAY_HEADER) and second.headers.get(_IGNORED_BODY_HEADER),
+                f"{route.key} replayed a mismatched body without both {_REPLAY_HEADER!r} and "
+                f"{_IGNORED_BODY_HEADER!r}. 'You got a 200 and your update was discarded' is documented "
+                f"vendor behaviour a consumer has no other way to observe; both are stamped in "
+                f"core/kernel/unit.py::_replay.",
+            )
+        else:
+            require(False, f"{route.key} publishes on_mismatch={declared!r}, which is neither 'conflict' nor 'replay'.")
+        require(
+            int(env.get_json(f"{CONTROL_PREFIX}journal")["seq"]) == seq_after_first,
+            f"{route.key}: the mismatched reuse moved the journal past seq {seq_after_first}. Whatever "
+            f"the declared answer to a mismatch is, the handler must not run for it.",
+        )
+        driven.append(f"{route.key} [{declared}] -> {second.status}:{second.error_kind or 'replay'}")
+    require(driven, "no idempotent route publishing an example_body was enabled, so nothing was driven.")
+    return "; ".join(driven) + "; journal unmoved by every mismatch"

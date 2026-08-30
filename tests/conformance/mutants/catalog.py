@@ -951,6 +951,13 @@ register(
         defect="GET /__unit/routes names an idempotency key_path the route does not deduplicate on.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C19"}),
+        also_trips=frozenset({"C24", "C25"}),
+        cascade=(
+            "C24 and C25 aim their keys at the published key_path exactly as C19 does, so a key sent "
+            "at the documented path is never stored: the second operation sees no replay (C24's "
+            "sanity replay on the first route fails) and a reused key with a different body executes "
+            "again instead of conflicting (C25). One lie in the route table, three contracts it breaks."
+        ),
         control=replace_control_route("GET", "/__unit/routes", rewrite_document(_lie_about_the_idempotency_key)),
     )
 )
@@ -1202,6 +1209,83 @@ register(
 scope enforcement removed from every route EXCEPT the one C17 probed left the
 matrix green, because a check that asks one route can be satisfied by a unit
 that is correct on exactly that route."""
+
+
+_SHARED_SCOPE = "conformance-shared"
+
+
+def _collapse_idempotency_scopes(routes: Sequence[Route]) -> Sequence[Route]:
+    return tuple(
+        route
+        if route.idempotency is None
+        else dataclasses.replace(route, idempotency=dataclasses.replace(route.idempotency, scope=_SHARED_SCOPE))
+        for route in routes
+    )
+
+
+def _publish_distinct_scopes(document: dict[str, Any]) -> dict[str, Any]:
+    """The route table keeps saying what the declarations used to say."""
+    rows: list[dict[str, Any]] = []
+    for row in document["routes"]:
+        spec = row.get("idempotency")
+        if spec is None:
+            rows.append(row)
+            continue
+        rows.append({**row, "idempotency": {**spec, "scope": f"{row['method']} {row['path']}"}})
+    return {**document, "routes": rows}
+
+
+register(
+    Mutant(
+        id="M34",
+        name="idempotency-scope-collapsed",
+        defect="Every idempotent route stores its answers under one scope, so a key replays across operations while the route table publishes a scope per operation.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C24"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_collapse_idempotency_scopes),
+        control=replace_control_route("GET", "/__unit/routes", rewrite_document(_publish_distinct_scopes)),
+    )
+)
+"""N-3c. ``f"{scope} {key}"`` -> ``key`` in the store's idempotency table: a
+PayOrder sent under a key a CreateOrder had used came back with the CreateOrder
+body and a 200. The matrix stayed green because C19 sends its key to one route
+and never to a second. The document is rewritten alongside because the defect
+is "the scope the table publishes is not the scope the unit keys on" -- a
+vendor that declared one scope everywhere would be caught by the declaration."""
+
+
+def _ignore_on_mismatch(routes: Sequence[Route]) -> Sequence[Route]:
+    return tuple(
+        route
+        if route.idempotency is None
+        else dataclasses.replace(route, idempotency=dataclasses.replace(route.idempotency, on_mismatch="replay"))
+        for route in routes
+    )
+
+
+def _publish_conflict(document: dict[str, Any]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for row in document["routes"]:
+        spec = row.get("idempotency")
+        rows.append(row if spec is None else {**row, "idempotency": {**spec, "on_mismatch": "conflict"}})
+    return {**document, "routes": rows}
+
+
+register(
+    Mutant(
+        id="M35",
+        name="on-mismatch-conflict-ignored",
+        defect="A reused key with a different body replays the stored answer on every route, while the route table still promises 'conflict'.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C25"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_ignore_on_mismatch),
+        control=replace_control_route("GET", "/__unit/routes", rewrite_document(_publish_conflict)),
+    )
+)
+"""N-3d. The ``on_mismatch == "conflict"`` branch in the kernel's ``_replay``
+deleted outright: a consumer who reuses a key with new data is handed the old
+answer and a 200, which is exactly the silent wrong answer the 409 exists to
+prevent. C19 sends the same body twice and cannot see it."""
 
 
 _REPLAY_MARKER = "x-unit-idempotent-replay"

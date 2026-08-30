@@ -23,7 +23,9 @@
     "C20": "state: a cursor belongs to the query that issued it",
     "C21": "webhooks: the declared retry schedule is the schedule actually followed",
     "C22": "state: the seed scenario is deterministic across two OPERATING-SYSTEM PROCESSES",
-    "C23": "transport: a repeated query parameter reaches the handler whole"
+    "C23": "transport: a repeated query parameter reaches the handler whole",
+    "C24": "state: an idempotency key is scoped to its operation",
+    "C25": "state: a reused idempotency key with a different body answers as the route declares"
   },
   "expected_skips": {
     "C07": [
@@ -56,6 +58,12 @@
       "no-faults",
       "oauth-only",
       "orders-only"
+    ],
+    "C24": [
+      "oauth-only"
+    ],
+    "C25": [
+      "oauth-only"
     ]
   }
 }
