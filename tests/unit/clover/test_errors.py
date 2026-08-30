@@ -185,3 +185,18 @@ def test_describe_publishes_all_twenty_rows() -> None:
     described = CloverErrorShaper().describe()
     assert set(described) == {kind.value for kind in UnitErrorKind}
     assert described["forbidden_scope"]["status"] == 401
+
+
+def test_the_control_plane_publishes_each_rows_provenance_from_describe() -> None:
+    """`GET /__unit/errors` carries the table's provenance per row -- the
+    promise the module docstring makes -- with the sidecar off, the case in
+    which nothing else on the wire could carry it."""
+    from tests.unit.clover.harness import harness
+
+    for h in harness("full", env={"VENDORFAKE_VENDOR_ERROR_SIDECAR": "false"}):
+        rows = {row["kind"]: row for row in h.api.get("/__unit/errors").json()["kinds"]}
+        assert rows["forbidden_scope"]["provenance"] == "documented"
+        assert rows["not_found"]["provenance"] == "judgment"
+        assert "unit_error" not in rows["not_found"]["body"]
+        for kind, mapping in CLOVER_ERROR_TABLE.items():
+            assert rows[kind.value]["provenance"] == mapping.provenance, kind

@@ -11,7 +11,9 @@ other nineteen behaved. Provenance is a real field because the ``unit_error``
 sidecar publishes it (when the sidecar is on): a consumer debugging a refusal
 sees which of this unit's statuses Clover actually documents and which are
 this project's reading, and :meth:`CloverErrorShaper.describe` renders the
-whole table for anything that wants it.
+whole table for ``GET /__unit/errors``. The sidecar, the ``retry-after`` and
+``x-unit-capability`` headers and the exhaustiveness check are the core's
+(``core/kernel/shaping.py``); this module is Clover's table and envelope.
 
 The envelope -- JUDGMENT
 ------------------------
@@ -82,8 +84,14 @@ block.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
+from vendorfake.core.kernel.shaping import (
+    Provenance,
+    assert_error_table_total,
+    mechanism_headers,
+    unit_error_sidecar,
+)
 from vendorfake.core.kernel.types import (
     ShapedError,
     UnitContext,
@@ -92,7 +100,6 @@ from vendorfake.core.kernel.types import (
     UnitRequest,
 )
 from vendorfake.core.util.json import compact
-from vendorfake.core.util.numbers import as_str
 
 __all__ = [
     "CLOVER_ERROR_TABLE",
@@ -102,9 +109,6 @@ __all__ = [
     "CloverErrorShaper",
     "Provenance",
 ]
-
-Provenance = Literal["documented", "judgment"]
-"""Where a row's HTTP status comes from. A real field, surfaced on the wire."""
 
 _CONFLATED_401 = (
     "Clover: 'The API does not distinguish between an unauthorized error (401 - expired/invalid token) "
@@ -288,11 +292,6 @@ DETAIL_SUPPRESSED_KINDS: frozenset[UnitErrorKind] = frozenset(
 kinds only the bearer path produces. ``unauthorized`` is conflated in status
 but keeps its detail -- see the module docstring for why."""
 
-#: The header value a rate-limited response carries when the header is on and
-#: a chaos rule supplied no interval, in whole seconds as Clover's documented
-#: ``retry-after: <seconds>`` implies.
-_DEFAULT_RETRY_AFTER = "1"
-
 _RATE_LIMIT_HEADERS: dict[str, str] = {
     "x-ratelimit-tokenlimit": "16",
     "x-ratelimit-crosstokenlimit": "50",
@@ -336,26 +335,16 @@ class CloverErrorShaper:
         message = mapping.message if conflated or not err.detail else err.detail
         body: dict[str, Any] = compact({"message": message, "type": mapping.type})
         if self._sidecar:
-            # Reserved keys last, so an `info` document carrying a `kind` of
-            # its own cannot clobber what the sidecar exists to report.
-            body["unit_error"] = compact(
-                {
-                    **dict(err.info or {}),
-                    "kind": err.kind.value,
-                    "status_provenance": mapping.provenance,
-                    "field": err.field or None,
-                    "detail": (err.detail or None) if conflated else None,
-                }
+            body["unit_error"] = unit_error_sidecar(
+                err,
+                mapping.provenance,
+                field=err.field or None,
+                detail=(err.detail or None) if conflated else None,
             )
         headers: dict[str, str] = {}
         if err.kind is UnitErrorKind.RATE_LIMITED:
             headers.update(_RATE_LIMIT_HEADERS)
-            if self._retry_after_header:
-                info = err.info or {}
-                headers["retry-after"] = as_str(info.get("retry_after_seconds"), _DEFAULT_RETRY_AFTER)
-        if err.kind is UnitErrorKind.CAPABILITY_DISABLED:
-            info = err.info or {}
-            headers["x-unit-capability"] = as_str(info.get("capability"), "")
+        headers.update(mechanism_headers(err, retry_after_header=self._retry_after_header))
         return ShapedError(status=mapping.status, body=body, headers=headers)
 
     def not_found(self, req: UnitRequest, ctx: UnitContext) -> ShapedError:
@@ -377,18 +366,11 @@ class CloverErrorShaper:
             ctx,
         )
 
-    def describe(self) -> dict[str, Any]:
+    def describe(self) -> dict[str, dict[str, Any]]:
         """The table as a report publishes it -- twenty rows with provenance."""
         return {kind.value: mapping.as_json() for kind, mapping in CLOVER_ERROR_TABLE.items()}
 
 
-# Exhaustiveness, at import, as a raise and never as an `assert`: `python -O`
-# strips assert statements, and a table that silently lost a row would answer
-# one error kind with a KeyError-turned-500 while the other nineteen behaved.
-if set(CLOVER_ERROR_TABLE) != set(UnitErrorKind):
-    _missing = sorted(kind.value for kind in UnitErrorKind if kind not in CLOVER_ERROR_TABLE)
-    _extra = sorted(str(kind) for kind in CLOVER_ERROR_TABLE if kind not in set(UnitErrorKind))
-    raise RuntimeError(
-        "CLOVER_ERROR_TABLE must map every UnitErrorKind exactly once; "
-        f"missing: {_missing or 'none'}; unknown: {_extra or 'none'}"
-    )
+# Exhaustiveness, at import, as a raise and never as an `assert` -- see
+# core/kernel/shaping.py for why.
+assert_error_table_total(CLOVER_ERROR_TABLE, name="CLOVER_ERROR_TABLE")

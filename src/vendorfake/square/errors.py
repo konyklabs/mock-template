@@ -14,6 +14,10 @@ not a comment because ``/__unit/errors`` and the ``unit_error`` sidecar publish
 it: a consumer can ask this fake which of its statuses Square actually
 documents and which are this project's reading.
 
+The sidecar, the ``retry-after`` and ``x-unit-capability`` headers and the
+exhaustiveness check are the core's (``core/kernel/shaping.py``); this module
+is Square's table and Square's envelope.
+
 Envelope and the four ``Error`` fields (``category``, ``code``, ``detail``,
 ``field``) are documented:
   https://developer.squareup.com/docs/build-basics/handling-errors
@@ -60,8 +64,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
+from vendorfake.core.kernel.shaping import (
+    Provenance,
+    assert_error_table_total,
+    mechanism_headers,
+    unit_error_sidecar,
+)
 from vendorfake.core.kernel.types import (
     ShapedError,
     UnitContext,
@@ -70,7 +80,6 @@ from vendorfake.core.kernel.types import (
     UnitRequest,
 )
 from vendorfake.core.util.json import compact
-from vendorfake.core.util.numbers import as_str
 
 __all__ = [
     "PUBLISHED_ERROR_CODES",
@@ -83,9 +92,6 @@ __all__ = [
     "SquareErrorMapping",
     "SquareErrorShaper",
 ]
-
-Provenance = Literal["documented", "judgment"]
-"""Where a row's HTTP status comes from. A real field, surfaced on the wire."""
 
 
 class ErrorCategory(StrEnum):
@@ -348,11 +354,6 @@ provenance."""
 PUBLISHED_ERROR_CODES: frozenset[ErrorCode] = frozenset(ErrorCode) - UNPUBLISHED_CODES
 """Every code above that Square's published ``ErrorCode`` enumeration lists."""
 
-#: The status header a rate-limited response carries when the header is on, and
-#: the fallback when a chaos rule supplied no interval. One second, matching the
-#: reference's ``Number(info.retryAfterSeconds ?? 1)``.
-_DEFAULT_RETRY_AFTER = "1"
-
 
 class SquareErrorShaper:
     """Turns a :class:`UnitError` into Square's envelope. Satisfies ``ErrorShaper``.
@@ -393,18 +394,8 @@ class SquareErrorShaper:
             ]
         }
         if self._sidecar:
-            body["unit_error"] = {
-                "kind": err.kind.value,
-                "status_provenance": mapping.provenance,
-                **dict(err.info or {}),
-            }
-        headers: dict[str, str] = {}
-        if err.kind is UnitErrorKind.RATE_LIMITED and self._retry_after_header:
-            info = err.info or {}
-            headers["retry-after"] = as_str(info.get("retry_after_seconds"), _DEFAULT_RETRY_AFTER)
-        if err.kind is UnitErrorKind.CAPABILITY_DISABLED:
-            info = err.info or {}
-            headers["x-unit-capability"] = as_str(info.get("capability"), "")
+            body["unit_error"] = unit_error_sidecar(err, mapping.provenance)
+        headers = mechanism_headers(err, retry_after_header=self._retry_after_header)
         return ShapedError(status=mapping.status, body=body, headers=headers)
 
     def not_found(self, req: UnitRequest, ctx: UnitContext) -> ShapedError:
@@ -426,20 +417,11 @@ class SquareErrorShaper:
             ctx,
         )
 
-    def describe(self) -> dict[str, Any]:
+    def describe(self) -> dict[str, dict[str, Any]]:
         """The table as a report publishes it -- twenty rows with provenance."""
         return {kind.value: mapping.as_json() for kind, mapping in SQUARE_ERROR_TABLE.items()}
 
 
-# Exhaustiveness, at import, as a raise and never as an `assert`: `python -O`
-# strips assert statements, and a table that silently lost a row would answer
-# one error kind with a KeyError-turned-500 while the other nineteen behaved.
-# This is the TypeScript `Record<UnitErrorKind, Mapping>` in the only form
-# Python can enforce at run time.
-if set(SQUARE_ERROR_TABLE) != set(UnitErrorKind):
-    _missing = sorted(kind.value for kind in UnitErrorKind if kind not in SQUARE_ERROR_TABLE)
-    _extra = sorted(str(kind) for kind in SQUARE_ERROR_TABLE if kind not in set(UnitErrorKind))
-    raise RuntimeError(
-        "SQUARE_ERROR_TABLE must map every UnitErrorKind exactly once; "
-        f"missing: {_missing or 'none'}; unknown: {_extra or 'none'}"
-    )
+# Exhaustiveness, at import, as a raise and never as an `assert` -- see
+# core/kernel/shaping.py for why.
+assert_error_table_total(SQUARE_ERROR_TABLE, name="SQUARE_ERROR_TABLE")

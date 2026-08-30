@@ -248,6 +248,9 @@ class ErrorShaperOverlay:
     def not_found(self, req: UnitRequest, ctx: UnitContext) -> ShapedError:
         return self._inner.not_found(req, ctx) if self._not_found is None else self._not_found
 
+    def describe(self) -> Mapping[str, Mapping[str, Any]]:
+        return self._inner.describe()
+
 
 class AuthAdapterOverlay:
     """An auth adapter that is another adapter, except where a mutant says so.

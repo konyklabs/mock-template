@@ -776,6 +776,18 @@ class ErrorShaper(Protocol):
         """Body for a path that matched no route at all."""
         ...
 
+    def describe(self) -> Mapping[str, Mapping[str, Any]]:
+        """The table as a report publishes it: one row per ``UnitErrorKind``
+        value, each carrying at least ``status`` and ``provenance``
+        (``"documented"`` or ``"judgment"`` -- where the status came from).
+
+        ``GET /__unit/errors`` reads the provenance of every row from here.
+        Without this hook the promise that a consumer can ask a unit which of
+        its statuses the vendor documents was made in two vendors' docstrings
+        and kept by nothing.
+        """
+        ...
+
 
 class AuthAdapter(Protocol):
     """Resolves a presented credential into a principal and its scopes.

@@ -56,7 +56,8 @@ NINE ROUTES THE REFERENCE DOES NOT HAVE
 ---------------------------------------
 ``GET /__unit/errors``
     The vendor's shaping of every one of the twenty core error kinds, read over
-    the wire instead of by importing the vendor's table.
+    the wire instead of by importing the vendor's table -- each row with the
+    provenance of its status, from ``ErrorShaper.describe``.
 ``GET /__unit/machines`` and ``POST /__unit/machines/probe``
     Declared lifecycles, with ``terminal`` derived from ``to == []`` in the
     machine itself, and a way to evaluate a transition without mutating
@@ -275,6 +276,10 @@ def control_plane_routes(
         loudly here -- instead of simply not appearing in the report.
         """
         ctx = args.ctx
+        # Provenance comes from `describe()`, never from the shaped body: the
+        # sidecar that would carry it there is switchable, and a consumer who
+        # turned it off still gets to ask which statuses the vendor documents.
+        described = ctx.vendor.errors.describe()
         shaped: list[dict[str, Any]] = []
         for kind in UnitErrorKind:
             result = ctx.vendor.errors.shape(UnitError(kind, detail=f"conformance probe for {kind.value}"), ctx)
@@ -282,6 +287,7 @@ def control_plane_routes(
                 {
                     "kind": kind.value,
                     "status": result.status,
+                    "provenance": described.get(kind.value, {}).get("provenance"),
                     "body": result.body,
                     "headers": dict(result.headers),
                 }
