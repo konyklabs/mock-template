@@ -425,8 +425,9 @@ and a behaviour had to be decided, the wire says so: error bodies carry a
 ## Status
 
 Pre-release, built in the open. The Square surface above is implemented and
-tested (1781 tests at the time of writing); nothing is published to a registry
-yet. Treat interfaces as subject to change until v0.1 is tagged.
+tested (`uv run pytest --collect-only -q` prints the current test count);
+nothing is published to a registry yet. Treat interfaces as subject to change
+until v0.1 is tagged.
 
 ## Design
 

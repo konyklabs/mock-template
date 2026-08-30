@@ -26,7 +26,10 @@ from vendorfake.square.seed.constants import (
 
 @pytest.fixture
 def h() -> Iterator[Harness]:
-    yield from build_harness("full")
+    """On a virtual clock: `enrolled_at` is stamped in the handler and
+    `created_at` by `Collection.insert`, two reads that a real clock can
+    separate by a millisecond."""
+    yield from build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"})
 
 
 def search(h: Harness, **body: Any) -> Any:
