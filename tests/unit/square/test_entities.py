@@ -23,6 +23,9 @@ def test_the_collection_names() -> None:
         "catalog_objects",
         "orders",
         "payments",
+        "loyalty_programs",
+        "loyalty_accounts",
+        "loyalty_events",
         "authorization_codes",
         "tokens",
     )

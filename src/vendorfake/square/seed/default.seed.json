@@ -7,6 +7,9 @@
     "  catalog ITEM + variation https://developer.squareup.com/reference/square/catalog-api/retrieve-catalog-object",
     "  order id shape           https://developer.squareup.com/reference/square/orders-api/create-order",
     "  tender id + shape        https://developer.squareup.com/reference/square/orders-api/pay-order",
+    "  loyalty program/account  https://developer.squareup.com/reference/square/loyalty-api/retrieve-loyalty-program",
+    "The loyalty program's accrual rule (one point per 100 minor units) is this",
+    "scenario's JUDGMENT; Square publishes no default.",
     "The COMPLETED order carries closed_at and a tender that covers its whole",
     "total, because Square cannot produce one that does not: COMPLETED means",
     "'Completed orders are fully paid. This is a terminal state.'",
@@ -127,19 +130,43 @@
       ]
     }
   ],
+  "loyalty_program": {
+    "id": "d619f755-2d17-41f3-990d-c04ecedd64dd",
+    "status": "ACTIVE",
+    "terminology_one": "Point",
+    "terminology_other": "Points",
+    "accrual_points": 1,
+    "spend_amount": { "amount": 100, "currency": "USD" },
+    "tax_mode": "BEFORE_TAX",
+    "reward_tiers": [
+      { "id": "e1b39225-9da5-43d1-a5db-782cdd8ad94f", "points": 10, "name": "10% off entire sale",
+        "created_at": "2020-06-10T21:00:00.000Z" }
+    ],
+    "created_at": "2020-06-10T21:00:00.000Z"
+  },
+  "loyalty_accounts": [
+    {
+      "id": "79b807d2-d786-46a9-933b-918028d7a8c5",
+      "phone_number": "+14155551234",
+      "customer_id": "QPTXM8PQNX3Q726ZYHPMNP46XC",
+      "mapping_id": "66aaab3f-da99-49ed-8b19-b87f851c844f",
+      "enrolled_at": "2026-08-01T10:00:00.000Z"
+    }
+  ],
   "tokens": [
     {
       "id": "tok_seed_full",
       "access_token": "EAAAl-unit-seeded-access-token-full-scopes",
       "refresh_token": "EQAAl-unit-seeded-refresh-token-full-scopes",
       "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ORDERS_WRITE", "ITEMS_READ", "ITEMS_WRITE",
-                 "PAYMENTS_READ", "PAYMENTS_WRITE", "DEVELOPER_APPLICATION_WEBHOOKS_WRITE"]
+                 "PAYMENTS_READ", "PAYMENTS_WRITE", "LOYALTY_READ", "LOYALTY_WRITE",
+                 "DEVELOPER_APPLICATION_WEBHOOKS_WRITE"]
     },
     {
       "id": "tok_seed_readonly",
       "access_token": "EAAAl-unit-seeded-access-token-read-only",
       "refresh_token": "EQAAl-unit-seeded-refresh-token-read-only",
-      "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ITEMS_READ", "PAYMENTS_READ"]
+      "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ITEMS_READ", "PAYMENTS_READ", "LOYALTY_READ"]
     }
   ]
 }

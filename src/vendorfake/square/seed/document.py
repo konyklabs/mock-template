@@ -37,9 +37,12 @@ __all__ = [
     "SeedItem",
     "SeedLineItem",
     "SeedLocation",
+    "SeedLoyaltyAccount",
+    "SeedLoyaltyProgram",
     "SeedMerchant",
     "SeedMoney",
     "SeedOrder",
+    "SeedRewardTier",
     "SeedSubscription",
     "SeedTender",
     "SeedToken",
@@ -203,6 +206,58 @@ class SeedOrder(BaseModel):
     tenders: tuple[SeedTender, ...] = ()
 
 
+class SeedRewardTier(BaseModel):
+    """One ``LoyaltyProgramRewardTier``: ``points`` to earn it and a ``name``.
+    https://developer.squareup.com/reference/square/objects/LoyaltyProgramRewardTier
+    ``pricing_rule_reference`` is absent: it names a PRICING_RULE catalog
+    object, which this unit does not model (SHRINK).
+    """
+
+    model_config = _SEED
+
+    id: str = Field(min_length=1)
+    points: int = Field(gt=0)
+    name: str
+    created_at: str | None = None
+
+
+class SeedLoyaltyProgram(BaseModel):
+    """The seller's one loyalty program, with a single SPEND accrual rule.
+
+    https://developer.squareup.com/reference/square/objects/LoyaltyProgram and
+    https://developer.squareup.com/reference/square/objects/LoyaltyProgramAccrualRule:
+    buyers earn ``accrual_points`` for every ``spend_amount`` of an order.
+    ``location_ids`` defaults to every seeded location.
+    """
+
+    model_config = _SEED
+
+    id: str = Field(min_length=1)
+    status: Literal["ACTIVE", "INACTIVE"] = "ACTIVE"
+    terminology_one: str = "Point"
+    terminology_other: str = "Points"
+    location_ids: tuple[str, ...] | None = None
+    accrual_points: int = Field(default=1, gt=0)
+    spend_amount: SeedMoney = SeedMoney(amount=100)
+    tax_mode: Literal["BEFORE_TAX", "AFTER_TAX"] = "BEFORE_TAX"
+    reward_tiers: tuple[SeedRewardTier, ...] = ()
+    created_at: str | None = None
+
+
+class SeedLoyaltyAccount(BaseModel):
+    """A buyer already enrolled, so the search-by-phone path finds someone."""
+
+    model_config = _SEED
+
+    id: str = Field(min_length=1)
+    phone_number: str = Field(min_length=1)
+    customer_id: str = Field(min_length=1)
+    mapping_id: str | None = None
+    balance: int = 0
+    lifetime_points: int = 0
+    enrolled_at: str | None = None
+
+
 class SeedToken(BaseModel):
     """A token already issued to the application.
 
@@ -250,6 +305,8 @@ class SeedDocument(BaseModel):
     locations: tuple[SeedLocation, ...] = ()
     catalog: SeedCatalog | None = None
     orders: tuple[SeedOrder, ...] = ()
+    loyalty_program: SeedLoyaltyProgram | None = None
+    loyalty_accounts: tuple[SeedLoyaltyAccount, ...] = ()
     tokens: tuple[SeedToken, ...] = ()
     webhook_subscriptions: tuple[SeedSubscription, ...] = ()
 

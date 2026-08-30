@@ -55,6 +55,9 @@ __all__ = [
     "CatalogObjectEntity",
     "Fulfillment",
     "LocationEntity",
+    "LoyaltyAccountEntity",
+    "LoyaltyEventEntity",
+    "LoyaltyProgramEntity",
     "MerchantEntity",
     "Money",
     "OrderEntity",
@@ -75,6 +78,9 @@ class SquareCollections:
     catalog: str = "catalog_objects"
     orders: str = "orders"
     payments: str = "payments"
+    loyalty_programs: str = "loyalty_programs"
+    loyalty_accounts: str = "loyalty_accounts"
+    loyalty_events: str = "loyalty_events"
     codes: str = "authorization_codes"
     tokens: str = "tokens"
 
@@ -86,6 +92,9 @@ class SquareCollections:
             self.catalog,
             self.orders,
             self.payments,
+            self.loyalty_programs,
+            self.loyalty_accounts,
+            self.loyalty_events,
             self.codes,
             self.tokens,
         )
@@ -640,6 +649,156 @@ class PaymentEntity:
                 "version": self.version,
                 "created_at": self.created_at or None,
                 "updated_at": self.updated_at or None,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LoyaltyProgramEntity:
+    """The seller's loyalty program. One per unit, in practice.
+
+    https://developer.squareup.com/reference/square/objects/LoyaltyProgram.
+    A single SPEND accrual rule is modelled -- "buyers earn ``points`` for
+    every ``spend_amount`` spent" -- because it is the rule an ordering
+    integration accumulates against; the rule's shape on the wire is
+    ``LoyaltyProgramAccrualRule`` with ``spend_data``. Reward tiers are stored
+    as the documents the seed gave, projected as they are.
+    """
+
+    id: str
+    merchant_id: str
+    status: str = "ACTIVE"
+    terminology_one: str = "Point"
+    terminology_other: str = "Points"
+    location_ids: tuple[str, ...] = ()
+    accrual_points: int = 1
+    spend_amount: Money = Money(amount=100, currency="USD")
+    tax_mode: str = "BEFORE_TAX"
+    reward_tiers: tuple[dict[str, Any], ...] = ()
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> LoyaltyProgramEntity:
+        spend = Money.from_entity(entity.get("spend_amount"))
+        tiers = entity.get("reward_tiers")
+        return cls(
+            id=_str(entity["id"]),
+            merchant_id=_str(entity.get("merchant_id")),
+            status=_str(entity.get("status"), "ACTIVE"),
+            terminology_one=_str(entity.get("terminology_one"), "Point"),
+            terminology_other=_str(entity.get("terminology_other"), "Points"),
+            location_ids=_str_tuple(entity.get("location_ids")),
+            accrual_points=_int(entity.get("accrual_points"), 1),
+            spend_amount=Money(amount=100, currency="USD") if spend is None else spend,
+            tax_mode=_str(entity.get("tax_mode"), "BEFORE_TAX"),
+            reward_tiers=tuple(
+                dict(tier)
+                for tier in (tiers if isinstance(tiers, Sequence) and not isinstance(tiers, str) else ())
+                if isinstance(tier, Mapping)
+            ),
+        )
+
+    def to_entity(self) -> Entity:
+        return {
+            "id": self.id,
+            "merchant_id": self.merchant_id,
+            "status": self.status,
+            "terminology_one": self.terminology_one,
+            "terminology_other": self.terminology_other,
+            "location_ids": list(self.location_ids),
+            "accrual_points": self.accrual_points,
+            "spend_amount": self.spend_amount.to_entity(),
+            "tax_mode": self.tax_mode,
+            "reward_tiers": [dict(tier) for tier in self.reward_tiers],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LoyaltyAccountEntity:
+    """A buyer's account in the program, keyed to a phone number.
+
+    https://developer.squareup.com/reference/square/objects/LoyaltyAccount.
+    ``enrolled_at`` is "The timestamp when the buyer joined the loyalty
+    program"; ``mapping_created_at`` is the mapping's own ``created_at``.
+    """
+
+    id: str
+    program_id: str
+    customer_id: str
+    phone_number: str
+    mapping_id: str
+    balance: int = 0
+    lifetime_points: int = 0
+    enrolled_at: str = ""
+    mapping_created_at: str = ""
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> LoyaltyAccountEntity:
+        return cls(
+            id=_str(entity["id"]),
+            program_id=_str(entity.get("program_id")),
+            customer_id=_str(entity.get("customer_id")),
+            phone_number=_str(entity.get("phone_number")),
+            mapping_id=_str(entity.get("mapping_id")),
+            balance=_int(entity.get("balance")),
+            lifetime_points=_int(entity.get("lifetime_points")),
+            enrolled_at=_str(entity.get("enrolled_at")),
+            mapping_created_at=_str(entity.get("mapping_created_at")),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "program_id": self.program_id,
+                "customer_id": self.customer_id,
+                "phone_number": self.phone_number,
+                "mapping_id": self.mapping_id,
+                "balance": self.balance,
+                "lifetime_points": self.lifetime_points,
+                "enrolled_at": self.enrolled_at or None,
+                "mapping_created_at": self.mapping_created_at or None,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LoyaltyEventEntity:
+    """One ledger entry against an account. Only ``ACCUMULATE_POINTS`` is
+    minted here. https://developer.squareup.com/reference/square/objects/LoyaltyEvent"""
+
+    id: str
+    type: str
+    account_id: str
+    program_id: str
+    location_id: str
+    points: int
+    order_id: str | None = None
+    source: str = "LOYALTY_API"
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> LoyaltyEventEntity:
+        return cls(
+            id=_str(entity["id"]),
+            type=_str(entity.get("type"), "ACCUMULATE_POINTS"),
+            account_id=_str(entity.get("account_id")),
+            program_id=_str(entity.get("program_id")),
+            location_id=_str(entity.get("location_id")),
+            points=_int(entity.get("points")),
+            order_id=_opt_str(entity.get("order_id")),
+            source=_str(entity.get("source"), "LOYALTY_API"),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "type": self.type,
+                "account_id": self.account_id,
+                "program_id": self.program_id,
+                "location_id": self.location_id,
+                "points": self.points,
+                "order_id": self.order_id,
+                "source": self.source,
             }
         )
 

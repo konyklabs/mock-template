@@ -90,6 +90,7 @@ from vendorfake.square.seed.hydrate import hydrate_square
 from vendorfake.square.signer import SquareWebhookSigner
 from vendorfake.square.surface.catalog import catalog_routes
 from vendorfake.square.surface.directory import directory_routes
+from vendorfake.square.surface.loyalty import loyalty_routes
 from vendorfake.square.surface.oauth import oauth_routes
 from vendorfake.square.surface.orders import order_routes
 from vendorfake.square.surface.payments import payment_routes
@@ -107,6 +108,8 @@ SQUARE_SCOPES: tuple[str, ...] = (
     "ITEMS_WRITE",
     "PAYMENTS_READ",
     "PAYMENTS_WRITE",
+    "LOYALTY_READ",
+    "LOYALTY_WRITE",
     WEBHOOK_SUBSCRIPTIONS_SCOPE,
 )
 """The scopes this unit's routes ask for.
@@ -237,6 +240,7 @@ class SquareVendor:
                 + directory_routes()
                 + catalog_routes(self)
                 + payment_routes(self)
+                + loyalty_routes(self)
                 + webhook_routes(self)
             )
         return self._routes

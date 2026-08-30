@@ -35,6 +35,12 @@ __all__ = [
     "SEED_COMPLETED_ORDER_TOTAL",
     "SEED_KIOSK_LOCATION_ID",
     "SEED_LOCATION_ID",
+    "SEED_LOYALTY_ACCOUNT_ID",
+    "SEED_LOYALTY_ACCOUNT_PHONE",
+    "SEED_LOYALTY_CUSTOMER_ID",
+    "SEED_LOYALTY_PROGRAM_ID",
+    "SEED_LOYALTY_REWARD_TIER_ID",
+    "SEED_LOYALTY_SPEND_AMOUNT",
     "SEED_MERCHANT_ID",
     "SEED_OPEN_ORDER_ID",
     "SEED_READ_ONLY_ACCESS_TOKEN",
@@ -86,6 +92,24 @@ SEED_COMPLETED_ORDER_TOTAL = 1125
 """3 x the 375 Cold Brew Small, in minor units: the order total, and therefore
 the tender amount and the reason nothing is due on it."""
 
+SEED_LOYALTY_PROGRAM_ID = "d619f755-2d17-41f3-990d-c04ecedd64dd"
+"""The program id from Square's RetrieveLoyaltyProgram example
+(https://developer.squareup.com/reference/square/loyalty-api/retrieve-loyalty-program)."""
+
+SEED_LOYALTY_REWARD_TIER_ID = "e1b39225-9da5-43d1-a5db-782cdd8ad94f"
+"""The reward tier id from the same example."""
+
+SEED_LOYALTY_SPEND_AMOUNT = 100
+"""The seeded SPEND accrual rule: one point per 100 minor units. JUDGMENT --
+the numbers are this scenario's, chosen so that a 500-cent order earns a
+round five points; Square's example program is one point per dollar too."""
+
+SEED_LOYALTY_ACCOUNT_ID = "79b807d2-d786-46a9-933b-918028d7a8c5"
+SEED_LOYALTY_ACCOUNT_PHONE = "+14155551234"
+SEED_LOYALTY_CUSTOMER_ID = "QPTXM8PQNX3Q726ZYHPMNP46XC"
+"""The seeded buyer: ids from Square's loyalty examples, phone in the E.164
+form the mapping documents."""
+
 SEED_ACCESS_TOKEN = "EAAAl-unit-seeded-access-token-full-scopes"
 SEED_REFRESH_TOKEN = "EQAAl-unit-seeded-refresh-token-full-scopes"
 SEED_SCOPES: tuple[str, ...] = (
@@ -96,6 +120,8 @@ SEED_SCOPES: tuple[str, ...] = (
     "ITEMS_WRITE",
     "PAYMENTS_READ",
     "PAYMENTS_WRITE",
+    "LOYALTY_READ",
+    "LOYALTY_WRITE",
     "DEVELOPER_APPLICATION_WEBHOOKS_WRITE",
 )
 """The full seeded grant.
@@ -111,6 +137,12 @@ already define.
 
 SEED_READ_ONLY_ACCESS_TOKEN = "EAAAl-unit-seeded-access-token-read-only"
 SEED_READ_ONLY_REFRESH_TOKEN = "EQAAl-unit-seeded-refresh-token-read-only"
-SEED_READ_ONLY_SCOPES: tuple[str, ...] = ("MERCHANT_PROFILE_READ", "ORDERS_READ", "ITEMS_READ", "PAYMENTS_READ")
+SEED_READ_ONLY_SCOPES: tuple[str, ...] = (
+    "MERCHANT_PROFILE_READ",
+    "ORDERS_READ",
+    "ITEMS_READ",
+    "PAYMENTS_READ",
+    "LOYALTY_READ",
+)
 """A second token that cannot write, so "403 on the write path" is testable
 without minting anything."""

@@ -242,6 +242,10 @@ def test_the_shipped_surfaces_are_wired_and_cached() -> None:
         ("GET", "/v2/payments/{payment_id}"),
         ("POST", "/v2/payments/{payment_id}/complete"),
         ("POST", "/v2/payments/{payment_id}/cancel"),
+        ("GET", "/v2/loyalty/programs/{program_id}"),
+        ("POST", "/v2/loyalty/accounts/search"),
+        ("POST", "/v2/loyalty/accounts"),
+        ("POST", "/v2/loyalty/accounts/{account_id}/accumulate"),
         ("GET", "/v2/webhooks/event-types"),
         ("POST", "/v2/webhooks/subscriptions"),
         ("GET", "/v2/webhooks/subscriptions"),
@@ -254,6 +258,7 @@ def test_the_shipped_surfaces_are_wired_and_cached() -> None:
         "order-lifecycle",
         "merchant-directory",
         "payments",
+        "loyalty",
         "webhooks",
     }
 
