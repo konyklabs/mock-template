@@ -26,7 +26,8 @@
     "C23": "transport: a repeated query parameter reaches the handler whole",
     "C24": "state: an idempotency key is scoped to its operation",
     "C25": "state: a reused idempotency key with a different body answers as the route declares",
-    "C26": "state: a declared page walk repeats no row and loses none"
+    "C26": "state: a declared page walk repeats no row and loses none",
+    "C27": "chaos: a rule below the one that fired still counts its match"
   },
   "expected_skips": {
     "C07": [
@@ -68,6 +69,9 @@
     ],
     "C26": [
       "oauth-only"
+    ],
+    "C27": [
+      "no-faults"
     ]
   }
 }

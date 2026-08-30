@@ -1339,6 +1339,26 @@ conformance matrix did not, because C20 pages the store through the control
 plane and no contract walked a vendor's own list route."""
 
 
+def _loop_breaking_selector(engine: ChaosEngine, capabilities: CapabilityRegistry) -> FaultSelector:
+    return LoopBreakingFaultSelector(engine, capabilities)
+
+
+register(
+    Mutant(
+        id="M37",
+        name="chaos-loop-breaks-at-the-first-fire",
+        defect="Once a rule fires, the rules below it stop counting their matches, so a lower rule's nth silently re-numbers.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C27"}),
+        selector=_loop_breaking_selector,
+    )
+)
+"""N-3f. The engine's own docstring names this as the invariant "easiest to
+optimise into a bug", and it was pinned by a unit test only: C08 installs one
+rule and C12 one rule, so no contract had ever read the counter of a rule that
+did not fire."""
+
+
 _REPLAY_MARKER = "x-unit-idempotent-replay"
 
 
