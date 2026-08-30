@@ -172,6 +172,24 @@ def fulfillment_update_rejected(h: Harness) -> None:
     assert response.status == 400, response.text
 
 
+def fulfillment_update_stale_version(h: Harness) -> None:
+    """Move the seeded order to version 2, then PUT with version 1: the stale
+    write must be refused before any uid is minted for the new entry."""
+    moved = h.api.put(
+        f"/v2/orders/{SEED_OPEN_ORDER_ID}",
+        {"idempotency_key": "move", "order": {"version": 1, "ticket_name": "Bar"}},
+        headers=h.auth,
+    )
+    assert moved.status == 200, moved.text
+    stale = h.api.put(
+        f"/v2/orders/{SEED_OPEN_ORDER_ID}",
+        {"idempotency_key": "stale", "order": {"version": 1, "fulfillments": [{"type": "DELIVERY"}]}},
+        headers=h.auth,
+    )
+    assert stale.status == 400, stale.text
+    assert stale.json()["errors"][0]["code"] == "VERSION_MISMATCH"
+
+
 def minted(ids: Ids, *, after: Reject | None) -> list[str]:
     for h in build_harness("full"):
         if after is not None:
@@ -188,6 +206,7 @@ def minted(ids: Ids, *, after: Reject | None) -> list[str]:
         pytest.param(fulfillment_ids, fulfillment_rejected, id="order-fulfillments"),
         pytest.param(fulfillment_ids, line_item_rejected, id="order-line-items"),
         pytest.param(fulfillment_update_ids, fulfillment_update_rejected, id="update-fulfillments"),
+        pytest.param(fulfillment_update_ids, fulfillment_update_stale_version, id="update-fulfillments-stale-version"),
     ],
 )
 def test_a_rejected_request_leaves_the_next_ids_unchanged(ids: Ids, reject: Reject) -> None:

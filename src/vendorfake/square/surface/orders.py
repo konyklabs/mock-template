@@ -508,6 +508,21 @@ class OrdersSurface:
                 field="order.version",
             )
 
+        # The version, before anything that mints: the store would refuse the
+        # write at `expect_version` anyway, but by then `_line_patches` and
+        # `_fulfillment_patches` have drawn uids for new entries, and a stale
+        # write that shifts every later id is the drift PayOrder avoids by
+        # minting inside its mutator. Same kind and wording as the store's.
+        if patch.version != current.version:
+            raise UnitError(
+                UnitErrorKind.VERSION_CONFLICT,
+                detail=(
+                    f"Supplied version {patch.version} does not match the current version "
+                    f"{current.version} of orders {order_id}."
+                ),
+                info={"collection": COL.orders, "id": order_id, "supplied": patch.version, "current": current.version},
+            )
+
         # Terminality first, then the move: "this order is finished" explains
         # "that move is not allowed", and reporting them the other way round
         # tells a consumer to consult a lifecycle diagram they cannot use.
@@ -741,8 +756,16 @@ class OrdersSurface:
           payment tenders once;
         * none does -- the opaque form this unit accepted before it had a
           Payments surface, kept so a scenario that never creates payments
-          still completes orders. The first id's tender carries the whole
-          total and the rest zero, because there is nothing else to divide.
+          still completes orders. The first id's tender carries exactly what
+          is still due and the rest zero, because there is nothing else to
+          divide; an order with nothing due refuses the ids with 400
+          (JUDGMENT: Square documents only the zero-total case, below).
+
+        "Orders with a total amount of `0` can be marked as paid by specifying
+        an empty array of `payment_ids`": an empty list on an order with
+        nothing due completes it with no tender. Either way the order
+        completes because the due reaches zero -- :func:`apply_tenders` is
+        the one place that decides -- never by fiat of this route.
 
         A mix is refused naming the id that does not resolve: a caller who
         creates payments here and then names one that does not exist has made
@@ -771,11 +794,11 @@ class OrdersSurface:
         _MACHINE.assert_transition(current.state, OrderState.COMPLETED.value, subject)
 
         total = order_total(current)
+        due = amount_due(current)
         payment_ids = list(request.payment_ids or [])
         payments = args.ctx.store.collection(COL.payments)
         stored = _resolve_payments(payments, payment_ids, current)
         if stored is not None:
-            due = amount_due(current)
             paid = sum(p.amount_money.amount for p in stored)
             if paid != due:
                 raise UnitError(
@@ -784,7 +807,17 @@ class OrdersSurface:
                     field="payment_ids",
                     info={"payments_total": paid, "order_total": total, "due": due},
                 )
-        opaque_ids = payment_ids or ["unit-payment"]
+        elif payment_ids and due == 0:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"Nothing is due on {subject}; its tenders already cover the total.",
+                field="payment_ids",
+                info={"order_total": total, "due": due},
+            )
+        # No ids and something due: the placeholder this unit has always
+        # tendered under, kept for scenarios that never create payments. No
+        # ids and nothing due is the documented zero-total case: no tender.
+        opaque_ids = payment_ids or (["unit-payment"] if due > 0 else [])
 
         def mutate(draft: Entity) -> None:
             # Minted inside the mutator, so a version conflict -- which
@@ -801,18 +834,18 @@ class OrdersSurface:
                         location_id=current.location_id,
                         transaction_id=current.id,
                         created_at=now,
-                        # The first tender carries the whole total and the rest
-                        # zero: Square requires the payments to sum to the order
-                        # total, and with opaque ids the total is all there is
-                        # to divide.
-                        amount_money=Money(amount=total if index == 0 else 0, currency=current.currency),
+                        # The first tender carries exactly what is due and the
+                        # rest zero: with opaque ids the due is all there is
+                        # to divide, and nothing may be tendered past it.
+                        amount_money=Money(amount=due if index == 0 else 0, currency=current.currency),
                         payment_id=payment_id,
                     )
                     for index, payment_id in enumerate(opaque_ids)
                 ]
+            # Completion is `apply_tenders`' decision -- the due reaches zero
+            # -- which both branches guarantee: the stored payments sum to it,
+            # and the opaque tender is it.
             apply_tenders(draft, tenders, now)
-            # PayOrder completes unconditionally: the sum was checked above.
-            _complete_order(draft, now)
 
         updated = orders.update(
             order_id,

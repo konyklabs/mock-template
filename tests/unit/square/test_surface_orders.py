@@ -866,13 +866,17 @@ def test_pay_spreads_the_total_across_the_supplied_payment_ids(h: Harness) -> No
 def test_a_rejected_payment_draws_no_tender_ids(h: Harness) -> None:
     """Ids are minted inside the mutator, which `Collection.update` reaches only
     after the version check. Two runs of one scenario must number their tenders
-    the same whether or not a stale request was tried in between."""
-    order = create(h, {"location_id": SEED_LOCATION_ID}).json()["order"]
+    the same whether or not a stale request was tried in between.
+
+    The order carries a line, so something is due and a tender is minted: a
+    zero-total order paid with no ids completes with no tender at all."""
+    line = {"quantity": "1", "base_price_money": {"amount": 100}}
+    order = create(h, {"location_id": SEED_LOCATION_ID, "line_items": [line]}).json()["order"]
     assert pay(h, order["id"], idempotency_key="rejected", order_version=99).status == 400
     paid = pay(h, order["id"], idempotency_key="accepted").json()["order"]
 
     for other in build_harness("orders-only"):
-        twin = create(other, {"location_id": SEED_LOCATION_ID}).json()["order"]
+        twin = create(other, {"location_id": SEED_LOCATION_ID, "line_items": [line]}).json()["order"]
         twin_paid = pay(other, twin["id"], idempotency_key="accepted").json()["order"]
         assert twin_paid["tenders"][0]["id"] == paid["tenders"][0]["id"]
 

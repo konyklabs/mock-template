@@ -541,6 +541,74 @@ def test_pay_order_sums_amount_money_and_carries_tips_on_the_tenders(h: Harness)
     assert paid["total_money"] == {"amount": 575, "currency": "USD"}
 
 
+def test_pay_order_with_opaque_ids_tenders_exactly_what_is_due(h: Harness) -> None:
+    """The gate's repro: a 200 stored payment against a 500 order, then
+    PayOrder with an unknown id. The opaque tender is the 300 still due, the
+    order completes because the due reached zero, and the tenders reconcile
+    to `total_money` -- not 500 more on top and a clamped due."""
+    order = create_order(h, 500)
+    assert pay(h, 200, key="part", order_id=order["id"]).status == 200
+    response = h.api.post(
+        f"/v2/orders/{order['id']}/pay",
+        {"idempotency_key": "pay-order-rest", "payment_ids": ["ext-1"]},
+        headers=h.auth,
+    )
+    assert response.status == 200, response.text
+    paid = response.json()["order"]
+    assert paid["state"] == "COMPLETED"
+    assert [t["amount_money"]["amount"] for t in paid["tenders"]] == [200, 300]
+    assert paid["tenders"][1]["payment_id"] == "ext-1"
+    assert sum(t["amount_money"]["amount"] for t in paid["tenders"]) == paid["total_money"]["amount"] == 500
+    assert paid["net_amount_due_money"] == {"amount": 0, "currency": "USD"}
+
+
+def test_pay_order_with_opaque_ids_refuses_an_order_with_nothing_due(h: Harness) -> None:
+    """Nothing to pay: 400 naming payment_ids, and the journal does not move.
+    Reached through a seeded OPEN order whose tenders already cover it, since
+    every route here completes an order the moment its due reaches zero."""
+    order = create_order(h, 300)
+    stored = h.unit.context.store.collection("orders")
+
+    def pre_tender(draft: dict[str, Any]) -> None:
+        draft["tenders"] = [
+            {
+                "id": "seed-tender",
+                "location_id": SEED_LOCATION_ID,
+                "transaction_id": order["id"],
+                "created_at": "2026-08-01T00:00:00.000Z",
+                "amount_money": {"amount": 300, "currency": "USD"},
+                "type": "CASH",
+                "payment_id": "seed-pay",
+            }
+        ]
+
+    stored.update(order["id"], pre_tender, silent=True)
+    assert retrieve_order(h, order["id"])["net_amount_due_money"]["amount"] == 0
+    seq = journal_seq(h)
+    response = h.api.post(
+        f"/v2/orders/{order['id']}/pay",
+        {"idempotency_key": "pay-order-none", "payment_ids": ["ext-1"]},
+        headers=h.auth,
+    )
+    assert response.status == 400
+    assert first_error(response)["field"] == "payment_ids"
+    assert response.json()["unit_error"]["due"] == 0
+    assert journal_seq(h) == seq
+    assert retrieve_order(h, order["id"])["state"] == "OPEN"
+
+
+def test_pay_order_with_an_empty_list_completes_a_zero_total_order(h: Harness) -> None:
+    """ "Orders with a total amount of `0` can be marked as paid by specifying
+    an empty array of `payment_ids` in the request." """
+    order = create_order(h, 0)
+    response = h.api.post(
+        f"/v2/orders/{order['id']}/pay", {"idempotency_key": "pay-zero", "payment_ids": []}, headers=h.auth
+    )
+    assert response.status == 200, response.text
+    assert response.json()["order"]["state"] == "COMPLETED"
+    assert "tenders" not in response.json()["order"]
+
+
 def test_pay_order_still_takes_opaque_ids_when_none_is_stored(h: Harness) -> None:
     """The form this unit accepted before it had a Payments surface."""
     order = create_order(h, 500)
