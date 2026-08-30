@@ -40,6 +40,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from vendorfake.core.config.models import merged_over
+
 __all__ = [
     "DEFAULT_SCOPES",
     "SQUARE_API_VERSION",
@@ -162,15 +164,10 @@ class SquareConfig(BaseModel):
     default_scopes: tuple[str, ...] = DEFAULT_SCOPES
 
     def merged_with(self, block: Mapping[str, Any]) -> SquareConfig:
-        """This config with ``block`` laid over it.
-
-        The profile wins over the base, which is the precedence every other
-        layer in this project uses: defaults under the vendor's own values,
-        those under the profile document, that under the environment. An
-        unknown key in ``block`` is still refused, because the merge revalidates
-        rather than patching field by field.
-        """
-        return SquareConfig.model_validate({**self.model_dump(), **dict(block)})
+        """This config with ``block`` laid over it: the profile wins, an
+        unknown key is still refused. The idiom is the core's
+        :func:`~vendorfake.core.config.models.merged_over`."""
+        return merged_over(self, block)
 
     @property
     def access_token_ttl(self) -> timedelta:
