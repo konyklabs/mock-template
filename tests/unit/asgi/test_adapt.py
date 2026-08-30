@@ -13,8 +13,9 @@ from typing import Any
 import anyio
 import httpx
 import pytest
+from starlette.requests import Request
 
-from vendorfake.asgi.adapt import TRANSPORT, to_response
+from vendorfake.asgi.adapt import TRANSPORT, request_path, to_response
 from vendorfake.core.kernel.types import UnitResponse
 
 
@@ -86,6 +87,21 @@ def test_a_bare_query_key_is_kept_as_an_empty_value(app: Any) -> None:
     body = call(app, "GET", "/v2/orders/abc?flag&x=1").json()
     assert body["query"] == {"flag": "", "x": "1"}
     assert body["query_all"] == {"flag": [""], "x": ["1"]}
+
+
+def test_a_raw_path_that_still_carries_the_query_string_is_cut_at_the_question_mark() -> None:
+    """ASGI says ``raw_path`` excludes the query, but a server that leaves it on
+    would otherwise feed every parameter to ``make_request`` twice -- once from
+    the path, once from ``query_string``."""
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/v2/orders/a/b",
+        "raw_path": b"/v2/orders/a%2Fb?x=1&x=2",
+        "query_string": b"x=1&x=2",
+        "headers": [],
+    }
+    assert request_path(Request(scope)) == "/v2/orders/a%2Fb"
 
 
 def test_body_reaches_the_core_as_the_exact_bytes(app: Any) -> None:

@@ -220,14 +220,23 @@ class UnitRequest:
     transport: TransportKind
     #: RFC 3339 with milliseconds.
     received_at: str
-    #: Every value sent for each key, in arrival order. Invariant:
-    #: ``query[k] == query_all[k][-1]`` for every ``k``. Defaults to the
-    #: single-valued view of ``query`` so a hand-built request keeps it.
+    #: Every value sent for each key, in arrival order. Invariant: the two
+    #: views have the same keys and ``query[k] == query_all[k][-1]`` for every
+    #: ``k``. Defaults to the single-valued view of ``query`` so a hand-built
+    #: request keeps it; supplied explicitly, it is checked.
     query_all: Mapping[str, Sequence[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.query_all and self.query:
+        if not self.query_all:
             object.__setattr__(self, "query_all", {k: (v,) for k, v in self.query.items()})
+            return
+        for key in set(self.query) | set(self.query_all):
+            values = self.query_all.get(key)
+            if not values or self.query.get(key) != values[-1]:
+                raise ValueError(
+                    f"UnitRequest.query[{key!r}] is {self.query.get(key)!r} but query_all[{key!r}] is "
+                    f"{values!r}; query must be the last value of query_all for every key"
+                )
 
 
 @dataclass(frozen=True, slots=True)

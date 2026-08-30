@@ -50,7 +50,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from vendorfake.conformance.client import MISSING, ConformanceClient, ConformanceResponse, FormPairs
+from vendorfake.conformance.client import MISSING, ConformanceClient, ConformanceResponse, FormPairs, QueryPairs
 from vendorfake.core.capability.gates import CoreCapability
 from vendorfake.core.capability.registry import CapabilityRegistry
 from vendorfake.core.chaos.engine import ChaosEngine, ChaosSubject
@@ -491,7 +491,7 @@ class ClientOverlay:
         form: FormPairs | None = None,
         body: bytes | None = None,
         headers: Mapping[str, str] | None = None,
-        query: Mapping[str, str] | None = None,
+        query: QueryPairs | None = None,
     ) -> ConformanceResponse:
         call: dict[str, Any] = {
             "json_body": json_body,

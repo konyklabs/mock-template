@@ -1,4 +1,4 @@
-"""Thirty units, each broken in exactly one way, and the check each must trip.
+"""Thirty-one units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -422,7 +422,7 @@ webhooks.
 
 
 # ---------------------------------------------------------------------------
-# C10, C15 -- the transport carries bytes and content types, and changes neither.
+# C10, C15, C23 -- the transport carries bytes, content types and query strings, and changes none.
 # ---------------------------------------------------------------------------
 
 
@@ -483,6 +483,31 @@ register(
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C15"}),
         client=_form_eating_binding,
+    )
+)
+
+
+def _query_collapsing_binding(transport: str, client: ConformanceClient) -> ConformanceClient:
+    def on_request(method: str, path: str, call: dict[str, Any]) -> dict[str, Any]:
+        query = call.get("query")
+        if query is None or isinstance(query, Mapping):
+            return call
+        # `dict(request.query_params)`: the adapter this codebase shipped with
+        # until konyklabs/roadmap#37, which kept one value per key and threw
+        # the rest away before the core could see them.
+        return {**call, "query": dict(query)}
+
+    return ClientOverlay(client, on_request=on_request)
+
+
+register(
+    Mutant(
+        id="M31",
+        name="repeated-query-key-collapses",
+        defect="The binding builds a dict from the query pairs, so a repeated key reaches the handler with its last value only.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C23"}),
+        client=_query_collapsing_binding,
     )
 )
 

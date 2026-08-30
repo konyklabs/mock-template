@@ -64,7 +64,7 @@ NINE ROUTES THE REFERENCE DOES NOT HAVE
     nothing registers, so there is no data source at all without
     ``VendorDefinition.machines``.
 ``POST /__unit/echo``
-    Any content type in, the parsed fields out. This is what makes the
+    Any content type in, the parsed fields and both query views out. This is what makes the
     form-encoded-body guarantee testable on a profile whose vendor has no
     form-accepting route -- the point being that vendor #2 inherits the
     guarantee rather than vendor #1 happening to own an OAuth endpoint.
@@ -763,7 +763,7 @@ def control_plane_routes(
     # -- transport ---------------------------------------------------------
 
     def echo(args: HandlerArgs) -> ReplyInit:
-        """Reflect what the body reader made of this request.
+        """Reflect what the body reader made of this request, and both query views.
 
         No capability, any content type, no vendor knowledge. It exists so that
         "a form-encoded body reaches the handler as fields" is assertable on
@@ -777,6 +777,8 @@ def control_plane_routes(
             "raw_len": len(args.req.raw_body),
             "fields": {},
             "fields_multi": {},
+            "query": dict(args.req.query),
+            "query_all": {name: list(values) for name, values in args.req.query_all.items()},
         }
         if media_type == "application/x-www-form-urlencoded":
             form = args.form()

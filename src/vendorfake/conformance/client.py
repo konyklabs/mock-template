@@ -44,6 +44,7 @@ __all__ = [
     "HttpConformanceClient",
     "InProcessConformanceClient",
     "encode_request",
+    "with_query",
 ]
 
 MISSING: Any = object()
@@ -57,6 +58,23 @@ FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
 JSON_CONTENT_TYPE = "application/json"
 
 FormPairs = Mapping[str, str] | Sequence[tuple[str, str]]
+QueryPairs = Mapping[str, str] | Sequence[tuple[str, str]]
+
+
+def with_query(path: str, query: QueryPairs | None) -> str:
+    """Append ``query`` to ``path`` as a query string, after any it already has.
+
+    Both clients send the query on the path and never through the HTTP
+    library's own ``params=``: httpx *replaces* a URL's query when ``params``
+    is given, so a check that wrote ``/x?k=a`` with ``query=None`` would reach
+    the handler with ``k`` over one binding and without it over the other.
+    A sequence of pairs is accepted so a repeated key can be sent at all --
+    a mapping cannot spell one.
+    """
+    pairs = list(query.items()) if isinstance(query, Mapping) else list(query or ())
+    if not pairs:
+        return path
+    return f"{path}{'&' if '?' in path else '?'}{urlencode(pairs)}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +178,7 @@ class ConformanceClient(Protocol):
         form: FormPairs | None = None,
         body: bytes | None = None,
         headers: Mapping[str, str] | None = None,
-        query: Mapping[str, str] | None = None,
+        query: QueryPairs | None = None,
     ) -> ConformanceResponse: ...
 
 
@@ -201,13 +219,12 @@ class InProcessConformanceClient:
         form: FormPairs | None = None,
         body: bytes | None = None,
         headers: Mapping[str, str] | None = None,
-        query: Mapping[str, str] | None = None,
+        query: QueryPairs | None = None,
     ) -> ConformanceResponse:
         payload, sent = encode_request(json_body=json_body, form=form, body=body, headers=headers)
         answered = self._binding.call(
             method=method,
-            path=path,
-            query=dict(query or {}),
+            path=with_query(path, query),
             headers=sent,
             raw_body=payload,
         )
@@ -240,13 +257,12 @@ class HttpConformanceClient:
         form: FormPairs | None = None,
         body: bytes | None = None,
         headers: Mapping[str, str] | None = None,
-        query: Mapping[str, str] | None = None,
+        query: QueryPairs | None = None,
     ) -> ConformanceResponse:
         payload, sent = encode_request(json_body=json_body, form=form, body=body, headers=headers)
         answered = self._client.request(
             method.upper(),
-            path,
-            params=dict(query or {}),
+            with_query(path, query),
             headers=sent,
             # `content=` and never `json=`/`data=`: httpx would re-encode, and
             # the two bindings would then differ on the request side.

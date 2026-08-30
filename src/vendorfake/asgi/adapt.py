@@ -80,13 +80,18 @@ def request_path(request: Request) -> str:
     ASGI specification, hence the fallback -- which is the decoded path, i.e.
     the behaviour of a server that does not publish the raw one, rather than a
     failure.
+
+    The specification also says ``raw_path`` excludes the query string, but a
+    server that left it on would hand the query to ``make_request`` twice --
+    once here, once through ``request_query`` -- and double every parameter,
+    so it is cut at the first ``?`` regardless.
     """
     raw = request.scope.get("raw_path")
     if isinstance(raw, bytes):
         # Percent-escapes are ASCII by construction; anything else in a path is
         # already UTF-8 bytes the router will hand on unchanged. latin-1 is the
         # lossless byte-to-str mapping, so nothing can raise here.
-        return raw.decode("latin-1")
+        return raw.split(b"?", 1)[0].decode("latin-1")
     return request.url.path
 
 

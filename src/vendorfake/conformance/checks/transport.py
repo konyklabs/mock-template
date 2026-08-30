@@ -1,4 +1,4 @@
-"""C10, C15 -- the transport carries bytes and content types, and changes neither.
+"""C10, C15, C23 -- the transport carries bytes, content types and query strings, and changes none.
 
 C10 is the contract that keeps the in-process binding honest. Every other
 check is cheap because it runs in process; that economy is only sound if the
@@ -11,6 +11,11 @@ asked through ``POST /__unit/echo`` rather than through a vendor's own token
 endpoint, deliberately: the guarantee belongs to the core's body reader, so
 vendor number two inherits it rather than rediscovering the trap. It is the
 exact shape that broke two of three implementations before this one.
+
+C23 is C15's twin for the query string. A repeated query key must reach the
+handler with every value, and a bare key with an empty one; a binding that
+built ``dict(query_params)`` would pass every other contract while silently
+dropping all but the last value.
 """
 
 from __future__ import annotations
@@ -20,7 +25,11 @@ from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv
 from vendorfake.conformance.registry import check
 from vendorfake.conformance.types import Requires, require
 
-__all__ = ["a_form_encoded_body_reaches_the_handler", "bindings_agree_byte_for_byte"]
+__all__ = [
+    "a_form_encoded_body_reaches_the_handler",
+    "a_repeated_query_parameter_reaches_the_handler",
+    "bindings_agree_byte_for_byte",
+]
 
 EXCLUDED_HEADERS: frozenset[str] = frozenset(
     {
@@ -159,4 +168,55 @@ def a_form_encoded_body_reaches_the_handler(env: CheckEnv) -> str:
     return (
         f"form body parsed as {len(fields)} fields; repeated key last-wins {fields.get('scope')!r} "
         f"and multi {multi.get('scope')}; no JSON document reported"
+    )
+
+
+@check(
+    id="C23",
+    name="transport: a repeated query parameter reaches the handler whole",
+    asserts=(
+        "POST /__unit/echo?flag with scope=first&scope=second reports query with the last value, "
+        "query_all with every value in order, and the bare key as an empty string."
+    ),
+)
+def a_repeated_query_parameter_reaches_the_handler(env: CheckEnv) -> str:
+    answered = env.client.call(
+        "POST",
+        f"{CONTROL_PREFIX}echo?flag",
+        query=[("scope", "first"), ("scope", "second"), ("limit", "2")],
+    )
+    require(
+        answered.status == 200,
+        f"POST /__unit/echo with a query string answered {answered.status}: {answered.text}. "
+        f"The query must reach the route unchanged; a transport that rejects or rewrites it has "
+        f"decided the request's shape on the core's behalf.",
+    )
+    body = answered.json()
+    query = {str(key): str(value) for key, value in dict(body["query"]).items()}
+    query_all = {str(key): list(value) for key, value in dict(body["query_all"]).items()}
+    require(
+        query.get("scope") == "second",
+        f"a repeated query key resolved to {query.get('scope')!r} in the scalar view, expected the "
+        f"last value 'second'. Last-wins is the scalar rule for query and form alike.",
+    )
+    require(
+        query_all.get("scope") == ["first", "second"],
+        f"a repeated query key arrived as {query_all.get('scope')!r} in query_all, expected "
+        f"['first', 'second']. Every value must survive the transport: dict(query_params) in an "
+        f"adapter keeps one and discards the rest, and no later layer can recover them.",
+    )
+    require(
+        query.get("flag") == "" and query_all.get("flag") == [""],
+        f"a bare query key arrived as {query.get('flag')!r} / {query_all.get('flag')!r}, expected "
+        f"'' / ['']. A key sent with no value is a value the handler must be able to see; parse "
+        f"the query with blank values kept.",
+    )
+    require(
+        query.get("limit") == "2" and query_all.get("limit") == ["2"],
+        f"a query key sent once arrived as {query.get('limit')!r} / {query_all.get('limit')!r}, "
+        f"expected '2' / ['2'] in both views.",
+    )
+    return (
+        f"query {query}; repeated key last-wins {query.get('scope')!r} and query_all "
+        f"{query_all.get('scope')}; bare key kept as {query.get('flag')!r}"
     )

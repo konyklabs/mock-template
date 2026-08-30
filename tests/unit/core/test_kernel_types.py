@@ -153,6 +153,23 @@ class TestTheSeam:
         req = a_request(query={"a": "2"}, query_all={"a": ("1", "2")})
         assert req.query_all == {"a": ("1", "2")}
 
+    @pytest.mark.parametrize(
+        ("query", "query_all"),
+        [
+            ({"a": "1"}, {"b": ("2",)}),
+            ({"a": "1"}, {"a": ("1", "2")}),
+            ({"a": "1", "b": "2"}, {"a": ("1",)}),
+            ({"a": "1"}, {"a": ()}),
+        ],
+    )
+    def test_two_views_that_disagree_are_refused_at_construction(
+        self, query: dict[str, str], query_all: dict[str, tuple[str, ...]]
+    ) -> None:
+        # Silently keeping both would let `args.query(k)` and `args.query_all(k)`
+        # answer different questions about the same request.
+        with pytest.raises(ValueError, match="query_all"):
+            a_request(query=query, query_all=query_all)
+
     def test_the_three_response_fields_are_the_contract(self) -> None:
         assert [f.name for f in dataclasses.fields(UnitResponse)] == ["status", "headers", "body"]
 
