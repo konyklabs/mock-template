@@ -12,7 +12,9 @@
     "  tax rate 0.0625    PERCENT, HALF_UP, isDefault",
     "The seeded tokens are readable strings a human types into curl; minted tokens are JWT-shaped.",
     "Token expirations are stamped at hydrate from the configured TTL (19168 s, the documented example).",
-    "config_modified_ms is the fixed instant every config entity reports to a lastModified filter."
+    "config_modified_ms is the fixed instant every config entity reports to a lastModified filter.",
+    "The seeded order (one Lemonade, unpaid, RECEIVED) is priced at hydrate by the same builder /prices uses.",
+    "credit_authorizations stands in for the credit-cards API: a CREDIT payment names one of these guids (7c65cc16... echoes the documented example)."
   ],
   "restaurant": {
     "guid": "e6a4a8d2-0000-4000-8000-000000000001",
@@ -139,6 +141,16 @@
       "promoCodes": [
         "SOUP"
       ]
+    },
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d702",
+      "name": "Regulars",
+      "active": true,
+      "type": "PERCENT",
+      "percentage": 10,
+      "selectionType": "CHECK",
+      "nonExclusive": false,
+      "promoCodes": []
     }
   ],
   "service_charges": [
@@ -299,5 +311,37 @@
         ]
       }
     ]
-  }
+  },
+  "orders": [
+    {
+      "guid": "9a7b6c5d-0000-4000-8000-00000000f001",
+      "externalId": "seed-open-order",
+      "diningOption": "5d0e2b11-0000-4000-8000-00000000d001",
+      "table": "5d0e2b11-0000-4000-8000-00000000d501",
+      "openedDate": 1755786102000,
+      "numberOfGuests": 2,
+      "checks": [
+        {
+          "guid": "9a7b6c5d-0000-4000-8000-00000000f101",
+          "tabName": "Table 1",
+          "selections": [
+            {
+              "guid": "9a7b6c5d-0000-4000-8000-00000000f201",
+              "item": "3c9a1f00-0000-4000-8000-00000000c203",
+              "quantity": 1
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "credit_authorizations": [
+    {
+      "guid": "7c65cc16-0000-4000-8000-00000000e001",
+      "amount": 5000,
+      "cardType": "VISA",
+      "last4Digits": "4242",
+      "cardEntryMode": "PRE_AUTHED"
+    }
+  ]
 }

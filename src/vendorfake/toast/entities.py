@@ -57,6 +57,9 @@ class ToastCollections:
     menu_groups: str = "menu_groups"
     config_menus: str = "config_menus"
     void_reasons: str = "void_reasons"
+    #: Pre-authorised CREDIT payments the scenario seeds; the credit-cards API
+    #: that would create one is not modelled (``surface/payments.py``).
+    credit_authorizations: str = "credit_authorizations"
 
     def names(self) -> tuple[str, ...]:
         return (
@@ -80,6 +83,7 @@ class ToastCollections:
             self.menu_groups,
             self.config_menus,
             self.void_reasons,
+            self.credit_authorizations,
         )
 
 

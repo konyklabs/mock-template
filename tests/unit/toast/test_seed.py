@@ -61,7 +61,15 @@ def test_every_constant_names_something_the_document_contains(document: dict[str
     assert {c.SERVICE_AREA_GUID} == guids["area"]
     assert {c.TABLE_1_GUID, c.TABLE_2_GUID} == guids["tables"]
     assert {c.RESTAURANT_SERVICE_DINNER_GUID} == guids["services"]
-    assert {c.DISCOUNT_SOUP_GUID} == guids["discounts"]
+    assert {c.DISCOUNT_SOUP_GUID, c.DISCOUNT_REGULARS_GUID} == guids["discounts"]
+    (order,) = document["orders"]
+    assert order["guid"] == c.SEED_ORDER_GUID and order["openedDate"] == c.SEED_ORDER_OPENED_MS
+    assert order["checks"][0]["guid"] == c.SEED_ORDER_CHECK_GUID
+    assert order["checks"][0]["selections"][0]["guid"] == c.SEED_ORDER_SELECTION_GUID
+    (authorization,) = document["credit_authorizations"]
+    assert (
+        authorization["guid"] == c.CREDIT_AUTHORIZATION_GUID and authorization["amount"] == c.CREDIT_AUTHORIZATION_CENTS
+    )
     assert {c.SERVICE_CHARGE_GRATUITY_GUID} == guids["charges"]
     assert {c.VOID_REASON_GUID} == guids["void"]
     assert document["tax_rates"][0]["rate"] == c.TAX_RATE_DEFAULT_RATE
@@ -95,6 +103,11 @@ def test_every_constant_names_something_the_document_contains(document: dict[str
     [
         (lambda d: d["service_areas"][0].update(revenueCenter="nope"), "service_areas[0].revenueCenter"),
         (lambda d: d["tables"][0].update(serviceArea="nope"), "tables[0].serviceArea"),
+        (lambda d: d["orders"][0].update(diningOption="nope"), "orders[0].diningOption"),
+        (
+            lambda d: d["orders"][0]["checks"][0]["selections"][0].update(item="nope"),
+            "orders[0].checks[0].selections[0].item",
+        ),
         (
             lambda d: d["menu_v3"]["menus"][0]["menuGroups"][0]["menuItems"][0]["taxInfo"].append("nope"),
             "menu_v3.menus[0].menuGroups[0].menuItems[0].taxInfo[1]",
@@ -151,6 +164,9 @@ def test_the_store_holds_the_restaurant_and_the_two_tokens(h: Harness) -> None:
     assert store.collection(COL.config_menus).size == 1
     assert store.collection(COL.partners).size == 1
     assert store.collection(COL.tables).size == 2
+    assert store.collection(COL.orders).size == 1
+    assert store.collection(COL.credit_authorizations).size == 1
+    assert store.collection(COL.discounts).size == 2
 
 
 def test_seeded_writes_are_marked_as_seeded(h: Harness) -> None:

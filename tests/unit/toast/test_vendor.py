@@ -149,7 +149,16 @@ def test_a_toast_unit_starts_on_the_full_profile_with_an_empty_surface() -> None
     try:
         assert unit.name == "toast"
         assert unit.context.config.profile == "full"
-        assert set(unit.context.config.capabilities) == {"auth", "menus", "config", "restaurants", "partners", "chaos"}
+        assert set(unit.context.config.capabilities) == {
+            "auth",
+            "orders",
+            "payments",
+            "menus",
+            "config",
+            "restaurants",
+            "partners",
+            "chaos",
+        }
         assert unit.context.store.collection(COL.restaurants).size == 1
     finally:
         unit.stop()
