@@ -147,19 +147,21 @@ def test_the_list_is_the_elements_envelope_with_self_hrefs(h: Harness) -> None:
     order = h.create_order()
     body = h.get("/orders").json()
     assert set(body) == {"elements"}
-    element = body["elements"][0]
+    element = next(e for e in body["elements"] if e["id"] == order["id"])
     assert element["href"] == f"https://apisandbox.dev.clover.com/v3/merchants/{MERCHANT_ID}/orders/{order['id']}"
     assert element["id"] == order["id"]
     assert element["total"] == 1500
 
 
 def test_an_empty_list_is_still_an_envelope(h: Harness) -> None:
+    h.clear_seed_orders()
     assert h.get("/orders").json() == {"elements": []}
 
 
 def test_pagination_is_overlap_free_and_complete(h: Harness) -> None:
     """The N-3e mutant class: walk more rows than one page holds and check
     the pages are disjoint and their union is the whole list."""
+    h.clear_seed_orders()
     created = [h.create_order(title=f"t{i}")["id"] for i in range(7)]
     seen: list[str] = []
     offset = 0
@@ -174,6 +176,7 @@ def test_pagination_is_overlap_free_and_complete(h: Harness) -> None:
 
 
 def test_limit_and_offset_are_validated_and_the_limit_is_clamped(h: Harness) -> None:
+    h.clear_seed_orders()
     for i in range(3):
         h.create_order(title=f"t{i}")
     assert h.get("/orders", query={"limit": "abc"}).status == 400
@@ -184,6 +187,7 @@ def test_limit_and_offset_are_validated_and_the_limit_is_clamped(h: Harness) -> 
 
 
 def test_filters_on_the_documented_fields(h: Harness) -> None:
+    h.clear_seed_orders()
     a = h.create_order(state="open", total=100, externalReferenceId="POS-1")
     b = h.create_order(state="Locked", total=300, externalReferenceId="POS-2")
 
@@ -233,7 +237,9 @@ def test_expansions_govern_the_nested_collections(h: Harness) -> None:
     assert too_many.status == 400
     unknown = h.get(f"/orders/{order['id']}", query={"expand": "categories"})
     assert unknown.status == 400
-    listed = h.get("/orders", query={"expand": "discounts"}).json()["elements"][0]
+    listed = next(
+        e for e in h.get("/orders", query={"expand": "discounts"}).json()["elements"] if e["id"] == order["id"]
+    )
     assert listed["discounts"] == [{"name": "order", "amount": -100}]
 
 

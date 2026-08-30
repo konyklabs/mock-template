@@ -98,14 +98,18 @@ def test_routes_are_built_once_and_cached() -> None:
     assert vendor.routes is vendor.routes
 
 
-def test_the_real_auth_adapter_is_wired_and_fails_closed_with_no_tokens() -> None:
-    """On an empty store nothing authenticates and nothing is offered."""
+def test_the_real_auth_adapter_is_wired_and_offers_only_the_seeded_bearers() -> None:
+    """The shipped scenario's two tokens are the whole credential list; an
+    unknown bearer still fails closed."""
     from types import SimpleNamespace
+
+    from vendorfake.clover.seed.constants import SEED_ACCESS_TOKEN, SEED_READ_ONLY_ACCESS_TOKEN
 
     unit = create_unit(vendor="clover", profile="full")
     vendor = unit.context.vendor
     assert isinstance(vendor.auth, CloverAuth)
-    assert vendor.auth.credentials(unit.context) == ()
+    offered = {c.headers["authorization"] for c in vendor.auth.credentials(unit.context)}
+    assert offered == {f"Bearer {SEED_ACCESS_TOKEN}", f"Bearer {SEED_READ_ONLY_ACCESS_TOKEN}"}
     args = SimpleNamespace(ctx=unit.context, header=lambda name: "Bearer never-minted")
     with pytest.raises(UnitError) as caught:
         vendor.auth.resolve(args, "bearer")  # type: ignore[arg-type]

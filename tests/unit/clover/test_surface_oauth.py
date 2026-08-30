@@ -400,7 +400,8 @@ def test_the_shipped_seed_makes_the_oauth_dance_work_out_of_the_box() -> None:
         assert token.status == 200
         bearer = {"authorization": f"Bearer {token.json()['access_token']}"}
         assert api.get(f"/v3/merchants/{MERCHANT_ID}", headers=bearer).json()["name"] == "Harvest & Rye"
-        assert api.get(f"/v3/merchants/{MERCHANT_ID}/items", headers=bearer).json() == {"elements": []}
+        items = api.get(f"/v3/merchants/{MERCHANT_ID}/items", headers=bearer).json()["elements"]
+        assert [item["name"] for item in items] == ["Craft Beer", "Espresso", "Croissant"]
     finally:
         unit.stop()
 

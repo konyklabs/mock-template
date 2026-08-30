@@ -165,7 +165,7 @@ def test_a_token_without_orders_w_gets_the_byte_identical_401_on_a_real_write_ro
     """The kernel's permission check on a shipped route, not a test-only one:
     ORDERS_R alone cannot POST /orders, and with the sidecar off the body is
     the same bytes a bad token gets. Nothing is journalled."""
-    from tests.unit.clover.harness import Silent, seed
+    from tests.unit.clover.harness import Silent
     from vendorfake import create_unit
     from vendorfake.clover.vendor import create_clover_vendor
     from vendorfake.core.transport.inprocess import in_process
@@ -173,7 +173,6 @@ def test_a_token_without_orders_w_gets_the_byte_identical_401_on_a_real_write_ro
     vendor = create_clover_vendor(vendor_config={"error_sidecar": False})
     unit = create_unit(vendor=vendor, profile="full", logger=Silent())
     try:
-        seed(unit)
         p = Harness(unit=unit, api=in_process(unit), auth={})
         reader = p.restricted_token("ORDERS_R")
         before = p.journal_len()
