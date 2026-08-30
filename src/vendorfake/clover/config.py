@@ -116,6 +116,16 @@ class CloverConfig(BaseModel):
     #: example, not a documented rule.
     refresh_token_ttl_ms: int = Field(default=365 * _DAY_MS, gt=0)
 
+    #: Accept ``http://`` callback URLs at the webhook dashboard stand-in.
+    #: Clover documents "only HTTPS-enabled callbacks"
+    #: (https://docs.clover.com/dev/docs/webhooks) and the stand-in refuses
+    #: anything else by default. JUDGMENT -- a fake-only affordance: a
+    #: consumer running a receiver on ``http://localhost`` against this unit
+    #: has no certificate to offer, and refusing them would make the
+    #: handshake unrehearsable in exactly the setting it exists for. Leaving
+    #: it off is what keeps the documented rule visible.
+    allow_insecure_callbacks: bool = False
+
     #: JUDGMENT -- Clover documents no authorization-code expiry at all
     #: (https://docs.clover.com/dev/docs/high-trust-app-auth-flow shows the
     #: redirect carrying ``code`` and says nothing about its lifetime).

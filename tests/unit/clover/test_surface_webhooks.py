@@ -250,6 +250,76 @@ def test_an_unknown_or_empty_event_key_is_refused(h: Harness) -> None:
         assert first_error(response)["field"] == "eventKeys"
 
 
+# ---------------------------------------------------------------------------
+# HTTPS only. DOCUMENTED: "Clover supports only HTTPS-enabled callbacks".
+# ---------------------------------------------------------------------------
+
+INSECURE_HOOKS = "http://localhost:9999/hooks"
+
+
+def test_an_http_callback_is_refused_by_default_naming_the_documented_rule(h: Harness, sink: MemorySink) -> None:
+    response = h.api.post("/__clover/webhooks/subscriptions", {"url": INSECURE_HOOKS})
+    assert response.status == 400, response.text
+    assert response.headers["x-unit-error"] == "invalid_value"
+    assert first_error(response)["field"] == "url"
+    assert "HTTPS-enabled callbacks" in response.json()["message"]
+    assert h.api.get("/__clover/webhooks/subscriptions").json()["subscriptions"] == []
+    h.api.post("/__unit/webhooks/drain", {})
+    assert sink.received == []
+
+
+@pytest.mark.parametrize("url", ["ftp://receiver.test/hooks", "receiver.test/hooks", "HTTP://receiver.test/hooks"])
+def test_every_non_https_scheme_is_refused_not_only_http(h: Harness, url: str) -> None:
+    response = h.api.post("/__clover/webhooks/subscriptions", {"url": url})
+    assert response.status == 400, (url, response.text)
+    assert first_error(response)["field"] == "url"
+
+
+def test_https_is_always_accepted_whatever_the_switch_says(h: Harness) -> None:
+    assert h.api.post("/__clover/webhooks/subscriptions", {"url": "HTTPS://receiver.test/hooks"}).status == 201
+
+
+def test_the_allow_insecure_callbacks_switch_lifts_the_check_for_a_local_receiver(sink: MemorySink) -> None:
+    """JUDGMENT, fake-only: a receiver on http://localhost has no certificate
+    to offer. Reached through the vendor block's environment layer, and read
+    live, so the profile's value is the one in force."""
+    env = {"VENDORFAKE_VENDOR_ALLOW_INSECURE_CALLBACKS": "true"}
+    for h in build_harness("full", sink=sink, env=env):
+        assert h.unit.context.vendor.config.allow_insecure_callbacks is True  # type: ignore[attr-defined]
+        verified = register_and_verify(h, sink, INSECURE_HOOKS)
+        assert verified["url"] == INSECURE_HOOKS
+        create_order(h)
+        h.api.post("/__unit/webhooks/drain", {})
+        (request,) = sink.received
+        assert request.url == INSECURE_HOOKS
+        assert request.headers[AUTH_HEADER] == verified["authCode"]
+
+
+def test_a_profile_declared_http_subscriber_is_exempt_and_still_delivers(sink: MemorySink) -> None:
+    """The dashboard's pre-verified entries are not a request to this route;
+    a scenario may point them at whatever its author's receiver listens on."""
+    env = {"VENDORFAKE_WEBHOOK_URL": INSECURE_HOOKS, "VENDORFAKE_WEBHOOK_SIGNATURE_KEY": "seeded-auth-code"}
+    for h in build_harness("full", sink=sink, env=env):
+        assert h.unit.context.vendor.config.allow_insecure_callbacks is False  # type: ignore[attr-defined]
+        (row,) = h.api.get("/__clover/webhooks/subscriptions").json()["subscriptions"]
+        assert row["url"] == INSECURE_HOOKS
+        assert row["verified"] is True
+        create_order(h)
+        h.api.post("/__unit/webhooks/drain", {})
+        (request,) = sink.received
+        assert request.url == INSECURE_HOOKS
+
+
+def test_every_stand_in_summary_says_it_is_not_a_clover_endpoint() -> None:
+    """Route has no flag for 'vendor route that is not the vendor's API'
+    (konyklabs/roadmap#38), so the prose is the mark a generated client
+    carries: it must open the summary, not be buried in it."""
+    for h in build_harness("full"):
+        routes = [r for r in h.api.get("/__unit/routes").json()["routes"] if r["path"].startswith("/__clover/")]
+        assert len(routes) == 3
+        assert all(r["summary"].startswith("Stand-in (not a Clover endpoint)") for r in routes), routes
+
+
 def test_ids_and_codes_are_deterministic_per_seed() -> None:
     """Two units on the same profile mint the same subscription id, so a
     transcript of the handshake diffs between runs."""

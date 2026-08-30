@@ -64,12 +64,33 @@ handlers read and write ``SUBSCRIPTION_COLLECTION`` and nothing else; the
 journal entries they produce are the ones the dispatcher already ignores, so
 registering a callback does not notify every subscriber that somebody
 subscribed.
+
+DOCUMENTED -- **HTTPS only.** "Clover supports only HTTPS-enabled callbacks"
+/ "Set up a publicly accessible HTTPs endpoint" (the webhooks page). The
+register route refuses any other scheme with ``invalid_value`` naming ``url``,
+unless the vendor config's ``allow_insecure_callbacks`` lifts it for a local
+receiver (JUDGMENT, labelled on ``CloverConfig``). A profile's
+``webhooks.subscribers`` are not checked: they are the dashboard's
+pre-verified entries, not a request to this route, and a scenario is entitled
+to point them wherever its author's receiver listens.
+
+KNOWN LIMITATION, tracked as konyklabs/roadmap#38 -- **nothing machine-readable
+marks these routes as not-Clover.** The core's ``Route`` has one flag,
+``internal``, and it means "control plane": no auth, no chaos, no capability
+gate, and hidden from the vendor surface report. These routes want the gate
+and the chaos and *also* want to be told apart from ``/oauth/v2/*`` in a
+generated client, and ``Route`` has no field for that -- no tags, no
+extensions. Until the core grows one, every summary below starts with
+"Stand-in (not a Clover endpoint)" so that ``vendorfake openapi --vendor
+clover`` and ``GET /__unit/routes`` at least say so in prose, and the
+``/__clover/`` prefix says it in the path.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 from vendorfake.clover.events import VERIFICATION_EVENT_TYPE, event_type
 from vendorfake.clover.model.common import validate_body
@@ -100,6 +121,13 @@ PENDING_NAME = "dashboard stand-in subscription"
 """What a subscription registered through this surface is called in the
 core's list, where ``name`` is a human-facing label and nothing more."""
 
+STAND_IN = "Stand-in (not a Clover endpoint)"
+"""The prefix every route summary carries. See the module docstring on
+konyklabs/roadmap#38 for why it is prose rather than a flag."""
+
+REQUIRED_SCHEME = "https"
+"""The only callback scheme Clover accepts. Documented; see the module docstring."""
+
 _VERIFIED = "verified"
 _VERIFICATION_CODE = "verification_code"
 _EVENT_KEYS = "event_keys"
@@ -129,7 +157,7 @@ class CloverWebhooksSurface:
                 capability=CAPABILITY,
                 handler=self.register,
                 operation_id="RegisterWebhookCallback",
-                summary="Dashboard stand-in: register a callback URL and start its verification.",
+                summary=f"{STAND_IN}: register a callback URL in the dashboard and start its verification.",
             ),
             Route(
                 method="GET",
@@ -137,7 +165,7 @@ class CloverWebhooksSurface:
                 capability=CAPABILITY,
                 handler=self.list_subscriptions,
                 operation_id="ListWebhookCallbacks",
-                summary="Dashboard stand-in: every registered callback and whether it is verified.",
+                summary=f"{STAND_IN}: every registered callback and whether it is verified.",
             ),
             Route(
                 method="POST",
@@ -145,7 +173,7 @@ class CloverWebhooksSurface:
                 capability=CAPABILITY,
                 handler=self.verify,
                 operation_id="VerifyWebhookCallback",
-                summary="Dashboard stand-in: paste the verification code, receive the auth code.",
+                summary=f"{STAND_IN}: paste the verification code into the dashboard, receive the auth code.",
             ),
         )
 
@@ -162,6 +190,7 @@ class CloverWebhooksSurface:
         """
         ctx = args.ctx
         request = validate_body(RegisterSubscriptionRequest, args.body())
+        self._require_https(request.url)
         ids = self._deps.ids
         subscription_id = ids.internal("wbhk")
         verification_code = ids.verification_code()
@@ -192,6 +221,23 @@ class CloverWebhooksSurface:
         )
         return json_(_project(entity), 201)
 
+    def _require_https(self, url: str) -> None:
+        """ "Clover supports only HTTPS-enabled callbacks." Read live from the
+        config, so a profile's ``allow_insecure_callbacks`` is in force on the
+        next request rather than the next process."""
+        scheme = urlsplit(url).scheme.lower()
+        if scheme == REQUIRED_SCHEME or self._deps.config.allow_insecure_callbacks:
+            return
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                f"url must be an https:// callback: Clover supports only HTTPS-enabled callbacks "
+                f"(https://docs.clover.com/dev/docs/webhooks). Got scheme {scheme or '(none)'!r}; set the "
+                "vendor config's allow_insecure_callbacks to register a local http:// receiver against this fake."
+            ),
+            field="url",
+        )
+
     # -- GET /__clover/webhooks/subscriptions ------------------------------
 
     def list_subscriptions(self, args: HandlerArgs) -> ReplyInit:
@@ -207,6 +253,11 @@ class CloverWebhooksSurface:
         Idempotent on a verified subscription: the code stays on the record,
         so pasting it twice answers the same document twice rather than
         refusing a consumer whose first response was lost.
+
+        A code matching nothing is a 400 ``invalid_value`` on ``verificationCode``
+        and not a 404: the code is a field of the request being validated, not
+        a resource being addressed -- the same treatment the OAuth surface
+        gives an authorization code it will not accept.
         """
         ctx = args.ctx
         request = validate_body(VerifySubscriptionRequest, args.body())
