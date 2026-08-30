@@ -1,4 +1,4 @@
-"""Thirty-one units, each broken in exactly one way, and the check each must trip.
+"""Forty units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -34,10 +34,11 @@ the seams are real and the defects are not.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import os
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from tests.conformance.harness import PROFILES
@@ -45,9 +46,11 @@ from tests.conformance.mutants.model import Mutant, Provenance, register
 from tests.conformance.mutants.seams import (
     AuthAdapterOverlay,
     ClientOverlay,
+    DeafWebhookFaultSelector,
     ErrorShaperOverlay,
     ImpatientWebhookDispatcher,
     LeakyFaultSelector,
+    LoopBreakingFaultSelector,
     PermissiveStateMachine,
     SignerOverlay,
     UngatedWebhookDispatcher,
@@ -80,6 +83,7 @@ from vendorfake.core.kernel.types import (
     VendorDefinition,
 )
 from vendorfake.core.state.machine import MachineDef
+from vendorfake.core.util.json import dump_json
 from vendorfake.core.webhooks.dispatcher import WebhookDispatcher
 from vendorfake.core.webhooks.models import DeliveryMetadata
 from vendorfake.square.retry import RETRY_NUMBER_HEADER, RETRY_REASON_HEADER, RETRY_REASONS
@@ -1122,3 +1126,79 @@ none may be FAIL, and the report must be red. What C11 discriminates is a
 is against a foreign implementation reached over ``--base-url``, which has no
 Python startup assertion in front of it.
 """
+
+
+# ---------------------------------------------------------------------------
+# konyklabs/roadmap#15 -- the coverage the third adversarial round found
+# missing. Each of M32 through M40 reproduces a mutation that was applied to
+# this codebase after the first remediation and left the whole conformance
+# matrix green (konyklabs/roadmap#10, findings N-3a..f, N-5, N-6, N-7).
+# ---------------------------------------------------------------------------
+
+_UNAUTHENTICATED_OPERATION = "ListLocations"
+"""The one route M32 stops authenticating. Chosen because it is NOT the route
+C17 used to probe: the finding was that C17 asked its question of one route
+out of sixteen, and a mutant on that one route would not have shown it."""
+
+
+def _skips_auth_on_one_route(inner: AuthAdapter, args: HandlerArgs, mode: str) -> AuthResult:
+    if args.route.operation_id == _UNAUTHENTICATED_OPERATION:
+        return AuthResult(principal_id="anyone", scopes=SQUARE_SCOPES, meta={"mode": mode})
+    return inner.resolve(args, mode)
+
+
+register(
+    Mutant(
+        id="M32",
+        name="auth-skipped-for-one-route",
+        defect="One route that declares auth resolves any caller, credential or none, to a principal holding every scope.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C17"}),
+        vendor=lambda inner: VendorOverlay(
+            inner, auth=AuthAdapterOverlay(inner.auth, resolve=_skips_auth_on_one_route)
+        ),
+    )
+)
+"""N-3a. C17 probed ``POST /v2/orders`` and only that; a unit that served every
+seeded location to an anonymous caller was certified conformant because the
+route it stopped authenticating was not the one asked. The fix is the C03
+treatment: every route that declares ``auth`` is asked all four questions."""
+
+
+def _first_scoped_route(routes: Sequence[Route]) -> str | None:
+    """The route the single-instance C17 chose: the first that declares scopes."""
+    return next((route.key for route in routes if route.auth is not None and route.scopes), None)
+
+
+def _scope_enforced_on_one_route_only(spared: str | None) -> Callable[[AuthAdapter, HandlerArgs, str], AuthResult]:
+    def resolve(inner: AuthAdapter, args: HandlerArgs, mode: str) -> AuthResult:
+        result = inner.resolve(args, mode)
+        if args.route.key == spared:
+            return result
+        # The kernel checks Route.scopes against what comes back, so an
+        # adapter that grants every scope to any authenticated caller has
+        # deleted scope enforcement without touching a route declaration.
+        return AuthResult(principal_id=result.principal_id, scopes=SQUARE_SCOPES, meta=result.meta)
+
+    return resolve
+
+
+register(
+    Mutant(
+        id="M33",
+        name="scope-enforced-on-one-route-only",
+        defect="Every authenticated caller is granted every scope, on every route but the first one that declares scopes.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C17"}),
+        vendor=lambda inner: VendorOverlay(
+            inner,
+            auth=AuthAdapterOverlay(
+                inner.auth, resolve=_scope_enforced_on_one_route_only(_first_scoped_route(inner.routes))
+            ),
+        ),
+    )
+)
+"""N-3b. The complement of M32, and the one that says why C17 has to iterate:
+scope enforcement removed from every route EXCEPT the one C17 probed left the
+matrix green, because a check that asks one route can be satisfied by a unit
+that is correct on exactly that route."""
