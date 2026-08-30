@@ -245,6 +245,8 @@ class RouteInfo:
     scopes: tuple[str, ...] = ()
     #: How this route deduplicates a retried request, or ``None``.
     idempotency: dict[str, object] | None = None
+    #: How this route pages, or ``None``. See :class:`PaginationSpec`.
+    pagination: dict[str, object] | None = None
     #: A body this route accepts. See :attr:`Route.example_body`.
     example_body: Mapping[str, Any] | None = None
     operation_id: str | None = None
@@ -271,6 +273,7 @@ class RouteInfo:
             auth=route.auth,
             scopes=tuple(route.scopes),
             idempotency=idempotency,
+            pagination=None if route.pagination is None else route.pagination.as_json(),
             example_body=route.example_body,
             operation_id=route.operation_id,
             summary=route.summary,
@@ -292,6 +295,7 @@ class RouteInfo:
         for key, value in (
             ("auth", self.auth),
             ("idempotency", self.idempotency),
+            ("pagination", self.pagination),
             ("example_body", None if self.example_body is None else dict(self.example_body)),
             ("operation_id", self.operation_id),
             ("summary", self.summary),

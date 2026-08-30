@@ -84,6 +84,7 @@ __all__ = [
     "MagicTriggerSpec",
     "MappedEvent",
     "MutableResponse",
+    "PaginationSpec",
     "PreparedEvent",
     "ReplyInit",
     "Route",
@@ -374,6 +375,53 @@ class IdempotencySpec:
 
 
 @dataclass(frozen=True, slots=True)
+class PaginationSpec:
+    """How a list route pages, published at ``GET /__unit/routes``.
+
+    Declared so a language-independent check can walk the route page by page
+    and assert that no row repeats and none is lost -- an overlap between two
+    pages is a wrong answer with a 200 attached, and a consumer looping until
+    the cursor is absent has no way to notice it. Two real styles are named
+    and nothing more: a vendor whose list pages some third way declares
+    nothing and is not asked.
+
+    ``where`` says where the page parameters travel. A cursor route that
+    takes them in the request body (Square's SearchOrders) also needs a body
+    that works, which is what :attr:`Route.example_body` already is: the check
+    sends the example plus the page parameters.
+    """
+
+    #: ``cursor`` -- an opaque token in the response names the next page --
+    #: or ``offset`` -- the caller counts rows itself.
+    style: Literal["cursor", "offset"]
+    #: Dot path to the list of rows in the response document.
+    items_path: str
+    #: Where ``limit`` and the cursor/offset are sent: ``query`` or ``body``.
+    where: Literal["query", "body"] = "query"
+    limit_param: str = "limit"
+    #: Cursor style: the request parameter carrying the cursor, and the dot
+    #: path in the response where the next one appears (absent on the last page).
+    cursor_param: str = "cursor"
+    next_cursor_path: str = "cursor"
+    #: Offset style: the request parameter carrying the row offset.
+    offset_param: str = "offset"
+    #: Dot path, within one row, to the identifier rows are compared by.
+    id_path: str = "id"
+
+    def as_json(self) -> dict[str, object]:
+        return {
+            "style": self.style,
+            "items_path": self.items_path,
+            "where": self.where,
+            "limit_param": self.limit_param,
+            "cursor_param": self.cursor_param,
+            "next_cursor_path": self.next_cursor_path,
+            "offset_param": self.offset_param,
+            "id_path": self.id_path,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Route:
     """One entry in a vendor's surface. Routes are data, not decorators.
 
@@ -393,6 +441,9 @@ class Route:
     #: Scopes the token must carry; checked by the kernel, not by the vendor.
     scopes: Sequence[str] = ()
     idempotency: IdempotencySpec | None = None
+    #: How this route pages its rows, or ``None`` for a route that does not
+    #: page. See :class:`PaginationSpec` for what declaring it buys.
+    pagination: PaginationSpec | None = None
     #: A body this route ACCEPTS, published at ``GET /__unit/routes``.
     #:
     #: The one thing a language-independent check cannot work out for itself. A

@@ -166,6 +166,7 @@ from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import (
     HandlerArgs,
     IdempotencySpec,
+    PaginationSpec,
     ReplyInit,
     Route,
     UnitContext,
@@ -400,6 +401,12 @@ class OrdersSurface:
                 scopes=("ORDERS_READ",),
                 operation_id="SearchOrders",
                 summary="Filtered, sorted, cursor-paginated order search.",
+                # The page parameters travel in the body, so the walk that
+                # proves pages never overlap needs a body that works: "Your
+                # request must include one or more location_ids", and the one
+                # named is the seeded location every scenario order belongs to.
+                example_body={"location_ids": [SEED_LOCATION_ID]},
+                pagination=PaginationSpec(style="cursor", where="body", items_path="orders"),
             ),
             Route(
                 method="POST",

@@ -30,7 +30,7 @@ from vendorfake.clover.model.common import validate_body
 from vendorfake.clover.model.references import CustomerCreateRequest
 from vendorfake.clover.surface.common import CloverDeps, elements, owned_by, page_window, require_merchant
 from vendorfake.core.kernel.reply import json_
-from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitError, UnitErrorKind
+from vendorfake.core.kernel.types import HandlerArgs, PaginationSpec, ReplyInit, Route, UnitError, UnitErrorKind
 from vendorfake.core.util.json import compact
 
 __all__ = ["CAPABILITY", "CloverCustomersSurface", "customer_routes"]
@@ -58,6 +58,7 @@ class CloverCustomersSurface:
                 scopes=("CUSTOMERS_R",),
                 operation_id="GetCustomers",
                 summary="Customers in the elements envelope; filter=firstName=...&filter=lastName=... (ANDed)",
+                pagination=PaginationSpec(style="offset", items_path="elements"),
             ),
             Route(
                 method="POST",

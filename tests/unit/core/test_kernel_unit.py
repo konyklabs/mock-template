@@ -17,6 +17,7 @@ from vendorfake.core.kernel.reply import json_, no_content
 from vendorfake.core.kernel.types import (
     IdempotencySpec,
     MagicTriggerSpec,
+    PaginationSpec,
     UnitError,
     UnitErrorKind,
 )
@@ -806,6 +807,24 @@ def test_route_info_omits_absent_optional_keys_rather_than_nulling_them() -> Non
     info = RouteInfo.of(route("GET", "/v2/x", _handler([])))
     assert "auth" not in info.as_json()
     assert "summary" not in info.as_json()
+    assert "pagination" not in info.as_json()
+
+
+def test_route_info_publishes_a_pagination_declaration_whole() -> None:
+    """Every field, defaults included: a check walking the route reads them
+    from the wire and never from this module."""
+    spec = PaginationSpec(style="cursor", where="body", items_path="orders")
+    info = RouteInfo.of(route("POST", "/v2/orders/search", _handler([]), pagination=spec))
+    assert info.as_json()["pagination"] == {
+        "style": "cursor",
+        "items_path": "orders",
+        "where": "body",
+        "limit_param": "limit",
+        "cursor_param": "cursor",
+        "next_cursor_path": "cursor",
+        "offset_param": "offset",
+        "id_path": "id",
+    }
 
 
 def test_a_malformed_percent_escape_reaches_the_caller_as_a_shaped_400() -> None:

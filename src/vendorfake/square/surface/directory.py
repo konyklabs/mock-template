@@ -49,7 +49,15 @@ from collections.abc import Mapping
 from typing import Any
 
 from vendorfake.core.kernel.reply import json_
-from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitContext, UnitError, UnitErrorKind
+from vendorfake.core.kernel.types import (
+    HandlerArgs,
+    PaginationSpec,
+    ReplyInit,
+    Route,
+    UnitContext,
+    UnitError,
+    UnitErrorKind,
+)
 from vendorfake.core.util.json import compact
 from vendorfake.core.util.numbers import as_int
 from vendorfake.square.entities import COL
@@ -138,6 +146,7 @@ class DirectorySurface:
                 scopes=("ITEMS_READ",),
                 operation_id="ListCatalog",
                 summary="Catalog objects, filtered by type and cursor-paginated.",
+                pagination=PaginationSpec(style="cursor", items_path="objects"),
             ),
         )
 
