@@ -27,12 +27,18 @@ give it a second, worse version.
 from __future__ import annotations
 
 import socket
-from collections.abc import Callable
+import threading
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 import uvicorn
 from fastapi import FastAPI
 
-__all__ = ["DEFAULT_HOST", "DEFAULT_PORT", "bind", "run_server"]
+__all__ = ["DEFAULT_HOST", "DEFAULT_PORT", "bind", "run_server", "serve_in_thread"]
+
+_THREAD_STARTUP_TIMEOUT_S = 30.0
+_THREAD_SHUTDOWN_TIMEOUT_S = 10.0
 
 DEFAULT_HOST = "127.0.0.1"
 """Loopback, not ``0.0.0.0``.
@@ -94,4 +100,41 @@ def run_server(
     try:
         server.run(sockets=[sock])
     finally:
+        sock.close()
+
+
+@contextmanager
+def serve_in_thread(
+    app: FastAPI,
+    *,
+    host: str = DEFAULT_HOST,
+    port: int = 0,
+    log_level: str = "error",
+) -> Iterator[str]:
+    """Serve ``app`` on a background thread, yielding its base URL.
+
+    The same binding as :func:`run_server` -- the socket is bound first, so
+    ``port=0`` is usable -- but returning instead of blocking, for a test in
+    this interpreter that needs a URL: the conformance ``http`` transport, or a
+    consumer whose service under test runs in the same pytest process. It is a
+    thread and not a process; a claim about separate runs needs
+    ``vendorfake.testing.served``.
+    """
+    sock = bind(host, port)
+    number = bound_port(sock)
+    server = uvicorn.Server(uvicorn.Config(app, log_level=log_level, access_log=False))
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + _THREAD_STARTUP_TIMEOUT_S
+        while not server.started:
+            if not thread.is_alive():
+                raise RuntimeError("uvicorn exited before it started serving")
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"uvicorn did not start within {_THREAD_STARTUP_TIMEOUT_S}s")
+            time.sleep(0.01)
+        yield f"http://{host}:{number}"
+    finally:
+        server.should_exit = True
+        thread.join(_THREAD_SHUTDOWN_TIMEOUT_S)
         sock.close()
