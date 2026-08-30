@@ -125,12 +125,19 @@ register(
         defect="GET /__unit/info omits `clock`, so a consumer cannot reproduce the run's time base.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C01"}),
+        also_trips=frozenset({"C29"}),
+        cascade=(
+            "C29 observes the webhook.delay fault as a timer pending in the clock block before the "
+            "delivery happens; a unit that does not publish its clock cannot show that a delayed "
+            "delivery is on the clock rather than merely late, so the contract is genuinely "
+            "unmet and not merely disturbed."
+        ),
         control=replace_control_route(
             "GET",
             "/__unit/info",
-            # `clock` and not one of the other six deliberately: it is the only
-            # documented key no other check reads, so this mutant measures C01
-            # rather than measuring the checks that aim themselves with /info.
+            # `clock` and not one of the other six deliberately: it is the key
+            # the fewest checks read, so this mutant measures C01 rather than
+            # measuring the checks that aim themselves with /info.
             rewrite_document(lambda document: {k: v for k, v in document.items() if k != "clock"}),
         ),
     )
@@ -535,6 +542,12 @@ register(
         defect="A capability the core gates on is neither declared nor excused, so its behaviour is silently off.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C11"}),
+        also_skips=frozenset({"C29"}),
+        skip_reason=(
+            "The document this mutant rewrites is the one C29's precondition reads: with "
+            "webhooks.chaos no longer listed, delivery-scope fault injection is honestly unaskable "
+            "and C29 skips. C11 is the contract that catches the omission itself."
+        ),
         control=replace_control_route("GET", "/__unit/capabilities", rewrite_document(_drop_a_gated_declaration)),
     )
 )
@@ -1043,6 +1056,12 @@ register(
         defect="Retries are submitted immediately instead of being put on the clock, so every declared interval is 0.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C21"}),
+        also_trips=frozenset({"C29"}),
+        cascade=(
+            "_schedule is the seam that carries webhook.delay as well as every retry, so a dispatcher "
+            "that submits instead of putting the attempt on the clock also delivers a delayed event "
+            "at once; C29 observes no pending timer and the delay fault has genuinely had no effect."
+        ),
         # The one profile that runs a virtual clock, which is what makes a
         # declared interval crossable rather than waitable. On any other
         # profile C21's precondition is unmet and this mutant would prove
@@ -1414,3 +1433,23 @@ register(
 """N-6. C19 asserted the replay carries the marker and never that the first
 execution does not; a consumer routing on "was this deduplicated?" is misled
 on every call, and the suite stayed green."""
+
+
+def _deaf_webhook_selector(engine: ChaosEngine, capabilities: CapabilityRegistry) -> FaultSelector:
+    return DeafWebhookFaultSelector(engine, capabilities)
+
+
+register(
+    Mutant(
+        id="M40",
+        name="webhook-scope-rules-never-fire",
+        defect="A delivery-scope rule is accepted, published with its counters, and never consulted when an event goes out.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C29"}),
+        selector=_deaf_webhook_selector,
+    )
+)
+"""N-7. Killing ``webhook.duplicate``, ``webhook.delay``, ``webhook.drop_ack``
+and ``webhook.out_of_order`` at once left the matrix green: C14 covers the
+request-scope gate and C18 the delivery gate, and nothing observed a delivery
+fault at the sink -- the same shape as original finding 7, one level down."""

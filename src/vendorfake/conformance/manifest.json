@@ -28,7 +28,8 @@
     "C25": "state: a reused idempotency key with a different body answers as the route declares",
     "C26": "state: a declared page walk repeats no row and loses none",
     "C27": "chaos: a rule below the one that fired still counts its match",
-    "C28": "control plane: set, delta, enable and disable each change what the unit does"
+    "C28": "control plane: set, delta, enable and disable each change what the unit does",
+    "C29": "chaos: every delivery-scope fault the unit publishes has its effect at the sink"
   },
   "expected_skips": {
     "C07": [
@@ -73,6 +74,12 @@
     ],
     "C27": [
       "no-faults"
+    ],
+    "C29": [
+      "no-chaos",
+      "no-faults",
+      "oauth-only",
+      "orders-only"
     ]
   }
 }

@@ -248,12 +248,13 @@ def test_the_session_goes_red_when_a_contract_passes_on_no_profile() -> None:
     this target skip, and a skip is not a failure. The session must still exit
     non-zero, because a contract nobody could ask proved nothing.
 
-    The four are named rather than counted: C08, C12 and C27 need fault
-    injection, which this profile switches off, and C21 needs a virtual clock,
-    which it does not run. Naming them means a fifth contract quietly joining
-    the list changes this test rather than sliding under a number.
+    The five are named rather than counted: C08, C12 and C27 need fault
+    injection, which this profile switches off; C29 needs delivery-scope fault
+    injection, likewise off; and C21 needs a virtual clock, which it does not
+    run. Naming them means a sixth contract quietly joining the list changes
+    this test rather than sliding under a number.
     """
-    silent = ("C08", "C12", "C21", "C27")
+    silent = ("C08", "C12", "C21", "C27", "C29")
     done = _pytest_pyargs("--conformance-target", f"{HARNESS}:one_profile_target")
     assert done.returncode == 1, done.stdout + done.stderr
     assert f"{len(CHECKS) - len(silent)} passed, {len(silent)} skipped" in done.stdout, done.stdout
