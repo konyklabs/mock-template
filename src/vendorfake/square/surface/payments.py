@@ -38,11 +38,24 @@ The order rules, and where each comes from
   be paid or fulfilled" (https://developer.squareup.com/reference/square/enums/OrderState);
 * a terminal order cannot be paid: the order machine has no edge out of
   COMPLETED or CANCELED;
-* the amount must not exceed what is due -- JUDGMENT. Square's guide has the
-  payment "for the order total" (https://developer.squareup.com/docs/orders-api/pay-for-orders)
-  and documents nothing for an overpayment through this route; refusing it
-  is the reading under which ``net_amount_due_money`` can never go negative,
-  and a partial payment is accepted because split tender is real;
+* ``amount_money`` must not exceed what is due -- JUDGMENT. Square's guide
+  has the payment "for the order total"
+  (https://developer.squareup.com/docs/orders-api/pay-for-orders) and
+  documents nothing for an overpayment through this route; refusing it is
+  the reading under which the tenders always reconcile to the order, and a
+  partial payment is accepted because split tender is real. ``tip_money`` is
+  on top of the amount and never counts against what is due: a tender's
+  ``amount_money`` is "the total amount of the tender, including
+  `tip_money`" (https://developer.squareup.com/reference/square/objects/Tender),
+  and the order reports the tips it collected in ``total_tip_money``;
+* **the check is made again at capture.** A hold (``autocomplete: false``)
+  is *not* reserved against the due -- two holds for the whole order both
+  create -- so CompletePayment re-checks ``amount_money`` against what is
+  due at that moment and refuses with ``conflict`` (409) when the order has
+  since been paid past it. JUDGMENT, twice: Square publishes neither whether
+  an approved payment reserves the order's due nor the error a late capture
+  gets, and 409 is chosen because the request was well-formed and what
+  changed is the order. NOT VERIFIED;
 * the payment's location is the order's. A ``location_id`` naming a
   different one is refused rather than either being silently preferred --
   JUDGMENT, the same rule the legacy CreateOrder path applies.
@@ -65,7 +78,7 @@ from vendorfake.core.state.store import Collection, Entity
 from vendorfake.square.entities import COL, LocationEntity, Money, OrderEntity, PaymentEntity
 from vendorfake.square.machine import ORDER_MACHINE, PAYMENT_MACHINE, OrderState, PaymentState
 from vendorfake.square.model.common import validate_body
-from vendorfake.square.model.order import order_total, tendered_total
+from vendorfake.square.model.order import amount_due
 from vendorfake.square.model.payment import (
     EXTERNAL_PAYMENT_TYPES,
     EXTERNAL_SOURCE_ID,
@@ -76,7 +89,7 @@ from vendorfake.square.model.payment import (
     version_token_of,
 )
 from vendorfake.square.surface.common import SquareDeps
-from vendorfake.square.surface.orders import apply_tenders, require_order, tender_for_payment
+from vendorfake.square.surface.orders import apply_tenders, capture_payment, require_order, tender_for_payment
 
 __all__ = ["CAPABILITY", "PaymentsSurface", "payment_routes"]
 
@@ -186,14 +199,7 @@ class PaymentsSurface:
         order: OrderEntity | None = None
         if request.order_id is not None:
             order = _payable_order(orders, request.order_id)
-            due = order_total(order) - tendered_total(order)
-            if request.amount_money.amount > due:
-                raise UnitError(
-                    UnitErrorKind.INVALID_VALUE,
-                    detail=f"amount_money.amount {request.amount_money.amount} exceeds the {due} due on order {order.id}.",
-                    field="amount_money.amount",
-                    info={"due": due, "order_id": order.id},
-                )
+            _require_within_due(order, request.amount_money.amount, UnitErrorKind.INVALID_VALUE)
         location = _resolve_location(ctx, request.location_id, order)
         currency = location.currency
         if request.amount_money.currency is not None and request.amount_money.currency != currency:
@@ -247,8 +253,10 @@ class PaymentsSurface:
         _MACHINE.assert_transition(payment.status, PaymentState.COMPLETED.value, f"Payment {payment.id}")
         if payment.order_id is not None:
             # Refuse before writing: an order that can no longer take a tender
+            # -- finished, or since paid past what this hold would apply --
             # must leave the payment APPROVED, not captured against nothing.
-            _payable_order(args.ctx.store.collection(COL.orders), payment.order_id)
+            order = _payable_order(args.ctx.store.collection(COL.orders), payment.order_id)
+            _require_within_due(order, payment.amount_money.amount, UnitErrorKind.CONFLICT)
         stored = self._capture(args.ctx, payments, payment, "CompletePayment")
         return json_({"payment": self._project(PaymentEntity.from_entity(stored))})
 
@@ -276,12 +284,11 @@ class PaymentsSurface:
     # -- internals ----------------------------------------------------------
 
     def _capture(self, ctx: UnitContext, payments: Collection, payment: PaymentEntity, operation_id: str) -> Entity:
-        """Move ``payment`` to COMPLETED, then tender its order if it has one."""
-
-        def mutate(draft: Entity) -> None:
-            draft["status"] = PaymentState.COMPLETED.value
-
-        stored = payments.update(payment.id, mutate, meta={"operation_id": operation_id})
+        """Move ``payment`` to COMPLETED through the machine, then tender its
+        order if it has one. The status write is the shared
+        :func:`~vendorfake.square.surface.orders.capture_payment`, so a
+        second capture is refused here exactly as it is on PayOrder."""
+        stored = capture_payment(payments, payment, None, operation_id)
         completed = PaymentEntity.from_entity(stored)
         if completed.order_id is not None:
             orders = ctx.store.collection(COL.orders)
@@ -371,6 +378,20 @@ def _resolve_location(ctx: UnitContext, requested: str | None, order: OrderEntit
     if not everything:
         raise UnitError(UnitErrorKind.INVALID_VALUE, detail="This merchant has no locations.", field="location_id")
     return LocationEntity.from_entity(everything[0])
+
+
+def _require_within_due(order: OrderEntity, amount: int, kind: UnitErrorKind) -> None:
+    """``amount`` may not exceed what is due on ``order``; ``kind`` is the
+    caller's reading of whose fault that is -- the request's value on create,
+    a conflict with the order's later state on capture."""
+    due = amount_due(order)
+    if amount > due:
+        raise UnitError(
+            kind,
+            detail=f"amount_money.amount {amount} exceeds the {due} due on order {order.id}.",
+            field="amount_money.amount",
+            info={"due": due, "order_id": order.id},
+        )
 
 
 def _check_version_token(payment: PaymentEntity, supplied: str | None) -> None:

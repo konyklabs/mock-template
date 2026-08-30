@@ -385,9 +385,17 @@ class Tender:
     location_id: str
     transaction_id: str
     created_at: str
+    #: "The total amount of the tender, including `tip_money`."
     amount_money: Money
     type: str = "CARD"
     payment_id: str = ""
+    #: "The tip's amount of the tender." Absent when no tip was taken.
+    tip_money: Money | None = None
+
+    @property
+    def applied(self) -> int:
+        """What this tender pays toward the order: the amount less the tip."""
+        return self.amount_money.amount - (0 if self.tip_money is None else self.tip_money.amount)
 
     @classmethod
     def from_entity(cls, entity: Mapping[str, Any]) -> Tender:
@@ -400,18 +408,22 @@ class Tender:
             amount_money=Money(amount=0, currency="USD") if amount is None else amount,
             type=_str(entity.get("type"), "CARD"),
             payment_id=_str(entity.get("payment_id")),
+            tip_money=Money.from_entity(entity.get("tip_money")),
         )
 
     def to_entity(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "location_id": self.location_id,
-            "transaction_id": self.transaction_id,
-            "created_at": self.created_at,
-            "amount_money": self.amount_money.to_entity(),
-            "type": self.type,
-            "payment_id": self.payment_id,
-        }
+        return compact(
+            {
+                "id": self.id,
+                "location_id": self.location_id,
+                "transaction_id": self.transaction_id,
+                "created_at": self.created_at,
+                "amount_money": self.amount_money.to_entity(),
+                "type": self.type,
+                "payment_id": self.payment_id,
+                "tip_money": None if self.tip_money is None else self.tip_money.to_entity(),
+            }
+        )
 
 
 @dataclass(frozen=True, slots=True)

@@ -149,10 +149,27 @@ _VOLATILE_FIELDS: tuple[str, ...] = (
     "used_at",
     "revoked_at",
     "superseded_at",
+    # Stamped from the clock by a mutation: a catalog upsert sets the
+    # millisecond-epoch `catalog_version`, an inventory change `calculated_at`,
+    # a loyalty enrolment `enrolled_at` and `mapping_created_at`.
+    "catalog_version",
+    "calculated_at",
+    "enrolled_at",
+    "mapping_created_at",
 )
 """Entity fields excluded from the state digest because they carry wall-clock
-time. Two units seeded identically a second apart must still agree, and these
-are the fields that would otherwise make them differ."""
+time. Two units seeded identically a second apart, and driven with the same
+traffic, must still agree, and these are the fields that would otherwise make
+them differ.
+
+KNOWN GAP, tracked as konyklabs/roadmap#35 -- **the digest excludes top-level
+fields only.** Three wall-clock stamps live one level down and cannot be
+named here: ``tenders[].created_at`` (PayOrder and every payment capture),
+``fulfillments[].pickup_details.placed_at`` and its transition siblings, and
+``reward_tiers[].created_at`` when a scenario omits it. Two units driven
+through those paths a millisecond apart digest differently, and
+``tests/unit/square/test_digest_determinism.py`` marks each such path
+``xfail`` against the issue rather than pretending the digest covers it."""
 
 
 class SquareVendor:

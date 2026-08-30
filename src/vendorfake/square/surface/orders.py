@@ -156,7 +156,14 @@ from vendorfake.square.entities import (
     Tender,
 )
 from vendorfake.square.ids import SquareIds
-from vendorfake.square.machine import FULFILLMENT_MACHINE, ORDER_MACHINE, FulfillmentState, OrderState, PaymentState
+from vendorfake.square.machine import (
+    FULFILLMENT_MACHINE,
+    ORDER_MACHINE,
+    PAYMENT_MACHINE,
+    FulfillmentState,
+    OrderState,
+    PaymentState,
+)
 from vendorfake.square.model.common import validate_body
 from vendorfake.square.model.order import (
     FULFILLMENT_TYPES,
@@ -167,11 +174,11 @@ from vendorfake.square.model.order import (
     PayOrderRequest,
     SearchOrdersRequest,
     UpdateOrderRequest,
+    amount_due,
     order_total,
     project_order,
     project_order_entry,
     supplied,
-    tendered_total,
 )
 from vendorfake.square.seed.constants import SEED_LOCATION_ID
 from vendorfake.square.surface.common import SquareDeps, instant_ms
@@ -184,6 +191,7 @@ __all__ = [
     "SEARCH_MAX_LIMIT",
     "OrdersSurface",
     "apply_tenders",
+    "capture_payment",
     "order_routes",
     "require_order",
     "tender_for_payment",
@@ -209,6 +217,7 @@ _MACHINE = StateMachine(ORDER_MACHINE)
 entity and no store -- it is the definition plus the two assertions over it."""
 
 _FULFILLMENT_MACHINE = StateMachine(FULFILLMENT_MACHINE)
+_PAYMENT_MACHINE = StateMachine(PAYMENT_MACHINE)
 
 _DETAILS_KEY: Mapping[str, str] = {
     "PICKUP": "pickup_details",
@@ -719,9 +728,12 @@ class OrdersSurface:
 
         * every id names a payment this unit holds -- the documented flow, a
           CreatePayment with ``autocomplete: false`` followed by PayOrder. Each
-          must be APPROVED and belong to this order or to none, their amounts
-          must sum to the order total, and each is moved to COMPLETED after
-          the order commits, which journals a ``payment.updated`` apiece;
+          must be APPROVED, at the order's location, and belong to this order
+          or to none; their ``amount_money`` (tips aside) must sum to what is
+          still due; and each is moved to COMPLETED through the payment
+          machine after the order commits, which journals a ``payment.updated``
+          apiece. An id listed twice is refused naming ``payment_ids`` -- a
+          payment tenders once;
         * none does -- the opaque form this unit accepted before it had a
           Payments surface, kept so a scenario that never creates payments
           still completes orders. The first id's tender carries the whole
@@ -758,13 +770,14 @@ class OrdersSurface:
         payments = args.ctx.store.collection(COL.payments)
         stored = _resolve_payments(payments, payment_ids, current)
         if stored is not None:
-            paid = sum(p.total for p in stored)
-            if paid != total - tendered_total(current):
+            due = amount_due(current)
+            paid = sum(p.amount_money.amount for p in stored)
+            if paid != due:
                 raise UnitError(
                     UnitErrorKind.INVALID_VALUE,
-                    detail=f"The payments total {paid} but the order total due is {total - tendered_total(current)}.",
+                    detail=f"The payments' amount_money sum to {paid} but {due} is due on the order.",
                     field="payment_ids",
-                    info={"payments_total": paid, "order_total": total, "tendered": tendered_total(current)},
+                    info={"payments_total": paid, "order_total": total, "due": due},
                 )
         opaque_ids = payment_ids or ["unit-payment"]
 
@@ -803,7 +816,7 @@ class OrdersSurface:
             meta={"operation_id": "PayOrder"},
         )
         for payment in stored or ():
-            _capture_payment(payments, payment, order_id, "PayOrder")
+            capture_payment(payments, payment, order_id, "PayOrder")
         return json_({"order": project_order(OrderEntity.from_entity(updated))})
 
     # -- line items ---------------------------------------------------------
@@ -1280,8 +1293,17 @@ def _resolve_payments(
     ]
     if not any(p is not None for p in found):
         return None
+    seen: set[str] = set()
     resolved: list[PaymentEntity] = []
     for pid, payment in zip(payment_ids, found, strict=True):
+        if pid in seen:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"Payment {pid} is listed more than once; a payment can tender an order only once.",
+                field="payment_ids",
+                info={"payment_id": pid},
+            )
+        seen.add(pid)
         if payment is None:
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
@@ -1303,18 +1325,38 @@ def _resolve_payments(
                 field="payment_ids",
                 info={"payment_id": pid, "order_id": payment.order_id},
             )
+        if payment.location_id != order.location_id:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"Payment {pid} was taken at location {payment.location_id}, not the order's {order.location_id}.",
+                field="payment_ids",
+                info={
+                    "payment_id": pid,
+                    "payment_location_id": payment.location_id,
+                    "order_location_id": order.location_id,
+                },
+            )
         resolved.append(payment)
     return resolved
 
 
-def _capture_payment(payments: Collection, payment: PaymentEntity, order_id: str, operation_id: str) -> None:
-    """Move an APPROVED payment to COMPLETED against ``order_id``, journalled."""
+def capture_payment(payments: Collection, payment: PaymentEntity, order_id: str | None, operation_id: str) -> Entity:
+    """Move a payment to COMPLETED through the payment machine, journalled.
+
+    The one place a payment's ``status`` is written to COMPLETED, for PayOrder
+    and for the Payments surface alike, so that the machine's rule -- no
+    edge out of a terminal state, no self-transition -- is asserted on every
+    capture and a payment cannot be captured twice. ``order_id`` is bound
+    when the capture attaches a previously unattached payment to an order.
+    """
+    _PAYMENT_MACHINE.assert_transition(payment.status, PaymentState.COMPLETED.value, f"Payment {payment.id}")
 
     def mutate(draft: Entity) -> None:
         draft["status"] = PaymentState.COMPLETED.value
-        draft["order_id"] = order_id
+        if order_id is not None:
+            draft["order_id"] = order_id
 
-    payments.update(payment.id, mutate, meta={"operation_id": operation_id})
+    return payments.update(payment.id, mutate, meta={"operation_id": operation_id})
 
 
 def tender_for_payment(ids: SquareIds, order: OrderEntity, payment: PaymentEntity, now: str) -> Tender:
@@ -1330,9 +1372,13 @@ def tender_for_payment(ids: SquareIds, order: OrderEntity, payment: PaymentEntit
         location_id=order.location_id,
         transaction_id=order.id,
         created_at=now,
+        # "The total amount of the tender, including `tip_money`."
         amount_money=Money(amount=payment.total, currency=order.currency),
         type="OTHER" if payment.source_type == "EXTERNAL" else "CARD",
         payment_id=payment.id,
+        tip_money=None
+        if payment.tip_money is None
+        else Money(amount=payment.tip_money.amount, currency=order.currency),
     )
 
 
@@ -1340,9 +1386,11 @@ def apply_tenders(draft: Entity, tenders: Sequence[Tender], now: str) -> None:
     """Append ``tenders`` to an order draft and complete it if it is now paid.
 
     Shared by PayOrder and by the Payments surface, so "an order is COMPLETED
-    when the tenders cover its total" is one rule. The guide's flow --
-    "Square marks the order as COMPLETED" once payments covering the total
-    are completed -- is the reading followed
+    when the tenders cover its total" is one rule -- and "cover" is
+    :func:`~vendorfake.square.model.order.amount_due` reaching zero, which
+    counts what a tender applies to the order and not its tip. The guide's
+    flow -- "Square marks the order as COMPLETED" once payments covering the
+    total are completed -- is the reading followed
     (https://developer.squareup.com/docs/orders-api/pay-for-orders); the
     exact wording is NOT VERIFIED and a partial payment leaves the order OPEN
     with the remainder in ``net_amount_due_money``.
@@ -1351,10 +1399,8 @@ def apply_tenders(draft: Entity, tenders: Sequence[Tender], now: str) -> None:
     stored = [dict(t) for t in existing if isinstance(t, dict)] if isinstance(existing, list) else []
     stored.extend(tender.to_entity() for tender in tenders)
     draft["tenders"] = stored
-    if draft.get("state") == OrderState.OPEN.value:
-        order = OrderEntity.from_entity(draft)
-        if tendered_total(order) >= order_total(order):
-            _complete_order(draft, now)
+    if draft.get("state") == OrderState.OPEN.value and amount_due(OrderEntity.from_entity(draft)) == 0:
+        _complete_order(draft, now)
 
 
 def _complete_order(draft: Entity, now: str) -> None:

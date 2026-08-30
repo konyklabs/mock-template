@@ -160,6 +160,7 @@ __all__ = [
     "TenderWire",
     "TimeRangeRequest",
     "UpdateOrderRequest",
+    "amount_due",
     "line_item_total",
     "money",
     "order_total",
@@ -169,6 +170,7 @@ __all__ = [
     "project_order_entry",
     "supplied",
     "tendered_total",
+    "tips_total",
 ]
 
 _WIRE = ConfigDict(extra="forbid", frozen=True, strict=True)
@@ -256,7 +258,11 @@ class LineItemWire(BaseModel):
 
 
 class TenderWire(BaseModel):
-    """One ``Tender``. No optional fields, so no key is ever omitted."""
+    """One ``Tender``. ``tip_money`` is the one optional, present when a tip
+    was taken: "amount_money: The total amount of the tender, including
+    `tip_money`" and "tip_money: The tip's amount of the tender".
+    https://developer.squareup.com/reference/square/objects/Tender
+    """
 
     model_config = _WIRE
 
@@ -265,19 +271,23 @@ class TenderWire(BaseModel):
     transaction_id: str
     created_at: str
     amount_money: MoneyWire
+    tip_money: MoneyWire | None = None
     type: str
     payment_id: str
 
     def wire(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "location_id": self.location_id,
-            "transaction_id": self.transaction_id,
-            "created_at": self.created_at,
-            "amount_money": self.amount_money.wire(),
-            "type": self.type,
-            "payment_id": self.payment_id,
-        }
+        return compact(
+            {
+                "id": self.id,
+                "location_id": self.location_id,
+                "transaction_id": self.transaction_id,
+                "created_at": self.created_at,
+                "amount_money": self.amount_money.wire(),
+                "tip_money": None if self.tip_money is None else self.tip_money.wire(),
+                "type": self.type,
+                "payment_id": self.payment_id,
+            }
+        )
 
 
 class FulfillmentWire(BaseModel):
@@ -449,13 +459,34 @@ def line_item_total(item: OrderLineItem) -> int:
 
 
 def order_total(order: OrderEntity) -> int:
-    """The sum of the line totals, in minor units."""
+    """The sum of the line totals, in minor units -- what the order is *for*,
+    before any tip a buyer adds at payment."""
     return sum(line_item_total(item) for item in order.line_items)
 
 
 def tendered_total(order: OrderEntity) -> int:
-    """How much has been paid, in minor units."""
+    """Everything the tenders carry, tips included, in minor units."""
     return sum(tender.amount_money.amount for tender in order.tenders)
+
+
+def tips_total(order: OrderEntity) -> int:
+    """The tips the tenders carry, in minor units: ``total_tip_money``."""
+    return sum(0 if tender.tip_money is None else tender.tip_money.amount for tender in order.tenders)
+
+
+def amount_due(order: OrderEntity) -> int:
+    """What is still owed on the line items: the order total less what the
+    tenders have *applied* to it, which is their amount without the tip.
+
+    One definition, used by every check that asks "can this payment take
+    this much?" -- CreatePayment, CompletePayment, PayOrder -- and by the
+    projection's ``net_amount_due_money``. A tip never reduces what is due
+    and never counts toward completing the order. Clamped at zero, so an
+    over-tendered scenario (which only a seed can now produce) reports
+    nothing due rather than owing the buyer money.
+    """
+    applied = sum(tender.applied for tender in order.tenders)
+    return max(0, order_total(order) - applied)
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +539,7 @@ def _project_tender(tender: Tender) -> TenderWire:
         transaction_id=tender.transaction_id,
         created_at=tender.created_at,
         amount_money=_money_wire(tender.amount_money),
+        tip_money=None if tender.tip_money is None else _money_wire(tender.tip_money),
         type=tender.type,
         payment_id=tender.payment_id,
     )
@@ -516,9 +548,20 @@ def _project_tender(tender: Tender) -> TenderWire:
 def project_order(order: OrderEntity) -> dict[str, Any]:
     """A stored order as Square's ``Order`` JSON, absent optionals omitted."""
     currency = order.currency
-    total = order_total(order)
+    tips = tips_total(order)
+    # JUDGMENT -- `total_money` includes the tips the tenders collected.
+    # "total_money: The total amount of money to collect for the order" and
+    # "total_tip_money: The total tip amount of money to collect for the
+    # order" (https://developer.squareup.com/reference/square/objects/Order),
+    # and a tender's amount "including `tip_money`", so tenders reconcile to
+    # `total_money` exactly when the order is paid. NOT VERIFIED that Square
+    # rolls a payment-time tip into the order's `total_money` rather than
+    # reporting it in `total_tip_money` alone; the two fields are emitted so a
+    # consumer can compute either reading.
+    total = order_total(order) + tips
     zero = money(0, currency)
     total_money = money(total, currency)
+    tip_money = money(tips, currency)
     return OrderWire(
         id=order.id,
         location_id=order.location_id,
@@ -538,13 +581,13 @@ def project_order(order: OrderEntity) -> dict[str, Any]:
         total_money=total_money,
         total_tax_money=zero,
         total_discount_money=zero,
-        total_tip_money=zero,
+        total_tip_money=tip_money,
         total_service_charge_money=zero,
         net_amounts=NetAmountsWire(
             total_money=total_money,
             tax_money=zero,
             discount_money=zero,
-            tip_money=zero,
+            tip_money=tip_money,
             service_charge_money=zero,
         ),
         # JUDGMENT, twice over, and NOT VERIFIED both times.
@@ -558,13 +601,15 @@ def project_order(order: OrderEntity) -> dict[str, Any]:
         # field teaches nothing, and it is the one number an unpaid order is
         # about.
         #
-        # Second: it never goes negative. Over-tendering leaves nothing due
-        # rather than owing the buyer money, which is what `Math.max(0, ...)`
-        # says in the reference. Note the asymmetry this leaves with a NEGATIVE
+        # Second: it never goes negative -- see `amount_due`. Over-tendering
+        # leaves nothing due rather than owing the buyer money, which is what
+        # `Math.max(0, ...)` says in the reference; the Payments surface now
+        # refuses to tender past what is due, so only a seed can reach it.
+        # Note the asymmetry this leaves with a NEGATIVE
         # quantity, which this unit accepts because Square's `quantity` text
         # forbids no such thing (see `line_item_total`): such an order reports
         # a negative `total_money` and nothing due.
-        net_amount_due_money=money(max(0, total - tendered_total(order)), currency),
+        net_amount_due_money=money(amount_due(order), currency),
     ).wire()
 
 

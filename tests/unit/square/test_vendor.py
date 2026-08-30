@@ -104,6 +104,10 @@ def test_volatile_fields_are_the_wall_clock_ones() -> None:
         "used_at",
         "revoked_at",
         "superseded_at",
+        "catalog_version",
+        "calculated_at",
+        "enrolled_at",
+        "mapping_created_at",
     }
 
 

@@ -180,16 +180,49 @@ def test_a_payment_exceeding_what_is_due_is_refused(h: Harness) -> None:
     assert retrieve_order(h, order["id"])["state"] == "OPEN"
 
 
-def test_a_tip_is_added_to_the_total_and_the_tender(h: Harness) -> None:
+def test_a_tip_rides_on_the_tender_and_the_order_reconciles(h: Harness) -> None:
+    """One definition of a tip, everywhere: the payment's `amount_money` is
+    what pays the order and `tip_money` is on top; the tender's `amount_money`
+    is "the total amount of the tender, including `tip_money`"
+    (https://developer.squareup.com/reference/square/objects/Tender) with the
+    tip in `tip_money`; the order's `total_tip_money` is the tips collected,
+    its `total_money` includes them (JUDGMENT, stated in `project_order`),
+    and the tenders sum to `total_money` exactly when it is paid."""
     order = create_order(h, 500)
     response = pay(h, 500, order_id=order["id"], tip_money={"amount": 100})
     assert response.status == 200, response.text
     payment = response.json()["payment"]
+    assert payment["amount_money"] == {"amount": 500, "currency": "USD"}
     assert payment["tip_money"] == {"amount": 100, "currency": "USD"}
     assert payment["total_money"] == {"amount": 600, "currency": "USD"}
     after = retrieve_order(h, order["id"])
-    assert after["tenders"][0]["amount_money"] == {"amount": 600, "currency": "USD"}
+    (tender,) = after["tenders"]
+    assert tender["amount_money"] == {"amount": 600, "currency": "USD"}
+    assert tender["tip_money"] == {"amount": 100, "currency": "USD"}
     assert after["state"] == "COMPLETED"
+    assert after["total_tip_money"] == {"amount": 100, "currency": "USD"}
+    assert after["total_money"] == {"amount": 600, "currency": "USD"}
+    assert after["net_amounts"]["tip_money"] == {"amount": 100, "currency": "USD"}
+    assert after["net_amount_due_money"] == {"amount": 0, "currency": "USD"}
+    assert sum(t["amount_money"]["amount"] for t in after["tenders"]) == after["total_money"]["amount"]
+
+
+def test_a_tip_does_not_pay_the_order_down(h: Harness) -> None:
+    """The other direction of the same rule: 400 + tip 100 against a 500
+    order applies 400, leaves 100 due, and does not complete it."""
+    order = create_order(h, 500)
+    assert pay(h, 400, order_id=order["id"], tip_money={"amount": 100}).status == 200
+    after = retrieve_order(h, order["id"])
+    assert after["state"] == "OPEN"
+    assert after["net_amount_due_money"] == {"amount": 100, "currency": "USD"}
+    assert after["total_tip_money"] == {"amount": 100, "currency": "USD"}
+    # `amount_money` is what is checked against the due; a tip on top is fine.
+    assert pay(h, 100, key="pay-rest", order_id=order["id"], tip_money={"amount": 50}).status == 200
+    done = retrieve_order(h, order["id"])
+    assert done["state"] == "COMPLETED"
+    assert done["total_tip_money"] == {"amount": 150, "currency": "USD"}
+    assert done["total_money"] == {"amount": 650, "currency": "USD"}
+    assert sum(t["amount_money"]["amount"] for t in done["tenders"]) == 650
 
 
 def test_a_draft_or_finished_order_cannot_be_paid(h: Harness) -> None:
@@ -305,6 +338,28 @@ def test_complete_honours_the_version_token(h: Harness) -> None:
     assert fresh.status == 200, fresh.text
 
 
+def test_two_holds_cannot_both_capture_past_what_is_due(h: Harness) -> None:
+    """Holds are not reserved against the due (JUDGMENT, stated): two 60-cent
+    holds on a 100-cent order both create. The first captures; the second is
+    refused at capture with 409 CONFLICT, the payment stays APPROVED and the
+    tenders never exceed the order."""
+    order = create_order(h, 100)
+    a = pay(h, 60, key="hold-a", order_id=order["id"], autocomplete=False).json()["payment"]
+    b = pay(h, 60, key="hold-b", order_id=order["id"], autocomplete=False).json()["payment"]
+    assert h.api.post(f"/v2/payments/{a['id']}/complete", {}, headers=h.auth).status == 200
+    seq = journal_seq(h)
+    late = h.api.post(f"/v2/payments/{b['id']}/complete", {}, headers=h.auth)
+    assert late.status == 409
+    assert first_error(late)["code"] == "CONFLICT"
+    assert late.json()["unit_error"]["due"] == 40
+    assert journal_seq(h) == seq
+    assert h.api.get(f"/v2/payments/{b['id']}", headers=h.auth).json()["payment"]["status"] == "APPROVED"
+    after = retrieve_order(h, order["id"])
+    assert after["state"] == "OPEN"
+    assert sum(t["amount_money"]["amount"] for t in after["tenders"]) == 60
+    assert after["net_amount_due_money"] == {"amount": 40, "currency": "USD"}
+
+
 def test_completing_twice_is_refused_and_tenders_once(h: Harness) -> None:
     order = create_order(h, 500)
     payment = pay(h, 500, order_id=order["id"], autocomplete=False).json()["payment"]
@@ -374,6 +429,58 @@ def test_pay_order_captures_the_approved_payments_it_names(h: Harness) -> None:
         assert stored["order_id"] == order["id"]
 
 
+def test_pay_order_refuses_a_payment_listed_twice(h: Harness) -> None:
+    """A payment tenders once: the same id twice is refused naming the field,
+    the order stays OPEN with no tender, the payment stays APPROVED, and the
+    journal does not move."""
+    order = create_order(h, 200)
+    a = pay(h, 100, key="hold-a", order_id=order["id"], autocomplete=False).json()["payment"]
+    seq = journal_seq(h)
+    response = h.api.post(
+        f"/v2/orders/{order['id']}/pay",
+        {"idempotency_key": "pay-order-dup", "payment_ids": [a["id"], a["id"]]},
+        headers=h.auth,
+    )
+    assert response.status == 400
+    assert first_error(response)["field"] == "payment_ids"
+    assert response.json()["unit_error"]["payment_id"] == a["id"]
+    assert journal_seq(h) == seq
+    after = retrieve_order(h, order["id"])
+    assert after["state"] == "OPEN"
+    assert "tenders" not in after
+    assert h.api.get(f"/v2/payments/{a['id']}", headers=h.auth).json()["payment"]["status"] == "APPROVED"
+
+
+def test_a_captured_payment_cannot_be_captured_again_by_pay_order(h: Harness) -> None:
+    """Every capture goes through the payment machine: a COMPLETED payment
+    named by PayOrder is refused before the order is touched."""
+    order = create_order(h, 100)
+    a = pay(h, 100, key="done", autocomplete=True).json()["payment"]
+    response = h.api.post(
+        f"/v2/orders/{order['id']}/pay",
+        {"idempotency_key": "pay-order-done", "payment_ids": [a["id"]]},
+        headers=h.auth,
+    )
+    assert response.status == 400
+    assert first_error(response)["field"] == "payment_ids"
+    assert "tenders" not in retrieve_order(h, order["id"])
+
+
+def test_pay_order_refuses_a_payment_from_another_location(h: Harness) -> None:
+    """The payment's location must be the order's, as it must on
+    CreatePayment with an `order_id`."""
+    order = create_order(h, 100)
+    elsewhere = pay(h, 100, key="kiosk", location_id=SEED_KIOSK_LOCATION_ID, autocomplete=False).json()["payment"]
+    response = h.api.post(
+        f"/v2/orders/{order['id']}/pay",
+        {"idempotency_key": "pay-order-loc", "payment_ids": [elsewhere["id"]]},
+        headers=h.auth,
+    )
+    assert response.status == 400
+    assert first_error(response)["field"] == "payment_ids"
+    assert response.json()["unit_error"]["payment_location_id"] == SEED_KIOSK_LOCATION_ID
+
+
 def test_pay_order_refuses_payments_that_do_not_sum_to_the_total(h: Harness) -> None:
     order = create_order(h, 500)
     a = pay(h, 300, key="hold-a", autocomplete=False).json()["payment"]
@@ -413,6 +520,25 @@ def test_pay_order_refuses_a_payment_that_is_not_approved_or_belongs_elsewhere(h
         )
         assert response.status == 400
         assert first_error(response)["field"] == "payment_ids"
+
+
+def test_pay_order_sums_amount_money_and_carries_tips_on_the_tenders(h: Harness) -> None:
+    order = create_order(h, 500)
+    a = pay(h, 500, key="hold-tip", order_id=order["id"], autocomplete=False, tip_money={"amount": 75}).json()[
+        "payment"
+    ]
+    response = h.api.post(
+        f"/v2/orders/{order['id']}/pay",
+        {"idempotency_key": "pay-order-tip", "payment_ids": [a["id"]]},
+        headers=h.auth,
+    )
+    assert response.status == 200, response.text
+    paid = response.json()["order"]
+    assert paid["state"] == "COMPLETED"
+    assert paid["tenders"][0]["amount_money"] == {"amount": 575, "currency": "USD"}
+    assert paid["tenders"][0]["tip_money"] == {"amount": 75, "currency": "USD"}
+    assert paid["total_tip_money"] == {"amount": 75, "currency": "USD"}
+    assert paid["total_money"] == {"amount": 575, "currency": "USD"}
 
 
 def test_pay_order_still_takes_opaque_ids_when_none_is_stored(h: Harness) -> None:
