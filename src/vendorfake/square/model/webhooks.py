@@ -44,9 +44,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from vendorfake.core.util.json import compact
 
 __all__ = [
+    "CatalogVersionUpdatedSummary",
     "CreateWebhookSubscriptionRequest",
     "EventDataWire",
     "EventEnvelopeWire",
+    "InventoryCountSummary",
     "OrderCreatedSummary",
     "OrderUpdatedSummary",
     "SubscriptionSpec",
@@ -125,6 +127,45 @@ class OrderUpdatedSummary(BaseModel):
             "state": self.state,
             "updated_at": self.updated_at,
             "version": self.version,
+        }
+
+
+class CatalogVersionUpdatedSummary(BaseModel):
+    """``data.object.catalog_version`` -- one field, when the catalog changed.
+    https://developer.squareup.com/reference/square/webhooks/catalog.version.updated
+    """
+
+    model_config = _WIRE
+
+    updated_at: str
+
+    def wire(self) -> dict[str, Any]:
+        return {"updated_at": self.updated_at}
+
+
+class InventoryCountSummary(BaseModel):
+    """One entry of ``data.object.inventory_counts`` -- the ``InventoryCount``
+    fields, in the documented order.
+    https://developer.squareup.com/reference/square/webhooks/inventory.count.updated
+    """
+
+    model_config = _WIRE
+
+    calculated_at: str
+    catalog_object_id: str
+    catalog_object_type: str
+    location_id: str
+    quantity: str
+    state: str
+
+    def wire(self) -> dict[str, Any]:
+        return {
+            "calculated_at": self.calculated_at,
+            "catalog_object_id": self.catalog_object_id,
+            "catalog_object_type": self.catalog_object_type,
+            "location_id": self.location_id,
+            "quantity": self.quantity,
+            "state": self.state,
         }
 
 

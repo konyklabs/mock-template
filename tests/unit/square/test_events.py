@@ -28,7 +28,12 @@ from vendorfake.core.kernel.types import EventMeta, JournalEntry
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.square.entities import COL
 from vendorfake.square.events import ORDER_CREATED, ORDER_UPDATED, SQUARE_EVENT_TYPES, SquareEventMapper
-from vendorfake.square.seed.constants import SEED_LOCATION_ID, SEED_MERCHANT_ID, SEED_OPEN_ORDER_ID
+from vendorfake.square.seed.constants import (
+    SEED_LOCATION_ID,
+    SEED_MERCHANT_ID,
+    SEED_OPEN_ORDER_ID,
+    TEA_MUG_VARIATION_ID,
+)
 
 SUBSCRIBE = {
     "notification_url": "https://example.test/hooks",
@@ -195,14 +200,51 @@ def test_a_deleted_entity_maps_to_nothing() -> None:
 
 def test_the_advertised_event_types_are_the_ones_the_mapper_can_produce(h: Harness, sink: MemorySink) -> None:
     """A type listed at `GET /v2/webhooks/event-types` with no branch in the
-    mapper would be advertised and never sent."""
+    mapper would be advertised and never sent. One mutation per collection the
+    mapper reads, so every advertised type is observed at least once."""
     subscribe(h)
-    create_order(h)
+    order_id = create_order(h)
     h.api.put(
         f"/v2/orders/{SEED_OPEN_ORDER_ID}",
         {"idempotency_key": "evt-both", "order": {"version": 1, "ticket_name": "Bar"}},
         headers=h.auth,
     )
+    paid = h.api.post(
+        "/v2/payments",
+        {
+            "idempotency_key": "evt-pay",
+            "source_id": "EXTERNAL",
+            "amount_money": {"amount": 250},
+            "order_id": order_id,
+            "external_details": {"type": "OTHER", "source": "Kiosk"},
+        },
+        headers=h.auth,
+    )
+    assert paid.status == 200, paid.text
+    upserted = h.api.post(
+        "/v2/catalog/object",
+        {"idempotency_key": "evt-cat", "object": {"type": "ITEM", "id": "#x", "item_data": {"name": "Scone"}}},
+        headers=h.auth,
+    )
+    assert upserted.status == 200, upserted.text
+    counted = h.api.post(
+        "/v2/inventory/changes/batch-create",
+        {
+            "idempotency_key": "evt-inv",
+            "changes": [
+                {
+                    "type": "PHYSICAL_COUNT",
+                    "physical_count": {
+                        "catalog_object_id": TEA_MUG_VARIATION_ID,
+                        "location_id": SEED_LOCATION_ID,
+                        "quantity": "3",
+                    },
+                }
+            ],
+        },
+        headers=h.auth,
+    )
+    assert counted.status == 200, counted.text
     observed = {body["type"] for body in delivered_bodies(h, sink)}
     assert observed == set(SQUARE_EVENT_TYPES)
 

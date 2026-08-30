@@ -14,9 +14,12 @@ Shapes, from the response examples on developer.squareup.com/reference/square:
 
 ===============  ============================================
 order            ``CAISENgvlJ6jLWAzERDzjyHVybY``  (27 chars)
+payment          ``R2B3Z8WMVt3EAmzYWLZvz7Y69EbZY`` (29 chars)
 location         ``18YC4JDH91E1H``                (13 chars)
 merchant         ``MLQW2MYBY81PZ``                (13 chars)
 catalog object   ``W62UWFY35CWMYGVWK6TWJDNI``     (24 chars)
+customer         ``QPTXM8PQNX3Q726ZYHPMNP46XC``   (26 chars)
+loyalty ids      ``79b807d2-d786-46a9-933b-918028d7a8c5`` (UUID-shaped)
 authorization    ``sq0cgb-xJPZ8rwCk7KfapZz815Grw``
 access token     ``EAAAl3ikZIe18J-2-cHlV2bL4-...``
 subscription     ``wbhk_b35f6b3145074cf9ad513610786c19d5``
@@ -78,6 +81,10 @@ class SquareIds:
     def line_item_uid(self) -> str:
         return self._pick(_MIXED, 22)
 
+    def fulfillment_uid(self) -> str:
+        """The same shape as a line-item uid: 22 mixed-case alphanumerics."""
+        return self._pick(_MIXED, 22)
+
     def location(self) -> str:
         return self._pick(_UPPER_ALNUM, 13)
 
@@ -87,8 +94,33 @@ class SquareIds:
     def catalog_object(self) -> str:
         return self._pick(_UPPER_ALNUM, 24)
 
+    def inventory_change(self) -> str:
+        """24 upper-case alphanumerics -- the shape of an InventoryAdjustment
+        or InventoryPhysicalCount id in Square's examples. JUDGMENT on the
+        shape; the examples show it without stating a rule."""
+        return self._pick(_UPPER_ALNUM, 24)
+
     def tender(self) -> str:
         return self._pick(_MIXED, 27)
+
+    def payment(self) -> str:
+        """29 mixed-case alphanumerics, the shape of the CreatePayment example
+        (https://developer.squareup.com/reference/square/payments-api/create-payment)."""
+        return self._pick(_MIXED, 29)
+
+    def customer(self) -> str:
+        """26 upper-case alphanumerics, the shape of Square's customer ids."""
+        return self._pick(_UPPER_ALNUM, 26)
+
+    def uuid(self) -> str:
+        """UUID-shaped, ``8-4-4-4-12`` lowercase hex, from the stream.
+
+        Loyalty programs, accounts, mappings and events all carry this shape
+        in Square's examples. Drawn from the seeded stream rather than from
+        ``uuid4`` so a scenario reproduces its ids.
+        """
+        hex32 = self._pick(_HEX, 32)
+        return f"{hex32[:8]}-{hex32[8:12]}-{hex32[12:16]}-{hex32[16:20]}-{hex32[20:]}"
 
     # -- OAuth -------------------------------------------------------------
 

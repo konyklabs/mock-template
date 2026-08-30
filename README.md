@@ -10,9 +10,12 @@ touching a vendor sandbox.
 > module imitates.
 
 Two vendors ship today. **Square (Connect v2)** is complete — OAuth2 (code +
-PKCE flows), orders with a real lifecycle, locations and catalog, and webhook
-subscriptions whose deliveries are signed the way Square signs them and
-retried on Square's documented schedule. **Clover (REST v3)** ships the
+PKCE flows), orders with a real lifecycle and fulfillments, external payments
+that tender those orders, the merchant, locations, catalog and inventory
+counts, a loyalty program, and webhook subscriptions whose deliveries are
+signed the way Square signs them and retried on Square's documented schedule;
+the full route list is under [The Square surface](#the-square-surface).
+**Clover (REST v3)** ships the
 same shape: OAuth v2 (authorize, token exchange, single-use refresh rotation,
 the documented 401-for-everything auth behaviour), orders and line items with
 client-owned totals, the atomic order/checkout calculators with taxes,
@@ -161,6 +164,32 @@ curl -si -X POST http://localhost:8080/v2/orders -H "Authorization: Bearer $SEED
 type, header or body content; `when` selects the nth call, every-nth, a window,
 or seeded probability. Same seed, same profile → same faults, every run.
 
+#### Rehearsing a 401 deactivation
+
+Integrations commonly deactivate a connection the moment a call answers 401,
+so that path deserves a rehearsal. The `token_expiry` fault answers one
+request with Square's documented `401 ACCESS_TOKEN_EXPIRED` **without
+touching the stored token** — the next call succeeds again, which is exactly
+the transient case a deactivate-on-401 handler gets wrong:
+
+```sh
+curl -s -X POST http://localhost:8080/__unit/chaos/rules -H 'Content-Type: application/json' -d '{
+  "id": "expire-on-next-read",
+  "scope": "request",
+  "fault": "token_expiry",
+  "match": {"route": "GET /v2/orders/{order_id}"},
+  "when": {"nth": [1]}
+}'
+# the next GET /v2/orders/{id} -> 401 {"errors": [{"category": "AUTHENTICATION_ERROR",
+#                                                   "code": "ACCESS_TOKEN_EXPIRED", ...
+# the one after it            -> 200
+```
+
+The shipped `chaos-demo` profile carries the same rule on the fourth read. For
+a *permanent* 401, revoke the token instead (`POST /oauth2/revoke` with the
+application secret → every later call answers `ACCESS_TOKEN_REVOKED`), or
+advance a virtual clock past the token's `expires_at` as shown below.
+
 ### The control plane
 
 Every route under `/__unit/*` is the operator's side channel — state,
@@ -191,7 +220,7 @@ curl -s http://localhost:8080/v2/locations -H "Authorization: Bearer $SEED"
 # -> {"errors": [{"category": "AUTHENTICATION_ERROR", "code": "ACCESS_TOKEN_EXPIRED", ...
 ```
 
-The rest is discoverable, not memorised: `GET /__unit/routes` lists all 45
+The rest is discoverable, not memorised: `GET /__unit/routes` lists all 65
 routes with summaries, `GET /__unit/info` (or `vendorfake info --vendor square`)
 describes the whole unit — capabilities, auth, signing scheme, fault catalogue,
 retry schedule — and `vendorfake openapi --vendor square` prints an OpenAPI 3.1
@@ -346,9 +375,32 @@ choices (`vendorfake serve --vendor square --profile <name>`, or a path to your 
 | `full` | Every capability on. The default. |
 | `no-faults` | Fault injection off entirely. For happy-path CI. |
 | `no-chaos` | Delivery faults off: a webhook that is sent is sent honestly, once. |
-| `orders-only` | Orders plus the reference data they point at. No OAuth dance, no webhooks: authenticate with a seeded token. |
+| `orders-only` | Orders and payments plus the reference data they point at. No OAuth dance, no webhooks, no loyalty or inventory: authenticate with a seeded token. |
 | `oauth-only` | Only the OAuth dance, for testing token handling alone. |
 | `chaos-demo` | Full surface with a preloaded fault set: rate limits, mid-flow token expiry, duplicate and reordered delivery. |
+
+## The Square surface
+
+Every route is documented-or-JUDGMENT in its module docstring: where Square
+publishes the behaviour the code cites the page, and where it does not the
+choice is labelled. `GET /__unit/routes` publishes the same list with
+summaries; `GET /__unit/capabilities` says which profile serves which.
+
+| Capability | Routes |
+|---|---|
+| `oauth` | `GET /oauth2/authorize`, `POST /oauth2/token`, `POST /oauth2/revoke`, `POST /oauth2/token/status` |
+| `order-lifecycle` | `POST /v2/orders`, `POST /v2/locations/{location_id}/orders` (the pre-2019 create path), `GET /v2/orders/{order_id}`, `PUT /v2/orders/{order_id}` (sparse update under `version`, including `fulfillments[].state`), `POST /v2/orders/search` (filters, `query.sort`, cursor), `POST /v2/orders/batch-retrieve`, `POST /v2/orders/{order_id}/pay` |
+| `merchant-directory` | `GET /v2/merchants`, `GET /v2/merchants/{merchant_id}` (`me` works), `GET /v2/locations`, `GET /v2/catalog/list` (`types`, cursor), `GET /v2/catalog/object/{object_id}`, `POST /v2/catalog/search` (`begin_time` → `latest_time`, `prefix_query` / `exact_query` on `name`), `POST /v2/catalog/object` (upsert ITEM / ITEM_VARIATION under the catalog `version`) |
+| `payments` | `POST /v2/payments` (`source_id: "EXTERNAL"` + `external_details`; `autocomplete` default true; tenders and completes its `order_id`), `GET /v2/payments/{payment_id}`, `POST /v2/payments/{payment_id}/complete`, `POST /v2/payments/{payment_id}/cancel` |
+| `inventory` | `POST /v2/inventory/changes/batch-create` (physical counts and adjustments to `IN_STOCK`), `POST /v2/inventory/counts/batch-retrieve`, `GET /v2/inventory/{catalog_object_id}` |
+| `loyalty` | `GET /v2/loyalty/programs/main`, `POST /v2/loyalty/accounts/search` (by `mappings[].phone_number`), `POST /v2/loyalty/accounts` (E.164 phone), `POST /v2/loyalty/accounts/{account_id}/accumulate` (points from the seeded SPEND rule, or stated) |
+| `webhooks` | `GET /v2/webhooks/event-types`, `POST` / `GET` / `DELETE` `/v2/webhooks/subscriptions[/{id}]`, `POST /v2/webhooks/subscriptions/{id}/test` |
+
+Webhook event types: `order.created`, `order.updated`, `payment.created`,
+`payment.updated`, `catalog.version.updated` (every catalog upsert),
+`inventory.count.updated` (every count change) — all delivered with Square's
+URL-bound HMAC signature. Three state machines are published at
+`GET /__unit/machines`: `order`, `fulfillment` and `payment`.
 
 ## Why this exists
 
@@ -373,8 +425,9 @@ and a behaviour had to be decided, the wire says so: error bodies carry a
 ## Status
 
 Pre-release, built in the open. The Square surface above is implemented and
-tested (1371 tests at the time of writing); nothing is published to a registry
-yet. Treat interfaces as subject to change until v0.1 is tagged.
+tested (`uv run pytest --collect-only -q` prints the current test count);
+nothing is published to a registry yet. Treat interfaces as subject to change
+until v0.1 is tagged.
 
 ## Design
 

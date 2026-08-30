@@ -34,7 +34,10 @@ from vendorfake.square.config import SquareConfig
 from vendorfake.square.entities import (
     COL,
     CatalogObjectEntity,
+    InventoryCountEntity,
     LocationEntity,
+    LoyaltyAccountEntity,
+    LoyaltyProgramEntity,
     MerchantEntity,
     Money,
     OrderEntity,
@@ -68,6 +71,8 @@ def hydrate_square(ctx: UnitContext, seed: object, config: SquareConfig) -> Seed
     _insert_locations(ctx, doc)
     _insert_catalog(ctx, doc)
     _insert_orders(ctx, doc)
+    _insert_loyalty(ctx, doc)
+    _insert_inventory(ctx, doc)
     _insert_tokens(ctx, doc, config)
     _insert_subscriptions(ctx, doc, config)
     return doc
@@ -81,16 +86,16 @@ def hydrate_square(ctx: UnitContext, seed: object, config: SquareConfig) -> Seed
 
 def _insert_merchant(ctx: UnitContext, doc: SeedDocument) -> None:
     merchant = doc.merchant
-    ctx.store.collection(COL.merchants).insert(
-        MerchantEntity(
-            id=merchant.id,
-            business_name=merchant.business_name,
-            country=merchant.country,
-            language_code=merchant.language_code,
-            currency=merchant.currency,
-        ).to_entity(),
-        SEED_META,
-    )
+    entity = MerchantEntity(
+        id=merchant.id,
+        business_name=merchant.business_name,
+        country=merchant.country,
+        language_code=merchant.language_code,
+        currency=merchant.currency,
+    ).to_entity()
+    if merchant.created_at is not None:
+        entity["created_at"] = merchant.created_at
+    ctx.store.collection(COL.merchants).insert(entity, SEED_META)
 
 
 def _insert_locations(ctx: UnitContext, doc: SeedDocument) -> None:
@@ -248,6 +253,95 @@ def _resolve_line_item(catalog: Collection, order: SeedOrder, line: SeedLineItem
         catalog_object_id=line.catalog_object_id,
         variation_name=variation_name,
     )
+
+
+def _insert_loyalty(ctx: UnitContext, doc: SeedDocument) -> None:
+    """The program, then the accounts that belong to it.
+
+    An account with no program is a scenario defect: Square accounts exist
+    only inside a program, and a unit that loaded them anyway would answer
+    the search and then fail every accumulation.
+    """
+    program = doc.loyalty_program
+    if program is None:
+        if doc.loyalty_accounts:
+            raise UnitError(
+                UnitErrorKind.INTERNAL,
+                detail="Seed loyalty_accounts need a loyalty_program to belong to.",
+                info={"accounts": len(doc.loyalty_accounts)},
+            )
+        return
+    location_ids = (
+        tuple(location.id for location in doc.locations) if program.location_ids is None else program.location_ids
+    )
+    entity = LoyaltyProgramEntity(
+        id=program.id,
+        merchant_id=doc.merchant.id,
+        status=program.status,
+        terminology_one=program.terminology_one,
+        terminology_other=program.terminology_other,
+        location_ids=location_ids,
+        accrual_points=program.accrual_points,
+        spend_amount=Money(amount=program.spend_amount.amount, currency=program.spend_amount.currency),
+        tax_mode=program.tax_mode,
+        reward_tiers=tuple(
+            compact({"id": tier.id, "points": tier.points, "name": tier.name, "created_at": tier.created_at})
+            for tier in program.reward_tiers
+        ),
+    ).to_entity()
+    if program.created_at is not None:
+        entity["created_at"] = program.created_at
+        entity["updated_at"] = program.created_at
+    ctx.store.collection(COL.loyalty_programs).insert(entity, SEED_META)
+
+    accounts = ctx.store.collection(COL.loyalty_accounts)
+    for index, account in enumerate(doc.loyalty_accounts, start=1):
+        entity = LoyaltyAccountEntity(
+            id=account.id,
+            program_id=program.id,
+            customer_id=account.customer_id,
+            phone_number=account.phone_number,
+            mapping_id=account.mapping_id or f"{account.id}-mapping-{index:02d}",
+            balance=account.balance,
+            lifetime_points=account.lifetime_points,
+            enrolled_at=account.enrolled_at or "",
+            mapping_created_at=account.enrolled_at or "",
+        ).to_entity()
+        if account.enrolled_at is not None:
+            entity["created_at"] = account.enrolled_at
+            entity["updated_at"] = account.enrolled_at
+        accounts.insert(entity, SEED_META)
+
+
+def _insert_inventory(ctx: UnitContext, doc: SeedDocument) -> None:
+    """Stock counts, each naming a variation and a location that exist."""
+    catalog = ctx.store.collection(COL.catalog)
+    locations = ctx.store.collection(COL.locations)
+    counts = ctx.store.collection(COL.inventory_counts)
+    for count in doc.inventory_counts:
+        stored = catalog.get(count.catalog_object_id)
+        if stored is None or not CatalogObjectEntity.from_entity(stored).is_variation:
+            raise UnitError(
+                UnitErrorKind.INTERNAL,
+                detail=f"Seed inventory count references unknown catalog variation {count.catalog_object_id}.",
+                info={"catalog_object_id": count.catalog_object_id},
+            )
+        if locations.get(count.location_id) is None:
+            raise UnitError(
+                UnitErrorKind.INTERNAL,
+                detail=f"Seed inventory count references unknown location {count.location_id}.",
+                info={"location_id": count.location_id},
+            )
+        entity = InventoryCountEntity(
+            catalog_object_id=count.catalog_object_id,
+            location_id=count.location_id,
+            quantity=count.quantity,
+            calculated_at=count.calculated_at or "",
+        ).to_entity()
+        if count.calculated_at is not None:
+            entity["created_at"] = count.calculated_at
+            entity["updated_at"] = count.calculated_at
+        counts.insert(entity, SEED_META)
 
 
 def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: SquareConfig) -> None:

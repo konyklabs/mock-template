@@ -57,7 +57,17 @@ from enum import StrEnum
 
 from vendorfake.core.state.machine import MachineDef, StateDef
 
-__all__ = ["ORDER_MACHINE", "ORDER_MACHINE_NAME", "OrderState"]
+__all__ = [
+    "FULFILLMENT_MACHINE",
+    "FULFILLMENT_MACHINE_NAME",
+    "ORDER_MACHINE",
+    "ORDER_MACHINE_NAME",
+    "PAYMENT_MACHINE",
+    "PAYMENT_MACHINE_NAME",
+    "FulfillmentState",
+    "OrderState",
+    "PaymentState",
+]
 
 
 class OrderState(StrEnum):
@@ -97,3 +107,131 @@ ORDER_MACHINE = MachineDef(
 )
 """The order lifecycle. ``COMPLETED`` and ``CANCELED`` list no transitions,
 which is what makes them terminal."""
+
+
+class FulfillmentState(StrEnum):
+    """The six documented ``FulfillmentState`` values.
+    https://developer.squareup.com/reference/square/enums/FulfillmentState
+    """
+
+    PROPOSED = "PROPOSED"
+    RESERVED = "RESERVED"
+    PREPARED = "PREPARED"
+    COMPLETED = "COMPLETED"
+    CANCELED = "CANCELED"
+    FAILED = "FAILED"
+
+
+FULFILLMENT_MACHINE_NAME = "fulfillment"
+"""The key the fulfillment machine is registered under."""
+
+FULFILLMENT_MACHINE = MachineDef(
+    field="state",
+    initial=FulfillmentState.PROPOSED.value,
+    states={
+        FulfillmentState.PROPOSED.value: StateDef(
+            summary="Proposed by the buyer; not yet accepted by the seller.",
+            to=(
+                FulfillmentState.RESERVED.value,
+                FulfillmentState.PREPARED.value,
+                FulfillmentState.COMPLETED.value,
+                FulfillmentState.CANCELED.value,
+                FulfillmentState.FAILED.value,
+            ),
+            allow_self=True,
+        ),
+        FulfillmentState.RESERVED.value: StateDef(
+            summary="Accepted by the seller; being prepared.",
+            to=(
+                FulfillmentState.PREPARED.value,
+                FulfillmentState.COMPLETED.value,
+                FulfillmentState.CANCELED.value,
+                FulfillmentState.FAILED.value,
+            ),
+            allow_self=True,
+        ),
+        FulfillmentState.PREPARED.value: StateDef(
+            summary="Ready for the buyer, the courier or the carrier.",
+            to=(
+                FulfillmentState.COMPLETED.value,
+                FulfillmentState.CANCELED.value,
+                FulfillmentState.FAILED.value,
+            ),
+            allow_self=True,
+        ),
+        FulfillmentState.COMPLETED.value: StateDef(summary="Picked up, delivered or shipped. Terminal."),
+        FulfillmentState.CANCELED.value: StateDef(summary="Canceled. Terminal."),
+        FulfillmentState.FAILED.value: StateDef(summary="Could not be completed. Terminal."),
+    },
+)
+"""The fulfillment lifecycle.
+
+The states and their meanings are Square's
+(https://developer.squareup.com/reference/square/enums/FulfillmentState), and
+the forward path -- PROPOSED, RESERVED, PREPARED, COMPLETED, with CANCELED
+reachable until completion -- is the one the fulfillments guide walks through
+(https://developer.squareup.com/docs/orders-api/manage-fulfillments).
+
+JUDGMENT, twice. First, a forward move may **skip** states: PROPOSED straight
+to COMPLETED is accepted, because the guide describes the states an
+integration *may* report and publishes no rule that each must be visited, and
+a counter-service order that is accepted, made and handed over in one motion
+has no RESERVED moment to report. Second, FAILED is reachable from every
+non-terminal state for the same reason. Neither is verified against an error
+Square would return for the corresponding move; a consumer must not read this
+unit's acceptance of a skip as Square's.
+
+The three terminal states list no transitions, which is what makes them
+terminal, and every non-terminal state allows a self-transition because
+UpdateOrder is a read-modify-write of the whole fulfillment -- echoing the
+current state back with a changed ``picked_up_at`` is the ordinary case, not
+an error.
+"""
+
+
+class PaymentState(StrEnum):
+    """The ``Payment.status`` values this unit can hold.
+
+    "Indicates whether the payment is APPROVED, PENDING, COMPLETED, CANCELED,
+    or FAILED." https://developer.squareup.com/reference/square/objects/Payment
+    ``PENDING`` is absent: it is the state of a card payment awaiting the
+    processor, and this unit takes external payments only, which are approved
+    the moment they are recorded.
+    """
+
+    APPROVED = "APPROVED"
+    COMPLETED = "COMPLETED"
+    CANCELED = "CANCELED"
+    FAILED = "FAILED"
+
+
+PAYMENT_MACHINE_NAME = "payment"
+
+PAYMENT_MACHINE = MachineDef(
+    field="status",
+    initial=PaymentState.APPROVED.value,
+    states={
+        PaymentState.APPROVED.value: StateDef(
+            summary="Authorised and held; capture with CompletePayment or void with CancelPayment.",
+            to=(PaymentState.COMPLETED.value, PaymentState.CANCELED.value),
+        ),
+        PaymentState.COMPLETED.value: StateDef(summary="Captured. Terminal."),
+        PaymentState.CANCELED.value: StateDef(summary="Voided before capture. Terminal."),
+        PaymentState.FAILED.value: StateDef(summary="Could not be taken. Terminal, and never entered here."),
+    },
+)
+"""The payment lifecycle.
+
+"If set to `false`, this payment will be held in an approved state until
+either explicitly completed (captured) or canceled (voided)" -- ``autocomplete``
+on CreatePayment
+(https://developer.squareup.com/reference/square/payments-api/create-payment)
+-- is the whole machine: APPROVED, then COMPLETED or CANCELED. A payment
+created with ``autocomplete`` true starts in APPROVED and is moved to COMPLETED
+in the same request, so the journal shows the capture as its own update.
+
+Neither terminal state allows a self-transition: completing a COMPLETED
+payment or cancelling a CANCELED one is ``invalid_transition``, for the same
+reason a second PayOrder is. ``FAILED`` is declared so the published machine
+matches the documented status set, and no route enters it.
+"""

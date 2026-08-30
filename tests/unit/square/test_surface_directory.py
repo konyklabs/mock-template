@@ -121,6 +121,8 @@ def test_each_route_declares_the_scope_square_documents_for_it() -> None:
     """
     routes = {route.path: tuple(route.scopes) for route in directory_routes()}
     assert routes == {
+        "/v2/merchants": ("MERCHANT_PROFILE_READ",),
+        "/v2/merchants/{merchant_id}": ("MERCHANT_PROFILE_READ",),
         "/v2/locations": ("MERCHANT_PROFILE_READ",),
         "/v2/catalog/list": ("ITEMS_READ",),
     }
@@ -228,6 +230,24 @@ def test_a_cursor_walks_the_pages_and_stops(h: Harness) -> None:
     assert seen == sorted(
         [TEA_MUG_VARIATION_ID, TEA_POT_VARIATION_ID, COLD_BREW_SMALL_VARIATION_ID, COLD_BREW_LARGE_VARIATION_ID]
     )
+
+
+def test_types_item_pages_with_a_cursor_and_nests_variations_on_every_page(h: Harness) -> None:
+    """The consumer's catalog sync: `GET /v2/catalog/list?types=ITEM` with a
+    page size smaller than the catalog. The first page carries a `cursor`,
+    the last does not, and each item on each page still nests its
+    variations -- paging must not flatten the shape."""
+    first = catalog(h, types="ITEM", limit="1")
+    assert len(first["objects"]) == 1
+    assert first["cursor"]
+    assert first["objects"][0]["type"] == "ITEM"
+    assert len(first["objects"][0]["item_data"]["variations"]) == 2
+
+    last = catalog(h, types="ITEM", limit="1", cursor=first["cursor"])
+    assert len(last["objects"]) == 1
+    assert "cursor" not in last
+    assert len(last["objects"][0]["item_data"]["variations"]) == 2
+    assert {first["objects"][0]["id"], last["objects"][0]["id"]} == {TEA_ITEM_ID, COLD_BREW_ITEM_ID}
 
 
 def test_a_cursor_from_a_different_query_is_refused(h: Harness) -> None:

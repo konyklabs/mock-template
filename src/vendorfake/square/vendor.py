@@ -77,13 +77,24 @@ from vendorfake.square.config import (
 from vendorfake.square.errors import SquareErrorShaper
 from vendorfake.square.events import SquareEventMapper
 from vendorfake.square.ids import SquareIds
-from vendorfake.square.machine import ORDER_MACHINE, ORDER_MACHINE_NAME
+from vendorfake.square.machine import (
+    FULFILLMENT_MACHINE,
+    FULFILLMENT_MACHINE_NAME,
+    ORDER_MACHINE,
+    ORDER_MACHINE_NAME,
+    PAYMENT_MACHINE,
+    PAYMENT_MACHINE_NAME,
+)
 from vendorfake.square.retry import square_retry_defaults
 from vendorfake.square.seed.hydrate import hydrate_square
 from vendorfake.square.signer import SquareWebhookSigner
+from vendorfake.square.surface.catalog import catalog_routes
 from vendorfake.square.surface.directory import directory_routes
+from vendorfake.square.surface.inventory import inventory_routes
+from vendorfake.square.surface.loyalty import loyalty_routes
 from vendorfake.square.surface.oauth import oauth_routes
 from vendorfake.square.surface.orders import order_routes
+from vendorfake.square.surface.payments import payment_routes
 from vendorfake.square.surface.webhooks import webhook_routes
 
 __all__ = ["SQUARE_MAGIC", "SQUARE_SCOPES", "SquareVendor", "create_square_vendor"]
@@ -95,12 +106,18 @@ SQUARE_SCOPES: tuple[str, ...] = (
     "ORDERS_READ",
     "ORDERS_WRITE",
     "ITEMS_READ",
+    "ITEMS_WRITE",
+    "PAYMENTS_READ",
     "PAYMENTS_WRITE",
+    "LOYALTY_READ",
+    "LOYALTY_WRITE",
+    "INVENTORY_READ",
+    "INVENTORY_WRITE",
     WEBHOOK_SUBSCRIPTIONS_SCOPE,
 )
 """The scopes this unit's routes ask for.
 
-The first five are a subset of Square's published OAuth permissions
+All but the last are a subset of Square's published OAuth permissions
 (https://developer.squareup.com/docs/oauth-api/square-permissions) -- the ones
 the modelled surface actually needs. A route names the scopes it requires and
 the kernel checks them against the token, so this tuple is the vocabulary and
@@ -132,10 +149,27 @@ _VOLATILE_FIELDS: tuple[str, ...] = (
     "used_at",
     "revoked_at",
     "superseded_at",
+    # Stamped from the clock by a mutation: a catalog upsert sets the
+    # millisecond-epoch `catalog_version`, an inventory change `calculated_at`,
+    # a loyalty enrolment `enrolled_at` and `mapping_created_at`.
+    "catalog_version",
+    "calculated_at",
+    "enrolled_at",
+    "mapping_created_at",
 )
 """Entity fields excluded from the state digest because they carry wall-clock
-time. Two units seeded identically a second apart must still agree, and these
-are the fields that would otherwise make them differ."""
+time. Two units seeded identically a second apart, and driven with the same
+traffic, must still agree, and these are the fields that would otherwise make
+them differ.
+
+KNOWN GAP, tracked as konyklabs/roadmap#35 -- **the digest excludes top-level
+fields only.** Three wall-clock stamps live one level down and cannot be
+named here: ``tenders[].created_at`` (PayOrder and every payment capture),
+``fulfillments[].pickup_details.placed_at`` and its transition siblings, and
+``reward_tiers[].created_at`` when a scenario omits it. Two units driven
+through those paths a millisecond apart digest differently, and
+``tests/unit/square/test_digest_determinism.py`` marks each such path
+``xfail`` against the issue rather than pretending the digest covers it."""
 
 
 class SquareVendor:
@@ -165,7 +199,7 @@ class SquareVendor:
         # in force on the next delivery rather than on the next process. That
         # is the same rule the surfaces follow; see `surface/common.py`.
         self._signer = SquareWebhookSigner(self)
-        self._events = SquareEventMapper()
+        self._events = SquareEventMapper(self)
         self._routes: tuple[Route, ...] | None = None
 
     def _build_errors(self) -> SquareErrorShaper:
@@ -220,7 +254,16 @@ class SquareVendor:
         capability index and the OpenAPI document would each see differently.
         """
         if self._routes is None:
-            self._routes = oauth_routes(self) + order_routes(self) + directory_routes() + webhook_routes(self)
+            self._routes = (
+                oauth_routes(self)
+                + order_routes(self)
+                + directory_routes()
+                + catalog_routes(self)
+                + inventory_routes(self)
+                + payment_routes(self)
+                + loyalty_routes(self)
+                + webhook_routes(self)
+            )
         return self._routes
 
     @property
@@ -253,14 +296,18 @@ class SquareVendor:
 
     @property
     def machines(self) -> Mapping[str, MachineDef]:
-        """The order lifecycle, reachable at ``GET /__unit/machines``.
+        """The order, fulfillment and payment lifecycles, at ``GET /__unit/machines``.
 
         This is the registration the reference lacks: its ``orderMachine`` is a
         module-level singleton nothing publishes, so "every declared terminal
         state really is terminal" could not be asserted from outside the vendor
         package.
         """
-        return {ORDER_MACHINE_NAME: ORDER_MACHINE}
+        return {
+            ORDER_MACHINE_NAME: ORDER_MACHINE,
+            FULFILLMENT_MACHINE_NAME: FULFILLMENT_MACHINE,
+            PAYMENT_MACHINE_NAME: PAYMENT_MACHINE,
+        }
 
     @property
     def retry_defaults(self) -> ProfileDocument:

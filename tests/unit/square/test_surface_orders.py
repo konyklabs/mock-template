@@ -866,13 +866,17 @@ def test_pay_spreads_the_total_across_the_supplied_payment_ids(h: Harness) -> No
 def test_a_rejected_payment_draws_no_tender_ids(h: Harness) -> None:
     """Ids are minted inside the mutator, which `Collection.update` reaches only
     after the version check. Two runs of one scenario must number their tenders
-    the same whether or not a stale request was tried in between."""
-    order = create(h, {"location_id": SEED_LOCATION_ID}).json()["order"]
+    the same whether or not a stale request was tried in between.
+
+    The order carries a line, so something is due and a tender is minted: a
+    zero-total order paid with no ids completes with no tender at all."""
+    line = {"quantity": "1", "base_price_money": {"amount": 100}}
+    order = create(h, {"location_id": SEED_LOCATION_ID, "line_items": [line]}).json()["order"]
     assert pay(h, order["id"], idempotency_key="rejected", order_version=99).status == 400
     paid = pay(h, order["id"], idempotency_key="accepted").json()["order"]
 
     for other in build_harness("orders-only"):
-        twin = create(other, {"location_id": SEED_LOCATION_ID}).json()["order"]
+        twin = create(other, {"location_id": SEED_LOCATION_ID, "line_items": [line]}).json()["order"]
         twin_paid = pay(other, twin["id"], idempotency_key="accepted").json()["order"]
         assert twin_paid["tenders"][0]["id"] == paid["tenders"][0]["id"]
 
@@ -1296,3 +1300,139 @@ def test_a_chaos_rule_naming_an_orders_route_is_live_rather_than_dead(h: Harness
     matched = {rule["id"]: rule["matched_routes"] for rule in response.json()["rules"]}
     assert matched["rate-limit-every-third-create"] == ["POST /v2/orders"]
     assert matched["token-expires-on-fourth-read"] == ["GET /v2/orders/{order_id}"]
+
+
+# ---------------------------------------------------------------------------
+# CreateOrder on its legacy path
+# ---------------------------------------------------------------------------
+
+
+def test_the_legacy_path_creates_the_same_order_as_the_current_one(h: Harness) -> None:
+    """`POST /v2/locations/{location_id}/orders` takes the location from the
+    URL and delegates everything else to CreateOrder: same pricing from the
+    catalog, same state, same shape back."""
+    response = h.api.post(
+        f"/v2/locations/{SEED_LOCATION_ID}/orders",
+        {
+            "idempotency_key": "legacy-1",
+            "order": {"line_items": [{"catalog_object_id": TEA_MUG_VARIATION_ID, "quantity": "2"}]},
+        },
+        headers=h.auth,
+    )
+    assert response.status == 200, response.text
+    order = response.json()["order"]
+    assert order["location_id"] == SEED_LOCATION_ID
+    assert order["state"] == "OPEN"
+    assert order["version"] == 1
+    assert order["total_money"] == {"amount": 300, "currency": "USD"}
+    assert order["line_items"][0]["name"] == "Tea"
+    assert retrieve(h, order["id"]).json()["order"] == order
+
+
+def test_the_legacy_path_refuses_a_body_naming_a_different_location(h: Harness) -> None:
+    """JUDGMENT, stated on the route: the two places a location can be named
+    must agree, and neither silently wins."""
+    response = h.api.post(
+        f"/v2/locations/{SEED_LOCATION_ID}/orders",
+        {"idempotency_key": "legacy-2", "order": {"location_id": SEED_KIOSK_LOCATION_ID}},
+        headers=h.auth,
+    )
+    assert response.status == 400
+    assert first_error(response)["field"] == "order.location_id"
+    agreed = h.api.post(
+        f"/v2/locations/{SEED_LOCATION_ID}/orders",
+        {"idempotency_key": "legacy-3", "order": {"location_id": SEED_LOCATION_ID}},
+        headers=h.auth,
+    )
+    assert agreed.status == 200, agreed.text
+
+
+def test_the_legacy_path_refuses_an_unknown_location_like_create_does(h: Harness) -> None:
+    response = h.api.post("/v2/locations/NOSUCH/orders", {"idempotency_key": "legacy-4", "order": {}}, headers=h.auth)
+    assert response.status == 400
+    assert first_error(response)["field"] == "order.location_id"
+    assert "known" in response.json()["unit_error"]
+
+
+def test_the_two_create_paths_share_one_idempotency_scope(h: Harness) -> None:
+    """One key, one order: a client that retried the same key on the other
+    path gets the replay when the body matches and IDEMPOTENCY_KEY_REUSED when
+    it does not, exactly as it would on one path."""
+    body = {"idempotency_key": "legacy-shared", "order": {"location_id": SEED_LOCATION_ID}}
+    first = h.api.post(f"/v2/locations/{SEED_LOCATION_ID}/orders", body, headers=h.auth)
+    second = h.api.post("/v2/orders", body, headers=h.auth)
+    assert first.status == second.status == 200
+    assert first.json() == second.json()
+    different = h.api.post(
+        "/v2/orders",
+        {"idempotency_key": "legacy-shared", "order": {"location_id": SEED_LOCATION_ID, "ticket_name": "x"}},
+        headers=h.auth,
+    )
+    assert different.status == 400
+    assert first_error(different)["code"] == "IDEMPOTENCY_KEY_REUSED"
+
+
+def test_the_legacy_path_requires_the_order_object(h: Harness) -> None:
+    response = h.api.post(f"/v2/locations/{SEED_LOCATION_ID}/orders", {"idempotency_key": "legacy-5"}, headers=h.auth)
+    assert response.status == 400
+    assert first_error(response)["field"] == "order"
+
+
+# ---------------------------------------------------------------------------
+# SearchOrders -- explicit sort, the "recover after a gateway timeout" query
+# ---------------------------------------------------------------------------
+
+
+def test_search_sorts_ascending_when_asked(h: Harness) -> None:
+    """https://developer.squareup.com/reference/square/objects/SearchOrdersSort
+    -- `sort_order` ASC reverses the default DESC, tie-break included."""
+    desc = [
+        o["id"] for o in search(h, query={"sort": {"sort_field": "CREATED_AT", "sort_order": "DESC"}}).json()["orders"]
+    ]
+    asc = [
+        o["id"] for o in search(h, query={"sort": {"sort_field": "CREATED_AT", "sort_order": "ASC"}}).json()["orders"]
+    ]
+    assert asc == list(reversed(desc))
+    assert asc == [SEED_COMPLETED_ORDER_ID, SEED_OPEN_ORDER_ID]
+
+
+def test_search_sorts_by_updated_at_and_puts_the_freshest_mutation_first(h: Harness) -> None:
+    """The recovery query: after a timeout, ask for the most recently updated
+    order and read its `version` and `state` back."""
+    created = create(h, {"location_id": SEED_LOCATION_ID}, idempotency_key="sort-1").json()["order"]
+    update(h, SEED_OPEN_ORDER_ID, {"version": 1, "ticket_name": "Bar"}, idempotency_key="sort-2")
+    page = search(h, query={"sort": {"sort_field": "UPDATED_AT", "sort_order": "DESC"}}, limit=1).json()
+    (latest,) = page["orders"]
+    assert latest["id"] == SEED_OPEN_ORDER_ID
+    assert latest["version"] == 2
+    assert latest["ticket_name"] == "Bar"
+    assert page["cursor"]
+    ids = [
+        o["id"] for o in search(h, query={"sort": {"sort_field": "UPDATED_AT", "sort_order": "DESC"}}).json()["orders"]
+    ]
+    assert ids[:2] == [SEED_OPEN_ORDER_ID, created["id"]]
+
+
+def test_search_sorts_by_closed_at_and_excludes_open_orders_only_when_filtering(h: Harness) -> None:
+    """Sorting by CLOSED_AT alone keeps open orders -- an empty key sorts
+    first ascending, last descending; a `closed_at` filter is what excludes
+    them (see `_within`)."""
+    ids = [
+        o["id"] for o in search(h, query={"sort": {"sort_field": "CLOSED_AT", "sort_order": "DESC"}}).json()["orders"]
+    ]
+    assert ids == [SEED_COMPLETED_ORDER_ID, SEED_OPEN_ORDER_ID]
+    filtered = search(
+        h,
+        query={
+            "sort": {"sort_field": "CLOSED_AT", "sort_order": "DESC"},
+            "filter": {"date_time_filter": {"closed_at": {"start_at": "2026-01-01T00:00:00Z"}}},
+        },
+    ).json()
+    assert [o["id"] for o in filtered["orders"]] == [SEED_COMPLETED_ORDER_ID]
+
+
+def test_sort_field_and_order_are_case_insensitive(h: Harness) -> None:
+    """JUDGMENT: upper-cased before comparison, so an SDK that emits
+    `created_at` lower-case is not refused."""
+    response = search(h, query={"sort": {"sort_field": "created_at", "sort_order": "asc"}})
+    assert response.status == 200, response.text

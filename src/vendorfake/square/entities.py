@@ -53,14 +53,21 @@ __all__ = [
     "COL",
     "AuthorizationCodeEntity",
     "CatalogObjectEntity",
+    "Fulfillment",
+    "InventoryCountEntity",
     "LocationEntity",
+    "LoyaltyAccountEntity",
+    "LoyaltyEventEntity",
+    "LoyaltyProgramEntity",
     "MerchantEntity",
     "Money",
     "OrderEntity",
     "OrderLineItem",
+    "PaymentEntity",
     "SquareCollections",
     "Tender",
     "TokenEntity",
+    "inventory_count_id",
 ]
 
 
@@ -72,12 +79,29 @@ class SquareCollections:
     locations: str = "locations"
     catalog: str = "catalog_objects"
     orders: str = "orders"
+    payments: str = "payments"
+    loyalty_programs: str = "loyalty_programs"
+    loyalty_accounts: str = "loyalty_accounts"
+    loyalty_events: str = "loyalty_events"
+    inventory_counts: str = "inventory_counts"
     codes: str = "authorization_codes"
     tokens: str = "tokens"
 
     def names(self) -> tuple[str, ...]:
         """Every collection name, in declaration order."""
-        return (self.merchants, self.locations, self.catalog, self.orders, self.codes, self.tokens)
+        return (
+            self.merchants,
+            self.locations,
+            self.catalog,
+            self.orders,
+            self.payments,
+            self.loyalty_programs,
+            self.loyalty_accounts,
+            self.loyalty_events,
+            self.inventory_counts,
+            self.codes,
+            self.tokens,
+        )
 
 
 COL = SquareCollections()
@@ -361,9 +385,17 @@ class Tender:
     location_id: str
     transaction_id: str
     created_at: str
+    #: "The total amount of the tender, including `tip_money`."
     amount_money: Money
     type: str = "CARD"
     payment_id: str = ""
+    #: "The tip's amount of the tender." Absent when no tip was taken.
+    tip_money: Money | None = None
+
+    @property
+    def applied(self) -> int:
+        """What this tender pays toward the order: the amount less the tip."""
+        return self.amount_money.amount - (0 if self.tip_money is None else self.tip_money.amount)
 
     @classmethod
     def from_entity(cls, entity: Mapping[str, Any]) -> Tender:
@@ -376,18 +408,80 @@ class Tender:
             amount_money=Money(amount=0, currency="USD") if amount is None else amount,
             type=_str(entity.get("type"), "CARD"),
             payment_id=_str(entity.get("payment_id")),
+            tip_money=Money.from_entity(entity.get("tip_money")),
         )
 
     def to_entity(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "location_id": self.location_id,
-            "transaction_id": self.transaction_id,
-            "created_at": self.created_at,
-            "amount_money": self.amount_money.to_entity(),
-            "type": self.type,
-            "payment_id": self.payment_id,
-        }
+        return compact(
+            {
+                "id": self.id,
+                "location_id": self.location_id,
+                "transaction_id": self.transaction_id,
+                "created_at": self.created_at,
+                "amount_money": self.amount_money.to_entity(),
+                "type": self.type,
+                "payment_id": self.payment_id,
+                "tip_money": None if self.tip_money is None else self.tip_money.to_entity(),
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Fulfillment:
+    """One fulfillment of an order: how the buyer receives it.
+
+    https://developer.squareup.com/reference/square/objects/Fulfillment --
+    ``uid``, ``type`` (``PICKUP``, ``SHIPMENT``, ``DELIVERY``), ``state``
+    (https://developer.squareup.com/reference/square/enums/FulfillmentState),
+    ``line_item_application`` (``ALL`` when the fulfillment covers the whole
+    order) and one details object named for the type.
+
+    The details are stored as the mapping the request models produced --
+    documented field names only, absent keys absent -- because each of the
+    three details objects has twenty-odd optional fields and a typed view of
+    every one would be a page of readers nothing else consults. The request
+    models in :mod:`vendorfake.square.model.order` are where the field lists
+    live.
+    """
+
+    uid: str
+    type: str
+    state: str = "PROPOSED"
+    line_item_application: str = "ALL"
+    pickup_details: dict[str, Any] | None = None
+    delivery_details: dict[str, Any] | None = None
+    shipment_details: dict[str, Any] | None = None
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> Fulfillment:
+        return cls(
+            uid=_str(entity.get("uid")),
+            type=_str(entity.get("type"), "PICKUP"),
+            state=_str(entity.get("state"), "PROPOSED"),
+            line_item_application=_str(entity.get("line_item_application"), "ALL"),
+            pickup_details=_details(entity.get("pickup_details")),
+            delivery_details=_details(entity.get("delivery_details")),
+            shipment_details=_details(entity.get("shipment_details")),
+        )
+
+    def to_entity(self) -> dict[str, Any]:
+        return compact(
+            {
+                "uid": self.uid,
+                "type": self.type,
+                "state": self.state,
+                "line_item_application": self.line_item_application,
+                "pickup_details": self.pickup_details,
+                "delivery_details": self.delivery_details,
+                "shipment_details": self.shipment_details,
+            }
+        )
+
+
+def _details(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, Mapping):
+        return {str(k): v for k, v in value.items()}
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,6 +502,7 @@ class OrderEntity:
     state: str = "OPEN"
     line_items: tuple[OrderLineItem, ...] = ()
     tenders: tuple[Tender, ...] = ()
+    fulfillments: tuple[Fulfillment, ...] = ()
     reference_id: str | None = None
     customer_id: str | None = None
     source_name: str | None = None
@@ -422,6 +517,7 @@ class OrderEntity:
     def from_entity(cls, entity: Mapping[str, Any]) -> OrderEntity:
         raw_lines = entity.get("line_items")
         raw_tenders = entity.get("tenders")
+        raw_fulfillments = entity.get("fulfillments")
         return cls(
             id=_str(entity["id"]),
             location_id=_str(entity.get("location_id")),
@@ -437,6 +533,15 @@ class OrderEntity:
                 Tender.from_entity(item)
                 for item in (
                     raw_tenders if isinstance(raw_tenders, Sequence) and not isinstance(raw_tenders, str) else ()
+                )
+                if isinstance(item, Mapping)
+            ),
+            fulfillments=tuple(
+                Fulfillment.from_entity(item)
+                for item in (
+                    raw_fulfillments
+                    if isinstance(raw_fulfillments, Sequence) and not isinstance(raw_fulfillments, str)
+                    else ()
                 )
                 if isinstance(item, Mapping)
             ),
@@ -467,6 +572,7 @@ class OrderEntity:
                 "state": self.state,
                 "line_items": [item.to_entity() for item in self.line_items],
                 "tenders": [tender.to_entity() for tender in self.tenders],
+                "fulfillments": [fulfillment.to_entity() for fulfillment in self.fulfillments] or None,
                 "reference_id": self.reference_id,
                 "customer_id": self.customer_id,
                 "source_name": self.source_name,
@@ -478,6 +584,294 @@ class OrderEntity:
                 "updated_at": self.updated_at or None,
             }
         )
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentEntity:
+    """A payment, as stored.
+
+    https://developer.squareup.com/reference/square/objects/Payment. Only the
+    ``EXTERNAL`` source is modelled -- see the SHRINK in
+    :mod:`vendorfake.square.surface.payments` -- so ``external_details`` is
+    the one source-specific block and ``source_type`` is always ``EXTERNAL``
+    on anything this unit mints. ``version``, ``created_at`` and
+    ``updated_at`` are the store's, as on an order; ``version_token`` on the
+    wire is derived from the store version.
+    """
+
+    id: str
+    location_id: str
+    merchant_id: str
+    amount_money: Money
+    status: str = "APPROVED"
+    source_type: str = "EXTERNAL"
+    tip_money: Money | None = None
+    order_id: str | None = None
+    customer_id: str | None = None
+    reference_id: str | None = None
+    note: str | None = None
+    external_type: str | None = None
+    external_source: str | None = None
+    external_source_id: str | None = None
+    version: int = 1
+    created_at: str = ""
+    updated_at: str = ""
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> PaymentEntity:
+        amount = Money.from_entity(entity.get("amount_money"))
+        return cls(
+            id=_str(entity["id"]),
+            location_id=_str(entity.get("location_id")),
+            merchant_id=_str(entity.get("merchant_id")),
+            amount_money=Money(amount=0, currency="USD") if amount is None else amount,
+            status=_str(entity.get("status"), "APPROVED"),
+            source_type=_str(entity.get("source_type"), "EXTERNAL"),
+            tip_money=Money.from_entity(entity.get("tip_money")),
+            order_id=_opt_str(entity.get("order_id")),
+            customer_id=_opt_str(entity.get("customer_id")),
+            reference_id=_opt_str(entity.get("reference_id")),
+            note=_opt_str(entity.get("note")),
+            external_type=_opt_str(entity.get("external_type")),
+            external_source=_opt_str(entity.get("external_source")),
+            external_source_id=_opt_str(entity.get("external_source_id")),
+            version=_int(entity.get("version"), 1),
+            created_at=_str(entity.get("created_at")),
+            updated_at=_str(entity.get("updated_at")),
+        )
+
+    @property
+    def total(self) -> int:
+        """``total_money``: the amount plus the tip, in minor units."""
+        return self.amount_money.amount + (0 if self.tip_money is None else self.tip_money.amount)
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "location_id": self.location_id,
+                "merchant_id": self.merchant_id,
+                "amount_money": self.amount_money.to_entity(),
+                "tip_money": None if self.tip_money is None else self.tip_money.to_entity(),
+                "status": self.status,
+                "source_type": self.source_type,
+                "order_id": self.order_id,
+                "customer_id": self.customer_id,
+                "reference_id": self.reference_id,
+                "note": self.note,
+                "external_type": self.external_type,
+                "external_source": self.external_source,
+                "external_source_id": self.external_source_id,
+                "version": self.version,
+                "created_at": self.created_at or None,
+                "updated_at": self.updated_at or None,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LoyaltyProgramEntity:
+    """The seller's loyalty program. One per unit, in practice.
+
+    https://developer.squareup.com/reference/square/objects/LoyaltyProgram.
+    A single SPEND accrual rule is modelled -- "buyers earn ``points`` for
+    every ``spend_amount`` spent" -- because it is the rule an ordering
+    integration accumulates against; the rule's shape on the wire is
+    ``LoyaltyProgramAccrualRule`` with ``spend_data``. Reward tiers are stored
+    as the documents the seed gave, projected as they are.
+    """
+
+    id: str
+    merchant_id: str
+    status: str = "ACTIVE"
+    terminology_one: str = "Point"
+    terminology_other: str = "Points"
+    location_ids: tuple[str, ...] = ()
+    accrual_points: int = 1
+    spend_amount: Money = Money(amount=100, currency="USD")
+    tax_mode: str = "BEFORE_TAX"
+    reward_tiers: tuple[dict[str, Any], ...] = ()
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> LoyaltyProgramEntity:
+        spend = Money.from_entity(entity.get("spend_amount"))
+        tiers = entity.get("reward_tiers")
+        return cls(
+            id=_str(entity["id"]),
+            merchant_id=_str(entity.get("merchant_id")),
+            status=_str(entity.get("status"), "ACTIVE"),
+            terminology_one=_str(entity.get("terminology_one"), "Point"),
+            terminology_other=_str(entity.get("terminology_other"), "Points"),
+            location_ids=_str_tuple(entity.get("location_ids")),
+            accrual_points=_int(entity.get("accrual_points"), 1),
+            spend_amount=Money(amount=100, currency="USD") if spend is None else spend,
+            tax_mode=_str(entity.get("tax_mode"), "BEFORE_TAX"),
+            reward_tiers=tuple(
+                dict(tier)
+                for tier in (tiers if isinstance(tiers, Sequence) and not isinstance(tiers, str) else ())
+                if isinstance(tier, Mapping)
+            ),
+        )
+
+    def to_entity(self) -> Entity:
+        return {
+            "id": self.id,
+            "merchant_id": self.merchant_id,
+            "status": self.status,
+            "terminology_one": self.terminology_one,
+            "terminology_other": self.terminology_other,
+            "location_ids": list(self.location_ids),
+            "accrual_points": self.accrual_points,
+            "spend_amount": self.spend_amount.to_entity(),
+            "tax_mode": self.tax_mode,
+            "reward_tiers": [dict(tier) for tier in self.reward_tiers],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LoyaltyAccountEntity:
+    """A buyer's account in the program, keyed to a phone number.
+
+    https://developer.squareup.com/reference/square/objects/LoyaltyAccount.
+    ``enrolled_at`` is "The timestamp when the buyer joined the loyalty
+    program"; ``mapping_created_at`` is the mapping's own ``created_at``.
+    """
+
+    id: str
+    program_id: str
+    customer_id: str
+    phone_number: str
+    mapping_id: str
+    balance: int = 0
+    lifetime_points: int = 0
+    enrolled_at: str = ""
+    mapping_created_at: str = ""
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> LoyaltyAccountEntity:
+        return cls(
+            id=_str(entity["id"]),
+            program_id=_str(entity.get("program_id")),
+            customer_id=_str(entity.get("customer_id")),
+            phone_number=_str(entity.get("phone_number")),
+            mapping_id=_str(entity.get("mapping_id")),
+            balance=_int(entity.get("balance")),
+            lifetime_points=_int(entity.get("lifetime_points")),
+            enrolled_at=_str(entity.get("enrolled_at")),
+            mapping_created_at=_str(entity.get("mapping_created_at")),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "program_id": self.program_id,
+                "customer_id": self.customer_id,
+                "phone_number": self.phone_number,
+                "mapping_id": self.mapping_id,
+                "balance": self.balance,
+                "lifetime_points": self.lifetime_points,
+                "enrolled_at": self.enrolled_at or None,
+                "mapping_created_at": self.mapping_created_at or None,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LoyaltyEventEntity:
+    """One ledger entry against an account. Only ``ACCUMULATE_POINTS`` is
+    minted here. https://developer.squareup.com/reference/square/objects/LoyaltyEvent"""
+
+    id: str
+    type: str
+    account_id: str
+    program_id: str
+    location_id: str
+    points: int
+    order_id: str | None = None
+    source: str = "LOYALTY_API"
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> LoyaltyEventEntity:
+        return cls(
+            id=_str(entity["id"]),
+            type=_str(entity.get("type"), "ACCUMULATE_POINTS"),
+            account_id=_str(entity.get("account_id")),
+            program_id=_str(entity.get("program_id")),
+            location_id=_str(entity.get("location_id")),
+            points=_int(entity.get("points")),
+            order_id=_opt_str(entity.get("order_id")),
+            source=_str(entity.get("source"), "LOYALTY_API"),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "type": self.type,
+                "account_id": self.account_id,
+                "program_id": self.program_id,
+                "location_id": self.location_id,
+                "points": self.points,
+                "order_id": self.order_id,
+                "source": self.source,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryCountEntity:
+    """The IN_STOCK quantity of one variation at one location.
+
+    https://developer.squareup.com/reference/square/objects/InventoryCount.
+    Keyed by ``catalog_object_id`` and ``location_id`` -- the entity id is the
+    two joined -- because Square's count has no id of its own: "The current
+    calculated stock count for a given CatalogObject at a given set of
+    Locations". ``quantity`` is a **decimal string**, as Square sends it.
+    ``calculated_at`` is stated by a seeded count and stamped from the clock
+    on a change.
+    """
+
+    catalog_object_id: str
+    location_id: str
+    quantity: str = "0"
+    state: str = "IN_STOCK"
+    catalog_object_type: str = "ITEM_VARIATION"
+    calculated_at: str = ""
+
+    @property
+    def id(self) -> str:
+        return inventory_count_id(self.catalog_object_id, self.location_id)
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> InventoryCountEntity:
+        return cls(
+            catalog_object_id=_str(entity.get("catalog_object_id")),
+            location_id=_str(entity.get("location_id")),
+            quantity=_str(entity.get("quantity"), "0"),
+            state=_str(entity.get("state"), "IN_STOCK"),
+            catalog_object_type=_str(entity.get("catalog_object_type"), "ITEM_VARIATION"),
+            calculated_at=_str(entity.get("calculated_at")),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "catalog_object_id": self.catalog_object_id,
+                "location_id": self.location_id,
+                "quantity": self.quantity,
+                "state": self.state,
+                "catalog_object_type": self.catalog_object_type,
+                "calculated_at": self.calculated_at or None,
+            }
+        )
+
+
+def inventory_count_id(catalog_object_id: str, location_id: str) -> str:
+    """The store id of a count: object and location, joined. Deterministic,
+    so two units seeded alike hold the same ids and a change finds its row."""
+    return f"{catalog_object_id}:{location_id}"
 
 
 @dataclass(frozen=True, slots=True)
