@@ -3,6 +3,10 @@
   "summary": "Every capability on. The default profile. Seeds the whole scenario.",
   "capabilities": [
     "auth",
+    "menus",
+    "config",
+    "restaurants",
+    "partners",
     "chaos"
   ],
   "seed": "seed/default.seed.json",
