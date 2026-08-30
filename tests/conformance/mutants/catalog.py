@@ -1288,6 +1288,57 @@ answer and a 200, which is exactly the silent wrong answer the 409 exists to
 prevent. C19 sends the same body twice and cannot see it."""
 
 
+def _overlapping_pages(routes: Sequence[Route]) -> Sequence[Route]:
+    """Every paginated route repeats the previous page's last row as the first of the next."""
+
+    def wrap(handler: Handler, spec: Any) -> Handler:
+        # Closure state: the last row served. A real off-by-one keeps it in
+        # the cursor; this keeps it here, and from outside they are the same.
+        last: list[Any] = [None]
+        continued_param = spec.cursor_param if spec.style == "cursor" else spec.offset_param
+
+        def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+            reply = handler(args)
+            if not isinstance(reply, ReplyInit) or not isinstance(reply.json, Mapping):
+                return reply
+            document = dict(reply.json)
+            items = list(document.get(spec.items_path) or [])
+            if spec.where == "query":
+                continued = args.req.query.get(continued_param)
+            else:
+                body = args.body()
+                continued = body.get(continued_param) if isinstance(body, Mapping) else None
+            if continued and last[0] is not None and items:
+                items = [last[0], *items]
+            if items:
+                last[0] = items[-1]
+            document[spec.items_path] = items
+            return dataclasses.replace(reply, json=document)
+
+        return wrapped
+
+    return tuple(
+        route if route.pagination is None else dataclasses.replace(route, handler=wrap(route.handler, route.pagination))
+        for route in routes
+    )
+
+
+register(
+    Mutant(
+        id="M36",
+        name="pages-overlap-by-one-row",
+        defect="On every paginated route, the last row of each page is served again as the first row of the next.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C26"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_overlapping_pages),
+    )
+)
+"""N-3e. A consumer looping until the cursor is absent receives every row past
+the first page twice and no error anywhere. Five unit tests caught it; the
+conformance matrix did not, because C20 pages the store through the control
+plane and no contract walked a vendor's own list route."""
+
+
 _REPLAY_MARKER = "x-unit-idempotent-replay"
 
 

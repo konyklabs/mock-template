@@ -1,5 +1,5 @@
-"""C06, C07, C13, C19, C20, C22, C24, C25 -- state is reproducible,
-append-only, honestly gated, and deduplicated per operation.
+"""C06, C07, C13, C19, C20, C22, C24, C25, C26 -- state is reproducible,
+append-only, honestly gated, deduplicated per operation, and paged without overlap.
 
 C06 is the property a consumer's CI depends on: two units built the same way
 hold the same entities, so a test that passed this morning is not going to fail
@@ -12,8 +12,10 @@ production.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
+from vendorfake.conformance.client import MISSING
 from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv, RouteRow
 from vendorfake.conformance.registry import check
 from vendorfake.conformance.types import ConformanceSkip, Requires, require
@@ -23,6 +25,7 @@ __all__ = [
     "a_replayed_idempotency_key_does_not_run_twice",
     "a_reused_key_with_a_different_body_answers_as_declared",
     "an_idempotency_key_is_scoped_to_its_operation",
+    "declared_pages_never_overlap_and_lose_nothing",
     "journal_is_append_only",
     "seed_is_deterministic_across_processes",
     "seed_is_deterministic_across_units",
@@ -783,3 +786,162 @@ def a_reused_key_with_a_different_body_answers_as_declared(env: CheckEnv) -> str
         driven.append(f"{route.key} [{declared}] -> {second.status}:{second.error_kind or 'replay'}")
     require(driven, "no idempotent route publishing an example_body was enabled, so nothing was driven.")
     return "; ".join(driven) + "; journal unmoved by every mismatch"
+
+
+# ---------------------------------------------------------------------------
+# C26 -- a declared page walk repeats nothing and loses nothing.
+# ---------------------------------------------------------------------------
+
+_WALK_PAGE_SIZE = 1
+"""One row per page: the smallest page is the one where an overlap or a lost
+row is most visible, and the one a broken offset is least able to hide in."""
+
+
+def _dig(document: Any, path: str) -> Any:
+    for part in path.split("."):
+        if not isinstance(document, Mapping):
+            return None
+        document = document.get(part)
+    return document
+
+
+def _row_ids(rows: Any, route: RouteRow, id_path: str) -> list[str]:
+    require(
+        isinstance(rows, list),
+        f"{route.key} declares its rows at {dict(route.pagination or {})['items_path']!r} and the "
+        f"response holds {type(rows).__name__} there, not a list. Fix PaginationSpec.items_path in "
+        f"the same file as the route.",
+    )
+    ids: list[str] = []
+    for row in rows:
+        value = _dig(row, id_path)
+        require(
+            value is not None,
+            f"{route.key}: a row carries no {id_path!r} ({str(row)[:120]}). Rows are compared by "
+            f"the id PaginationSpec.id_path names; fix the path or the projection.",
+        )
+        ids.append(str(value))
+    return ids
+
+
+def _fetch_page(env: CheckEnv, route: RouteRow, headers: dict[str, str], params: dict[str, Any]) -> Any:
+    spec = dict(route.pagination or {})
+    if spec["where"] == "body":
+        body = dict(route.example_body or {})
+        body.update(params)
+        answered = env.client.call(route.method, route.probe_path, json_body=body, headers=headers)
+    else:
+        query = {name: str(value) for name, value in params.items()}
+        body = {} if route.method in _MUTATING_METHODS else MISSING
+        answered = env.client.call(route.method, route.probe_path, json_body=body, query=query, headers=headers)
+    require(
+        answered.status == 200,
+        f"{route.key} answered {answered.status} {answered.error_kind!r} to a page request "
+        f"{params}: {answered.text[:200]}. A route declaring a PaginationSpec must answer its own "
+        f"page parameters; if it also needs a body, publish one as Route.example_body.",
+    )
+    return answered.json()
+
+
+@check(
+    id="C26",
+    name="state: a declared page walk repeats no row and loses none",
+    asserts=(
+        "For every enabled route declaring a PaginationSpec that holds two or more rows: walking it "
+        "one row per page yields each id exactly once, and the union of the pages equals the "
+        "unpaged listing."
+    ),
+    requires=Requires(paginated_route=True, credentials=True),
+)
+def declared_pages_never_overlap_and_lose_nothing(env: CheckEnv) -> str:
+    """Pagination as a consumer meets it: through the vendor's own list route.
+
+    Repeating the last row of each page as the first of the next left the
+    matrix green (konyklabs/roadmap#10, N-3e; tracked as konyklabs/roadmap#15)
+    while five unit tests went red. C20 pages the store through the control
+    plane and proves the cursor's fingerprint; it cannot see a vendor's own
+    list handler slicing wrongly, and a vendor whose lists use offsets never
+    touches the store's cursor at all. So this walks whatever the route table
+    declares, in the style each route declares, and compares the walk against
+    the same route asked once for everything.
+
+    The reference listing is the route's own unpaged answer rather than a
+    count from ``/__unit/state``: a list route legitimately filters -- a
+    merchant's orders, one location's search -- and only the route knows what
+    it should list. What it must not do is disagree with itself.
+    """
+    walked: list[str] = []
+    too_small: list[str] = []
+    problems: list[str] = []
+    for route in env.paginated_routes():
+        spec = dict(route.pagination or {})
+        id_path = str(spec["id_path"])
+        headers = env.authorized(route)
+
+        whole = _row_ids(_dig(_fetch_page(env, route, headers, {}), str(spec["items_path"])), route, id_path)
+        duplicates = sorted({value for value in whole if whole.count(value) > 1})
+        if duplicates:
+            problems.append(f"{route.key}: the unpaged listing itself repeats {duplicates}.")
+            continue
+        if len(whole) < 2:
+            too_small.append(f"{route.key} ({len(whole)} row)")
+            continue
+
+        seen: list[str] = []
+        pages = 0
+        limit = str(spec["limit_param"])
+        if spec["style"] == "cursor":
+            cursor: Any = None
+            while pages <= len(whole) + 1:
+                params: dict[str, Any] = {limit: _WALK_PAGE_SIZE}
+                if cursor is not None:
+                    params[str(spec["cursor_param"])] = cursor
+                document = _fetch_page(env, route, headers, params)
+                pages += 1
+                seen.extend(_row_ids(_dig(document, str(spec["items_path"])), route, id_path))
+                cursor = _dig(document, str(spec["next_cursor_path"]))
+                if not cursor:
+                    break
+        else:
+            offset = 0
+            while pages <= len(whole) + 1:
+                params = {limit: _WALK_PAGE_SIZE, str(spec["offset_param"]): offset}
+                pages += 1
+                got = _row_ids(_dig(_fetch_page(env, route, headers, params), str(spec["items_path"])), route, id_path)
+                if not got:
+                    break
+                seen.extend(got)
+                offset += len(got)
+
+        repeated = sorted({value for value in seen if seen.count(value) > 1})
+        if repeated:
+            problems.append(
+                f"{route.key}: walking {spec['style']}-paginated pages of {_WALK_PAGE_SIZE} served "
+                f"{repeated} more than once across {pages} pages ({seen}). A consumer looping until the "
+                f"cursor is absent receives those rows twice with a 200 and no error anywhere; the next "
+                f"page must start at the row AFTER the last one served."
+            )
+        missing = sorted(set(whole) - set(seen))
+        extra = sorted(set(seen) - set(whole))
+        if missing or extra:
+            problems.append(
+                f"{route.key}: the union of {pages} pages is not the unpaged listing -- missing "
+                f"{missing}, unexpected {extra}. Pages must partition exactly the rows a single "
+                f"request lists."
+            )
+        if pages > len(whole) + 1:
+            problems.append(
+                f"{route.key}: the walk did not terminate within {len(whole) + 1} pages over {len(whole)} "
+                f"rows. A next cursor is emitted only when there is genuinely a next page, and an "
+                f"offset past the end answers an empty page."
+            )
+        walked.append(f"{route.key} ({len(whole)} rows, {pages} pages, {spec['style']})")
+
+    require(not problems, "\n".join(problems))
+    if not walked:
+        raise ConformanceSkip(
+            f"every declared paginated route holds fewer than two rows on profile {env.profile!r} "
+            f"({', '.join(too_small)}), so no page boundary exists to walk across; seed more rows"
+        )
+    tail = f"; too small to walk: {', '.join(too_small)}" if too_small else ""
+    return f"walked {len(walked)} route(s) one row per page with no repeat and no loss: {'; '.join(walked)}{tail}"
