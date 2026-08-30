@@ -107,6 +107,7 @@ from vendorfake.clover.surface.common import (
     elements,
     expansions,
     int_param,
+    merchant_row,
     page_window,
     require_merchant,
 )
@@ -272,7 +273,7 @@ class CloverOrdersSurface:
         expand = expansions(args, EXPANDABLE)
         _check_state_value(request.state)
         _check_payment_state(request)
-        _check_references(args.ctx, request.orderType, request.employee, request.customers, field="")
+        _check_references(args.ctx, merchant_id, request.orderType, request.employee, request.customers, field="")
         merchant = _the_merchant(args.ctx, merchant_id)
         now = _now(args.ctx)
         entity = OrderEntity(
@@ -351,7 +352,7 @@ class CloverOrdersSurface:
                     field=name,
                 )
         _check_payment_state(request)
-        _check_references(args.ctx, request.orderType, request.employee, request.customers, field="")
+        _check_references(args.ctx, merchant_id, request.orderType, request.employee, request.customers, field="")
 
         # Terminality first, then the move: "this order is locked" explains
         # "that move is not allowed". Compared on the lowercase canon, stored
@@ -474,7 +475,7 @@ class CloverOrdersSurface:
         merchant_id = require_merchant(args)
         cart = validate_body(AtomicOrderRequest, args.body()).orderCart
         merchant = _the_merchant(args.ctx, merchant_id)
-        lines, discounts, charge, totals = self._price_cart(args.ctx, cart)
+        lines, discounts, charge, totals = self._price_cart(args.ctx, merchant_id, cart)
         now = _now(args.ctx)
         entity = OrderEntity(
             id=self._deps.ids.order(),
@@ -511,7 +512,7 @@ class CloverOrdersSurface:
         merchant_id = require_merchant(args)
         cart = validate_body(AtomicOrderRequest, args.body()).orderCart
         merchant = _the_merchant(args.ctx, merchant_id)
-        lines, discounts, charge, totals = self._price_cart(args.ctx, cart)
+        lines, discounts, charge, totals = self._price_cart(args.ctx, merchant_id, cart)
         return json_(
             compact(
                 {
@@ -560,7 +561,7 @@ class CloverOrdersSurface:
     # -- shared --------------------------------------------------------------
 
     def _price_cart(
-        self, ctx: UnitContext, cart: OrderCartRequest
+        self, ctx: UnitContext, merchant_id: str, cart: OrderCartRequest
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None, AtomicTotals]:
         """Resolve a cart's lines and their tax rates, validate its discounts,
         resolve a service charge that references the merchant's default, and
@@ -572,7 +573,7 @@ class CloverOrdersSurface:
                 field="orderCart.lineItems",
                 info={"supplied": len(cart.lineItems), "max": MAX_LINE_ITEMS_PER_ORDER},
             )
-        _check_references(ctx, cart.orderType, cart.employee, cart.customers, field="orderCart.")
+        _check_references(ctx, merchant_id, cart.orderType, cart.employee, cart.customers, field="orderCart.")
         lines: list[dict[str, Any]] = []
         line_rates: list[list[dict[str, Any]]] = []
         for index, line in enumerate(cart.lineItems):
@@ -745,20 +746,23 @@ def _check_payment_state(request: OrderCreateRequest) -> None:
         )
 
 
-def _check_references(ctx: UnitContext, order_type: Any, employee: Any, customers: Any, *, field: str) -> None:
-    """``orderType``, ``employee`` and ``customers`` must name records the
-    unit holds, exactly as a line item's ``item`` and a payment's
+def _check_references(
+    ctx: UnitContext, merchant_id: str, order_type: Any, employee: Any, customers: Any, *, field: str
+) -> None:
+    """``orderType``, ``employee`` and ``customers`` must name records of
+    the path merchant, exactly as a line item's ``item`` and a payment's
     ``employee`` must (JUDGMENT: consistent refusal, 400 naming the field;
-    Clover documents no answer to a dangling reference)."""
+    Clover documents no answer to a dangling reference). Another merchant's
+    row is as absent as none (``merchant_row``)."""
     checks = [
         (order_type, COL.order_types, f"{field}orderType.id", "Order type"),
         (employee, COL.employees, f"{field}employee.id", "Employee"),
     ]
     for ref, collection, path, label in checks:
-        if ref is not None and ctx.store.collection(collection).get(ref.id) is None:
+        if ref is not None and merchant_row(ctx, collection, ref.id, merchant_id) is None:
             raise UnitError(UnitErrorKind.INVALID_VALUE, detail=f"{label} {ref.id} was not found.", field=path)
     for index, ref in enumerate(customers or []):
-        if ctx.store.collection(COL.customers).get(ref.id) is None:
+        if merchant_row(ctx, COL.customers, ref.id, merchant_id) is None:
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail=f"Customer {ref.id} was not found.",

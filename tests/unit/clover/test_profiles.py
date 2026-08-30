@@ -87,7 +87,7 @@ def test_chaos_demo_ships_four_rules_on_a_virtual_clock_and_the_request_rules_fi
         assert h.get(f"/orders/{order['id']}").status == 200  # the stored token never changed
 
 
-SEED_DIGEST = "690085b43b6f0ae2efafa33e7eabb978e7cb3c3fc2d350aa20c5ab04d4739523"
+SEED_DIGEST = "1baf5d0af37c744b45f30a31fe7348e08ddd21a78d92aa25d298288939fbd4a3"
 """The entity digest of the shipped scenario, pinned as a literal.
 
 Identical on every profile because seeded ids come from the document, never

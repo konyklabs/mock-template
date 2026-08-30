@@ -83,12 +83,16 @@ def _insert_reference_data(ctx: UnitContext, doc: SeedDocument) -> None:
         store.collection(COL.modifier_groups).insert(group.model_dump(), SEED_META)
     for modifier in doc.modifiers:
         store.collection(COL.modifiers).insert(modifier.model_dump(), SEED_META)
+    # Employees, order types and customers carry the merchant they belong to
+    # (``merchant_id``, internal, stripped on projection): an order's
+    # references resolve against the path merchant's rows only.
+    scope = {"merchant_id": doc.merchant.id}
     for employee in doc.employees:
-        store.collection(COL.employees).insert(compact(employee.model_dump()), SEED_META)
+        store.collection(COL.employees).insert(compact({**employee.model_dump(), **scope}), SEED_META)
     for tender in doc.tenders:
         store.collection(COL.tenders).insert(tender.model_dump(), SEED_META)
     for order_type in doc.order_types:
-        store.collection(COL.order_types).insert(compact(order_type.model_dump()), SEED_META)
+        store.collection(COL.order_types).insert(compact({**order_type.model_dump(), **scope}), SEED_META)
     for charge in doc.service_charges:
         store.collection(COL.service_charges).insert(charge.model_dump(), SEED_META)
 
@@ -123,6 +127,7 @@ def _insert_customers(ctx: UnitContext, doc: SeedDocument) -> None:
             compact(
                 {
                     "id": customer.id,
+                    "merchant_id": doc.merchant.id,
                     "firstName": customer.firstName,
                     "lastName": customer.lastName,
                     "customerSince": customer.customerSince,

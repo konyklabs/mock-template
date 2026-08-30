@@ -285,3 +285,64 @@ def test_a_refused_line_item_request_never_advances_the_id_stream(h: Harness) ->
     assert h.post(f"/orders/{order['id']}/line_items", {"price": 1}).status == 400
     assert h.post(f"/orders/{order['id']}/bulk_line_items", {"items": [{"price": 1}]}).status == 400
     assert h.unit.context.vendor.ids.draw_count == draws  # type: ignore[attr-defined]
+
+
+# -- final round: implied parents are bound by EXPANDABLE ------------------------
+
+
+def test_an_implied_parent_must_itself_be_expandable() -> None:
+    from vendorfake.clover.surface.common import expansions
+    from vendorfake.core.kernel.types import UnitError
+
+    class _Args:
+        def __init__(self, expand: str) -> None:
+            self._expand = expand
+
+        def query(self, name: str) -> str | None:
+            return self._expand if name == "expand" else None
+
+    # A scratch set in which the dotted child is allowed but its parent is
+    # not: the parent used to be implied without a check.
+    allowed = frozenset({"lineItems", "lineItems.discounts", "payments.tender"})
+    assert expansions(_Args("lineItems.discounts"), allowed) == frozenset({"lineItems", "lineItems.discounts"})  # type: ignore[arg-type]
+    with pytest.raises(UnitError) as refused:
+        expansions(_Args("payments.tender"), allowed)  # type: ignore[arg-type]
+    assert refused.value.field == "expand"
+    assert "payments.tender" in (refused.value.detail or "")
+
+
+# -- final round: references resolve against the path merchant only -------------
+
+
+def test_another_merchants_employee_is_not_a_reference(h: Harness) -> None:
+    from vendorfake.clover.entities import COL
+    from vendorfake.clover.seed.hydrate import SEED_META
+
+    other = "OTHERMERCHNT1"
+    h.unit.context.store.collection(COL.employees).insert(
+        {"id": "OTHEREMPLOY01", "name": "Not ours", "merchant_id": other}, SEED_META
+    )
+    h.unit.context.store.collection(COL.customers).insert({"id": "OTHERCUSTOM01", "merchant_id": other}, SEED_META)
+    before = h.journal_len()
+    created = h.post("/orders", {"total": 1, "employee": {"id": "OTHEREMPLOY01"}})
+    assert created.status == 400
+    assert created.json()["unit_error"]["field"] == "employee.id"
+    with_customer = h.post("/orders", {"total": 1, "customers": [{"id": "OTHERCUSTOM01"}]})
+    assert with_customer.status == 400
+    assert with_customer.json()["unit_error"]["field"] == "customers[0].id"
+    order = h.create_order(total=100)
+    paid = h.post(
+        f"/orders/{order['id']}/payments",
+        {"tender": {"id": TENDER_CASH}, "employee": {"id": "OTHEREMPLOY01"}, "amount": 100},
+    )
+    assert paid.status == 400
+    assert paid.json()["unit_error"]["field"] == "employee.id"
+    assert h.journal_len() == before + 1  # only the good create
+    # Neither row is listed for this merchant, and the internal stamp never leaks.
+    employees = h.get("/employees").json()["elements"]
+    assert EMPLOYEE_BARISTA in [e["id"] for e in employees]
+    assert "OTHEREMPLOY01" not in [e["id"] for e in employees]
+    assert all("merchant_id" not in e for e in employees)
+    customers = h.get("/customers").json()["elements"]
+    assert [c["id"] for c in customers] == [CUSTOMER_ADA]
+    assert all("merchant_id" not in c for c in customers)

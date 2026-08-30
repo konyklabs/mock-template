@@ -28,7 +28,7 @@ from typing import Any
 from vendorfake.clover.entities import COL
 from vendorfake.clover.model.common import validate_body
 from vendorfake.clover.model.references import CustomerCreateRequest
-from vendorfake.clover.surface.common import CloverDeps, elements, page_window, require_merchant
+from vendorfake.clover.surface.common import CloverDeps, elements, owned_by, page_window, require_merchant
 from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitError, UnitErrorKind
 from vendorfake.core.util.json import compact
@@ -75,8 +75,9 @@ class CloverCustomersSurface:
     def list_customers(self, args: HandlerArgs) -> ReplyInit:
         merchant_id = require_merchant(args)
         predicate = _filters(args.query_all("filter"))
+        mine = owned_by(merchant_id)
         limit, offset = page_window(args)
-        rows = [row for row in args.ctx.store.collection(COL.customers).all() if predicate(row)]
+        rows = [row for row in args.ctx.store.collection(COL.customers).all() if mine(row) and predicate(row)]
         page = rows[offset : offset + limit]
         base = self._deps.config.base_url
         return json_(
@@ -87,7 +88,7 @@ class CloverCustomersSurface:
         )
 
     def create_customer(self, args: HandlerArgs) -> ReplyInit:
-        require_merchant(args)
+        merchant_id = require_merchant(args)
         request = validate_body(CustomerCreateRequest, args.body())
         if not request.firstName and not request.lastName:
             raise UnitError(
@@ -98,6 +99,7 @@ class CloverCustomersSurface:
         entity = compact(
             {
                 "id": self._deps.ids.customer(),
+                "merchant_id": merchant_id,
                 "firstName": request.firstName,
                 "lastName": request.lastName,
                 "customerSince": int(args.ctx.clock.now()),
@@ -116,7 +118,7 @@ def customer_routes(deps: CloverDeps) -> tuple[Route, ...]:
 
 
 def _project(entity: Mapping[str, Any]) -> dict[str, Any]:
-    return compact({k: v for k, v in entity.items() if k not in ("version", "created_at", "updated_at")})
+    return compact({k: v for k, v in entity.items() if k not in ("version", "created_at", "updated_at", "merchant_id")})
 
 
 def _filters(raws: Sequence[str]) -> Any:

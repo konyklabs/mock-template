@@ -42,7 +42,7 @@ from vendorfake.clover.entities import COL, OrderEntity
 from vendorfake.clover.machine import ORDER_MACHINE, OrderState
 from vendorfake.clover.model.common import validate_body
 from vendorfake.clover.model.references import PaymentCreateRequest
-from vendorfake.clover.surface.common import CloverDeps, require_merchant
+from vendorfake.clover.surface.common import CloverDeps, merchant_row, require_merchant
 from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitError, UnitErrorKind
 from vendorfake.core.state.machine import StateMachine
@@ -112,7 +112,7 @@ class CloverPaymentsSurface:
                 detail=f"Tender {request.tender.id} was not found; a merchant's tenders are at /tenders.",
                 field="tender.id",
             )
-        if request.employee is not None and ctx.store.collection(COL.employees).get(request.employee.id) is None:
+        if request.employee is not None and merchant_row(ctx, COL.employees, request.employee.id, merchant_id) is None:
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail=f"Employee {request.employee.id} was not found.",

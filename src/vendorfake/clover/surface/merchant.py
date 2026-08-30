@@ -37,7 +37,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from vendorfake.clover.entities import COL, MerchantEntity
-from vendorfake.clover.surface.common import CloverDeps, elements, page_window, require_merchant
+from vendorfake.clover.surface.common import CloverDeps, elements, owned_by, page_window, require_merchant
 from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitError, UnitErrorKind
 from vendorfake.core.util.json import compact
@@ -131,13 +131,13 @@ class CloverMerchantSurface:
         )
 
     def list_employees(self, args: HandlerArgs) -> ReplyInit:
-        return self._list(args, COL.employees, "employees")
+        return self._list(args, COL.employees, "employees", scoped=True)
 
     def list_tenders(self, args: HandlerArgs) -> ReplyInit:
-        return self._list(args, COL.tenders, "tenders")
+        return self._list(args, COL.tenders, "tenders", scoped=False)
 
     def list_order_types(self, args: HandlerArgs) -> ReplyInit:
-        return self._list(args, COL.order_types, "order_types")
+        return self._list(args, COL.order_types, "order_types", scoped=True)
 
     def get_default_service_charge(self, args: HandlerArgs) -> ReplyInit:
         """The one service charge the merchant configured as default; a
@@ -149,10 +149,14 @@ class CloverMerchantSurface:
             raise UnitError(UnitErrorKind.NOT_FOUND, detail="This merchant has no default service charge.")
         return json_(_project(found, strip=("isDefault",)))
 
-    def _list(self, args: HandlerArgs, collection: str, segment: str) -> ReplyInit:
+    def _list(self, args: HandlerArgs, collection: str, segment: str, *, scoped: bool) -> ReplyInit:
+        """``scoped`` rows (employees, order types) carry a ``merchant_id``
+        and only the path merchant's are listed; tenders are the unit's."""
         merchant_id = require_merchant(args)
         limit, offset = page_window(args)
-        rows = args.ctx.store.collection(collection).all()[offset : offset + limit]
+        every = args.ctx.store.collection(collection).all()
+        mine = owned_by(merchant_id)
+        rows = [row for row in every if not scoped or mine(row)][offset : offset + limit]
         base = self._deps.config.base_url
         return json_(
             elements(
@@ -175,5 +179,5 @@ def _project(entity: Mapping[str, Any], *, strip: tuple[str, ...] = ()) -> dict[
     whose ``isDefault`` is this unit's own selector for *which* charge the
     ``/default_service_charge`` route answers, not a documented field.
     """
-    hidden = ("version", "created_at", "updated_at", *strip)
+    hidden = ("version", "created_at", "updated_at", "merchant_id", *strip)
     return compact({k: v for k, v in entity.items() if k not in hidden})

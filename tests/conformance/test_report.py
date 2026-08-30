@@ -137,3 +137,17 @@ def test_a_check_declared_inapplicable_by_name_is_not_never_ran_but_a_bare_skip_
     assert stale.stale_inapplicable == ("C19",)
     assert not stale.ok
     assert "DECLARED INAPPLICABLE BUT RAN C19" in "\n".join(stale.problems)
+
+
+def test_the_cli_text_names_a_declared_inapplicable_check_that_ran() -> None:
+    """The CLI prints ``format_report``, not ``problems``: a stale
+    declaration that only the pytest plugin could explain exited 1 with no
+    stated cause. The text now carries the same line."""
+    stale = ConformanceReport(
+        (_result("C01", "full", Outcome.PASS), _result("C19", "full", Outcome.PASS)),
+        inapplicable={"C19": "no idempotency key"},
+    )
+    text = format_report(stale)
+    assert "DECLARED INAPPLICABLE BUT RAN C19: " in text
+    assert "(no idempotency key)" in text
+    assert text.endswith("NOT OK")

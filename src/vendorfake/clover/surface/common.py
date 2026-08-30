@@ -32,12 +32,12 @@ millisecond where it still works.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from vendorfake.clover.config import CloverConfig
 from vendorfake.clover.ids import CloverIds
-from vendorfake.core.kernel.types import HandlerArgs, UnitError, UnitErrorKind
+from vendorfake.core.kernel.types import HandlerArgs, UnitContext, UnitError, UnitErrorKind
 from vendorfake.core.time.clock import Clock
 
 __all__ = [
@@ -112,6 +112,28 @@ def require_merchant(args: HandlerArgs) -> str:
     return merchant_id
 
 
+def merchant_row(ctx: UnitContext, collection: str, row_id: str, merchant_id: str) -> dict[str, Any] | None:
+    """A reference row (employee, order type, customer) of *this* merchant,
+    or ``None``.
+
+    JUDGMENT, consistent with :func:`require_merchant`: a row stamped with
+    another merchant's ``merchant_id`` is as absent as no row at all, so a
+    reference to it fails the way a dangling one does and never leaks that
+    the other merchant's record exists. ``merchant_id`` is this unit's own
+    scoping field on those rows, stamped at hydration and on create, and
+    stripped from every projection.
+    """
+    row = ctx.store.collection(collection).get(row_id)
+    if row is None or row.get("merchant_id") != merchant_id:
+        return None
+    return dict(row)
+
+
+def owned_by(merchant_id: str) -> Callable[[Mapping[str, Any]], bool]:
+    """The list predicate for the same scoping rule as :func:`merchant_row`."""
+    return lambda row: row.get("merchant_id") == merchant_id
+
+
 _INTEGER = re.compile(r"^-?\d+$")
 """One optional minus, then digits. ``--5``, ``+5``, ``5x`` and ``1e3`` are
 all refused: ``str.isdigit`` after ``lstrip("-")`` let ``--5`` through to
@@ -181,6 +203,10 @@ def expansions(args: HandlerArgs, allowed: frozenset[str]) -> frozenset[str]:
     # count against that cap.
     implied = [name.split(".", 1)[0] for name in wanted if "." in name]
     unknown = [name for name in wanted if name not in allowed]
+    # An implied parent is bound by the same set as a named one: a dotted
+    # name whose parent is not expandable is unknown, and the refusal names
+    # the expansion as supplied so the caller sees what was rejected.
+    unknown += [name for name in wanted if "." in name and name.split(".", 1)[0] not in allowed and name in allowed]
     if unknown:
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,

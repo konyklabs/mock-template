@@ -244,6 +244,11 @@ def format_report(report: ConformanceReport) -> str:
     lines.append(f"{report.passed} passed, {report.failed} failed, {report.skipped} skipped, {report.errored} errored")
     for check_id, reason in sorted(report.inapplicable.items()):
         lines.append(f"inapplicable to this target: {check_id} -- {reason}")
+    for check_id in report.stale_inapplicable:
+        lines.append(
+            f"DECLARED INAPPLICABLE BUT RAN {check_id}: the target says its vendor cannot be asked this "
+            f"({report.inapplicable[check_id]}), and it ran -- delete the declaration in the same commit"
+        )
     if report.never_ran:
         note = "" if report.cross_profile else " (informational: this run covered only part of the profile matrix)"
         lines.append(f"never ran on any profile in this run: {', '.join(report.never_ran)}{note}")
