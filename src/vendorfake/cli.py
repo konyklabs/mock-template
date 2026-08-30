@@ -59,7 +59,10 @@ def _add_unit_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--vendor",
         default=None,
-        help="Vendor module to serve. Defaults to $VENDORFAKE_VENDOR, or to the only one installed.",
+        help=(
+            "Vendor to serve (see `vendorfake vendors`). Defaults to $VENDORFAKE_VENDOR; with exactly one "
+            "vendor installed that one is used, otherwise the command refuses and lists them."
+        ),
     )
     parser.add_argument(
         "--profile",

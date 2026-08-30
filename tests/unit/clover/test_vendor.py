@@ -74,8 +74,17 @@ def test_routes_are_built_once_and_cached() -> None:
 
 
 def test_the_real_auth_adapter_is_wired_and_fails_closed_with_no_tokens() -> None:
-    vendor = create_clover_vendor()
+    """On an empty store nothing authenticates and nothing is offered."""
+    from types import SimpleNamespace
+
+    unit = create_unit(vendor="clover", profile="full")
+    vendor = unit.context.vendor
     assert isinstance(vendor.auth, CloverAuth)
+    assert vendor.auth.credentials(unit.context) == ()
+    args = SimpleNamespace(ctx=unit.context, header=lambda name: "Bearer never-minted")
+    with pytest.raises(UnitError) as caught:
+        vendor.auth.resolve(args, "bearer")  # type: ignore[arg-type]
+    assert caught.value.kind is UnitErrorKind.UNAUTHORIZED
 
 
 def test_the_order_machine_is_registered_so_the_control_plane_can_publish_it() -> None:
@@ -181,7 +190,7 @@ def test_a_clover_unit_starts_on_the_full_profile_with_an_empty_surface() -> Non
     unit = create_unit(vendor="clover", profile="full")
     assert unit.name == "clover"
     assert unit.context.config.profile == "full"
-    assert set(unit.context.config.capabilities) == {"oauth", "orders", "inventory", "chaos"}
+    assert set(unit.context.config.capabilities) == {"oauth", "chaos"}
 
 
 def test_two_clover_units_in_one_process_do_not_share_an_id_stream() -> None:

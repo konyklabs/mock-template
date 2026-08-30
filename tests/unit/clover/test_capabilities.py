@@ -30,9 +30,44 @@ def test_the_webhook_gates_are_excused_not_declared_until_pr_d() -> None:
     assert not declared & set(CLOVER_NOT_SUPPORTED)
 
 
-def test_the_surface_capabilities_are_the_three_this_pr_series_declares() -> None:
+def test_only_surfaces_that_own_routes_are_declared() -> None:
+    """Conformance C02 refuses a `surface` capability that owns no route, so
+    `orders` and `inventory` are declared in PR C with their routes, not
+    before. Every declared surface capability owns at least one route now."""
+    from vendorfake.clover.vendor import create_clover_vendor
+
     surface = {decl.name for decl in CLOVER_CAPABILITIES if decl.kind == "surface"}
-    assert surface == {"oauth", "orders", "inventory"}
+    assert surface == {"oauth"}
+    owned = {route.capability for route in create_clover_vendor().routes}
+    assert surface <= owned, (surface, owned)
+
+
+def test_a_disabled_capability_answers_explicitly_and_never_with_a_404() -> None:
+    """Switching `oauth` off through the environment layer must produce a 501
+    naming the capability -- not a 404 that reads as "no such route", which
+    is indistinguishable from a consumer's own typo."""
+    from tests.unit.clover.harness import CLIENT_ID, Silent
+    from vendorfake import create_unit
+    from vendorfake.core.transport.inprocess import in_process
+
+    unit = create_unit(vendor="clover", profile="full", logger=Silent(), env={"VENDORFAKE_CAPABILITIES": "-oauth"})
+    try:
+        api = in_process(unit)
+        response = api.call(method="GET", path="/oauth/v2/authorize", query={"client_id": CLIENT_ID})
+        assert response.status == 501
+        assert response.headers["x-unit-error"] == "capability_disabled"
+        assert response.headers["x-unit-capability"] == "oauth"
+        body = response.json()
+        assert "oauth" in body["message"]
+        assert body["unit_error"]["kind"] == "capability_disabled"
+        assert body["unit_error"]["capability"] == "oauth"
+        # The contrast case, without which the assertion above proves nothing:
+        # a path this vendor does not serve is still a 404.
+        missing = api.get("/v3/merchants/X/nothing")
+        assert missing.status == 404
+        assert missing.headers["x-unit-error"] == "not_found"
+    finally:
+        unit.stop()
 
 
 def test_chaos_is_the_one_behaviour_capability() -> None:

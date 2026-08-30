@@ -40,14 +40,11 @@ CLOVER_CAPABILITIES: tuple[CapabilityDecl, ...] = (
         name="oauth",
         summary="OAuth v2 authorization-code flow with expiring access tokens and single-use refresh rotation.",
     ),
-    CapabilityDecl(
-        name="orders",
-        summary="Create, retrieve, update and delete orders and line items, with client-owned totals.",
-    ),
-    CapabilityDecl(
-        name="inventory",
-        summary="Inventory items and the merchant record -- the reference data orders point at.",
-    ),
+    # `orders` and `inventory` are declared in PR C, together with their
+    # routes. A `surface` capability that owns no route is refused by the
+    # conformance suite (C02: "declared kind='surface' and owns no route"),
+    # and neither is core-gated, so they cannot be excused in
+    # CLOVER_NOT_SUPPORTED either -- they are simply not declared yet.
     CapabilityDecl(
         name="chaos",
         summary="Request-scope fault injection: rate limits, timeouts, server errors, token expiry.",

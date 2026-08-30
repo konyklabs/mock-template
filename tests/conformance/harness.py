@@ -35,6 +35,7 @@ watches the number move.
 
 from __future__ import annotations
 
+import functools
 import json
 import socket
 import subprocess
@@ -92,7 +93,7 @@ indefensible, so it is paid for by the one contract whose claim requires it.
 CHILD_STARTUP_TIMEOUT_S = 60.0
 
 
-def build_unit(profile: str, *, tripwire: FrameworkTripwire | None = None) -> Unit:
+def build_unit(profile: str, *, tripwire: FrameworkTripwire | None = None, vendor: str = VENDOR) -> Unit:
     """One unit for one check, built the same way for every transport.
 
     ``warn`` rather than the profile's own level: a matrix run builds close to
@@ -114,7 +115,7 @@ def build_unit(profile: str, *, tripwire: FrameworkTripwire | None = None) -> Un
     hole in the catch-all went unnoticed while the suite stayed green.
     """
     return create_unit(
-        vendor=VENDOR,
+        vendor=vendor,
         profile=profile,
         sink=MemorySink(),
         logger=JsonLogger("warn"),
@@ -122,8 +123,8 @@ def build_unit(profile: str, *, tripwire: FrameworkTripwire | None = None) -> Un
     )
 
 
-def _unit(profile: str) -> Unit:
-    return build_unit(profile)
+def _unit(profile: str, vendor: str = VENDOR) -> Unit:
+    return build_unit(profile, vendor=vendor)
 
 
 @contextmanager
@@ -174,7 +175,7 @@ def serve(unit: Unit) -> Iterator[ConformanceClient]:
 
 
 @contextmanager
-def _served(profile: str) -> Iterator[ConformanceClient]:
+def _served(profile: str, vendor: str = VENDOR) -> Iterator[ConformanceClient]:
     """The HTTP binding, with the tripwire wired at both ends.
 
     The unit is built with ``framework_answered=tripwire.get`` and the
@@ -184,7 +185,7 @@ def _served(profile: str) -> Iterator[ConformanceClient]:
     and the contract printed "framework_answered still 0" and passed.
     """
     tripwire = FrameworkTripwire()
-    unit = build_unit(profile, tripwire=tripwire)
+    unit = build_unit(profile, tripwire=tripwire, vendor=vendor)
     try:
         with serving(unit, tripwire=tripwire) as base_url:
             client = HttpConformanceClient(base_url)
@@ -250,8 +251,8 @@ def _stop(child: subprocess.Popen[str]) -> None:
 
 
 @contextmanager
-def _in_process(profile: str) -> Iterator[ConformanceClient]:
-    unit = _unit(profile)
+def _in_process(profile: str, vendor: str = VENDOR) -> Iterator[ConformanceClient]:
+    unit = _unit(profile, vendor)
     try:
         yield InProcessConformanceClient(in_process(unit))
     finally:
@@ -259,12 +260,12 @@ def _in_process(profile: str) -> Iterator[ConformanceClient]:
 
 
 @contextmanager
-def open_client(profile: str, transport: str) -> Iterator[ConformanceClient]:
+def open_client(profile: str, transport: str, vendor: str = VENDOR) -> Iterator[ConformanceClient]:
     if transport == "inprocess":
-        with _in_process(profile) as client:
+        with _in_process(profile, vendor) as client:
             yield client
     elif transport == "http":
-        with _served(profile) as client:
+        with _served(profile, vendor) as client:
             yield client
     elif transport == OUT_OF_PROCESS_TRANSPORT:
         with _child(profile) as client:
@@ -287,6 +288,34 @@ def target(
         profiles=profiles,
         transports=transports,
         out_of_process=out_of_process,
+    )
+
+
+CLOVER_VENDOR = "clover"
+CLOVER_PROFILES: tuple[str, ...] = ("full",)
+"""The one profile the clover unit ships at this commit; the six-profile set
+arrives with PR E of konyklabs/roadmap#34, which is also when this target
+can be run ``--strict`` (a single-profile matrix cannot satisfy the
+anti-vacuity rule -- see :func:`one_profile_target`)."""
+
+
+def clover_target(
+    *,
+    profiles: tuple[str, ...] = CLOVER_PROFILES,
+    transports: tuple[str, ...] = ("inprocess", "http"),
+) -> ConformanceTarget:
+    """The second vendor, over the same in-process and HTTP bindings.
+
+    No ``out_of_process`` transport yet: ``unit_child`` builds the Square unit
+    by name, and the cross-process determinism contract has nothing to compare
+    until the clover seed scenario exists. Recorded rather than faked.
+    """
+    return ConformanceTarget(
+        name=CLOVER_VENDOR,
+        open_client=functools.partial(open_client, vendor=CLOVER_VENDOR),
+        profiles=profiles,
+        transports=transports,
+        out_of_process=(),
     )
 
 
