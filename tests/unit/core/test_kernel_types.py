@@ -129,7 +129,7 @@ class TestTheSeam:
         raw = b'{"a": 1,  "b":   2}'
         assert a_request(raw_body=raw).raw_body == raw
 
-    def test_the_eight_request_fields_are_the_contract(self) -> None:
+    def test_the_nine_request_fields_are_the_contract(self) -> None:
         assert [f.name for f in dataclasses.fields(UnitRequest)] == [
             "id",
             "method",
@@ -139,7 +139,19 @@ class TestTheSeam:
             "raw_body",
             "transport",
             "received_at",
+            "query_all",
         ]
+
+    def test_query_all_defaults_to_the_single_valued_view_of_query(self) -> None:
+        # The invariant ``query[k] == query_all[k][-1]`` must hold for a request
+        # built by hand as much as for one a binding built.
+        req = a_request(query={"a": "1", "b": ""})
+        assert req.query_all == {"a": ("1",), "b": ("",)}
+        assert a_request().query_all == {}
+
+    def test_an_explicit_query_all_is_kept(self) -> None:
+        req = a_request(query={"a": "2"}, query_all={"a": ("1", "2")})
+        assert req.query_all == {"a": ("1", "2")}
 
     def test_the_three_response_fields_are_the_contract(self) -> None:
         assert [f.name for f in dataclasses.fields(UnitResponse)] == ["status", "headers", "body"]

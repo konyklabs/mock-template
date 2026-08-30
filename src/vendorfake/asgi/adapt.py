@@ -42,10 +42,16 @@ does to the reference's ``req.headers`` before it ever sees them, and joining
 is what RFC 9110 says a repeated field means. ``dict(request.headers)`` would
 silently keep only the first value.
 
-**Repeated query parameters collapse to the last value.** ``UnitRequest.query``
-is a plain ``str -> str`` mapping in every binding, and ``dict(query_params)``
-is exactly that collapse. Starlette's multi-valued ``QueryParams`` must not
-leak through, or one binding would see a list where the others see a string.
+**Repeated query parameters are handed on as pairs, not as a dict.**
+``UnitRequest`` carries two views in every binding: ``query`` is a plain
+``str -> str`` mapping in which a repeated key keeps its last value, and
+``query_all`` is ``str -> Sequence[str]`` with every value in arrival order,
+so ``query[k] == query_all[k][-1]`` always holds. ``dict(query_params)`` would
+build the first view by throwing the second away, and Starlette's own
+multi-valued ``QueryParams`` must not leak through either, or this binding
+would see a list where the others see a string. ``multi_items()`` is the
+lossless form, and ``make_request`` derives both views from it exactly as it
+does for the other bindings.
 """
 
 from __future__ import annotations
@@ -99,9 +105,9 @@ def request_headers(request: Request) -> dict[str, str]:
     return headers
 
 
-def request_query(request: Request) -> dict[str, str]:
-    """Query parameters, repeated keys collapsing to the last value."""
-    return dict(request.query_params)
+def request_query(request: Request) -> list[tuple[str, str]]:
+    """Every query pair in arrival order, blank values kept; nothing collapsed here."""
+    return request.query_params.multi_items()
 
 
 async def to_unit_request(request: Request) -> UnitRequest:

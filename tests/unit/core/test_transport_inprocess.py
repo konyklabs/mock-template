@@ -18,6 +18,8 @@ def _echo(args):  # type: ignore[no-untyped-def]
             "content_type": args.header("content-type"),
             "raw": args.body_text(),
             "query": dict(args.req.query),
+            "query_all": {name: list(values) for name, values in args.req.query_all.items()},
+            "k_all": list(args.query_all("k")),
         }
     )
 
@@ -64,6 +66,21 @@ def test_raw_body_wins_over_body_so_a_caller_can_pin_the_exact_bytes() -> None:
 
 def test_query_parameters_reach_the_request() -> None:
     assert in_process(_unit()).get("/echo", query={"limit": "2"}).json()["query"] == {"limit": "2"}
+
+
+def test_a_repeated_query_parameter_reaches_the_handler_whole() -> None:
+    """``query`` keeps the last value, as every binding always did; ``query_all``
+    keeps them all, in arrival order, and a handler asks for it by name."""
+    body = in_process(_unit()).get("/echo?k=a&k=b&limit=2").json()
+    assert body["query"] == {"k": "b", "limit": "2"}
+    assert body["query_all"] == {"k": ["a", "b"], "limit": ["2"]}
+    assert body["k_all"] == ["a", "b"]
+
+
+def test_a_bare_query_key_is_kept_as_an_empty_value() -> None:
+    body = in_process(_unit()).get("/echo?k").json()
+    assert body["query"] == {"k": ""}
+    assert body["query_all"] == {"k": [""]}
 
 
 def test_every_verb_helper_sends_its_own_verb() -> None:

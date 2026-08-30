@@ -19,7 +19,9 @@ The layout is the reference's (``packages/core/src/transport/filedrop.ts``):
     <dir>/processed/<name>.request.json   the request, moved aside
 
 A request document is
-``{"method", "path", "query"?, "headers"?, "body"?, "raw_body"?}``.
+``{"method", "path", "query"?, "headers"?, "body"?, "raw_body"?}``. A JSON
+object cannot repeat a key, so a repeated query parameter is written on the
+path -- ``"path": "/v2/items?id=a&id=b"`` -- and ``make_request`` splits it off.
 
 THREE THINGS THIS PORT DOES THAT THE REFERENCE DOES NOT
 ------------------------------------------------------

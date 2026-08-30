@@ -217,6 +217,11 @@ class TestRawAccess:
         assert handler_args.query("state") == "xyz"
         assert handler_args.query("absent") is None
 
+    def test_query_all_reads_every_value_and_is_empty_when_absent(self) -> None:
+        handler_args = args(query={"state": "xyz"})
+        assert list(handler_args.query_all("state")) == ["xyz"]
+        assert list(handler_args.query_all("absent")) == []
+
     def test_header_lookup_lowercases_the_name(self) -> None:
         handler_args = args(headers={"authorization": "Bearer x"})
         assert handler_args.header("Authorization") == "Bearer x"

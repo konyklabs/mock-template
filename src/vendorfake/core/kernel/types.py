@@ -208,7 +208,8 @@ class UnitRequest:
     method: str
     #: Logical resource path, always starting with ``/``.
     path: str
-    #: Repeated keys collapse to the last value, matching every binding.
+    #: The scalar view: repeated keys collapse to the last value, matching
+    #: every binding. Every value is kept in ``query_all``.
     query: Mapping[str, str]
     #: Header names are lowercased by every binding before the kernel sees them.
     headers: Mapping[str, str]
@@ -219,6 +220,14 @@ class UnitRequest:
     transport: TransportKind
     #: RFC 3339 with milliseconds.
     received_at: str
+    #: Every value sent for each key, in arrival order. Invariant:
+    #: ``query[k] == query_all[k][-1]`` for every ``k``. Defaults to the
+    #: single-valued view of ``query`` so a hand-built request keeps it.
+    query_all: Mapping[str, Sequence[str]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.query_all and self.query:
+            object.__setattr__(self, "query_all", {k: (v,) for k, v in self.query.items()})
 
 
 @dataclass(frozen=True, slots=True)
@@ -584,6 +593,10 @@ class HandlerArgs:
 
     def query(self, name: str) -> str | None:
         return self.req.query.get(name)
+
+    def query_all(self, name: str) -> Sequence[str]:
+        """Every value sent for ``name``, in arrival order; empty when absent."""
+        return self.req.query_all.get(name, ())
 
     def header(self, name: str) -> str | None:
         return self.req.headers.get(name.lower())

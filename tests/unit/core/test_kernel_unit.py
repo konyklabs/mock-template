@@ -529,11 +529,13 @@ def test_a_serialized_route_holds_the_unit_and_an_unserialized_one_does_not() ->
 
         free_done = threading.Event()
         threading.Thread(target=lambda: (api.get("/v2/free"), free_done.set()), daemon=True).start()
-        assert free_done.wait(timeout=2), "an unserialized route must not wait for the request lock"
+        # An unserialized route must not wait for the request lock.
+        assert free_done.wait(timeout=2)
 
         blocked_done = threading.Event()
         threading.Thread(target=lambda: (api.get("/v2/fast"), blocked_done.set()), daemon=True).start()
-        assert not blocked_done.wait(timeout=0.3), "a serialized route must wait for the request lock"
+        # A serialized route must wait for the request lock.
+        assert not blocked_done.wait(timeout=0.3)
     finally:
         release.set()
         holder.join(timeout=5)
@@ -690,6 +692,22 @@ def test_make_request_leaves_an_explicit_content_type_alone() -> None:
     req = make_request(method="POST", path="/x", body="a=1", headers={"content-type": "text/plain"})
     assert req.headers["content-type"] == "text/plain"
     assert req.raw_body == b"a=1"
+
+
+def test_make_request_keeps_every_query_value_and_the_last_one_wins_the_scalar_view() -> None:
+    """Pairs are what Starlette's ``multi_items()`` and ``parse_qsl`` both hand
+    over; a mapping still works for every existing caller."""
+    req = make_request(method="GET", path="/x", query=[("k", "a"), ("k", "b"), ("n", "1")])
+    assert req.query == {"k": "b", "n": "1"}
+    assert req.query_all == {"k": ("a", "b"), "n": ("1",)}
+    assert make_request(method="GET", path="/x", query={"k": "a"}).query_all == {"k": ("a",)}
+
+
+def test_make_request_splits_a_query_string_off_the_path_and_keeps_blank_values() -> None:
+    req = make_request(method="GET", path="/x?k=a&k=b&flag", query={"n": "1"})
+    assert req.path == "/x"
+    assert req.query == {"k": "b", "flag": "", "n": "1"}
+    assert req.query_all == {"k": ("a", "b"), "flag": ("",), "n": ("1",)}
 
 
 def test_make_request_takes_its_id_from_the_inbound_header_when_present() -> None:
