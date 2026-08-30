@@ -21,8 +21,8 @@ construction, then :meth:`CloverVendor.hydrate` re-resolves from
 ``POST /__unit/state/reset`` -- rebuilds what depends on it (the error
 shaper), and re-seeds the id stream from the unit's seed.
 
-PR-B shape: **the OAuth surface and the real auth adapter are live**; orders,
-inventory and merchant land in PR C. ``signer`` and ``events`` stay ``None``
+PR-C shape: **OAuth, orders, inventory and the merchant read are live**.
+``signer`` and ``events`` stay ``None``
 and the two webhook gates sit in ``not_supported`` until PR D ships the seams
 that would make them deliverable (see ``capabilities.py``). The machines,
 retry defaults, error table, id stream and configuration are final-shape.
@@ -46,7 +46,9 @@ from vendorfake.clover.errors import CloverErrorShaper
 from vendorfake.clover.ids import CloverIds
 from vendorfake.clover.machine import ORDER_MACHINE, ORDER_MACHINE_NAME
 from vendorfake.clover.retry import clover_retry_defaults
+from vendorfake.clover.surface.inventory import inventory_routes
 from vendorfake.clover.surface.oauth import oauth_routes
+from vendorfake.clover.surface.orders import order_routes
 from vendorfake.core.config.models import ProfileDocument
 from vendorfake.core.kernel.types import (
     AuthAdapter,
@@ -179,11 +181,11 @@ class CloverVendor:
 
         Cached because ``Route`` handlers are bound methods of a surface
         object and rebuilding them on every access would make two reads of
-        this property produce routes that compare unequal. OAuth for now;
-        orders, inventory and merchant land in PR C, webhooks in PR D.
+        this property produce routes that compare unequal. Webhooks land in
+        PR D.
         """
         if self._routes is None:
-            self._routes = oauth_routes(self)
+            self._routes = oauth_routes(self) + order_routes(self) + inventory_routes(self)
         return self._routes
 
     @property

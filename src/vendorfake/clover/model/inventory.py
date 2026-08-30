@@ -31,14 +31,15 @@ Defaults, labelled:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from vendorfake.core.util.json import compact
 
-__all__ = ["ItemWire", "PriceType"]
+__all__ = ["ItemCreateRequest", "ItemWire", "PriceType", "project_item"]
 
 _REQUEST = ConfigDict(extra="ignore", frozen=True)
 """The parse path: item documents arrive decoded, so ``"priceType":
@@ -92,3 +93,27 @@ class ItemWire(BaseModel):
                 "modifiedTime": self.modifiedTime,
             }
         )
+
+
+class ItemCreateRequest(BaseModel):
+    """``POST .../items``: "name and price are required"
+    (https://docs.clover.com/dev/docs/inventorycreateitem). Everything else
+    takes the defaults labelled on :class:`ItemWire`."""
+
+    model_config = _REQUEST
+
+    name: str = Field(min_length=1)
+    price: int
+    hidden: bool | None = None
+    available: bool | None = None
+    priceType: PriceType | None = None
+    defaultTaxRates: bool | None = None
+    isRevenue: bool | None = None
+    sku: str | None = None
+    code: str | None = None
+
+
+def project_item(entity: Mapping[str, Any]) -> dict[str, Any]:
+    """A stored item as Clover JSON. The entity uses the wire's own field
+    names, so it validates straight into :class:`ItemWire`."""
+    return ItemWire.model_validate(entity).wire()

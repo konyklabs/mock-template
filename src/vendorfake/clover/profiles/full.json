@@ -1,7 +1,7 @@
 {
   "name": "full",
-  "summary": "Every declared capability on. The default profile. Orders and inventory arrive in PR C, webhooks in PR D, the seed scenario in PR E; until then the unit starts empty.",
-  "capabilities": ["oauth", "chaos"],
+  "summary": "Every declared capability on. The default profile. Webhooks arrive in PR D, the seed scenario in PR E; until then the unit starts empty.",
+  "capabilities": ["oauth", "orders", "inventory", "chaos"],
   "vendor": {
     "client_id": "UNITCLOVERAPP",
     "client_secret": "unit-clover-app-secret",

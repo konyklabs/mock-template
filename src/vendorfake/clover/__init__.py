@@ -27,19 +27,25 @@ from vendorfake.clover.entities import COL
 from vendorfake.clover.errors import CLOVER_ERROR_TABLE, CloverErrorShaper
 from vendorfake.clover.ids import CloverIds
 from vendorfake.clover.machine import ORDER_MACHINE, ORDER_MACHINE_NAME, OrderState
-from vendorfake.clover.model.inventory import ItemWire, PriceType
+from vendorfake.clover.model.inventory import ItemWire, PriceType, project_item
 from vendorfake.clover.model.merchant import AddressWire, MerchantWire, OwnerWire
 from vendorfake.clover.model.oauth import RefreshRequest, TokenRequest, TokenResponse
 from vendorfake.clover.model.order import (
+    DiscountWire,
     ItemRefWire,
     LineItemWire,
     OrderTypeRefWire,
     OrderWire,
     PaymentState,
     PayType,
+    ServiceChargeWire,
+    atomic_total,
+    project_order,
 )
 from vendorfake.clover.retry import CLOVER_RETRY_SCHEDULE_MS
+from vendorfake.clover.surface.inventory import inventory_routes
 from vendorfake.clover.surface.oauth import FAILED_CODE_MESSAGE, oauth_routes
+from vendorfake.clover.surface.orders import order_routes
 from vendorfake.clover.vendor import CLOVER_MAGIC, CloverVendor, create_clover_vendor
 from vendorfake.core.kernel.types import VendorDefinition
 
@@ -62,6 +68,7 @@ __all__ = [
     "CloverErrorShaper",
     "CloverIds",
     "CloverVendor",
+    "DiscountWire",
     "ItemRefWire",
     "ItemWire",
     "LineItemWire",
@@ -74,10 +81,16 @@ __all__ = [
     "PaymentState",
     "PriceType",
     "RefreshRequest",
+    "ServiceChargeWire",
     "TokenRequest",
     "TokenResponse",
+    "atomic_total",
     "create_clover_vendor",
+    "inventory_routes",
     "oauth_routes",
+    "order_routes",
+    "project_item",
+    "project_order",
     "resolve_clover_config",
 ]
 

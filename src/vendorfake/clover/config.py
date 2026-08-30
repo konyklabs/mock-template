@@ -86,6 +86,16 @@ class CloverConfig(BaseModel):
     client_secret: str = "unit-clover-app-secret"
     redirect_uri: str = "https://example.test/oauth/callback"
 
+    #: The origin every list element's ``href`` self-URL is built on. Clover's
+    #: documented sandbox API host
+    #: (https://docs.clover.com/dev/docs/oauth-flows-in-clover names
+    #: ``apisandbox.dev.clover.com``), so an href from this unit is shaped
+    #: like one from the real sandbox. JUDGMENT on emitting it at all: the
+    #: docs show absolute hrefs and this fake cannot know where it is being
+    #: served from, so a consumer following one must rewrite the origin --
+    #: or set this to their own base in the profile's ``vendor`` block.
+    base_url: str = "https://apisandbox.dev.clover.com"
+
     #: The permission set the app was "installed" with; every minted token
     #: inherits it. See the module docstring for why this is a fixed set
     #: rather than a per-token scope request.

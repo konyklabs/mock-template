@@ -31,13 +31,30 @@ millisecond where it still works.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from collections.abc import Sequence
+from typing import Any, Protocol, runtime_checkable
 
 from vendorfake.clover.config import CloverConfig
 from vendorfake.clover.ids import CloverIds
+from vendorfake.core.kernel.types import HandlerArgs, UnitError, UnitErrorKind
 from vendorfake.core.time.clock import Clock
 
-__all__ = ["CloverDeps", "is_past_ms", "wire_seconds"]
+__all__ = [
+    "DEFAULT_LIMIT",
+    "MAX_LIMIT",
+    "CloverDeps",
+    "elements",
+    "is_past_ms",
+    "page_window",
+    "require_merchant",
+    "wire_seconds",
+]
+
+DEFAULT_LIMIT = 100
+MAX_LIMIT = 1000
+""""limit" default 100 and maximum 1000, with "offset" -- documented for both
+the orders and the items lists (https://docs.clover.com/dev/docs/ordergetorders,
+https://docs.clover.com/dev/docs/inventorygetitems)."""
 
 
 @runtime_checkable
@@ -69,3 +86,67 @@ def wire_seconds(instant_ms: int) -> int:
     side.
     """
     return instant_ms // 1000
+
+
+def require_merchant(args: HandlerArgs) -> str:
+    """The ``{mId}`` of the request, checked against the bearer's merchant.
+
+    JUDGMENT -- a token presented against another merchant's path, or an
+    unknown one, answers **401**: Clover documents no error for the mismatch,
+    and the conflation rule (https://docs.clover.com/dev/docs/401-unauthorized)
+    makes "this token is not good for this" a 401 whatever the reason. No
+    detail, so the wire body is the same ``401 Unauthorized`` every other
+    authorization failure sends; the sidecar says ``merchant_mismatch``.
+    """
+    merchant_id = args.params["mId"]
+    principal = args.auth.principal_id if args.auth is not None else None
+    if principal != merchant_id:
+        raise UnitError(
+            UnitErrorKind.UNAUTHORIZED,
+            info={"reason": "merchant_mismatch", "path_merchant": merchant_id},
+        )
+    return merchant_id
+
+
+def _query_int(args: HandlerArgs, name: str, default: int, *, minimum: int) -> int:
+    """A non-negative integer query parameter, or a 400 naming it.
+
+    Refused rather than ignored: ``limit=abc`` silently becoming the default
+    is how a consumer who mistyped a page size never learns.
+    """
+    raw = args.query(name)
+    if raw is None:
+        return default
+    stripped = raw.strip()
+    if not stripped.lstrip("-").isdigit() or int(stripped) < minimum:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"{name} must be an integer >= {minimum}.",
+            field=name,
+            info={"supplied": raw},
+        )
+    return int(stripped)
+
+
+def page_window(args: HandlerArgs) -> tuple[int, int]:
+    """``(limit, offset)`` from the query: limit default 100, clamped to the
+    documented maximum of 1000 (JUDGMENT on clamping rather than refusing an
+    over-large limit -- the docs state the maximum, not the response to
+    exceeding it, and clamping is what the core's own paginator does);
+    offset default 0."""
+    limit = min(_query_int(args, "limit", DEFAULT_LIMIT, minimum=1), MAX_LIMIT)
+    offset = _query_int(args, "offset", 0, minimum=0)
+    return limit, offset
+
+
+def elements(items: Sequence[dict[str, Any]], hrefs: Sequence[str]) -> dict[str, Any]:
+    """Clover's list envelope: ``{"elements": [{"href": ..., ...}, ...]}``.
+
+    The envelope and the per-element ``href`` are documented verbatim
+    (https://docs.clover.com/dev/docs/paginating-elements). JUDGMENT that an
+    element is the *whole* object plus its href: the example abbreviates
+    elements to ``href`` and ``id``, and a list that returned only ids would
+    make every consumer fetch each element separately. ``elements`` is always
+    present, empty when nothing matched: it is the answer to the request.
+    """
+    return {"elements": [{"href": href, **item} for href, item in zip(hrefs, items, strict=True)]}

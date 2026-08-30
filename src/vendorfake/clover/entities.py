@@ -49,27 +49,33 @@ from vendorfake.core.util.json import compact
 
 __all__ = [
     "COL",
+    "MAX_LINE_ITEMS_PER_ORDER",
     "AuthorizationCodeEntity",
     "CloverCollections",
+    "ItemEntity",
     "MerchantEntity",
+    "OrderEntity",
     "TokenEntity",
 ]
+
+MAX_LINE_ITEMS_PER_ORDER = 3000
+""""an order can have a maximum of 3,000 line items" -- exceeding it is a 400
+(https://docs.clover.com/dev/docs/ordercreatelineitem)."""
 
 
 @dataclass(frozen=True, slots=True)
 class CloverCollections:
-    """The store collections this vendor uses, named once.
-
-    Orders and items join in PR C; the seed scenario in PR E.
-    """
+    """The store collections this vendor uses, named once."""
 
     merchants: str = "merchants"
+    items: str = "items"
+    orders: str = "orders"
     codes: str = "authorization_codes"
     tokens: str = "tokens"
 
     def names(self) -> tuple[str, ...]:
         """Every collection name, in declaration order."""
-        return (self.merchants, self.codes, self.tokens)
+        return (self.merchants, self.items, self.orders, self.codes, self.tokens)
 
 
 COL = CloverCollections()
@@ -99,29 +105,222 @@ def _opt_int(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def _opt_bool(value: Any) -> bool | None:
+    return None if value is None else bool(value)
+
+
 def _str_tuple(value: Any) -> tuple[str, ...]:
     if isinstance(value, Sequence) and not isinstance(value, str | bytes):
         return tuple(str(item) for item in value)
     return ()
 
 
+def _opt_mapping(value: Any) -> dict[str, Any] | None:
+    return dict(value) if isinstance(value, Mapping) else None
+
+
+def _dict_list(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return [dict(item) for item in value if isinstance(item, Mapping)]
+    return []
+
+
 @dataclass(frozen=True, slots=True)
 class MerchantEntity:
     """The merchant this unit represents. One per unit, in practice.
 
-    PR B needs only the identity the authorize redirect carries; PR C's
-    merchant surface and PR E's seed extend this with the owner and address.
+    ``owner`` and ``address`` are stored as the nested documents the merchant
+    reference lists (https://docs.clover.com/dev/docs/merchantgetmerchant --
+    "owner{...}", "address{...}", contents undocumented; see
+    ``model/merchant.py``). ``currency`` is what an order created without one
+    is denominated in (JUDGMENT; see the orders surface).
     """
 
     id: str
     name: str
+    currency: str = "USD"
+    owner: dict[str, Any] | None = None
+    address: dict[str, Any] | None = None
 
     @classmethod
     def from_entity(cls, entity: Mapping[str, Any]) -> MerchantEntity:
-        return cls(id=_str(entity["id"]), name=_str(entity.get("name")))
+        return cls(
+            id=_str(entity["id"]),
+            name=_str(entity.get("name")),
+            currency=_str(entity.get("currency"), "USD"),
+            owner=_opt_mapping(entity.get("owner")),
+            address=_opt_mapping(entity.get("address")),
+        )
 
     def to_entity(self) -> Entity:
-        return {"id": self.id, "name": self.name}
+        return compact(
+            {
+                "id": self.id,
+                "name": self.name,
+                "currency": self.currency,
+                "owner": self.owner,
+                "address": self.address,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ItemEntity:
+    """One inventory item, stored under the field names Clover's create-item
+    example uses verbatim (https://docs.clover.com/dev/docs/inventorycreateitem).
+    Defaults and their provenance are on ``model/inventory.py``."""
+
+    id: str
+    name: str
+    price: int
+    hidden: bool = False
+    available: bool = True
+    priceType: str = "FIXED"
+    defaultTaxRates: bool = True
+    isRevenue: bool = False
+    sku: str | None = None
+    code: str | None = None
+    #: Epoch ms, per the documented example (``modifiedTime: 1755786102000``).
+    modifiedTime: int | None = None
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> ItemEntity:
+        return cls(
+            id=_str(entity["id"]),
+            name=_str(entity.get("name")),
+            price=_int(entity.get("price")),
+            hidden=bool(entity.get("hidden", False)),
+            available=bool(entity.get("available", True)),
+            priceType=_str(entity.get("priceType"), "FIXED"),
+            defaultTaxRates=bool(entity.get("defaultTaxRates", True)),
+            isRevenue=bool(entity.get("isRevenue", False)),
+            sku=_opt_str(entity.get("sku")),
+            code=_opt_str(entity.get("code")),
+            modifiedTime=_opt_int(entity.get("modifiedTime")),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "name": self.name,
+                "price": self.price,
+                "hidden": self.hidden,
+                "available": self.available,
+                "priceType": self.priceType,
+                "defaultTaxRates": self.defaultTaxRates,
+                "isRevenue": self.isRevenue,
+                "sku": self.sku,
+                "code": self.code,
+                "modifiedTime": self.modifiedTime,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class OrderEntity:
+    """One order, stored under Clover's own field names.
+
+    Everything documented is client-owned, ``total`` above all: "Order totals
+    are calculated dynamically and updated by the app the merchant uses... If
+    your app modifies an order, it must update the total as well"
+    (https://docs.clover.com/dev/docs/creating-custom-orders). Nothing here
+    recomputes it; the atomic endpoints compute a total *once*, at creation.
+
+    ``merchant_id`` is this unit's own scoping field (snake_case, internal):
+    every order route lives under ``/v3/merchants/{mId}/`` and a token for one
+    merchant must not see another's. ``state`` is stored **verbatim** --
+    ``Open`` and ``open`` both appear in Clover's docs -- and compared
+    case-insensitively against the machine's lowercase canon (``machine.py``).
+    Absent means null, "the default for hidden orders".
+
+    ``lineItems``, ``discounts`` and ``serviceCharge`` are stored as the plain
+    documents the wire carries; the line-item and discount shapes are typed
+    on the request side (``model/order.py``) and projected back through the
+    wire models.
+    """
+
+    id: str
+    merchant_id: str
+    currency: str
+    total: int
+    state: str | None = None
+    paymentState: str = "OPEN"
+    payType: str | None = None
+    createdTime: int | None = None
+    modifiedTime: int | None = None
+    clientCreatedTime: int | None = None
+    deletedTime: int | None = None
+    title: str | None = None
+    note: str | None = None
+    externalReferenceId: str | None = None
+    testMode: bool | None = None
+    taxRemoved: bool | None = None
+    manualTransaction: bool | None = None
+    groupLineItems: bool | None = None
+    orderType: dict[str, Any] | None = None
+    lineItems: tuple[dict[str, Any], ...] = ()
+    discounts: tuple[dict[str, Any], ...] = ()
+    serviceCharge: dict[str, Any] | None = None
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> OrderEntity:
+        return cls(
+            id=_str(entity["id"]),
+            merchant_id=_str(entity.get("merchant_id")),
+            currency=_str(entity.get("currency"), "USD"),
+            total=_int(entity.get("total")),
+            state=_opt_str(entity.get("state")),
+            paymentState=_str(entity.get("paymentState"), "OPEN"),
+            payType=_opt_str(entity.get("payType")),
+            createdTime=_opt_int(entity.get("createdTime")),
+            modifiedTime=_opt_int(entity.get("modifiedTime")),
+            clientCreatedTime=_opt_int(entity.get("clientCreatedTime")),
+            deletedTime=_opt_int(entity.get("deletedTime")),
+            title=_opt_str(entity.get("title")),
+            note=_opt_str(entity.get("note")),
+            externalReferenceId=_opt_str(entity.get("externalReferenceId")),
+            testMode=_opt_bool(entity.get("testMode")),
+            taxRemoved=_opt_bool(entity.get("taxRemoved")),
+            manualTransaction=_opt_bool(entity.get("manualTransaction")),
+            groupLineItems=_opt_bool(entity.get("groupLineItems")),
+            orderType=_opt_mapping(entity.get("orderType")),
+            lineItems=tuple(_dict_list(entity.get("lineItems"))),
+            discounts=tuple(_dict_list(entity.get("discounts"))),
+            serviceCharge=_opt_mapping(entity.get("serviceCharge")),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "merchant_id": self.merchant_id,
+                "currency": self.currency,
+                "total": self.total,
+                "state": self.state,
+                "paymentState": self.paymentState,
+                "payType": self.payType,
+                "createdTime": self.createdTime,
+                "modifiedTime": self.modifiedTime,
+                "clientCreatedTime": self.clientCreatedTime,
+                "deletedTime": self.deletedTime,
+                "title": self.title,
+                "note": self.note,
+                "externalReferenceId": self.externalReferenceId,
+                "testMode": self.testMode,
+                "taxRemoved": self.taxRemoved,
+                "manualTransaction": self.manualTransaction,
+                "groupLineItems": self.groupLineItems,
+                "orderType": self.orderType,
+                "lineItems": list(self.lineItems),
+                "discounts": list(self.discounts) if self.discounts else None,
+                "serviceCharge": self.serviceCharge,
+            }
+        )
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deletedTime is not None
 
 
 @dataclass(frozen=True, slots=True)
