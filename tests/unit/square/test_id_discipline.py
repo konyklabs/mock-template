@@ -215,6 +215,43 @@ def update_new_line_missing_price_rejected(h: Harness) -> None:
     assert response.status == 400, response.text
 
 
+def create_reserved_uid_rejected(h: Harness) -> None:
+    """A caller-chosen `#...` uid on a line and on a fulfillment, on create:
+    refused naming the field, before any id draw."""
+    for body, field in (
+        (
+            {"line_items": [{"uid": "#mine", "quantity": "1", "base_price_money": {"amount": 1}}]},
+            "order.line_items[0].uid",
+        ),
+        ({"fulfillments": [{"uid": "#mine", "type": "PICKUP"}]}, "order.fulfillments[0].uid"),
+    ):
+        response = h.api.post(
+            "/v2/orders",
+            {"idempotency_key": f"reserved-{field}", "order": {"location_id": SEED_LOCATION_ID, **body}},
+            headers=h.auth,
+        )
+        assert response.status == 400, response.text
+        assert response.json()["errors"][0]["field"] == field
+
+
+def update_reserved_uid_rejected(h: Harness) -> None:
+    """The same two, on update against the seeded order."""
+    for body, field in (
+        (
+            {"line_items": [{"uid": "#mine", "quantity": "1", "base_price_money": {"amount": 1}}]},
+            "order.line_items[0].uid",
+        ),
+        ({"fulfillments": [{"uid": "#mine", "type": "PICKUP"}]}, "order.fulfillments[0].uid"),
+    ):
+        response = h.api.put(
+            f"/v2/orders/{SEED_OPEN_ORDER_ID}",
+            {"idempotency_key": f"reserved-{field}", "order": {"version": 1, **body}},
+            headers=h.auth,
+        )
+        assert response.status == 400, response.text
+        assert response.json()["errors"][0]["field"] == field
+
+
 def fulfillment_update_ids(h: Harness) -> list[str]:
     created = h.api.post(
         "/v2/orders", {"idempotency_key": "base", "order": {"location_id": SEED_LOCATION_ID}}, headers=h.auth

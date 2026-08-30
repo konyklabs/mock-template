@@ -650,6 +650,38 @@ def test_an_order_cannot_be_shrunk_below_what_its_tenders_applied(h: Harness) ->
     assert done.json()["order"]["total_money"] == {"amount": 200, "currency": "USD"}
 
 
+def test_a_reserved_uid_cannot_slip_a_shrink_past_the_tendered_floor(h: Harness) -> None:
+    """The gate's repro: 1000 order, 600 tendered, then one PUT that names a
+    new line `#new1` at quantity -1, adds an unnamed 600 line and clears the
+    original. Refused on the reserved uid, before the floor is even asked."""
+    order = create_order(h, 1000)
+    assert pay(h, 600, key="part", order_id=order["id"]).status == 200
+    seq = journal_seq(h)
+    uid = order["line_items"][0]["uid"]
+    response = h.api.put(
+        f"/v2/orders/{order['id']}",
+        {
+            "idempotency_key": "slip",
+            "order": {
+                "version": 2,
+                "line_items": [
+                    {"uid": "#new1", "quantity": "-1", "base_price_money": {"amount": 1000}},
+                    {"quantity": "1", "base_price_money": {"amount": 600}},
+                ],
+            },
+            "fields_to_clear": [f"line_items[{uid}]"],
+        },
+        headers=h.auth,
+    )
+    assert response.status == 400
+    assert first_error(response)["field"] == "order.line_items[0].uid"
+    assert journal_seq(h) == seq
+    current = retrieve_order(h, order["id"])
+    assert current["version"] == 2
+    assert current["total_money"] == {"amount": 1000, "currency": "USD"}
+    assert current["net_amount_due_money"] == {"amount": 400, "currency": "USD"}
+
+
 def test_pay_order_with_an_empty_list_completes_a_zero_total_order(h: Harness) -> None:
     """ "Orders with a total amount of `0` can be marked as paid by specifying
     an empty array of `payment_ids` in the request." """

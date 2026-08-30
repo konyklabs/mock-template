@@ -572,7 +572,8 @@ class OrdersSurface:
         # a new line missing its quantity or price is refused before any uid
         # is minted. Then mint, in order: line uids, fulfillment uids.
         probe = orders.require(order_id)
-        _apply_line_changes(probe, clears_line_items, _placeholders(patches), request.fields_to_clear)
+        taken = {str(line.get("uid", "")) for line in _lines_of(probe)}
+        _apply_line_changes(probe, clears_line_items, _placeholders(patches, taken), request.fields_to_clear)
         _assert_tendered_floor(OrderEntity.from_entity(probe), subject)
         if patches is not None:
             patches = tuple(p if p.uid else replace(p, uid=self._deps.ids.line_item_uid()) for p in patches)
@@ -906,6 +907,8 @@ class OrdersSurface:
         built: list[OrderLineItem] = []
         for index, item in enumerate(items):
             path = f"order.line_items[{index}]"
+            if item.uid is not None:
+                _require_uid_unreserved(item.uid, f"{path}.uid")
             if not item.quantity:
                 raise UnitError(
                     UnitErrorKind.MISSING_FIELD,
@@ -958,6 +961,8 @@ class OrdersSurface:
         patches: list[_LinePatch] = []
         for index, item in enumerate(items):
             path = f"order.line_items[{index}]"
+            if item.uid is not None:
+                _require_uid_unreserved(item.uid, f"{path}.uid")
             assign: dict[str, Any] = {}
             clear: list[str] = []
 
@@ -1015,6 +1020,7 @@ class OrdersSurface:
             path = f"order.fulfillments[{index}]"
             kind = _require_fulfillment_type(item.type, f"{path}.type")
             if item.uid is not None:
+                _require_uid_unreserved(item.uid, f"{path}.uid")
                 if item.uid in seen:
                     raise UnitError(
                         UnitErrorKind.INVALID_VALUE,
@@ -1059,6 +1065,8 @@ class OrdersSurface:
         checked: list[tuple[str | None, dict[str, Any], dict[str, Any], tuple[str, ...]]] = []
         for index, item in enumerate(items):
             path = f"order.fulfillments[{index}]"
+            if item.uid is not None:
+                _require_uid_unreserved(item.uid, f"{path}.uid")
             prior = None if item.uid is None else by_uid.get(item.uid)
             assign: dict[str, Any] = {}
             if item.uid is not None and prior is None:
@@ -1232,13 +1240,51 @@ def _assign_or_clear(draft: Entity, patch: Any, name: str) -> None:
         draft.pop(name, None)
 
 
-def _placeholders(patches: tuple[_LinePatch, ...] | None) -> tuple[_LinePatch, ...] | None:
+RESERVED_UID_PREFIX = "#"
+"""A caller-supplied line or fulfillment uid may not start with this.
+
+JUDGMENT. Square reserves the ``#`` prefix for client-chosen temporary ids in
+catalog upserts ("use a temporary ID prefixed with `#`"), and a line or
+fulfillment uid is otherwise Square's to mint; a caller-chosen ``#...`` uid
+is never a legitimate request, and refusing it keeps the vocabulary in one
+place. The dry merge's placeholders do not rely on this -- see
+:func:`_placeholders` -- so the invariant survives even if the rule were
+loosened."""
+
+
+def _require_uid_unreserved(uid: str, field: str) -> None:
+    if uid.startswith(RESERVED_UID_PREFIX):
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"{field} may not start with {RESERVED_UID_PREFIX!r}; that prefix is reserved for temporary ids.",
+            field=field,
+            info={"supplied": uid},
+        )
+
+
+def _placeholders(patches: tuple[_LinePatch, ...] | None, taken: set[str]) -> tuple[_LinePatch, ...] | None:
     """The patches with a distinct placeholder uid on each new line, for the
-    dry merge. A placeholder cannot collide with a stored uid (stored uids
-    never start with ``#``), and no total depends on a uid."""
+    dry merge. No total depends on a uid, so any string will do as long as it
+    collides with nothing: each placeholder carries a NUL byte, which no
+    request uid is refused for and no real uid has ever carried, and is then
+    lengthened until it is in neither ``taken`` -- the stored uids and the
+    named patches -- nor the placeholders already handed out. The dry merge
+    therefore sees exactly the lines the commit will, whatever the caller
+    named."""
     if patches is None:
         return None
-    return tuple(p if p.uid else replace(p, uid=f"#new{index}") for index, p in enumerate(patches))
+    used = set(taken) | {p.uid for p in patches if p.uid}
+    out: list[_LinePatch] = []
+    for index, patch in enumerate(patches):
+        if patch.uid:
+            out.append(patch)
+            continue
+        candidate = f"\x00new{index}"
+        while candidate in used:
+            candidate += "\x00"
+        used.add(candidate)
+        out.append(replace(patch, uid=candidate))
+    return tuple(out)
 
 
 def _apply_line_changes(
