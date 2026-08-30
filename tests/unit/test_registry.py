@@ -107,9 +107,26 @@ def test_create_unit_starts_the_unit(tmp_path: Path) -> None:
     assert vendor.hydrated == 1
 
 
+def test_with_two_vendors_and_no_selector_the_error_names_them_all() -> None:
+    """The multi-vendor vendorless path, run for real. Two vendors ship in this
+    distribution, so "exactly one installed" no longer applies and the
+    registry must refuse rather than pick -- naming every candidate and the
+    environment variable that would have chosen one. A hidden default here
+    would be the silent misconfiguration the registry's invariant forbids."""
+    offered = available_vendors()
+    assert {"clover", "square"} <= set(offered), offered
+    with pytest.raises(ValueError) as caught:
+        create_unit(profile="full")
+    message = str(caught.value)
+    assert VENDOR_ENV_VAR in message
+    for name in offered:
+        assert name in message
+
+
 def test_with_no_vendor_and_none_installed_the_error_says_how_to_supply_one(tmp_path: Path) -> None:
-    if available_vendors():
-        pytest.skip("a vendor is installed; the single-vendor default applies instead")
+    installed = available_vendors()
+    if installed:
+        pytest.skip(f"vendors installed: {installed}; the none-installed branch is unreachable here")
     with pytest.raises(ValueError) as caught:
         create_unit(profile="test")
     assert VENDOR_ENV_VAR in str(caught.value)

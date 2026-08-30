@@ -9,10 +9,18 @@ touching a vendor sandbox.
 > documentation. Vendor names are used only to identify which public API a
 > module imitates.
 
-One vendor ships today: **Square (Connect v2)** — OAuth2 (code + PKCE flows),
-orders with a real lifecycle, locations and catalog, and webhook subscriptions
-whose deliveries are signed the way Square signs them and retried on Square's
-documented schedule.
+Two vendors ship today. **Square (Connect v2)** is complete — OAuth2 (code +
+PKCE flows), orders with a real lifecycle, locations and catalog, and webhook
+subscriptions whose deliveries are signed the way Square signs them and
+retried on Square's documented schedule. **Clover (REST v3)** is in progress:
+at this commit the `clover` unit serves the OAuth v2 surface (authorize, token
+exchange, single-use refresh rotation, and the documented 401-for-everything
+auth behaviour) plus the control plane; orders, inventory, webhooks and the
+seed scenario are landing in follow-up PRs.
+
+Because two vendors are installed, every command names one: `--vendor square`
+(or `--vendor clover`), or set `VENDORFAKE_VENDOR`. With no selector the
+command refuses and lists what it found — it never guesses.
 
 ## Install
 
@@ -21,7 +29,7 @@ Not yet on PyPI. Until v0.1 is published, install from source:
 ```sh
 git clone https://github.com/konyklabs/vendorfake
 cd vendorfake
-uv run vendorfake serve        # or: uv sync && .venv/bin/vendorfake serve
+uv run vendorfake serve --vendor square   # or: uv sync && .venv/bin/vendorfake serve --vendor square
 ```
 
 Once v0.1 is out this becomes `pip install vendorfake` / `uv add vendorfake`.
@@ -32,7 +40,7 @@ Python ≥ 3.11.
 Serve the Square unit (defaults to the `full` profile on port 8080):
 
 ```sh
-vendorfake serve
+vendorfake serve --vendor square      # or: VENDORFAKE_VENDOR=square vendorfake serve
 ```
 
 The default scenario is pre-seeded — a merchant, two locations, a small
@@ -168,7 +176,7 @@ curl -s -X POST http://localhost:8080/__unit/state/reset -H 'Content-Type: appli
 Time is controllable when the unit starts with a virtual clock:
 
 ```sh
-VENDORFAKE_CLOCK=virtual vendorfake serve
+VENDORFAKE_CLOCK=virtual vendorfake serve --vendor square
 
 curl -s -X POST http://localhost:8080/__unit/clock/advance \
   -H 'Content-Type: application/json' -d '{"ms": 2592000000}'    # 30 days
@@ -179,14 +187,15 @@ curl -s http://localhost:8080/v2/locations -H "Authorization: Bearer $SEED"
 ```
 
 The rest is discoverable, not memorised: `GET /__unit/routes` lists all 45
-routes with summaries, `GET /__unit/info` (or `vendorfake info`) describes the
-whole unit — capabilities, auth, signing scheme, fault catalogue, retry
-schedule — and `vendorfake openapi` prints an OpenAPI 3.1 document.
+routes with summaries, `GET /__unit/info` (or `vendorfake info --vendor square`)
+describes the whole unit — capabilities, auth, signing scheme, fault catalogue,
+retry schedule — and `vendorfake openapi --vendor square` prints an OpenAPI 3.1
+document.
 
 ## Profiles
 
 A profile decides which capabilities a unit serves. Ship-with-the-package
-choices (`vendorfake serve --profile <name>`, or a path to your own JSON):
+choices (`vendorfake serve --vendor square --profile <name>`, or a path to your own JSON):
 
 | Profile | What it is |
 |---|---|

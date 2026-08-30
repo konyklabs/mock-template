@@ -32,6 +32,7 @@ REQUIRED = (
     "vendorfake/square/profiles/oauth-only.json",
     "vendorfake/square/profiles/orders-only.json",
     "vendorfake/square/profiles/chaos-demo.json",
+    "vendorfake/clover/profiles/full.json",
 )
 
 

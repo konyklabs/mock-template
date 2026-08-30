@@ -137,6 +137,24 @@ def test_every_declared_subcommand_has_a_dispatch_arm() -> None:
     assert declared == {"serve", "info", "openapi", "vendors", "conformance"}
 
 
+def test_serve_without_a_vendor_refuses_and_lists_both(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The README quickstart names a vendor because this refusal is real: with
+    two vendors installed and no --vendor or $VENDORFAKE_VENDOR, `serve`
+    exits non-zero before binding anything, listing what it found. Run
+    against the real registry -- no monkeypatched create_unit."""
+    from vendorfake.registry import available_vendors
+
+    monkeypatch.delenv("VENDORFAKE_VENDOR", raising=False)
+    offered = available_vendors()
+    assert {"clover", "square"} <= set(offered), offered
+    with pytest.raises(SystemExit) as raised:
+        run("serve")
+    message = str(raised.value)
+    assert "create_unit needs a vendor" in message
+    for name in offered:
+        assert name in message
+
+
 def test_an_unknown_vendor_is_a_startup_failure_that_lists_the_real_ones() -> None:
     """Not a server that starts and 404s everything.
 
