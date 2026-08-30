@@ -38,6 +38,25 @@ table at all. A Square-habituated consumer expects a 403 on an under-permitted
 token; surfacing that Clover does not send one is exactly the kind of
 difference this fake exists to teach.
 
+The conflation goes one step further than the status. The kernel raises
+``forbidden_scope`` with a detail that names the missing permission ("The
+access token is missing the required permission(s): ORDERS_W."), and the
+chaos engine raises ``token_expired`` with its own; a Clover that put either
+on the wire would be distinguishing the two cases it documents itself as not
+distinguishing. So on ``token_expired``, ``token_revoked`` and
+``forbidden_scope`` -- the kinds only the bearer path produces -- the wire
+``message`` is **always the table's**, and the detail travels only in the
+``unit_error`` sidecar (as ``detail``), for whoever is debugging this fake.
+
+``unauthorized`` keeps the handler's detail, deliberately. Nothing in the core
+raises it; the bearer adapter raises it **without** a detail (so the table
+wins there too, and the three bearer failures are byte-identical on the wire
+-- pinned by a test that drives the kernel's real permission check), and the
+only callers that attach one are the OAuth *endpoints*, whose refusal bodies
+("Failed to validate authentication code") are this package's JUDGMENT for a
+gap the 401 sentence does not cover: that sentence is about API requests
+carrying a bearer token, not about the token endpoint's own answers.
+
 Rate limiting
 -------------
 429 is documented (https://docs.clover.com/dev/docs/api-usage-rate-limits)
@@ -77,6 +96,8 @@ from vendorfake.core.util.numbers import as_str
 
 __all__ = [
     "CLOVER_ERROR_TABLE",
+    "CONFLATED_401_KINDS",
+    "DETAIL_SUPPRESSED_KINDS",
     "CloverErrorMapping",
     "CloverErrorShaper",
     "Provenance",
@@ -246,6 +267,27 @@ CLOVER_ERROR_TABLE: dict[UnitErrorKind, CloverErrorMapping] = {
 """Twenty rows, one per core error kind. See the module docstring for
 provenance -- and note there is deliberately no 403 anywhere in this table."""
 
+CONFLATED_401_KINDS: frozenset[UnitErrorKind] = frozenset(
+    {
+        UnitErrorKind.UNAUTHORIZED,
+        UnitErrorKind.TOKEN_EXPIRED,
+        UnitErrorKind.TOKEN_REVOKED,
+        UnitErrorKind.FORBIDDEN_SCOPE,
+    }
+)
+"""The four rows the documented conflation collapses onto 401."""
+
+DETAIL_SUPPRESSED_KINDS: frozenset[UnitErrorKind] = frozenset(
+    {
+        UnitErrorKind.TOKEN_EXPIRED,
+        UnitErrorKind.TOKEN_REVOKED,
+        UnitErrorKind.FORBIDDEN_SCOPE,
+    }
+)
+"""The conflated rows whose wire message ignores the error's own detail: the
+kinds only the bearer path produces. ``unauthorized`` is conflated in status
+but keeps its detail -- see the module docstring for why."""
+
 #: The header value a rate-limited response carries when the header is on and
 #: a chaos rule supplied no interval, in whole seconds as Clover's documented
 #: ``retry-after: <seconds>`` implies.
@@ -284,11 +326,14 @@ class CloverErrorShaper:
 
         ``message`` follows the error's own wording when it has one and the
         table's otherwise, so a handler that explains precisely what was wrong
-        is not overwritten by a generic sentence. ``type`` is emitted only on
-        the one row whose value Clover documents.
+        is not overwritten by a generic sentence -- except on the bearer-path
+        401 rows (:data:`DETAIL_SUPPRESSED_KINDS`), where the table always
+        wins and the detail goes to the sidecar instead (module docstring).
+        ``type`` is emitted only on the one row whose value Clover documents.
         """
         mapping = CLOVER_ERROR_TABLE[err.kind]
-        message = err.detail if err.detail else mapping.message
+        conflated = err.kind in DETAIL_SUPPRESSED_KINDS
+        message = mapping.message if conflated or not err.detail else err.detail
         body: dict[str, Any] = compact({"message": message, "type": mapping.type})
         if self._sidecar:
             # Reserved keys last, so an `info` document carrying a `kind` of
@@ -299,6 +344,7 @@ class CloverErrorShaper:
                     "kind": err.kind.value,
                     "status_provenance": mapping.provenance,
                     "field": err.field or None,
+                    "detail": (err.detail or None) if conflated else None,
                 }
             )
         headers: dict[str, str] = {}

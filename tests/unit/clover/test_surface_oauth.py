@@ -273,6 +273,18 @@ def test_a_refresh_does_not_end_previously_issued_access_tokens(h: Harness) -> N
     assert f"Bearer {first['access_token']}" in offered
 
 
+def test_a_refresh_journals_both_its_writes_as_a_refresh(h: Harness) -> None:
+    """One request, one operation: the rotation mark on the old record and the
+    insert of the new pair both carry operation_id RefreshToken. A mint that
+    hardcoded ExchangeToken made a refresh look like two different requests."""
+    first = h.exchange()
+    before = h.journal_len()
+    assert h.refresh(refresh_token=first["refresh_token"]).status == 200
+    entries = h.api.get("/__unit/journal").json()["entries"][before:]
+    assert [(entry["collection"], entry["op"]) for entry in entries] == [("tokens", "update"), ("tokens", "insert")]
+    assert {entry["meta"]["operation_id"] for entry in entries} == {"RefreshToken"}
+
+
 def test_an_expired_refresh_token_is_refused(h: Harness) -> None:
     first = h.exchange()
     tokens = h.unit.context.store.collection(COL.tokens)

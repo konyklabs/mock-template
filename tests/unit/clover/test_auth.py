@@ -15,7 +15,7 @@ import pytest
 
 from tests.unit.clover.harness import Harness, harness
 from vendorfake.clover.entities import COL, TokenEntity
-from vendorfake.clover.errors import CLOVER_ERROR_TABLE, CloverErrorShaper
+from vendorfake.clover.errors import CLOVER_ERROR_TABLE
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
 
@@ -84,29 +84,82 @@ def test_an_expired_token_raises_token_expired_which_is_also_401(h: Harness) -> 
     assert CLOVER_ERROR_TABLE[UnitErrorKind.TOKEN_EXPIRED].status == 401
 
 
-def test_the_conflation_makes_every_auth_failure_identical_on_the_wire(h: Harness) -> None:
-    """The adapter raises without a detail on purpose, so bad-token, expired
-    and insufficient-permission failures shape to byte-identical Clover
-    envelopes -- only the debugging sidecar differs. That is the documented
-    behaviour a Square-habituated consumer (expecting a 403) must meet."""
-    token = _insert_token(h, access_expiry_ms=1)
-    auth = h.unit.context.vendor.auth
-    shaper = CloverErrorShaper(sidecar=False)
-    ctx = h.unit.context
+def _protected_unit(*, sidecar: bool) -> Harness:
+    """A clover unit with one extra bearer route demanding a permission no
+    token carries, so the KERNEL's own forbidden_scope raise -- detail naming
+    the permission and all -- is what reaches the shaper."""
+    from tests.conformance.mutants.seams import VendorOverlay
+    from tests.unit.clover.harness import MERCHANT_ID, Silent
+    from vendorfake import create_unit
+    from vendorfake.clover.entities import MerchantEntity
+    from vendorfake.clover.vendor import create_clover_vendor
+    from vendorfake.core.kernel.reply import json_
+    from vendorfake.core.kernel.types import Route
+    from vendorfake.core.transport.inprocess import in_process
 
-    failures: list[UnitError] = []
-    for header in (None, "Bearer never-minted", f"Bearer {token.access_token}"):
-        with pytest.raises(UnitError) as caught:
-            auth.resolve(_args_with(h, header), "bearer")
-        failures.append(caught.value)
-    # The kernel's own permission check raises this kind for an
-    # under-permitted token; it belongs in the same conflated set.
-    failures.append(UnitError(UnitErrorKind.FORBIDDEN_SCOPE))
+    guarded = Route(
+        method="GET",
+        path="/v3/merchants/{mId}/payments",
+        capability="oauth",
+        handler=lambda args: json_({"ok": True}),
+        auth="bearer",
+        scopes=("PAYMENTS_W",),
+        operation_id="TestGuarded",
+        summary="Test-only: needs a permission the app's set does not grant.",
+    )
+    inner = create_clover_vendor(vendor_config={"error_sidecar": sidecar})
+    overlay = VendorOverlay(inner, routes=lambda routes: (*routes, guarded))
+    unit = create_unit(vendor=overlay, profile="full", logger=Silent())
+    unit.context.store.collection(COL.merchants).insert(
+        MerchantEntity(id=MERCHANT_ID, name="Harvest & Rye").to_entity(),
+        {"operation_id": "TestSeed", "seed": True},
+    )
+    return Harness(unit=unit, api=in_process(unit))
 
-    shaped = [shaper.shape(err, ctx) for err in failures]
-    assert {s.status for s in shaped} == {401}
-    bodies = [s.body for s in shaped]
-    assert all(body == {"message": "401 Unauthorized"} for body in bodies), bodies
+
+def _three_failures(p: Harness) -> list:  # type: ignore[type-arg]
+    """Bad token, expired token, under-permitted token -- the last through the
+    kernel's real permission check, not a hand-built error."""
+    live = p.exchange()
+    expired = _insert_token(p, access_expiry_ms=1)
+    path = "/v3/merchants/HRVSTRYE12345/payments"
+    return [
+        p.api.get(path, headers={"authorization": "Bearer never-minted"}),
+        p.api.get(path, headers={"authorization": f"Bearer {expired.access_token}"}),
+        p.api.get(path, headers={"authorization": f"Bearer {live['access_token']}"}),
+    ]
+
+
+def test_the_conflation_makes_every_auth_failure_byte_identical_with_the_sidecar_off() -> None:
+    """DOCUMENTED: bad token and insufficient permission both answer 401 and
+    Clover does not say which. With the sidecar off the three bodies are the
+    same bytes -- including the under-permitted one, whose kernel-raised
+    detail names the missing permission and must never reach the wire."""
+    p = _protected_unit(sidecar=False)
+    try:
+        responses = _three_failures(p)
+        assert [r.status for r in responses] == [401, 401, 401]
+        assert [r.headers["x-unit-error"] for r in responses] == ["unauthorized", "token_expired", "forbidden_scope"]
+        bodies = {r.body for r in responses}
+        assert bodies == {b'{"message":"401 Unauthorized"}'}, bodies
+        assert b"PAYMENTS_W" not in responses[2].body
+    finally:
+        p.unit.stop()
+
+
+def test_the_conflation_is_still_debuggable_with_the_sidecar_on() -> None:
+    """Same three failures, sidecar on: the wire message stays identical while
+    unit_error distinguishes them and carries the suppressed detail."""
+    p = _protected_unit(sidecar=True)
+    try:
+        responses = _three_failures(p)
+        assert {r.json()["message"] for r in responses} == {"401 Unauthorized"}
+        kinds = [r.json()["unit_error"]["kind"] for r in responses]
+        assert kinds == ["unauthorized", "token_expired", "forbidden_scope"]
+        assert "PAYMENTS_W" in responses[2].json()["unit_error"]["detail"]
+        assert {r.status for r in responses} == {401}
+    finally:
+        p.unit.stop()
 
 
 def test_a_rotated_refresh_does_not_end_the_access_token_here_either(h: Harness) -> None:

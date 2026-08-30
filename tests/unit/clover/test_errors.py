@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from tests.unit.clover.conftest import fake_ctx
-from vendorfake.clover.errors import CLOVER_ERROR_TABLE, CloverErrorShaper
+from vendorfake.clover.errors import (
+    CLOVER_ERROR_TABLE,
+    CONFLATED_401_KINDS,
+    DETAIL_SUPPRESSED_KINDS,
+    CloverErrorShaper,
+)
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind, UnitRequest
 
 
@@ -47,6 +52,42 @@ def test_forbidden_scope_shapes_to_401_on_the_wire() -> None:
     shaped = CloverErrorShaper().shape(UnitError(UnitErrorKind.FORBIDDEN_SCOPE), fake_ctx())
     assert shaped.status == 401
     assert shaped.body["message"] == "401 Unauthorized"
+
+
+def test_the_bearer_path_rows_never_put_the_errors_detail_on_the_wire() -> None:
+    """The kernel's forbidden_scope names the missing permission in its detail
+    and the chaos engine's token_expired carries one too; a Clover that said
+    either would distinguish what it documents itself as not distinguishing.
+    The table wins on those rows; the detail reaches the sidecar only."""
+    leaky = "The access token is missing the required permission(s): ORDERS_W."
+    assert {
+        UnitErrorKind.TOKEN_EXPIRED,
+        UnitErrorKind.TOKEN_REVOKED,
+        UnitErrorKind.FORBIDDEN_SCOPE,
+    } == DETAIL_SUPPRESSED_KINDS
+    assert DETAIL_SUPPRESSED_KINDS < CONFLATED_401_KINDS
+    for kind in DETAIL_SUPPRESSED_KINDS:
+        shaped = CloverErrorShaper(sidecar=False).shape(UnitError(kind, detail=leaky), fake_ctx())
+        assert shaped.body == {"message": "401 Unauthorized"}, kind
+        with_sidecar = CloverErrorShaper(sidecar=True).shape(UnitError(kind, detail=leaky), fake_ctx())
+        assert with_sidecar.body["message"] == "401 Unauthorized"
+        assert with_sidecar.body["unit_error"]["detail"] == leaky
+    # `unauthorized` is conflated in status but keeps a handler's detail: the
+    # bearer adapter never attaches one (the byte-identity test in test_auth
+    # drives that through the kernel), and the OAuth endpoints' own refusal
+    # bodies are a labelled JUDGMENT the 401 sentence does not cover.
+    oauth = CloverErrorShaper().shape(
+        UnitError(UnitErrorKind.UNAUTHORIZED, detail="Failed to validate authentication code"), fake_ctx()
+    )
+    assert oauth.status == 401
+    assert oauth.body["message"] == "Failed to validate authentication code"
+    bare = CloverErrorShaper(sidecar=False).shape(UnitError(UnitErrorKind.UNAUTHORIZED), fake_ctx())
+    assert bare.body == {"message": "401 Unauthorized"}
+    # Every other row still prefers the handler's own wording, and carries no
+    # sidecar `detail` key because nothing was suppressed.
+    other = CloverErrorShaper().shape(UnitError(UnitErrorKind.NOT_FOUND, detail="no such order"), fake_ctx())
+    assert other.body["message"] == "no such order"
+    assert "detail" not in other.body["unit_error"]
 
 
 def test_the_envelope_is_message_plus_optional_type() -> None:

@@ -230,7 +230,15 @@ class CloverOAuthSurface:
             draft["used_at_ms"] = now_ms
 
         codes.update(record.id, mark_used, meta={"operation_id": "ExchangeToken"})
-        return json_(self._mint(ctx, client_id=record.client_id, merchant_id=record.merchant_id, now_ms=now_ms))
+        return json_(
+            self._mint(
+                ctx,
+                client_id=record.client_id,
+                merchant_id=record.merchant_id,
+                now_ms=now_ms,
+                operation_id="ExchangeToken",
+            )
+        )
 
     # -- POST /oauth/v2/refresh --------------------------------------------
 
@@ -277,7 +285,15 @@ class CloverOAuthSurface:
         # can observe (the old refresh token stops working). The old ACCESS
         # token is deliberately untouched; see the module docstring.
         tokens.update(existing.id, rotate, meta={"operation_id": "RefreshToken"})
-        return json_(self._mint(ctx, client_id=existing.client_id, merchant_id=existing.merchant_id, now_ms=now_ms))
+        return json_(
+            self._mint(
+                ctx,
+                client_id=existing.client_id,
+                merchant_id=existing.merchant_id,
+                now_ms=now_ms,
+                operation_id="RefreshToken",
+            )
+        )
 
     # -- shared ------------------------------------------------------------
 
@@ -323,10 +339,22 @@ class CloverOAuthSurface:
                 field="code_verifier",
             )
 
-    def _mint(self, ctx: UnitContext, *, client_id: str, merchant_id: str, now_ms: int) -> dict[str, Any]:
+    def _mint(
+        self,
+        ctx: UnitContext,
+        *,
+        client_id: str,
+        merchant_id: str,
+        now_ms: int,
+        operation_id: str,
+    ) -> dict[str, Any]:
         """Issue one access/refresh pair, record it, and answer the documented
         four fields. Stored instants are ms; the wire gets Unix seconds
-        through :func:`~vendorfake.clover.surface.common.wire_seconds`."""
+        through :func:`~vendorfake.clover.surface.common.wire_seconds`.
+
+        ``operation_id`` is the caller's, so a refresh journals the token it
+        minted as a refresh: one request, one operation, however many writes.
+        """
         config = self._deps.config
         access_expires_ms = now_ms + config.access_token_ttl_ms
         refresh_expires_ms = now_ms + config.refresh_token_ttl_ms
@@ -343,7 +371,7 @@ class CloverOAuthSurface:
             permissions=config.permissions,
             createdTime=now_ms,
         )
-        ctx.store.collection(COL.tokens).insert(entity.to_entity(), {"operation_id": "ExchangeToken"})
+        ctx.store.collection(COL.tokens).insert(entity.to_entity(), {"operation_id": operation_id})
         return TokenResponse(
             access_token=entity.access_token,
             access_token_expiration=wire_seconds(access_expires_ms),
