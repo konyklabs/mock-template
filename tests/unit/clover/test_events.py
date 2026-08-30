@@ -246,6 +246,15 @@ def test_a_mutation_in_a_unit_with_no_merchant_is_not_delivered_and_is_logged(si
     assert any("no merchant" in message for message in warnings)
 
 
+def test_the_mapper_keys_on_the_collection_names_the_orders_branch_uses() -> None:
+    """The contract with feat/34-clover-orders, as four literals: a rename of
+    a collection on either side must go red here rather than present as "a
+    mutation delivered nothing". TODO(rebase onto orders): once EVENT_KEYS is
+    derived from COL, this assertion is what keeps COL honest instead."""
+    assert EVENT_KEYS == {"orders": "O", "items": "I", "customers": "C", "payments": "P"}
+    assert list(EVENT_KEYS) == ["orders", "items", "customers", "payments"]
+
+
 def test_the_advertised_event_types_are_the_key_type_product() -> None:
     assert len(CLOVER_EVENT_TYPES) == 12
     assert CLOVER_EVENT_TYPES[:3] == ("O:CREATE", "O:UPDATE", "O:DELETE")

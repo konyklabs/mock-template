@@ -81,7 +81,7 @@ CLOVER_SIGNER_PROPERTIES = SignerProperties(
 """Bound to the secret and to nothing else. See the module docstring."""
 
 
-def verify_clover_auth(headers: Mapping[str, str], expected: str) -> bool:
+def verify_clover_auth(headers: Mapping[str, object], expected: str) -> bool:
     """Whether a delivery's ``X-Clover-Auth`` is ``expected``.
 
     Mirrors ``verify_square_signature`` so a consumer can copy one helper per
@@ -89,12 +89,15 @@ def verify_clover_auth(headers: Mapping[str, str], expected: str) -> bool:
     consumer's framework may have lower-cased the name, and the comparison is
     :func:`hmac.compare_digest` rather than ``==`` for the same reason the
     Square helper uses it: a consumer who copies ``==`` from here ships it.
-    An absent header verifies as nothing, never as the empty string.
+    An absent header verifies as nothing, never as the empty string, and a
+    value that is not a string -- a framework handing over ``None`` for a
+    missing header, say -- is a failed verification rather than a comparison
+    against ``"None"``.
     """
     wanted = AUTH_HEADER.lower()
     for name, value in headers.items():
         if name.lower() == wanted:
-            return hmac.compare_digest(str(value), expected)
+            return isinstance(value, str) and hmac.compare_digest(value, expected)
     return False
 
 

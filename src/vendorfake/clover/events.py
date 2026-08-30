@@ -78,6 +78,9 @@ KEY_INVENTORY = "I"
 KEY_CUSTOMERS = "C"
 KEY_PAYMENTS = "P"
 
+# TODO(rebase onto orders): derive from COL -- feat/34-clover-orders adds
+# COL.orders / COL.items / COL.customers / COL.payments; replace these literals
+# with those attributes at the merge so the name is spelled once again.
 EVENT_KEYS: Mapping[str, str] = {
     "orders": KEY_ORDERS,
     "items": KEY_INVENTORY,

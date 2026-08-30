@@ -148,6 +148,14 @@ def test_an_absent_header_never_verifies_even_against_an_empty_expectation() -> 
     assert not verify_clover_auth({}, "")
 
 
+def test_a_non_string_header_value_is_a_failed_verification_not_a_stringified_one() -> None:
+    """A framework that hands over `None` for a missing header must not be
+    compared as the four-letter string "None" -- and must not raise either."""
+    assert not verify_clover_auth({"X-Clover-Auth": None}, "None")
+    assert not verify_clover_auth({"X-Clover-Auth": 12345}, "12345")
+    assert not verify_clover_auth({"X-Clover-Auth": b"code"}, "code")
+
+
 # ---------------------------------------------------------------------------
 # The description, which is what an operator reads at /__unit/info.
 # ---------------------------------------------------------------------------
