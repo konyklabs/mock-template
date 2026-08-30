@@ -22,7 +22,8 @@
     "C19": "state: a replayed idempotency key returns the stored answer and runs nothing",
     "C20": "state: a cursor belongs to the query that issued it",
     "C21": "webhooks: the declared retry schedule is the schedule actually followed",
-    "C22": "state: the seed scenario is deterministic across two OPERATING-SYSTEM PROCESSES"
+    "C22": "state: the seed scenario is deterministic across two OPERATING-SYSTEM PROCESSES",
+    "C23": "transport: a repeated query parameter reaches the handler whole"
   },
   "expected_skips": {
     "C07": [

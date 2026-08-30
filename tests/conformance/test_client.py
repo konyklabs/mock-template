@@ -13,6 +13,7 @@ from vendorfake.conformance.client import (
     JSON_CONTENT_TYPE,
     ConformanceResponse,
     encode_request,
+    with_query,
 )
 from vendorfake.conformance.env import ancestors, concrete_path
 
@@ -47,6 +48,18 @@ def test_no_body_is_empty_bytes_and_no_content_type() -> None:
 def test_two_body_spellings_at_once_are_refused() -> None:
     with pytest.raises(ValueError, match="at most one"):
         encode_request(json_body={}, form={"a": "b"})
+
+
+def test_the_query_goes_on_the_path_so_neither_binding_can_drop_one_already_there() -> None:
+    """httpx replaces a URL's query when ``params=`` is given, so a check that
+    wrote ``/x?k=a`` would have reached the handler with ``k`` in process and
+    without it over HTTP. Both clients now encode the query the same way."""
+    assert with_query("/x", None) == "/x"
+    assert with_query("/x?k=a", None) == "/x?k=a"
+    assert with_query("/x", []) == "/x"
+    assert with_query("/x", {"limit": "2"}) == "/x?limit=2"
+    assert with_query("/x?flag", [("scope", "first"), ("scope", "second")]) == "/x?flag&scope=first&scope=second"
+    assert with_query("/x", [("empty", "")]) == "/x?empty="
 
 
 def test_a_response_exposes_bytes_text_json_and_the_error_kind() -> None:

@@ -23,9 +23,10 @@ def _show(args: Any) -> Any:
     """A vendor route that reports what the adapter handed the core.
 
     Everything this returns is a fact the transport had to carry correctly:
-    the path parameter proves segmentation, the query proves the last-wins
-    collapse, the header proves the join, and the raw length proves the body
-    arrived as bytes and was not re-encoded on the way.
+    the path parameter proves segmentation, the two query views prove both
+    that the last value wins and that no value was dropped, the header proves
+    the join, and the raw length proves the body arrived as bytes and was not
+    re-encoded on the way.
     """
     return json_(
         {
@@ -33,6 +34,7 @@ def _show(args: Any) -> Any:
             "method": args.req.method,
             "path": args.req.path,
             "query": dict(args.req.query),
+            "query_all": {name: list(values) for name, values in args.req.query_all.items()},
             "headers": dict(args.req.headers),
             "raw_len": len(args.req.raw_body),
             "transport": args.req.transport,

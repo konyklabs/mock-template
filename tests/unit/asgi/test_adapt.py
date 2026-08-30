@@ -13,8 +13,9 @@ from typing import Any
 import anyio
 import httpx
 import pytest
+from starlette.requests import Request
 
-from vendorfake.asgi.adapt import TRANSPORT, to_response
+from vendorfake.asgi.adapt import TRANSPORT, request_path, to_response
 from vendorfake.core.kernel.types import UnitResponse
 
 
@@ -69,15 +70,38 @@ def test_header_names_are_lowercased(app: Any) -> None:
     assert body["headers"]["x-mixed-case"] == "v"
 
 
-def test_repeated_query_parameters_collapse_to_the_last(app: Any) -> None:
-    """``UnitRequest.query`` is ``str -> str`` in every binding.
+def test_repeated_query_parameters_keep_every_value_and_the_scalar_view_keeps_the_last(app: Any) -> None:
+    """``UnitRequest.query`` is ``str -> str`` in every binding and
+    ``query_all`` is ``str -> Sequence[str]`` in every binding.
 
     Starlette's ``QueryParams`` is multi-valued; letting it through would give
     the HTTP binding a list where the in-process and file-drop bindings have a
-    string, and a handler written against one would break on the others.
+    string. ``dict(query_params)`` would instead drop ``x=1`` on the floor.
     """
     body = call(app, "GET", "/v2/orders/abc?x=1&x=2&y=3").json()
     assert body["query"] == {"x": "2", "y": "3"}
+    assert body["query_all"] == {"x": ["1", "2"], "y": ["3"]}
+
+
+def test_a_bare_query_key_is_kept_as_an_empty_value(app: Any) -> None:
+    body = call(app, "GET", "/v2/orders/abc?flag&x=1").json()
+    assert body["query"] == {"flag": "", "x": "1"}
+    assert body["query_all"] == {"flag": [""], "x": ["1"]}
+
+
+def test_a_raw_path_that_still_carries_the_query_string_is_cut_at_the_question_mark() -> None:
+    """ASGI says ``raw_path`` excludes the query, but a server that leaves it on
+    would otherwise feed every parameter to ``make_request`` twice -- once from
+    the path, once from ``query_string``."""
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/v2/orders/a/b",
+        "raw_path": b"/v2/orders/a%2Fb?x=1&x=2",
+        "query_string": b"x=1&x=2",
+        "headers": [],
+    }
+    assert request_path(Request(scope)) == "/v2/orders/a%2Fb"
 
 
 def test_body_reaches_the_core_as_the_exact_bytes(app: Any) -> None:

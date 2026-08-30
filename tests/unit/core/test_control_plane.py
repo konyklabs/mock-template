@@ -922,6 +922,15 @@ def test_echo_reports_a_json_body_and_its_exact_received_length() -> None:
     assert body["raw_len"] == len(b'{"a":1}')
 
 
+def test_echo_reports_both_query_views() -> None:
+    """The conformance suite sees only what crosses the boundary, so the
+    repeated-query contract needs the echo route to say what the handler saw."""
+    api, _ = _api()
+    body = api.post("/__unit/echo?scope=a&scope=b&flag").json()
+    assert body["query"] == {"scope": "b", "flag": ""}
+    assert body["query_all"] == {"scope": ["a", "b"], "flag": [""]}
+
+
 def test_echo_omits_the_json_key_when_there_was_no_body_at_all() -> None:
     """`null` is a legitimate JSON body, so an always-present key could not
     distinguish "the body was null" from "there was no body"."""

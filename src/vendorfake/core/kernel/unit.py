@@ -86,10 +86,11 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import parse_qsl
 
 from vendorfake.core.capability.gates import CoreCapability, assert_capability_declarations
 from vendorfake.core.capability.registry import CapabilityRegistry
@@ -169,7 +170,7 @@ def make_request(
     *,
     method: str,
     path: str,
-    query: Mapping[str, str] | None = None,
+    query: Mapping[str, str] | Iterable[tuple[str, str]] | None = None,
     headers: Mapping[str, str] | None = None,
     body: object = None,
     raw_body: bytes | str | None = None,
@@ -179,11 +180,15 @@ def make_request(
 ) -> UnitRequest:
     """Build a :class:`UnitRequest` the way every binding must build one.
 
-    Shared rather than duplicated per binding, because the three normalisations
+    Shared rather than duplicated per binding, because the four normalisations
     below are exactly the ones a second binding gets subtly wrong:
 
     * header names are lower-cased, so ``args.header()`` is case-insensitive
       without every handler saying so;
+    * a ``?query=string`` on ``path`` is split off and parsed with blank values
+      kept, and ``query`` may be a mapping or ``(name, value)`` pairs in
+      arrival order; ``query_all`` keeps every value and ``query`` the last,
+      so a repeated key is never lost on one binding and kept on another;
     * ``raw_body`` wins over ``body``; supplying ``body`` serialises it and
       defaults the content type to JSON, which is what makes
       ``post(path, {...})`` mean what a caller expects while leaving the exact
@@ -193,6 +198,13 @@ def make_request(
     normalised: dict[str, str] = {}
     for name, value in (headers or {}).items():
         normalised[name.lower()] = value
+
+    path, _, query_string = path.partition("?")
+    pairs = list(parse_qsl(query_string, keep_blank_values=True))
+    pairs.extend(query.items() if isinstance(query, Mapping) else (query or ()))
+    query_all: dict[str, list[str]] = {}
+    for name, value in pairs:
+        query_all.setdefault(name, []).append(value)
 
     payload: bytes
     if raw_body is not None:
@@ -207,11 +219,12 @@ def make_request(
         id=request_id or normalised.get(REQUEST_ID_HEADER) or str(uuid.uuid4()),
         method=method.upper(),
         path=path if path.startswith("/") else f"/{path}",
-        query=dict(query or {}),
+        query={name: values[-1] for name, values in query_all.items()},
         headers=normalised,
         raw_body=payload,
         transport=transport,
         received_at=received_at or _now_iso(),
+        query_all={name: tuple(values) for name, values in query_all.items()},
     )
 
 

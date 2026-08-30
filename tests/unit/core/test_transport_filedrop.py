@@ -26,6 +26,7 @@ def _echo(args: Any) -> Any:
             "path": args.req.path,
             "transport": args.req.transport,
             "query": dict(args.req.query),
+            "query_all": {name: list(values) for name, values in args.req.query_all.items()},
             "content_type": args.media_type(),
             "fields": dict(args.form()) if args.media_type() == "application/x-www-form-urlencoded" else {},
             "raw_len": len(args.req.raw_body),
@@ -117,6 +118,18 @@ def test_a_document_may_carry_query_parameters_and_headers(tmp_path: Path) -> No
     # is honoured -- without which the same logical call has two identities
     # depending on which binding carried it.
     assert body["request_id"] == "corr-9"
+
+
+def test_a_repeated_query_parameter_is_written_on_the_path_and_reaches_the_handler_whole(tmp_path: Path) -> None:
+    """A JSON object cannot repeat a key, so the path carries the query string;
+    the same request over HTTP and in-process must see the same two views."""
+    drop = _drop(tmp_path)
+    _write(drop, "01", {"method": "GET", "path": "/echo?k=a&k=b&flag", "query": {"limit": "2"}})
+    drop.poll()
+    body = _read(drop, "01")["body"]
+    assert body["path"] == "/echo"
+    assert body["query"] == {"k": "b", "flag": "", "limit": "2"}
+    assert body["query_all"] == {"k": ["a", "b"], "flag": [""], "limit": ["2"]}
 
 
 # ---------------------------------------------------------------------------
