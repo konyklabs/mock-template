@@ -48,11 +48,30 @@ def test_a_typo_on_the_module_still_raises_attribute_error() -> None:
         toast.VENDORS  # type: ignore[attr-defined]  # noqa: B018
 
 
-def test_the_login_is_the_first_route_and_the_webhook_seams_are_absent() -> None:
+def test_every_surface_is_live_and_the_webhook_seams_are_wired() -> None:
     vendor = create_toast_vendor()
-    assert [route.key for route in vendor.routes][:1] == ["POST /authentication/v1/authentication/login"]
+    keys = [route.key for route in vendor.routes]
+    assert keys[:2] == ["POST /authentication/v1/authentication/login", "POST /orders/v2/prices"]
+    assert "POST /orders/v2/orders" in keys and "GET /orders/v2/ordersBulk" in keys
+    assert "POST /orders/v2/orders/{guid}/void" in keys
+    assert "POST /orders/v2/orders/{guid}/checks/{checkGuid}/payments" in keys
+    assert "PATCH /orders/v2/orders/{guid}/checks/{checkGuid}/payments/{paymentGuid}" in keys
+    assert "GET /menus/v3/menus" in keys and "GET /config/v2/taxRates/{guid}" in keys
+    assert "GET /restaurants/v1/restaurants/{restaurantGUID}" in keys
+    assert "GET /partners/v1/connectedRestaurants" in keys
+    assert "PUT /stock/v1/inventory/update" in keys
+    assert keys[-3:] == [
+        "POST /__toast/webhooks/subscriptions",
+        "GET /__toast/webhooks/subscriptions",
+        "DELETE /__toast/webhooks/subscriptions/{guid}",
+    ]
+    assert len(keys) == 54 and len(set(keys)) == 54
+    for route in vendor.routes:
+        if route.path.startswith(("/orders/", "/menus/", "/config/", "/stock/", "/restaurants/", "/partners/")):
+            assert route.auth in ("bearer", "restaurant"), route.key
+            assert route.scopes, route.key
     assert vendor.routes is vendor.routes
-    assert vendor.signer is None and vendor.events is None
+    assert vendor.signer is not None and vendor.events is not None
     assert isinstance(vendor.auth, ToastAuth)
 
 
@@ -158,7 +177,9 @@ def test_a_toast_unit_starts_on_the_full_profile_with_an_empty_surface() -> None
             "restaurants",
             "partners",
             "stock",
+            "webhooks",
             "chaos",
+            "webhooks.chaos",
         }
         assert unit.context.store.collection(COL.restaurants).size == 1
     finally:

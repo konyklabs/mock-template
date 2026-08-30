@@ -15,7 +15,8 @@
     "config_modified_ms is the fixed instant every config entity reports to a lastModified filter.",
     "The seeded order (one Lemonade, unpaid, RECEIVED) is priced at hydrate by the same builder /prices uses.",
     "credit_authorizations stands in for the credit-cards API: a CREDIT payment names one of these guids (7c65cc16... echoes the documented example).",
-    "stock: one row per item and option (apiUsingTheStockApi.html); Lemonade at 3 is under the documented low_quantity threshold of 5."
+    "stock: one row per item and option (apiUsingTheStockApi.html); Lemonade at 3 is under the documented low_quantity threshold of 5.",
+    "The webhook subscriber is a template, shipped DISABLED so a served unit does not retry into its dead .test host; its signature_key is the per-subscription secret Toast-Signature is computed with."
   ],
   "restaurant": {
     "guid": "e6a4a8d2-0000-4000-8000-000000000001",
@@ -372,6 +373,22 @@
       "guid": "3c9a1f00-0000-4000-8000-00000000c402",
       "status": "IN_STOCK",
       "versionId": "14707576-0000-4000-8000-00000000a402"
+    }
+  ],
+  "webhook_subscriptions": [
+    {
+      "id": "sub_seed_quickstart",
+      "name": "Quickstart receiver",
+      "notification_url": "https://example.test/webhooks/toast",
+      "event_types": [
+        "order_updated",
+        "in_stock",
+        "out_of_stock",
+        "low_quantity",
+        "menus_updated"
+      ],
+      "signature_key": "unit-seeded-toast-webhook-secret",
+      "enabled": false
     }
   ]
 }

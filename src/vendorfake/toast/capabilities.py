@@ -10,11 +10,11 @@ fails at construction when one of its gated capabilities (``chaos``,
 ``webhooks``, ``webhooks.chaos``) is neither declared here nor excused in
 ``VendorDefinition.not_supported`` with a reason.
 
-The build lands in steps, and the declaration follows the seams: ``webhooks``
-and ``webhooks.chaos`` are *excused* until the signer, the event mapper and
-the subscription stand-in exist, because a capability declared while the
-dispatcher would silently no-op on a missing seam is the enabled-but-dead
-state the declaration system exists to prevent.
+``webhooks`` and ``webhooks.chaos`` are declared together with the signer,
+the event mapper and the subscription stand-in, which is the order the
+declaration system demands: a capability declared while the dispatcher would
+silently no-op on a missing seam is the enabled-but-dead state it exists to
+prevent, and the earlier steps of this build excused both for that reason.
 
 ``not_supported`` may not name anything the core does not gate on, so the
 documented Toast features this fake omits live in :data:`TOAST_NOT_MODELED`, an
@@ -63,20 +63,27 @@ TOAST_CAPABILITIES: tuple[CapabilityDecl, ...] = (
         summary="Stock API v1: what is out or counted, search, and updates; orders refuse OUT_OF_STOCK items.",
     ),
     CapabilityDecl(
+        name="webhooks",
+        summary=(
+            "Event delivery with the documented envelope, Toast-Signature (HMAC over body + timestamp) and the "
+            "documented headers and 5-then-10-minute retry; the portal stand-in for subscriptions."
+        ),
+    ),
+    CapabilityDecl(
         name="chaos",
         summary="Request-scope fault injection: rate limits, timeouts, server errors, token expiry.",
         kind="behavior",
     ),
+    CapabilityDecl(
+        name="webhooks.chaos",
+        summary="Delivery faults: duplication, reordering, dropped acknowledgements, delay.",
+        kind="behavior",
+        requires=("webhooks", "chaos"),
+    ),
 )
 
-TOAST_NOT_SUPPORTED: Mapping[str, str] = {
-    "webhooks": (
-        "Not yet: the Toast-Signature signer, the order_updated/stock/menus_updated mapper and the "
-        "subscription stand-in arrive together in a later step of this build (konyklabs/roadmap#39)."
-    ),
-    "webhooks.chaos": "Not yet: follows webhooks.",
-}
-"""Core-gated capabilities this step does not implement, each with its reason."""
+TOAST_NOT_SUPPORTED: Mapping[str, str] = {}
+"""Empty: every core-gated capability is declared above."""
 
 TOAST_NOT_MODELED: Mapping[str, str] = {
     "hostnames": (
@@ -109,6 +116,16 @@ TOAST_NOT_MODELED: Mapping[str, str] = {
         "is chaos-injected, with the documented X-Toast-RateLimit-* headers."
     ),
     "menus-v2": "Only Menus API V3 is served; 'Ordering integrations should use menus API V3'.",
+    "webhook-pause-thresholds": (
+        "The '50+ errors in 5 minutes pauses the subscription' rule is known only from a search snippet "
+        "(audit gap 9) and is not modelled; a failing subscriber is retried on the documented schedule and "
+        "then dropped, never paused."
+    ),
+    "retry-only-on-some-statuses": (
+        "Toast resends on a timeout, 404, 429 or 5xx and NOT on other 4xx (apiRetrySupport.html); the core "
+        "dispatcher retries every non-2xx and offers no vendor hook, so a 400 from a subscriber is retried "
+        "here where Toast would stop. A core seam is needed; recorded in retry.py."
+    ),
     "loyalty-and-service-charges-on-orders": (
         "appliedLoyaltyInfo, appliedServiceCharges, appliedPackagingInfo and marketplace facilitator tax "
         "info are accepted on the wire and stored verbatim, never computed."
