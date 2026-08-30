@@ -34,13 +34,13 @@ or marked ``deletedTime``; the orders surface (PR C) records it as an
 Either signal maps to ``DELETE`` here, as does a hard ``delete`` journal op,
 so the payload says ``DELETE`` however the surface chose to store it.
 
-THE CONTRACT WITH THE SURFACES, stated so a rebase cannot quietly break it:
-this mapper keys on the journal's ``collection`` and ``op`` and on one
-``operation_id``. The collection names are the ones ``entities.COL`` spells
-for PR C -- ``orders``, ``items``, ``customers``, ``payments`` -- and are
-repeated in :data:`EVENT_KEYS` because this module ships before those
-attributes exist; a mismatch shows up as "a mutation delivered nothing", which
-``tests/unit/clover/test_events.py`` drives through the real store.
+THE CONTRACT WITH THE SURFACES: this mapper keys on the journal's
+``collection`` and ``op`` and on one ``operation_id``. The collections are
+``entities.COL``'s ``orders``, ``items``, ``customers`` and ``payments``, read
+from ``COL`` so the name is spelled once; the surfaces never call this module
+and this module never calls a surface -- the store's journal is the whole
+interface, which ``tests/unit/clover/test_events.py`` drives both through the
+real routes and through raw store writes.
 
 Event types on the core's side are ``<key>:<type>`` -- ``O:CREATE``,
 ``I:UPDATE`` -- so that a subscriber's per-key filter (Clover's dashboard lets
@@ -78,17 +78,14 @@ KEY_INVENTORY = "I"
 KEY_CUSTOMERS = "C"
 KEY_PAYMENTS = "P"
 
-# TODO(rebase onto orders): derive from COL -- feat/34-clover-orders adds
-# COL.orders / COL.items / COL.customers / COL.payments; replace these literals
-# with those attributes at the merge so the name is spelled once again.
 EVENT_KEYS: Mapping[str, str] = {
-    "orders": KEY_ORDERS,
-    "items": KEY_INVENTORY,
-    "customers": KEY_CUSTOMERS,
-    "payments": KEY_PAYMENTS,
+    COL.orders: KEY_ORDERS,
+    COL.items: KEY_INVENTORY,
+    COL.customers: KEY_CUSTOMERS,
+    COL.payments: KEY_PAYMENTS,
 }
-"""Store collection -> documented ``objectId`` prefix. See the module docstring
-for why the collection names are spelled here as well as in ``entities.COL``."""
+"""Store collection -> documented ``objectId`` prefix, keyed by the names
+``entities.COL`` spells so a rename there is a rename here."""
 
 CHANGE_TYPES: tuple[str, ...] = ("CREATE", "UPDATE", "DELETE")
 """The documented ``type`` vocabulary, in the order the page lists it."""
