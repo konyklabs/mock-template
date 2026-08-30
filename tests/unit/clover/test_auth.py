@@ -114,7 +114,7 @@ def _protected_unit(*, sidecar: bool) -> Harness:
         MerchantEntity(id=MERCHANT_ID, name="Harvest & Rye").to_entity(),
         {"operation_id": "TestSeed", "seed": True},
     )
-    return Harness(unit=unit, api=in_process(unit))
+    return Harness(unit=unit, api=in_process(unit), auth={})
 
 
 def _three_failures(p: Harness) -> list:  # type: ignore[type-arg]
@@ -160,6 +160,34 @@ def test_the_conflation_is_still_debuggable_with_the_sidecar_on() -> None:
         assert {r.status for r in responses} == {401}
     finally:
         p.unit.stop()
+
+
+def test_a_token_without_orders_w_gets_the_byte_identical_401_on_a_real_write_route() -> None:
+    """The kernel's permission check on a shipped route, not a test-only one:
+    ORDERS_R alone cannot POST /orders, and with the sidecar off the body is
+    the same bytes a bad token gets. Nothing is journalled."""
+    from tests.unit.clover.harness import Silent, seed
+    from vendorfake import create_unit
+    from vendorfake.clover.vendor import create_clover_vendor
+    from vendorfake.core.transport.inprocess import in_process
+
+    vendor = create_clover_vendor(vendor_config={"error_sidecar": False})
+    unit = create_unit(vendor=vendor, profile="full", logger=Silent())
+    try:
+        seed(unit)
+        p = Harness(unit=unit, api=in_process(unit), auth={})
+        reader = p.restricted_token("ORDERS_R")
+        before = p.journal_len()
+        denied = p.api.post(p.path("/orders"), {"total": 1}, headers=reader)
+        bad = p.api.post(p.path("/orders"), {"total": 1}, headers={"authorization": "Bearer never-minted"})
+        assert denied.status == bad.status == 401
+        assert denied.body == bad.body == b'{"message":"401 Unauthorized"}'
+        assert denied.headers["x-unit-error"] == "forbidden_scope"
+        assert p.journal_len() == before
+        # And the same token reads fine: the permission set is real, not a switch.
+        assert p.api.get(p.path("/orders"), headers=reader).status == 200
+    finally:
+        unit.stop()
 
 
 def test_a_rotated_refresh_does_not_end_the_access_token_here_either(h: Harness) -> None:

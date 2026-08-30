@@ -58,10 +58,23 @@ def test_a_typo_on_the_module_still_raises_attribute_error() -> None:
         clover.VENDORS  # type: ignore[attr-defined]  # noqa: B018
 
 
-def test_the_oauth_routes_are_live_and_the_webhook_seams_are_none_until_pr_d() -> None:
+def test_the_three_surfaces_are_live_and_the_webhook_seams_are_none_until_pr_d() -> None:
     vendor = create_clover_vendor()
     keys = [route.key for route in vendor.routes]
-    assert keys == ["GET /oauth/v2/authorize", "POST /oauth/v2/token", "POST /oauth/v2/refresh"]
+    assert keys[:3] == ["GET /oauth/v2/authorize", "POST /oauth/v2/token", "POST /oauth/v2/refresh"]
+    assert "POST /v3/merchants/{mId}/orders" in keys
+    assert "POST /v3/merchants/{mId}/orders/{orderId}" in keys  # update is POST, not PUT
+    assert "DELETE /v3/merchants/{mId}/orders/{orderId}" in keys
+    assert "POST /v3/merchants/{mId}/atomic_order/checkouts" in keys
+    assert "GET /v3/merchants/{mId}/items/{itemId}" in keys
+    assert "GET /v3/merchants/{mId}" in keys
+    assert len(keys) == 16
+    assert len(set(keys)) == 16
+    # Every merchant-scoped route authenticates and names a permission.
+    for route in vendor.routes:
+        if route.path.startswith("/v3/"):
+            assert route.auth == "bearer", route.key
+            assert route.scopes, route.key
     assert vendor.signer is None
     assert vendor.events is None
 
@@ -190,7 +203,7 @@ def test_a_clover_unit_starts_on_the_full_profile_with_an_empty_surface() -> Non
     unit = create_unit(vendor="clover", profile="full")
     assert unit.name == "clover"
     assert unit.context.config.profile == "full"
-    assert set(unit.context.config.capabilities) == {"oauth", "chaos"}
+    assert set(unit.context.config.capabilities) == {"oauth", "orders", "inventory", "chaos"}
 
 
 def test_two_clover_units_in_one_process_do_not_share_an_id_stream() -> None:

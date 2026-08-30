@@ -157,11 +157,54 @@ def test_a_full_order_round_trips_its_documented_fields() -> None:
         orderType=OrderTypeRefWire(id="KFRPRVCZ73JHM"),
         lineItems=(LineItemWire(id="L1", price=750, item=ItemRefWire(id="NEWITEM123ABC")),),
     )
-    wire = order.wire()
+    wire = order.wire(expand={"lineItems"})
     assert wire["state"] == "open"
     assert wire["orderType"] == {"id": "KFRPRVCZ73JHM"}
     assert wire["lineItems"][0]["item"] == {"id": "NEWITEM123ABC"}
     assert wire["lineItems"][0]["price"] == 750
+    assert "lineItems" not in order.wire()  # nested collections need an expansion
+
+
+def test_the_atomic_total_arithmetic_from_the_documented_units() -> None:
+    """price x unitQty/1000 (absent = one unit), negative amounts, whole
+    percentages of the undiscounted base, percentageDecimal = percent x 10000
+    on the discounted subtotal, half-up on cents (JUDGMENT)."""
+    from vendorfake.clover.model.order import atomic_total, line_total
+
+    assert line_total({"price": 750}) == 750
+    assert line_total({"price": 750, "unitQty": 2000}) == 1500
+    assert line_total({"price": 333, "unitQty": 1500}) == 500  # 499.5 -> half-up
+    assert line_total({"price": 1000, "discounts": [{"amount": -200}]}) == 800
+    assert line_total({"price": 1000, "discounts": [{"percentage": 15}]}) == 850
+    assert atomic_total([{"price": 1000}], [{"amount": -200}]) == 800
+    assert atomic_total([{"price": 1000}], [{"percentage": 10}]) == 900
+    assert atomic_total([{"price": 1000}], [], {"percentageDecimal": 180000}) == 1180
+    assert atomic_total([{"price": 1000}], [{"amount": -200}], {"percentageDecimal": 180000}) == 944
+    assert atomic_total([]) == 0
+
+
+def test_projection_omits_unexpanded_nested_collections_and_caps_at_100() -> None:
+    from vendorfake.clover.model.order import NESTED_CAP, project_order
+
+    entity = {
+        "id": "X",
+        "merchant_id": "M",
+        "currency": "USD",
+        "total": 1,
+        "lineItems": [{"id": f"L{i}", "price": 1, "discounts": [{"amount": -1}]} for i in range(150)],
+        "discounts": [{"amount": -5}],
+        "serviceCharge": {"percentageDecimal": 1},
+        "version": 3,
+        "created_at": "x",
+    }
+    bare = project_order(entity)
+    assert set(bare) == {"id", "currency", "total", "paymentState"}
+    expanded = project_order(entity, {"lineItems", "lineItems.discounts", "serviceCharge"})
+    assert len(expanded["lineItems"]) == NESTED_CAP == 100
+    assert expanded["lineItems"][0]["discounts"] == [{"amount": -1}]
+    assert expanded["serviceCharge"] == {"percentageDecimal": 1}
+    assert "discounts" not in expanded
+    assert "discounts" not in project_order(entity, {"lineItems"})["lineItems"][0]
 
 
 # ---------------------------------------------------------------------------

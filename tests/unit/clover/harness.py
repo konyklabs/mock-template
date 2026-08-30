@@ -5,9 +5,12 @@ Deliberately thin, like the Square harness: it knows the app credentials the
 OAuth test needs both.
 
 Until PR E ships the seed scenario, the store starts empty, so the harness
-inserts the one merchant OAuth needs -- marked ``{"seed": True}`` in its
-journal meta the way a real seed write would be, so it never reads as request
-traffic in a journal assertion.
+inserts the scenario the surfaces need -- one merchant and three inventory
+items ("Craft Beer" at 750 is the documented create-item example) -- marked
+``{"seed": True}`` in their journal meta the way real seed writes are, so
+they never read as request traffic in a journal assertion. A full-permission
+bearer token is minted through the real OAuth flow at start and offered as
+``auth``.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from vendorfake import create_unit
-from vendorfake.clover.entities import COL, MerchantEntity
+from vendorfake.clover.entities import COL, ItemEntity, MerchantEntity, TokenEntity
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.transport.inprocess import InProcessClient, InProcessResponse, in_process
 
@@ -29,6 +32,17 @@ CONFIGURED_REDIRECT_URI = "https://example.test/oauth/callback"
 
 MERCHANT_ID = "HRVSTRYE12345"
 """13 uppercase characters, matching the entity-id shape."""
+
+ITEM_BEER = "CRAFTBEER0750"
+ITEM_ESPRESSO = "ESPRESSO00300"
+ITEM_CROISSANT = "CROISSANT0450"
+SEED_ITEMS: tuple[tuple[str, str, int], ...] = (
+    (ITEM_BEER, "Craft Beer", 750),
+    (ITEM_ESPRESSO, "Espresso", 300),
+    (ITEM_CROISSANT, "Croissant", 450),
+)
+
+SEED_META = {"operation_id": "TestSeed", "seed": True}
 
 
 class Silent:
@@ -42,10 +56,13 @@ class Silent:
 
 @dataclass(frozen=True, slots=True)
 class Harness:
-    """A started unit and the client that drives it."""
+    """A started unit, the client that drives it, and a live bearer."""
 
     unit: Unit
     api: InProcessClient
+    auth: dict[str, str]
+
+    # -- OAuth ---------------------------------------------------------------
 
     def authorize(self, **query: str) -> InProcessResponse:
         """``GET /oauth/v2/authorize`` with ``client_id`` already filled in."""
@@ -72,18 +89,73 @@ class Harness:
         """``POST /oauth/v2/refresh`` as JSON, ``client_id`` filled in."""
         return self.api.post("/oauth/v2/refresh", {"client_id": CLIENT_ID, **fields})
 
+    # -- the merchant surface --------------------------------------------------
+
+    def path(self, suffix: str = "") -> str:
+        return f"/v3/merchants/{MERCHANT_ID}{suffix}"
+
+    def get(self, suffix: str, **kwargs: Any) -> InProcessResponse:
+        return self.api.get(self.path(suffix), headers=self.auth, **kwargs)
+
+    def post(self, suffix: str, body: Any = None, **kwargs: Any) -> InProcessResponse:
+        return self.api.post(self.path(suffix), body, headers=self.auth, **kwargs)
+
+    def delete(self, suffix: str, **kwargs: Any) -> InProcessResponse:
+        return self.api.delete(self.path(suffix), headers=self.auth, **kwargs)
+
+    def create_order(self, **fields: Any) -> dict[str, Any]:
+        response = self.post("/orders", {"currency": "USD", "total": 1500, "state": "open", **fields})
+        assert response.status == 200, response.text
+        body: dict[str, Any] = response.json()
+        return body
+
+    def restricted_token(self, *permissions: str) -> dict[str, str]:
+        """A bearer carrying only ``permissions``, inserted as seed state."""
+        entity = TokenEntity(
+            id=f"tok_restricted_{len(permissions)}",
+            access_token=f"restricted-{'-'.join(p.lower() for p in permissions) or 'none'}",
+            refresh_token="never-used",
+            client_id=CLIENT_ID,
+            merchant_id=MERCHANT_ID,
+            access_token_expiration_ms=2**53,
+            refresh_token_expiration_ms=2**53,
+            permissions=permissions,
+        )
+        self.unit.context.store.collection(COL.tokens).insert(entity.to_entity(), SEED_META)
+        return {"authorization": f"Bearer {entity.access_token}"}
+
     def journal_len(self) -> int:
         return len(self.api.get("/__unit/journal").json()["entries"])
 
 
-def harness(profile: str = "full", **kwargs: Any) -> Iterator[Harness]:
-    """Start a unit with the merchant inserted, yield it, stop it after."""
-    unit = create_unit(vendor="clover", profile=profile, logger=Silent(), **kwargs)
-    unit.context.store.collection(COL.merchants).insert(
-        MerchantEntity(id=MERCHANT_ID, name="Harvest & Rye").to_entity(),
-        {"operation_id": "TestSeed", "seed": True},
+def seed(unit: Unit) -> None:
+    """The scenario the surfaces need, until PR E ships the real one."""
+    store = unit.context.store
+    store.collection(COL.merchants).insert(
+        MerchantEntity(
+            id=MERCHANT_ID,
+            name="Harvest & Rye",
+            currency="USD",
+            owner={"id": "OWNERHRVST001", "name": "R. Harvest"},
+            address={"address1": "1 Main St", "city": "Springfield", "state": "IL", "zip": "62701", "country": "US"},
+        ).to_entity(),
+        SEED_META,
     )
+    for item_id, name, price in SEED_ITEMS:
+        store.collection(COL.items).insert(
+            ItemEntity(id=item_id, name=name, price=price, modifiedTime=1755786102000).to_entity(),
+            SEED_META,
+        )
+
+
+def harness(profile: str = "full", **kwargs: Any) -> Iterator[Harness]:
+    """Start a unit with the scenario seeded and a bearer minted; stop it after."""
+    unit = create_unit(vendor="clover", profile=profile, logger=Silent(), **kwargs)
+    seed(unit)
+    api = in_process(unit)
+    bare = Harness(unit=unit, api=api, auth={})
     try:
-        yield Harness(unit=unit, api=in_process(unit))
+        token = bare.exchange()
+        yield Harness(unit=unit, api=api, auth={"authorization": f"Bearer {token['access_token']}"})
     finally:
         unit.stop()

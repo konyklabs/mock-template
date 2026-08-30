@@ -30,16 +30,15 @@ def test_the_webhook_gates_are_excused_not_declared_until_pr_d() -> None:
     assert not declared & set(CLOVER_NOT_SUPPORTED)
 
 
-def test_only_surfaces_that_own_routes_are_declared() -> None:
-    """Conformance C02 refuses a `surface` capability that owns no route, so
-    `orders` and `inventory` are declared in PR C with their routes, not
-    before. Every declared surface capability owns at least one route now."""
+def test_every_declared_surface_owns_routes_and_every_route_is_owned() -> None:
+    """Conformance C02 refuses a `surface` capability that owns no route and
+    a route whose capability is undeclared; both directions pinned here."""
     from vendorfake.clover.vendor import create_clover_vendor
 
     surface = {decl.name for decl in CLOVER_CAPABILITIES if decl.kind == "surface"}
-    assert surface == {"oauth"}
+    assert surface == {"oauth", "orders", "inventory"}
     owned = {route.capability for route in create_clover_vendor().routes}
-    assert surface <= owned, (surface, owned)
+    assert surface == owned, (surface, owned)
 
 
 def test_a_disabled_capability_answers_explicitly_and_never_with_a_404() -> None:
