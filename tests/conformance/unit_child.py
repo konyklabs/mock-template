@@ -32,11 +32,11 @@ from vendorfake.asgi import create_app, run_server  # noqa: E402
 from vendorfake.core.kernel.unit import Unit  # noqa: E402
 
 
-def _build(profile: str, mutant_id: str | None) -> Unit:
+def _build(profile: str, mutant_id: str | None, vendor: str) -> Unit:
     if mutant_id is None:
         from tests.conformance.harness import build_unit
 
-        return build_unit(profile)
+        return build_unit(profile, vendor=vendor)
     # Imported here so that an ordinary child never pays for the mutant
     # registry, and so that a mutant child builds the unit through exactly the
     # same factory an in-process mutant run uses.
@@ -51,9 +51,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Serve one unit for the out-of-process contracts.")
     parser.add_argument("--profile", required=True)
     parser.add_argument("--mutant", default=None)
+    parser.add_argument("--vendor", default="square", help="which registered vendor to build (mutants are Square's)")
     args = parser.parse_args(argv)
 
-    unit = _build(args.profile, args.mutant)
+    unit = _build(args.profile, args.mutant, args.vendor)
     app = create_app(unit)
 
     def announce(host: str, port: int) -> None:

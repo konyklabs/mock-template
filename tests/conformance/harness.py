@@ -49,6 +49,7 @@ from pathlib import Path
 import uvicorn
 
 from vendorfake.asgi import FrameworkTripwire, bind, bound_port, create_app
+from vendorfake.clover.seed.constants import SEED_MERCHANT_ID as CLOVER_SEED_MERCHANT_ID
 from vendorfake.conformance import ConformanceClient, ConformanceTarget, HttpConformanceClient
 from vendorfake.conformance.client import InProcessConformanceClient
 from vendorfake.core.kernel.unit import Unit
@@ -198,7 +199,7 @@ def _served(profile: str, vendor: str = VENDOR) -> Iterator[ConformanceClient]:
 
 
 @contextmanager
-def _child(profile: str) -> Iterator[ConformanceClient]:
+def _child(profile: str, vendor: str = VENDOR) -> Iterator[ConformanceClient]:
     """A unit built and served by a *separate process*, reached over HTTP.
 
     The child prints one JSON line naming its port and then serves; the parent
@@ -208,7 +209,7 @@ def _child(profile: str) -> Iterator[ConformanceClient]:
     unobservable from two units in one interpreter.
     """
     child = subprocess.Popen(
-        [sys.executable, "-m", "tests.conformance.unit_child", "--profile", profile],
+        [sys.executable, "-m", "tests.conformance.unit_child", "--profile", profile, "--vendor", vendor],
         cwd=str(REPO_ROOT),
         stdout=subprocess.PIPE,
         text=True,
@@ -268,7 +269,7 @@ def open_client(profile: str, transport: str, vendor: str = VENDOR) -> Iterator[
         with _served(profile, vendor) as client:
             yield client
     elif transport == OUT_OF_PROCESS_TRANSPORT:
-        with _child(profile) as client:
+        with _child(profile, vendor) as client:
             yield client
     else:
         raise ValueError(
@@ -292,30 +293,59 @@ def target(
 
 
 CLOVER_VENDOR = "clover"
-CLOVER_PROFILES: tuple[str, ...] = ("full",)
-"""The one profile the clover unit ships at this commit; the six-profile set
-arrives with PR E of konyklabs/roadmap#34, which is also when this target
-can be run ``--strict`` (a single-profile matrix cannot satisfy the
-anti-vacuity rule -- see :func:`one_profile_target`)."""
+CLOVER_PROFILES: tuple[str, ...] = PROFILES
+"""The same six names the Square unit ships, so one matrix shape covers both
+vendors and ``--strict`` is satisfiable on either."""
+
+
+CLOVER_EXPECTED_SKIPS: dict[str, tuple[str, ...]] = {
+    # The same shape as the manifest's Square matrix: a profile that lacks
+    # the capability a contract needs.
+    "C07": ("oauth-only",),
+    "C08": ("no-faults",),
+    "C12": ("no-faults",),
+    "C17": ("oauth-only",),
+}
+
+_WEBHOOKS_PENDING = (
+    "the clover webhook surface, signer and event mapper ship in PR D of konyklabs/roadmap#34; "
+    "until that merge the vendor excuses the webhooks gate. PR D deletes this row, and the suite "
+    "fails if it forgets: a check declared inapplicable that runs is stale."
+)
+
+CLOVER_INAPPLICABLE: dict[str, str] = {
+    "C09": _WEBHOOKS_PENDING,
+    "C16": _WEBHOOKS_PENDING,
+    "C18": _WEBHOOKS_PENDING,
+    "C21": _WEBHOOKS_PENDING,
+    "C19": (
+        "Clover's REST API documents no idempotency key on any endpoint, so no clover route carries an "
+        "IdempotencySpec and the replay contract can never be asked of this vendor."
+    ),
+}
 
 
 def clover_target(
     *,
     profiles: tuple[str, ...] = CLOVER_PROFILES,
     transports: tuple[str, ...] = ("inprocess", "http"),
+    out_of_process: tuple[str, ...] = (OUT_OF_PROCESS_TRANSPORT,),
 ) -> ConformanceTarget:
-    """The second vendor, over the same in-process and HTTP bindings.
-
-    No ``out_of_process`` transport yet: ``unit_child`` builds the Square unit
-    by name, and the cross-process determinism contract has nothing to compare
-    until the clover seed scenario exists. Recorded rather than faked.
-    """
+    """The second vendor, over the same three ways of reaching a unit:
+    ``unit_child`` builds by ``--vendor``, so the cross-process determinism
+    contract compares two clover processes. ``{mId}`` is the tenant every
+    clover route is scoped to, so it is filled with the seeded merchant
+    (``ConformanceTarget.path_params``); ``{orderId}`` and the rest stay the
+    probe."""
     return ConformanceTarget(
         name=CLOVER_VENDOR,
         open_client=functools.partial(open_client, vendor=CLOVER_VENDOR),
         profiles=profiles,
         transports=transports,
-        out_of_process=(),
+        out_of_process=out_of_process,
+        path_params={"mId": CLOVER_SEED_MERCHANT_ID},
+        expected_skips=CLOVER_EXPECTED_SKIPS,
+        inapplicable=CLOVER_INAPPLICABLE,
     )
 
 

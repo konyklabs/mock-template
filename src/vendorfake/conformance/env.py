@@ -16,7 +16,12 @@ WHY THE PROBE VALUES ARE WHAT THEY ARE. A path template's parameters are
 filled with a value that cannot exist in any seed (``conformance-probe``), so
 a probe reaches the handler and is refused for a reason the check is asserting
 about -- a disabled capability, an injected fault, a missing token -- rather
-than accidentally succeeding and mutating state a later assertion reads.
+than accidentally succeeding and mutating state a later assertion reads. The
+one exception is a parameter the target declares as its *tenant*
+(``ConformanceTarget.path_params``): a path scoped to the merchant a
+credential belongs to has to name that merchant, or no authenticated probe can
+ever be honoured and no example body can ever commit. Everything below the
+tenant stays the probe.
 
 WHAT A CHECK MAY IMPORT FROM THE CORE. The core's own vocabulary: the error
 kinds it raises and the capabilities it gates on. Those are the contract; a
@@ -29,7 +34,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from vendorfake.conformance.client import ConformanceClient
@@ -59,12 +64,17 @@ prose; the kernel owns the enforcement that no vendor route may start here."""
 _MUTATING_METHODS = frozenset({"POST", "PUT"})
 
 
-def concrete_path(template: str) -> str:
-    """``/v2/orders/{order_id}`` -> ``/v2/orders/conformance-probe``."""
-    return "/".join(
-        PROBE_SEGMENT if segment.startswith("{") and segment.endswith("}") else segment
-        for segment in template.split("/")
-    )
+def concrete_path(template: str, params: Mapping[str, str] | None = None) -> str:
+    """``/v2/orders/{order_id}`` -> ``/v2/orders/conformance-probe``; a
+    parameter named in ``params`` (the target's tenant) takes its value."""
+    filled = params or {}
+
+    def segment_of(segment: str) -> str:
+        if segment.startswith("{") and segment.endswith("}"):
+            return filled.get(segment[1:-1], PROBE_SEGMENT)
+        return segment
+
+    return "/".join(segment_of(segment) for segment in template.split("/"))
 
 
 def ancestors(name: str) -> tuple[str, ...]:
@@ -99,10 +109,13 @@ class RouteRow:
     idempotency: Mapping[str, Any] | None = None
     example_body: Mapping[str, Any] | None = None
     operation_id: str | None = None
+    #: The target's tenant parameters; see ``ConformanceTarget.path_params``.
+    path_params: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
-    def of(cls, row: Mapping[str, Any]) -> RouteRow:
+    def of(cls, row: Mapping[str, Any], path_params: Mapping[str, str] | None = None) -> RouteRow:
         return cls(
+            path_params=dict(path_params or {}),
             method=str(row["method"]).upper(),
             path=str(row["path"]),
             capability=str(row["capability"]),
@@ -120,7 +133,7 @@ class RouteRow:
 
     @property
     def probe_path(self) -> str:
-        return concrete_path(self.path)
+        return concrete_path(self.path, self.path_params)
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,7 +278,7 @@ class CheckEnv:
     def routes(self) -> tuple[RouteRow, ...]:
         document = self._memo("routes", f"{CONTROL_PREFIX}routes")
         rows: Sequence[Mapping[str, Any]] = document["routes"]
-        return tuple(RouteRow.of(row) for row in rows)
+        return tuple(RouteRow.of(row, self.target.path_params) for row in rows)
 
     def machines(self) -> Mapping[str, Any]:
         document = self._memo("machines", f"{CONTROL_PREFIX}machines")

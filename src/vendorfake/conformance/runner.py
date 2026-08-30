@@ -301,9 +301,15 @@ def run_conformance(
         for spec in specs
     )
     derived = set(chosen_profiles) >= set(target.profiles) and not check_ids
+    declared = (
+        expected_skips()
+        if target.expected_skips is None
+        else {check_id: frozenset(profiles) for check_id, profiles in target.expected_skips.items()}
+    )
     return ConformanceReport(
         results=results,
         strict=strict,
-        expected_skips=expected_skips(),
+        expected_skips=declared,
+        inapplicable=dict(target.inapplicable),
         cross_profile=derived if cross_profile is None else cross_profile,
     )
