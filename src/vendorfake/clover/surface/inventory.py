@@ -57,6 +57,9 @@ __all__ = ["CAPABILITY", "CloverInventorySurface", "inventory_routes", "item_tax
 CAPABILITY = "inventory"
 """The capability every route below belongs to."""
 
+_CANNOT_BE_CLEARED = frozenset({"name", "price"})
+"""Required on create (documented), and therefore not clearable on update."""
+
 
 class CloverInventorySurface:
     """The item and modifier routes, bound to one vendor."""
@@ -178,6 +181,16 @@ class CloverInventorySurface:
         require_merchant(args)
         request = validate_body(ItemPatchRequest, args.body())
         current = _require_item(args)
+        for name in request.model_fields_set:
+            if getattr(request, name) is None and name in _CANNOT_BE_CLEARED:
+                # A required field with no default: clearing it would store a
+                # document the wire cannot project, which is a 500 on every
+                # later read of this item AND of the whole list.
+                raise UnitError(
+                    UnitErrorKind.INVALID_VALUE,
+                    detail=f"{name} cannot be cleared; name and price are required on an item.",
+                    field=name,
+                )
         now = int(args.ctx.clock.now())
 
         def mutate(draft: Entity) -> None:
@@ -229,7 +242,11 @@ class CloverInventorySurface:
     # -- shared --------------------------------------------------------------
 
     def _project(self, ctx: UnitContext, entity: Mapping[str, Any], expand: frozenset[str]) -> dict[str, Any]:
+        # Round-tripped through the tolerant entity reader before projection,
+        # so a stored document can never 500 a list: the wire model is strict
+        # about required fields and the reader supplies every default.
         item = ItemEntity.from_entity(entity)
+        entity = item.to_entity()
         groups: list[Mapping[str, Any]] = []
         if "modifierGroups" in expand:
             collection = ctx.store.collection(COL.modifier_groups)

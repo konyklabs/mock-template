@@ -63,7 +63,7 @@ def test_create_defaults_are_the_labelled_judgments(h: Harness) -> None:
 
 
 def test_documented_but_unmodelled_fields_are_tolerated_on_create(h: Harness) -> None:
-    response = h.post("/orders", {"total": 1, "isVat": False, "employee": {"id": "E"}, "unpaidBalance": 1})
+    response = h.post("/orders", {"total": 1, "isVat": False, "unpaidBalance": 1, "customers": []})
     assert response.status == 200
     assert "isVat" not in response.json()
 

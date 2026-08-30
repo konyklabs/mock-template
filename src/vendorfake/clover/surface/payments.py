@@ -95,6 +95,17 @@ class CloverPaymentsSurface:
                 detail="Payment must include a positive amount and a valid tender ID.",
                 field="amount",
             )
+        if order.paymentState == "PAID":
+            # JUDGMENT: an order already paid in full takes no further payment.
+            # Clover documents nothing about paying a PAID order; a consumer's
+            # flow pays exactly `total`, and a second full payment silently
+            # accepted is the worse surprise. Over-tendering within ONE payment
+            # of an unpaid order is allowed (cash with change is real).
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"Order {order.id} is already PAID; it takes no further payment.",
+                field="amount",
+            )
         if ctx.store.collection(COL.tenders).get(request.tender.id) is None:
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,

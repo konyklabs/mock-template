@@ -104,7 +104,14 @@ from vendorfake.clover.model.order import (
     supplied,
 )
 from vendorfake.clover.model.references import PrintEventRequest
-from vendorfake.clover.surface.common import CloverDeps, elements, expansions, page_window, require_merchant
+from vendorfake.clover.surface.common import (
+    CloverDeps,
+    elements,
+    expansions,
+    int_param,
+    page_window,
+    require_merchant,
+)
 from vendorfake.clover.surface.inventory import item_tax_rates
 from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitContext, UnitError, UnitErrorKind
@@ -121,6 +128,10 @@ BULK_MAX = 100
 """"max 100" line items per bulk request (orderbulkcreatelineitems)."""
 
 _MACHINE = StateMachine(ORDER_MACHINE)
+
+_CANNOT_BE_CLEARED = frozenset({"currency", "total"})
+"""Required on the wire with no default: clearing either would store an
+order the wire cannot project."""
 
 _ATOMIC_EXPAND = frozenset(
     {"lineItems", "discounts", "serviceCharge", "customers", "lineItems.discounts", "lineItems.modifications"}
@@ -262,6 +273,8 @@ class CloverOrdersSurface:
         request = validate_body(OrderCreateRequest, args.body())
         expand = expansions(args, EXPANDABLE)
         _check_state_value(request.state)
+        _check_payment_state(request)
+        _check_references(args.ctx, request.orderType, request.employee, request.customers, field="")
         merchant = _the_merchant(args.ctx, merchant_id)
         now = _now(args.ctx)
         entity = OrderEntity(
@@ -293,8 +306,10 @@ class CloverOrdersSurface:
     # -- GET /orders ---------------------------------------------------------
 
     def list_orders(self, args: HandlerArgs) -> ReplyInit:
-        """Insertion order, filtered, then windowed -- stable, so two pages
-        never overlap and their union is the whole list."""
+        """Insertion order, filtered, then windowed. Stable under inserts: a
+        row created between two pages lands after the walk, never inside it,
+        so pages never overlap. A soft delete between two pages drops that
+        row from the union -- the list reports what exists now."""
         merchant_id = require_merchant(args)
         expand = expansions(args, EXPANDABLE)
         predicate = _filter(args.query("filter"))
@@ -330,6 +345,15 @@ class CloverOrdersSurface:
         orders = args.ctx.store.collection(COL.orders)
         current = _require_order(orders, args.params["orderId"], merchant_id)
         subject = f"Order {current.id}"
+        for name in request.model_fields_set:
+            if getattr(request, name) is None and name in _CANNOT_BE_CLEARED:
+                raise UnitError(
+                    UnitErrorKind.INVALID_VALUE,
+                    detail=f"{name} cannot be cleared.",
+                    field=name,
+                )
+        _check_payment_state(request)
+        _check_references(args.ctx, request.orderType, request.employee, request.customers, field="")
 
         # Terminality first, then the move: "this order is locked" explains
         # "that move is not allowed". Compared on the lowercase canon, stored
@@ -369,10 +393,13 @@ class CloverOrdersSurface:
 
     def delete_order(self, args: HandlerArgs) -> ReplyInit:
         """Soft delete (JUDGMENT, module docstring). The body names what was
-        deleted and when; Clover documents a 200 and no schema."""
+        deleted and when; Clover documents a 200 and no schema. A locked
+        order is not deletable -- "any write to a locked order is a 400", and
+        a paid order vanishing is the worse surprise (JUDGMENT)."""
         merchant_id = require_merchant(args)
         orders = args.ctx.store.collection(COL.orders)
         current = _require_order(orders, args.params["orderId"], merchant_id)
+        _MACHINE.assert_mutable(_canonical(current.state), f"Order {current.id}")
         now = _now(args.ctx)
 
         def mutate(draft: Entity) -> None:
@@ -390,8 +417,9 @@ class CloverOrdersSurface:
         orders = args.ctx.store.collection(COL.orders)
         current = _require_order(orders, args.params["orderId"], merchant_id)
         _MACHINE.assert_mutable(_canonical(current.state), f"Order {current.id}")
-        line = self._build_line(args.ctx, request, field="")
+        # Capacity before the build: a refused request must not draw ids.
         _check_capacity(current, 1)
+        line = self._build_line(args.ctx, request, field="")
         now = _now(args.ctx)
 
         def mutate(draft: Entity) -> None:
@@ -416,6 +444,7 @@ class CloverOrdersSurface:
                 field="items",
                 info={"supplied": len(request.items), "max": BULK_MAX},
             )
+        _check_capacity(current, len(request.items))
         lines: list[dict[str, Any]] = []
         for index, item in enumerate(request.items):
             if item.price is None:
@@ -427,7 +456,6 @@ class CloverOrdersSurface:
                     field=f"items[{index}].price",
                 )
             lines.append(self._build_line(args.ctx, item, field=f"items[{index}]."))
-        _check_capacity(current, len(lines))
         now = _now(args.ctx)
 
         def mutate(draft: Entity) -> None:
@@ -539,6 +567,14 @@ class CloverOrdersSurface:
         """Resolve a cart's lines and their tax rates, validate its discounts,
         resolve a service charge that references the merchant's default, and
         compute the documented totals block."""
+        if len(cart.lineItems) > MAX_LINE_ITEMS_PER_ORDER:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"An order can have at most {MAX_LINE_ITEMS_PER_ORDER} line items.",
+                field="orderCart.lineItems",
+                info={"supplied": len(cart.lineItems), "max": MAX_LINE_ITEMS_PER_ORDER},
+            )
+        _check_references(ctx, cart.orderType, cart.employee, cart.customers, field="orderCart.")
         lines: list[dict[str, Any]] = []
         line_rates: list[list[dict[str, Any]]] = []
         for index, line in enumerate(cart.lineItems):
@@ -698,6 +734,40 @@ def _check_state_value(state: str | None) -> None:
         )
 
 
+def _check_payment_state(request: OrderCreateRequest) -> None:
+    """JUDGMENT: ``paymentState`` is moved by payments, never set by a client
+    write. Clover documents the values and nothing about who sets them; a
+    client declaring an order PAID with no payment behind it would make the
+    field a lie, so only the initial ``OPEN`` is accepted here."""
+    if request.paymentState is not None and request.paymentState.value != "OPEN":
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail="paymentState is set by payments (POST .../orders/{orderId}/payments), not by an order write.",
+            field="paymentState",
+        )
+
+
+def _check_references(ctx: UnitContext, order_type: Any, employee: Any, customers: Any, *, field: str) -> None:
+    """``orderType``, ``employee`` and ``customers`` must name records the
+    unit holds, exactly as a line item's ``item`` and a payment's
+    ``employee`` must (JUDGMENT: consistent refusal, 400 naming the field;
+    Clover documents no answer to a dangling reference)."""
+    checks = [
+        (order_type, COL.order_types, f"{field}orderType.id", "Order type"),
+        (employee, COL.employees, f"{field}employee.id", "Employee"),
+    ]
+    for ref, collection, path, label in checks:
+        if ref is not None and ctx.store.collection(collection).get(ref.id) is None:
+            raise UnitError(UnitErrorKind.INVALID_VALUE, detail=f"{label} {ref.id} was not found.", field=path)
+    for index, ref in enumerate(customers or []):
+        if ctx.store.collection(COL.customers).get(ref.id) is None:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"Customer {ref.id} was not found.",
+                field=f"{field}customers[{index}].id",
+            )
+
+
 def _check_capacity(order: OrderEntity, adding: int) -> None:
     if len(order.lineItems) + adding > MAX_LINE_ITEMS_PER_ORDER:
         raise UnitError(
@@ -746,7 +816,8 @@ def _filter(raw: str | None) -> Any:
     """``filter=<field><op><value>`` as a predicate over orders, or a 400.
 
     ``>=`` and ``<=`` are tried before ``=`` so ``total>=1500`` is not read
-    as the field ``total>`` equal to ``1500``.
+    as the field ``total>`` equal to ``1500``; a bare ``>`` or ``<`` is
+    named as unsupported rather than reported as "no operator".
     """
     if raw is None:
         return lambda order: True
@@ -755,7 +826,12 @@ def _filter(raw: str | None) -> Any:
             field, value = raw.split(op, 1)
             break
     else:
-        raise UnitError(UnitErrorKind.INVALID_VALUE, detail=f"filter {raw!r} has no operator.", field="filter")
+        detail = (
+            f"filter {raw!r} uses an unsupported operator; use =, >= or <=."
+            if any(symbol in raw for symbol in ("<", ">", "!"))
+            else f"filter {raw!r} has no operator; use <field>=<value>, >= or <=."
+        )
+        raise UnitError(UnitErrorKind.INVALID_VALUE, detail=detail, field="filter")
     field = field.strip()
     value = value.strip()
     kind = _FILTER_FIELDS.get(field)
@@ -767,9 +843,7 @@ def _filter(raw: str | None) -> Any:
             info={"allowed": list(_FILTER_FIELDS)},
         )
     if kind == "int":
-        if not value.lstrip("-").isdigit():
-            raise UnitError(UnitErrorKind.INVALID_VALUE, detail=f"{field} filters take an integer.", field="filter")
-        bound = int(value)
+        bound = int_param(value, "filter")
 
         def numeric(order: OrderEntity) -> bool:
             actual = getattr(order, field)

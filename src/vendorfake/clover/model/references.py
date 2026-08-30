@@ -57,8 +57,8 @@ class PaymentCreateRequest(BaseModel):
     amount: int
     employee: RefRequest | None = None
     offline: bool = False
-    tipAmount: int | None = None
-    taxAmount: int | None = None
+    tipAmount: int | None = Field(default=None, ge=0)
+    taxAmount: int | None = Field(default=None, ge=0)
     note: str | None = None
 
 

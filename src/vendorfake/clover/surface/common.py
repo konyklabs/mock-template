@@ -31,6 +31,7 @@ millisecond where it still works.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
@@ -46,6 +47,7 @@ __all__ = [
     "CloverDeps",
     "elements",
     "expansions",
+    "int_param",
     "is_past_ms",
     "page_window",
     "require_merchant",
@@ -110,24 +112,44 @@ def require_merchant(args: HandlerArgs) -> str:
     return merchant_id
 
 
-def _query_int(args: HandlerArgs, name: str, default: int, *, minimum: int) -> int:
-    """A non-negative integer query parameter, or a 400 naming it.
+_INTEGER = re.compile(r"^-?\d+$")
+"""One optional minus, then digits. ``--5``, ``+5``, ``5x`` and ``1e3`` are
+all refused: ``str.isdigit`` after ``lstrip("-")`` let ``--5`` through to
+``int()`` and a 500."""
 
-    Refused rather than ignored: ``limit=abc`` silently becoming the default
-    is how a consumer who mistyped a page size never learns.
+
+def int_param(raw: str, field: str, *, minimum: int | None = None) -> int:
+    """``raw`` as an integer, or a 400 naming ``field``.
+
+    The one integer parser for query strings and filter values, so every
+    surface refuses the same spellings the same way. Refused rather than
+    ignored: ``limit=abc`` silently becoming the default is how a consumer
+    who mistyped a page size never learns.
     """
+    stripped = raw.strip()
+    if not _INTEGER.match(stripped):
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"{field} must be an integer.",
+            field=field,
+            info={"supplied": raw},
+        )
+    value = int(stripped)
+    if minimum is not None and value < minimum:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"{field} must be an integer >= {minimum}.",
+            field=field,
+            info={"supplied": raw},
+        )
+    return value
+
+
+def _query_int(args: HandlerArgs, name: str, default: int, *, minimum: int) -> int:
     raw = args.query(name)
     if raw is None:
         return default
-    stripped = raw.strip()
-    if not stripped.lstrip("-").isdigit() or int(stripped) < minimum:
-        raise UnitError(
-            UnitErrorKind.INVALID_VALUE,
-            detail=f"{name} must be an integer >= {minimum}.",
-            field=name,
-            info={"supplied": raw},
-        )
-    return int(stripped)
+    return int_param(raw, name, minimum=minimum)
 
 
 def page_window(args: HandlerArgs) -> tuple[int, int]:
@@ -151,6 +173,13 @@ def expansions(args: HandlerArgs, allowed: frozenset[str]) -> frozenset[str]:
     if raw is None or not raw.strip():
         return frozenset()
     wanted = [part.strip() for part in raw.split(",") if part.strip()]
+    # JUDGMENT: a dotted expansion implies its parent -- `lineItems.discounts`
+    # alone shows the line items with their discounts. Clover documents the
+    # dotted syntax ("one nesting level") and nothing about the parent being
+    # absent; implying it is the only reading under which the syntax is
+    # usable inside the three-expansion cap, and the implied parent does not
+    # count against that cap.
+    implied = [name.split(".", 1)[0] for name in wanted if "." in name]
     unknown = [name for name in wanted if name not in allowed]
     if unknown:
         raise UnitError(
@@ -166,7 +195,7 @@ def expansions(args: HandlerArgs, allowed: frozenset[str]) -> frozenset[str]:
             field="expand",
             info={"supplied": wanted},
         )
-    return frozenset(wanted)
+    return frozenset(wanted) | frozenset(implied)
 
 
 def elements(items: Sequence[dict[str, Any]], hrefs: Sequence[str]) -> dict[str, Any]:

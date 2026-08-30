@@ -57,7 +57,7 @@ def test_order_types_list_label(h: Harness) -> None:
     dine_in = next(e for e in body["elements"] if e["id"] == ORDER_TYPE_DINE_IN)
     assert dine_in["label"] == "Dine In"
     assert dine_in["taxable"] is True
-    assert "isDefault" not in dine_in  # the seed's own flag, not projected
+    assert dine_in["isDefault"] is True  # documented on an order type, projected
 
 
 def test_the_default_service_charge_and_its_documented_scale(h: Harness) -> None:

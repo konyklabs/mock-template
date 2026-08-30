@@ -201,7 +201,7 @@ class ItemRefWire(BaseModel):
 
     model_config = _REQUEST
 
-    id: str
+    id: str = Field(min_length=1)
 
     def wire(self) -> dict[str, Any]:
         return {"id": self.id}
@@ -214,7 +214,7 @@ class OrderTypeRefWire(BaseModel):
 
     model_config = _REQUEST
 
-    id: str
+    id: str = Field(min_length=1)
 
     def wire(self) -> dict[str, Any]:
         return {"id": self.id}
@@ -462,13 +462,21 @@ def supplied(model: BaseModel, field: str) -> bool:
 
 class DiscountRequest(BaseModel):
     """A discount as a caller sends it; ``amount`` (negative cents) or
-    ``percentage``. Both absent is refused by the surface."""
+    ``percentage``. Both absent is refused by the surface.
+
+    JUDGMENT on signs and bounds -- Clover's tutorial shows ``"amount": -200``
+    and states no rule: ``amount`` is accepted as a signed integer and added
+    as sent (a positive one is a surcharge the caller asked for, not an error
+    this fake can see); ``percentage`` must be 0-100, because a negative or
+    >100 percentage has no documented meaning and would only produce a
+    negative total. The order total is floored at zero by the calculator.
+    """
 
     model_config = _REQUEST
 
     name: str | None = None
     amount: int | None = None
-    percentage: int | None = None
+    percentage: int | None = Field(default=None, ge=0, le=100)
 
 
 class ServiceChargeRequest(BaseModel):
@@ -479,7 +487,7 @@ class ServiceChargeRequest(BaseModel):
 
     id: str | None = None
     name: str | None = None
-    percentageDecimal: int | None = None
+    percentageDecimal: int | None = Field(default=None, ge=0)
     enabled: bool | None = None
 
 
@@ -498,7 +506,8 @@ class ModificationRequest(BaseModel):
     model_config = _REQUEST
 
     modifier: RefRequest
-    amount: int | None = None
+    #: Cents, never negative: a reduction is a discount, not a modification.
+    amount: int | None = Field(default=None, ge=0)
     name: str | None = None
 
 
@@ -512,11 +521,14 @@ class LineItemRequest(BaseModel):
 
     model_config = _REQUEST
 
-    price: int | None = None
+    #: Cents, never negative (money is refused below zero everywhere).
+    price: int | None = Field(default=None, ge=0)
     item: ItemRefWire | None = None
     name: str | None = None
     note: str | None = None
-    unitQty: int | None = None
+    #: Fixed-point x1000, never negative (JUDGMENT: a negative quantity has
+    #: no documented meaning; a return is not a line item).
+    unitQty: int | None = Field(default=None, ge=0)
     printed: bool | None = None
     discounts: list[DiscountRequest] | None = None
     modifications: list[ModificationRequest] | None = None
@@ -545,8 +557,11 @@ class OrderCreateRequest(BaseModel):
     model_config = _REQUEST
 
     currency: str | None = None
-    total: int | None = None
+    #: Client-owned, and never negative.
+    total: int | None = Field(default=None, ge=0)
     state: str | None = None
+    #: Accepted on the wire, refused by the surface unless OPEN: paymentState
+    #: is moved by payments (JUDGMENT, ``surface/orders.py``).
     paymentState: PaymentState | None = None
     payType: PayType | None = None
     clientCreatedTime: int | None = None
@@ -649,7 +664,9 @@ def atomic_total(
     receipt shows). Tax is added by :func:`atomic_totals`.
     """
     subtotal = sum(line_total(line) for line in lines)
-    discounted = subtotal + _discount_total(discounts, subtotal)
+    # JUDGMENT: floored at zero. A discount larger than the subtotal leaves
+    # nothing owed rather than a negative order; Clover documents no rule.
+    discounted = max(0, subtotal + _discount_total(discounts, subtotal))
     return discounted + _service_charge_amount(discounted, service_charge)
 
 

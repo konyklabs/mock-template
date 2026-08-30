@@ -103,7 +103,8 @@ class ItemCreateRequest(BaseModel):
     model_config = _REQUEST
 
     name: str = Field(min_length=1)
-    price: int
+    #: Cents, never negative.
+    price: int = Field(ge=0)
     hidden: bool | None = None
     available: bool | None = None
     priceType: PriceType | None = None
@@ -121,7 +122,7 @@ class ItemPatchRequest(BaseModel):
     model_config = _REQUEST
 
     name: str | None = Field(default=None, min_length=1)
-    price: int | None = None
+    price: int | None = Field(default=None, ge=0)
     hidden: bool | None = None
     available: bool | None = None
     priceType: PriceType | None = None

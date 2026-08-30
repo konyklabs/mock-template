@@ -147,7 +147,7 @@ class CloverMerchantSurface:
         found = args.ctx.store.collection(COL.service_charges).find(lambda e: e.get("isDefault") is True)
         if found is None:
             raise UnitError(UnitErrorKind.NOT_FOUND, detail="This merchant has no default service charge.")
-        return json_(_project(found))
+        return json_(_project(found, strip=("isDefault",)))
 
     def _list(self, args: HandlerArgs, collection: str, segment: str) -> ReplyInit:
         merchant_id = require_merchant(args)
@@ -167,6 +167,13 @@ def merchant_routes(deps: CloverDeps) -> tuple[Route, ...]:
     return CloverMerchantSurface(deps).routes()
 
 
-def _project(entity: Mapping[str, Any]) -> dict[str, Any]:
-    """A reference document as stored, minus this unit's internal keys."""
-    return compact({k: v for k, v in entity.items() if k not in ("version", "created_at", "updated_at", "isDefault")})
+def _project(entity: Mapping[str, Any], *, strip: tuple[str, ...] = ()) -> dict[str, Any]:
+    """A reference document as stored, minus this unit's internal keys.
+
+    ``isDefault`` stays: it is a documented field of an order type and of a
+    tax rate. The one row that strips it is the default service charge,
+    whose ``isDefault`` is this unit's own selector for *which* charge the
+    ``/default_service_charge`` route answers, not a documented field.
+    """
+    hidden = ("version", "created_at", "updated_at", *strip)
+    return compact({k: v for k, v in entity.items() if k not in hidden})
