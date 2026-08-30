@@ -88,6 +88,11 @@ class Mutant:
     #: violates them too. Every entry needs a line in :attr:`cascade`.
     also_trips: frozenset[str] = frozenset()
     cascade: str = ""
+    #: Check ids allowed to SKIP under this mutant, because the defect removes
+    #: a precondition some other contract honestly reads. Every entry needs a
+    #: line in :attr:`skip_reason`; an unexplained skip is a silenced contract.
+    also_skips: frozenset[str] = frozenset()
+    skip_reason: str = ""
     #: Check ids that must SKIP on every profile -- the anti-vacuity path.
     skips_everywhere: frozenset[str] = frozenset()
     profiles: tuple[str, ...] = (DEFAULT_PROFILE,)
@@ -146,6 +151,11 @@ def register(mutant: Mutant) -> Mutant:
         raise RuntimeError(
             f"mutant {mutant.id} declares also_trips={sorted(mutant.also_trips)} with no `cascade` reason. "
             f"Tolerated collateral is written down or it is not tolerated."
+        )
+    if mutant.also_skips and not mutant.skip_reason.strip():
+        raise RuntimeError(
+            f"mutant {mutant.id} declares also_skips={sorted(mutant.also_skips)} with no `skip_reason`. "
+            f"A tolerated skip is written down or it is not tolerated."
         )
     MUTANTS.append(mutant)
     # Kept in id order, as the check registry is: a report and a coverage

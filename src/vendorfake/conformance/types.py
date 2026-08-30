@@ -142,6 +142,13 @@ class Requires:
     mutating_example: bool = False
     #: ...and that route also declares an idempotency spec.
     idempotent_example: bool = False
+    #: ...and some OTHER enabled route declares an idempotency spec under a
+    #: different scope, so one key can be sent to two operations.
+    idempotency_scopes: bool = False
+    #: At least one enabled, non-internal route declares how it pages.
+    paginated_route: bool = False
+    #: Delivery-scope fault injection -- ``webhooks.chaos`` -- is enabled.
+    webhooks_chaos: bool = False
     #: The unit runs on a virtual clock, so a delay can be crossed on demand.
     virtual_clock: bool = False
     #: The target can build the same unit in a SEPARATE OPERATING-SYSTEM

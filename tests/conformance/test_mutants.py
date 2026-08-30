@@ -65,11 +65,12 @@ def _outcomes(report: ConformanceReport, outcome: Outcome) -> frozenset[str]:
 def _tolerated_skips(mutant: Mutant) -> frozenset[str]:
     """Skips a mutant is allowed to produce, derived rather than listed.
 
-    Four sources, all of them data: the contracts that need a second binding
+    Five sources, all of them data: the contracts that need a second binding
     (none of these runs offers one), the contracts that need a second OS
     process (which only the mutant whose defect is per-process pays for), the
     committed expected-skip matrix restricted to the profiles this mutant
-    covers, and whatever the mutant itself declares it will silence.
+    covers, the skips the mutant declares with a reason (``also_skips``), and
+    whatever the mutant itself declares it will silence.
     """
     both_transports = frozenset(spec.id for spec in CHECKS if spec.requires.both_transports)
     out_of_process = (
@@ -80,7 +81,7 @@ def _tolerated_skips(mutant: Mutant) -> frozenset[str]:
         for check_id, profiles in expected_skips().items()
         if any(profile in profiles for profile in mutant.profiles)
     )
-    return both_transports | out_of_process | declared | mutant.skips_everywhere
+    return both_transports | out_of_process | declared | mutant.also_skips | mutant.skips_everywhere
 
 
 @pytest.mark.conformance
@@ -217,6 +218,8 @@ def test_the_mutant_registry_is_internally_consistent() -> None:
     assert not silent, f"{silent} do not say what is broken about them"
     unjustified = [mutant.id for mutant in MUTANTS if mutant.also_trips and not mutant.cascade.strip()]
     assert not unjustified, f"{unjustified} tolerate collateral with no written reason"
+    unexplained = [mutant.id for mutant in MUTANTS if mutant.also_skips and not mutant.skip_reason.strip()]
+    assert not unexplained, f"{unexplained} tolerate a skip with no written reason"
 
 
 @pytest.mark.conformance
@@ -238,6 +241,17 @@ def test_tolerated_collateral_must_be_justified() -> None:
                 provenance=Provenance.HYPOTHETICAL,
                 trips=frozenset({"C01"}),
                 also_trips=frozenset({"C02"}),
+            )
+        )
+    with pytest.raises(RuntimeError, match="written down"):
+        register(
+            Mutant(
+                id="M99",
+                name="unexplained-skip",
+                defect="Declares a tolerated skip without saying why the contract became unaskable.",
+                provenance=Provenance.HYPOTHETICAL,
+                trips=frozenset({"C01"}),
+                also_skips=frozenset({"C02"}),
             )
         )
     # A refused mutant must not reach the registry.
