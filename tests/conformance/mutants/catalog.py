@@ -1202,3 +1202,30 @@ register(
 scope enforcement removed from every route EXCEPT the one C17 probed left the
 matrix green, because a check that asks one route can be satisfied by a unit
 that is correct on exactly that route."""
+
+
+_REPLAY_MARKER = "x-unit-idempotent-replay"
+
+
+def _stamp_replay_marker(handler: Handler) -> Handler:
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        reply = handler(args)
+        headers = {**(reply.headers or {}), _REPLAY_MARKER: "true"}
+        return dataclasses.replace(reply, headers=headers)
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M39",
+        name="replay-marker-on-every-response",
+        defect="Every successful response claims to be an idempotent replay, the first execution included.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C19"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=wrap_vendor_handlers(_stamp_replay_marker)),
+    )
+)
+"""N-6. C19 asserted the replay carries the marker and never that the first
+execution does not; a consumer routing on "was this deduplicated?" is misled
+on every call, and the suite stayed green."""

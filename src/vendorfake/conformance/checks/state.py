@@ -383,6 +383,19 @@ def a_replayed_idempotency_key_does_not_run_twice(env: CheckEnv) -> str:
         f"{first.error_kind!r} {first.text[:300]}. A replay contract cannot be asked until "
         f"something has succeeded once.",
     )
+    # The other direction, which nothing asserted until the third adversarial
+    # round stamped the marker on every response and the suite stayed green
+    # (konyklabs/roadmap#10, N-6; konyklabs/roadmap#15). A consumer routes on
+    # this header to tell "this executed" from "this was deduplicated"; a
+    # first execution that claims to be a replay misleads them on every call.
+    require(
+        _REPLAY_HEADER not in first.headers,
+        f"the FIRST execution under {key_path!r} answered with {_REPLAY_HEADER}="
+        f"{first.headers.get(_REPLAY_HEADER)!r}. Nothing was replayed: the key had never been "
+        f"seen. The marker is stamped in core/kernel/unit.py::_replay and nowhere else; a handler "
+        f"or a decorator adding it to a fresh response tells a consumer their request was "
+        f"deduplicated when it was executed.",
+    )
     seq_after_first = int(env.get_json(f"{CONTROL_PREFIX}journal")["seq"])
 
     second = env.client.call(route.method, route.probe_path, json_body=body, headers=headers)
