@@ -14,6 +14,7 @@ Shapes, from the response examples on developer.squareup.com/reference/square:
 
 ===============  ============================================
 order            ``CAISENgvlJ6jLWAzERDzjyHVybY``  (27 chars)
+payment          ``R2B3Z8WMVt3EAmzYWLZvz7Y69EbZY`` (29 chars)
 location         ``18YC4JDH91E1H``                (13 chars)
 merchant         ``MLQW2MYBY81PZ``                (13 chars)
 catalog object   ``W62UWFY35CWMYGVWK6TWJDNI``     (24 chars)
@@ -93,6 +94,11 @@ class SquareIds:
 
     def tender(self) -> str:
         return self._pick(_MIXED, 27)
+
+    def payment(self) -> str:
+        """29 mixed-case alphanumerics, the shape of the CreatePayment example
+        (https://developer.squareup.com/reference/square/payments-api/create-payment)."""
+        return self._pick(_MIXED, 29)
 
     # -- OAuth -------------------------------------------------------------
 

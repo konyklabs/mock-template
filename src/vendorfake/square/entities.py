@@ -59,6 +59,7 @@ __all__ = [
     "Money",
     "OrderEntity",
     "OrderLineItem",
+    "PaymentEntity",
     "SquareCollections",
     "Tender",
     "TokenEntity",
@@ -73,12 +74,21 @@ class SquareCollections:
     locations: str = "locations"
     catalog: str = "catalog_objects"
     orders: str = "orders"
+    payments: str = "payments"
     codes: str = "authorization_codes"
     tokens: str = "tokens"
 
     def names(self) -> tuple[str, ...]:
         """Every collection name, in declaration order."""
-        return (self.merchants, self.locations, self.catalog, self.orders, self.codes, self.tokens)
+        return (
+            self.merchants,
+            self.locations,
+            self.catalog,
+            self.orders,
+            self.payments,
+            self.codes,
+            self.tokens,
+        )
 
 
 COL = SquareCollections()
@@ -544,6 +554,89 @@ class OrderEntity:
                 "ticket_name": self.ticket_name,
                 "closed_at": self.closed_at,
                 "metadata": self.metadata,
+                "version": self.version,
+                "created_at": self.created_at or None,
+                "updated_at": self.updated_at or None,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentEntity:
+    """A payment, as stored.
+
+    https://developer.squareup.com/reference/square/objects/Payment. Only the
+    ``EXTERNAL`` source is modelled -- see the SHRINK in
+    :mod:`vendorfake.square.surface.payments` -- so ``external_details`` is
+    the one source-specific block and ``source_type`` is always ``EXTERNAL``
+    on anything this unit mints. ``version``, ``created_at`` and
+    ``updated_at`` are the store's, as on an order; ``version_token`` on the
+    wire is derived from the store version.
+    """
+
+    id: str
+    location_id: str
+    merchant_id: str
+    amount_money: Money
+    status: str = "APPROVED"
+    source_type: str = "EXTERNAL"
+    tip_money: Money | None = None
+    order_id: str | None = None
+    customer_id: str | None = None
+    reference_id: str | None = None
+    note: str | None = None
+    external_type: str | None = None
+    external_source: str | None = None
+    external_source_id: str | None = None
+    version: int = 1
+    created_at: str = ""
+    updated_at: str = ""
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> PaymentEntity:
+        amount = Money.from_entity(entity.get("amount_money"))
+        return cls(
+            id=_str(entity["id"]),
+            location_id=_str(entity.get("location_id")),
+            merchant_id=_str(entity.get("merchant_id")),
+            amount_money=Money(amount=0, currency="USD") if amount is None else amount,
+            status=_str(entity.get("status"), "APPROVED"),
+            source_type=_str(entity.get("source_type"), "EXTERNAL"),
+            tip_money=Money.from_entity(entity.get("tip_money")),
+            order_id=_opt_str(entity.get("order_id")),
+            customer_id=_opt_str(entity.get("customer_id")),
+            reference_id=_opt_str(entity.get("reference_id")),
+            note=_opt_str(entity.get("note")),
+            external_type=_opt_str(entity.get("external_type")),
+            external_source=_opt_str(entity.get("external_source")),
+            external_source_id=_opt_str(entity.get("external_source_id")),
+            version=_int(entity.get("version"), 1),
+            created_at=_str(entity.get("created_at")),
+            updated_at=_str(entity.get("updated_at")),
+        )
+
+    @property
+    def total(self) -> int:
+        """``total_money``: the amount plus the tip, in minor units."""
+        return self.amount_money.amount + (0 if self.tip_money is None else self.tip_money.amount)
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "location_id": self.location_id,
+                "merchant_id": self.merchant_id,
+                "amount_money": self.amount_money.to_entity(),
+                "tip_money": None if self.tip_money is None else self.tip_money.to_entity(),
+                "status": self.status,
+                "source_type": self.source_type,
+                "order_id": self.order_id,
+                "customer_id": self.customer_id,
+                "reference_id": self.reference_id,
+                "note": self.note,
+                "external_type": self.external_type,
+                "external_source": self.external_source,
+                "external_source_id": self.external_source_id,
                 "version": self.version,
                 "created_at": self.created_at or None,
                 "updated_at": self.updated_at or None,

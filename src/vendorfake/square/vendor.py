@@ -77,7 +77,14 @@ from vendorfake.square.config import (
 from vendorfake.square.errors import SquareErrorShaper
 from vendorfake.square.events import SquareEventMapper
 from vendorfake.square.ids import SquareIds
-from vendorfake.square.machine import FULFILLMENT_MACHINE, FULFILLMENT_MACHINE_NAME, ORDER_MACHINE, ORDER_MACHINE_NAME
+from vendorfake.square.machine import (
+    FULFILLMENT_MACHINE,
+    FULFILLMENT_MACHINE_NAME,
+    ORDER_MACHINE,
+    ORDER_MACHINE_NAME,
+    PAYMENT_MACHINE,
+    PAYMENT_MACHINE_NAME,
+)
 from vendorfake.square.retry import square_retry_defaults
 from vendorfake.square.seed.hydrate import hydrate_square
 from vendorfake.square.signer import SquareWebhookSigner
@@ -85,6 +92,7 @@ from vendorfake.square.surface.catalog import catalog_routes
 from vendorfake.square.surface.directory import directory_routes
 from vendorfake.square.surface.oauth import oauth_routes
 from vendorfake.square.surface.orders import order_routes
+from vendorfake.square.surface.payments import payment_routes
 from vendorfake.square.surface.webhooks import webhook_routes
 
 __all__ = ["SQUARE_MAGIC", "SQUARE_SCOPES", "SquareVendor", "create_square_vendor"]
@@ -97,6 +105,7 @@ SQUARE_SCOPES: tuple[str, ...] = (
     "ORDERS_WRITE",
     "ITEMS_READ",
     "ITEMS_WRITE",
+    "PAYMENTS_READ",
     "PAYMENTS_WRITE",
     WEBHOOK_SUBSCRIPTIONS_SCOPE,
 )
@@ -167,7 +176,7 @@ class SquareVendor:
         # in force on the next delivery rather than on the next process. That
         # is the same rule the surfaces follow; see `surface/common.py`.
         self._signer = SquareWebhookSigner(self)
-        self._events = SquareEventMapper()
+        self._events = SquareEventMapper(self)
         self._routes: tuple[Route, ...] | None = None
 
     def _build_errors(self) -> SquareErrorShaper:
@@ -227,6 +236,7 @@ class SquareVendor:
                 + order_routes(self)
                 + directory_routes()
                 + catalog_routes(self)
+                + payment_routes(self)
                 + webhook_routes(self)
             )
         return self._routes
@@ -261,14 +271,18 @@ class SquareVendor:
 
     @property
     def machines(self) -> Mapping[str, MachineDef]:
-        """The order and fulfillment lifecycles, reachable at ``GET /__unit/machines``.
+        """The order, fulfillment and payment lifecycles, at ``GET /__unit/machines``.
 
         This is the registration the reference lacks: its ``orderMachine`` is a
         module-level singleton nothing publishes, so "every declared terminal
         state really is terminal" could not be asserted from outside the vendor
         package.
         """
-        return {ORDER_MACHINE_NAME: ORDER_MACHINE, FULFILLMENT_MACHINE_NAME: FULFILLMENT_MACHINE}
+        return {
+            ORDER_MACHINE_NAME: ORDER_MACHINE,
+            FULFILLMENT_MACHINE_NAME: FULFILLMENT_MACHINE,
+            PAYMENT_MACHINE_NAME: PAYMENT_MACHINE,
+        }
 
     @property
     def retry_defaults(self) -> ProfileDocument:

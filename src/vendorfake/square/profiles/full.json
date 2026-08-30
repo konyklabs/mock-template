@@ -1,7 +1,7 @@
 {
   "name": "full",
   "summary": "Every capability on. The default profile.",
-  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "webhooks", "chaos", "webhooks.chaos"],
+  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "payments", "webhooks", "chaos", "webhooks.chaos"],
   "seed": "seed/default.seed.json",
   "vendor": {
     "application_id": "sandbox-sq0idb-unit-square-application",

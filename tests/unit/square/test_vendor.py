@@ -15,7 +15,7 @@ from vendorfake.core.kernel.types import (
     VendorDefinition,
 )
 from vendorfake.square.events import SquareEventMapper
-from vendorfake.square.machine import FULFILLMENT_MACHINE, ORDER_MACHINE
+from vendorfake.square.machine import FULFILLMENT_MACHINE, ORDER_MACHINE, PAYMENT_MACHINE
 from vendorfake.square.retry import SQUARE_RETRY_SCHEDULE_MS
 from vendorfake.square.signer import SquareWebhookSigner
 from vendorfake.square.vendor import SquareVendor, create_square_vendor
@@ -82,7 +82,7 @@ def test_the_behaviour_capabilities_carry_their_prerequisites() -> None:
 
 def test_the_order_and_fulfillment_machines_are_registered_so_the_control_plane_can_publish_them() -> None:
     machines = create_square_vendor().machines
-    assert machines == {"order": ORDER_MACHINE, "fulfillment": FULFILLMENT_MACHINE}
+    assert machines == {"order": ORDER_MACHINE, "fulfillment": FULFILLMENT_MACHINE, "payment": PAYMENT_MACHINE}
 
 
 def test_the_retry_defaults_carry_squares_documented_schedule() -> None:
@@ -238,6 +238,10 @@ def test_the_shipped_surfaces_are_wired_and_cached() -> None:
         ("GET", "/v2/catalog/object/{object_id}"),
         ("POST", "/v2/catalog/search"),
         ("POST", "/v2/catalog/object"),
+        ("POST", "/v2/payments"),
+        ("GET", "/v2/payments/{payment_id}"),
+        ("POST", "/v2/payments/{payment_id}/complete"),
+        ("POST", "/v2/payments/{payment_id}/cancel"),
         ("GET", "/v2/webhooks/event-types"),
         ("POST", "/v2/webhooks/subscriptions"),
         ("GET", "/v2/webhooks/subscriptions"),
@@ -249,6 +253,7 @@ def test_the_shipped_surfaces_are_wired_and_cached() -> None:
         "oauth",
         "order-lifecycle",
         "merchant-directory",
+        "payments",
         "webhooks",
     }
 

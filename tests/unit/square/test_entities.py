@@ -17,7 +17,15 @@ from vendorfake.square.entities import (
 
 
 def test_the_collection_names() -> None:
-    assert COL.names() == ("merchants", "locations", "catalog_objects", "orders", "authorization_codes", "tokens")
+    assert COL.names() == (
+        "merchants",
+        "locations",
+        "catalog_objects",
+        "orders",
+        "payments",
+        "authorization_codes",
+        "tokens",
+    )
 
 
 def test_an_unset_optional_emits_no_key() -> None:

@@ -152,9 +152,11 @@ from vendorfake.square.entities import (
     Money,
     OrderEntity,
     OrderLineItem,
+    PaymentEntity,
     Tender,
 )
-from vendorfake.square.machine import FULFILLMENT_MACHINE, ORDER_MACHINE, FulfillmentState, OrderState
+from vendorfake.square.ids import SquareIds
+from vendorfake.square.machine import FULFILLMENT_MACHINE, ORDER_MACHINE, FulfillmentState, OrderState, PaymentState
 from vendorfake.square.model.common import validate_body
 from vendorfake.square.model.order import (
     FULFILLMENT_TYPES,
@@ -169,6 +171,7 @@ from vendorfake.square.model.order import (
     project_order,
     project_order_entry,
     supplied,
+    tendered_total,
 )
 from vendorfake.square.seed.constants import SEED_LOCATION_ID
 from vendorfake.square.surface.common import SquareDeps, instant_ms
@@ -180,7 +183,10 @@ __all__ = [
     "SEARCH_DEFAULT_LIMIT",
     "SEARCH_MAX_LIMIT",
     "OrdersSurface",
+    "apply_tenders",
     "order_routes",
+    "require_order",
+    "tender_for_payment",
 ]
 
 CAPABILITY = "order-lifecycle"
@@ -468,7 +474,7 @@ class OrdersSurface:
 
     def retrieve_order(self, args: HandlerArgs) -> ReplyInit:
         orders = args.ctx.store.collection(COL.orders)
-        order = _require_order(orders, args.params["order_id"])
+        order = require_order(orders, args.params["order_id"])
         return json_({"order": project_order(order)})
 
     # -- PUT /v2/orders/{order_id} -----------------------------------------
@@ -478,7 +484,7 @@ class OrdersSurface:
         patch = request.order
         order_id = args.params["order_id"]
         orders = args.ctx.store.collection(COL.orders)
-        current = _require_order(orders, order_id)
+        current = require_order(orders, order_id)
         subject = f"Order {order_id}"
 
         if patch.version is None:
@@ -702,10 +708,33 @@ class OrdersSurface:
     # -- POST /v2/orders/{order_id}/pay ------------------------------------
 
     def pay_order(self, args: HandlerArgs) -> ReplyInit:
+        """Pay an OPEN order with the payments named, and complete it.
+
+        "The total of the `payment_ids` listed in the request must be equal to
+        the order total. Orders with a total amount of `0` can be marked as
+        paid by specifying an empty array of `payment_ids` in the request."
+        https://developer.squareup.com/reference/square/orders-api/pay-order
+
+        Two readings of ``payment_ids``, and the request decides which:
+
+        * every id names a payment this unit holds -- the documented flow, a
+          CreatePayment with ``autocomplete: false`` followed by PayOrder. Each
+          must be APPROVED and belong to this order or to none, their amounts
+          must sum to the order total, and each is moved to COMPLETED after
+          the order commits, which journals a ``payment.updated`` apiece;
+        * none does -- the opaque form this unit accepted before it had a
+          Payments surface, kept so a scenario that never creates payments
+          still completes orders. The first id's tender carries the whole
+          total and the rest zero, because there is nothing else to divide.
+
+        A mix is refused naming the id that does not resolve: a caller who
+        creates payments here and then names one that does not exist has made
+        a mistake this unit must not paper over with a zero tender.
+        """
         request = validate_body(PayOrderRequest, args.body())
         order_id = args.params["order_id"]
         orders = args.ctx.store.collection(COL.orders)
-        current = _require_order(orders, order_id)
+        current = require_order(orders, order_id)
         subject = f"Order {order_id}"
 
         if current.state == OrderState.DRAFT:
@@ -725,7 +754,19 @@ class OrdersSurface:
         _MACHINE.assert_transition(current.state, OrderState.COMPLETED.value, subject)
 
         total = order_total(current)
-        payment_ids = request.payment_ids if request.payment_ids else ["unit-payment"]
+        payment_ids = list(request.payment_ids or [])
+        payments = args.ctx.store.collection(COL.payments)
+        stored = _resolve_payments(payments, payment_ids, current)
+        if stored is not None:
+            paid = sum(p.total for p in stored)
+            if paid != total - tendered_total(current):
+                raise UnitError(
+                    UnitErrorKind.INVALID_VALUE,
+                    detail=f"The payments total {paid} but the order total due is {total - tendered_total(current)}.",
+                    field="payment_ids",
+                    info={"payments_total": paid, "order_total": total, "tendered": tendered_total(current)},
+                )
+        opaque_ids = payment_ids or ["unit-payment"]
 
         def mutate(draft: Entity) -> None:
             # Minted inside the mutator, so a version conflict -- which
@@ -733,24 +774,27 @@ class OrdersSurface:
             # from the id stream and leave two runs of one scenario numbering
             # their tenders differently.
             now = args.ctx.clock.iso_ms()
-            draft["tenders"] = [
-                Tender(
-                    id=self._deps.ids.tender(),
-                    location_id=current.location_id,
-                    transaction_id=current.id,
-                    created_at=now,
-                    # The first tender carries the whole total and the rest
-                    # zero: Square requires the payments to sum to the order
-                    # total, and with no Payments API the total is all there is
-                    # to divide.
-                    amount_money=Money(amount=total if index == 0 else 0, currency=current.currency),
-                    payment_id=payment_id,
-                ).to_entity()
-                for index, payment_id in enumerate(payment_ids)
-            ]
-            draft["state"] = OrderState.COMPLETED.value
-            draft["closed_at"] = now
-            _drop_zero_quantity_lines(draft)
+            if stored is not None:
+                tenders = [tender_for_payment(self._deps.ids, current, payment, now) for payment in stored]
+            else:
+                tenders = [
+                    Tender(
+                        id=self._deps.ids.tender(),
+                        location_id=current.location_id,
+                        transaction_id=current.id,
+                        created_at=now,
+                        # The first tender carries the whole total and the rest
+                        # zero: Square requires the payments to sum to the order
+                        # total, and with opaque ids the total is all there is
+                        # to divide.
+                        amount_money=Money(amount=total if index == 0 else 0, currency=current.currency),
+                        payment_id=payment_id,
+                    )
+                    for index, payment_id in enumerate(opaque_ids)
+                ]
+            apply_tenders(draft, tenders, now)
+            # PayOrder completes unconditionally: the sum was checked above.
+            _complete_order(draft, now)
 
         updated = orders.update(
             order_id,
@@ -758,6 +802,8 @@ class OrdersSurface:
             expect_version=request.order_version,
             meta={"operation_id": "PayOrder"},
         )
+        for payment in stored or ():
+            _capture_payment(payments, payment, order_id, "PayOrder")
         return json_({"order": project_order(OrderEntity.from_entity(updated))})
 
     # -- line items ---------------------------------------------------------
@@ -962,7 +1008,7 @@ def _cannot_be_cleared(field: str) -> UnitError:
     )
 
 
-def _require_order(orders: Collection, order_id: str) -> OrderEntity:
+def require_order(orders: Collection, order_id: str) -> OrderEntity:
     """The order, or Square's own wording for a miss."""
     stored = orders.get(order_id)
     if stored is None:
@@ -1219,6 +1265,105 @@ def _merge_fulfillments(
             merged.pop(key, None)
         by_uid[patch.uid] = merged
     return [by_uid[uid] for uid in order]
+
+
+def _resolve_payments(
+    payments: Collection, payment_ids: Sequence[str], order: OrderEntity
+) -> list[PaymentEntity] | None:
+    """The stored payments ``payment_ids`` name, or ``None`` when none is stored.
+
+    See :meth:`OrdersSurface.pay_order` for the two readings and why a mix is
+    refused.
+    """
+    found: list[PaymentEntity | None] = [
+        None if (raw := payments.get(pid)) is None else PaymentEntity.from_entity(raw) for pid in payment_ids
+    ]
+    if not any(p is not None for p in found):
+        return None
+    resolved: list[PaymentEntity] = []
+    for pid, payment in zip(payment_ids, found, strict=True):
+        if payment is None:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"Payment {pid} was not found.",
+                field="payment_ids",
+                info={"payment_id": pid},
+            )
+        if payment.status != PaymentState.APPROVED.value:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"Payment {pid} is {payment.status}; only an APPROVED payment can pay an order.",
+                field="payment_ids",
+                info={"payment_id": pid, "status": payment.status},
+            )
+        if payment.order_id is not None and payment.order_id != order.id:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"Payment {pid} belongs to order {payment.order_id}, not {order.id}.",
+                field="payment_ids",
+                info={"payment_id": pid, "order_id": payment.order_id},
+            )
+        resolved.append(payment)
+    return resolved
+
+
+def _capture_payment(payments: Collection, payment: PaymentEntity, order_id: str, operation_id: str) -> None:
+    """Move an APPROVED payment to COMPLETED against ``order_id``, journalled."""
+
+    def mutate(draft: Entity) -> None:
+        draft["status"] = PaymentState.COMPLETED.value
+        draft["order_id"] = order_id
+
+    payments.update(payment.id, mutate, meta={"operation_id": operation_id})
+
+
+def tender_for_payment(ids: SquareIds, order: OrderEntity, payment: PaymentEntity, now: str) -> Tender:
+    """The tender a completed payment adds to its order.
+
+    JUDGMENT -- ``type`` is ``OTHER`` for an external payment. Square's
+    ``TenderType`` (https://developer.squareup.com/reference/square/enums/TenderType)
+    has no ``EXTERNAL`` member and documents no mapping from a payment's
+    ``source_type``; ``OTHER`` is the member that claims nothing false.
+    """
+    return Tender(
+        id=ids.tender(),
+        location_id=order.location_id,
+        transaction_id=order.id,
+        created_at=now,
+        amount_money=Money(amount=payment.total, currency=order.currency),
+        type="OTHER" if payment.source_type == "EXTERNAL" else "CARD",
+        payment_id=payment.id,
+    )
+
+
+def apply_tenders(draft: Entity, tenders: Sequence[Tender], now: str) -> None:
+    """Append ``tenders`` to an order draft and complete it if it is now paid.
+
+    Shared by PayOrder and by the Payments surface, so "an order is COMPLETED
+    when the tenders cover its total" is one rule. The guide's flow --
+    "Square marks the order as COMPLETED" once payments covering the total
+    are completed -- is the reading followed
+    (https://developer.squareup.com/docs/orders-api/pay-for-orders); the
+    exact wording is NOT VERIFIED and a partial payment leaves the order OPEN
+    with the remainder in ``net_amount_due_money``.
+    """
+    existing = draft.get("tenders")
+    stored = [dict(t) for t in existing if isinstance(t, dict)] if isinstance(existing, list) else []
+    stored.extend(tender.to_entity() for tender in tenders)
+    draft["tenders"] = stored
+    if draft.get("state") == OrderState.OPEN.value:
+        order = OrderEntity.from_entity(draft)
+        if tendered_total(order) >= order_total(order):
+            _complete_order(draft, now)
+
+
+def _complete_order(draft: Entity, now: str) -> None:
+    """The terminal move into COMPLETED, however it was reached."""
+    if draft.get("state") == OrderState.COMPLETED.value:
+        return
+    draft["state"] = OrderState.COMPLETED.value
+    draft["closed_at"] = now
+    _drop_zero_quantity_lines(draft)
 
 
 def _drop_zero_quantity_lines(draft: Entity) -> None:

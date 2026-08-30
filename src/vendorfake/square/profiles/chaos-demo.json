@@ -1,7 +1,7 @@
 {
   "name": "chaos-demo",
   "summary": "Full surface with a preloaded fault set: rate limiting, mid-flow token expiry, duplicate and reordered webhook delivery.",
-  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "webhooks", "chaos", "webhooks.chaos"],
+  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "payments", "webhooks", "chaos", "webhooks.chaos"],
   "seed": "seed/default.seed.json",
   "vendor": {
     "application_id": "sandbox-sq0idb-unit-square-application",

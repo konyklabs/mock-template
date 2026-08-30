@@ -94,6 +94,7 @@ SEED_SCOPES: tuple[str, ...] = (
     "ORDERS_WRITE",
     "ITEMS_READ",
     "ITEMS_WRITE",
+    "PAYMENTS_READ",
     "PAYMENTS_WRITE",
     "DEVELOPER_APPLICATION_WEBHOOKS_WRITE",
 )
@@ -110,6 +111,6 @@ already define.
 
 SEED_READ_ONLY_ACCESS_TOKEN = "EAAAl-unit-seeded-access-token-read-only"
 SEED_READ_ONLY_REFRESH_TOKEN = "EQAAl-unit-seeded-refresh-token-read-only"
-SEED_READ_ONLY_SCOPES: tuple[str, ...] = ("MERCHANT_PROFILE_READ", "ORDERS_READ", "ITEMS_READ")
+SEED_READ_ONLY_SCOPES: tuple[str, ...] = ("MERCHANT_PROFILE_READ", "ORDERS_READ", "ITEMS_READ", "PAYMENTS_READ")
 """A second token that cannot write, so "403 on the write path" is testable
 without minting anything."""
