@@ -58,12 +58,37 @@ def test_a_typo_on_the_module_still_raises_attribute_error() -> None:
         clover.VENDORS  # type: ignore[attr-defined]  # noqa: B018
 
 
-def test_the_oauth_routes_are_live_and_the_webhook_seams_are_none_until_pr_d() -> None:
+def test_every_surface_is_live_and_the_webhook_seams_are_wired() -> None:
     vendor = create_clover_vendor()
     keys = [route.key for route in vendor.routes]
-    assert keys == ["GET /oauth/v2/authorize", "POST /oauth/v2/token", "POST /oauth/v2/refresh"]
-    assert vendor.signer is None
-    assert vendor.events is None
+    assert keys[:3] == ["GET /oauth/v2/authorize", "POST /oauth/v2/token", "POST /oauth/v2/refresh"]
+    assert "POST /v3/merchants/{mId}/orders" in keys
+    assert "POST /v3/merchants/{mId}/orders/{orderId}" in keys  # update is POST, not PUT
+    assert "DELETE /v3/merchants/{mId}/orders/{orderId}" in keys
+    assert "POST /v3/merchants/{mId}/atomic_order/checkouts" in keys
+    assert "GET /v3/merchants/{mId}/items/{itemId}" in keys
+    assert "POST /v3/merchants/{mId}/items/{itemId}" in keys
+    assert "GET /v3/merchants/{mId}" in keys
+    assert "POST /v3/merchants/{mId}/orders/{orderId}/payments" in keys
+    assert "POST /v3/merchants/{mId}/print_event" in keys
+    assert "GET /v3/merchants/{mId}/default_service_charge" in keys
+    assert "GET /v3/merchants/{mId}/modifier_groups/{modGroupId}/modifiers/{modId}" in keys
+    assert "POST /v3/merchants/{mId}/customers" in keys
+    # The dashboard stand-in comes last, after every real Clover endpoint.
+    assert keys[-3:] == [
+        "POST /__clover/webhooks/subscriptions",
+        "GET /__clover/webhooks/subscriptions",
+        "POST /__clover/webhooks/verify",
+    ]
+    assert len(keys) == 30
+    assert len(set(keys)) == 30
+    # Every merchant-scoped route authenticates and names a permission.
+    for route in vendor.routes:
+        if route.path.startswith("/v3/"):
+            assert route.auth == "bearer", route.key
+            assert route.scopes, route.key
+    assert vendor.signer is not None
+    assert vendor.events is not None
 
 
 def test_routes_are_built_once_and_cached() -> None:
@@ -73,14 +98,18 @@ def test_routes_are_built_once_and_cached() -> None:
     assert vendor.routes is vendor.routes
 
 
-def test_the_real_auth_adapter_is_wired_and_fails_closed_with_no_tokens() -> None:
-    """On an empty store nothing authenticates and nothing is offered."""
+def test_the_real_auth_adapter_is_wired_and_offers_only_the_seeded_bearers() -> None:
+    """The shipped scenario's two tokens are the whole credential list; an
+    unknown bearer still fails closed."""
     from types import SimpleNamespace
+
+    from vendorfake.clover.seed.constants import SEED_ACCESS_TOKEN, SEED_READ_ONLY_ACCESS_TOKEN
 
     unit = create_unit(vendor="clover", profile="full")
     vendor = unit.context.vendor
     assert isinstance(vendor.auth, CloverAuth)
-    assert vendor.auth.credentials(unit.context) == ()
+    offered = {c.headers["authorization"] for c in vendor.auth.credentials(unit.context)}
+    assert offered == {f"Bearer {SEED_ACCESS_TOKEN}", f"Bearer {SEED_READ_ONLY_ACCESS_TOKEN}"}
     args = SimpleNamespace(ctx=unit.context, header=lambda name: "Bearer never-minted")
     with pytest.raises(UnitError) as caught:
         vendor.auth.resolve(args, "bearer")  # type: ignore[arg-type]
@@ -160,11 +189,43 @@ def test_the_id_stream_is_reseeded_from_the_unit_seed_not_the_constructor_arg() 
     assert [other.ids.order() for _ in range(3)] != first
 
 
-def test_hydrate_refuses_a_seed_document_until_pr_e_ships_the_parser() -> None:
+def test_hydrate_loads_the_seed_merchant_and_refuses_a_malformed_document() -> None:
+    """The one-merchant seed: a valid document inserts the merchant with the
+    seed meta; a wrong one is refused by name at startup; no seed loads
+    nothing and is legal."""
+    from vendorfake.clover.entities import COL, MerchantEntity
+
+    unit = create_unit(vendor="clover", profile="full")
+    ctx = unit.context
+    stored = ctx.store.collection(COL.merchants).require("HRVSTRYE12345")
+    assert MerchantEntity.from_entity(stored).name == "Harvest & Rye"
+    seeded = [e for e in ctx.store.journal() if e.collection == COL.merchants]
+    assert seeded and all(e.meta.get("seed") is True for e in seeded)
+    vendor = CloverVendor()
+    vendor.hydrate(ctx, {"merchant": {"id": "SECONDMERCH01", "name": "Second"}})
+    assert ctx.store.collection(COL.merchants).get("SECONDMERCH01") is not None
     with pytest.raises(UnitError) as caught:
-        CloverVendor().hydrate(fake_ctx(), {"merchant": {}})
+        vendor.hydrate(ctx, {"merchant": {"id": "X"}, "unknown": 1})
     assert caught.value.kind is UnitErrorKind.INVALID_VALUE
-    assert "seed" in str(caught.value)
+    assert caught.value.field == "seed"
+    with pytest.raises(UnitError):
+        vendor.hydrate(ctx, {"merchant": {}})
+    vendor.hydrate(ctx, None)  # a profile with no seed
+
+
+def test_two_fresh_units_seed_identically_and_reset_reseeds() -> None:
+    """The determinism the conformance C06 contract asserts, pinned here too:
+    identical digests across two units, and after a control-plane reset."""
+    from vendorfake.core.transport.inprocess import in_process
+
+    first = create_unit(vendor="clover", profile="full")
+    second = create_unit(vendor="clover", profile="full")
+    digest = first.context.store.entity_digest()
+    assert digest == second.context.store.entity_digest()
+    api = in_process(first)
+    assert api.post("/__unit/state/reset").status == 200
+    assert first.context.store.entity_digest() == digest
+    assert first.context.store.collection("merchants").get("HRVSTRYE12345") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +251,17 @@ def test_a_clover_unit_starts_on_the_full_profile_with_an_empty_surface() -> Non
     unit = create_unit(vendor="clover", profile="full")
     assert unit.name == "clover"
     assert unit.context.config.profile == "full"
-    assert set(unit.context.config.capabilities) == {"oauth", "chaos"}
+    assert set(unit.context.config.capabilities) == {
+        "oauth",
+        "orders",
+        "payments",
+        "inventory",
+        "merchant",
+        "customers",
+        "webhooks",
+        "chaos",
+        "webhooks.chaos",
+    }
 
 
 def test_two_clover_units_in_one_process_do_not_share_an_id_stream() -> None:

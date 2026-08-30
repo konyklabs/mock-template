@@ -33,6 +33,12 @@ REQUIRED = (
     "vendorfake/square/profiles/orders-only.json",
     "vendorfake/square/profiles/chaos-demo.json",
     "vendorfake/clover/profiles/full.json",
+    "vendorfake/clover/profiles/no-chaos.json",
+    "vendorfake/clover/profiles/no-faults.json",
+    "vendorfake/clover/profiles/oauth-only.json",
+    "vendorfake/clover/profiles/orders-only.json",
+    "vendorfake/clover/profiles/chaos-demo.json",
+    "vendorfake/clover/seed/default.seed.json",
 )
 
 

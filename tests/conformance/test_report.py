@@ -106,3 +106,48 @@ def test_the_formatted_report_says_what_happened() -> None:
     assert "== full / inprocess ==" in text
     assert "[PASS] C01" in text
     assert text.endswith("OK")
+
+
+def test_a_check_declared_inapplicable_by_name_is_not_never_ran_but_a_bare_skip_matrix_still_is() -> None:
+    """A second vendor's target says, with a reason, which contracts its API
+    cannot be asked (Clover has no idempotency key). Declared: named, dropped
+    from the anti-vacuity rule, ok under --strict. Merely skipped everywhere
+    -- even with the skip matrix covering every profile -- still never-ran,
+    still not ok: a matrix is not a reason. And a declared-inapplicable
+    check that runs is stale and fails."""
+    results = (
+        _result("C01", "full", Outcome.PASS),
+        _result("C19", "full", Outcome.SKIP),
+        _result("C19", "oauth-only", Outcome.SKIP),
+    )
+    declared = ConformanceReport(results, strict=True, inapplicable={"C19": "no idempotency key"})
+    assert declared.never_ran == ()
+    assert declared.undeclared_skips == ()
+    assert declared.ok, declared.problems
+    assert "inapplicable to this target: C19 -- no idempotency key" in format_report(declared)
+
+    matrix_only = ConformanceReport(results, strict=True, expected_skips={"C19": frozenset({"full", "oauth-only"})})
+    assert matrix_only.never_ran == ("C19",)
+    assert not matrix_only.ok
+
+    stale = ConformanceReport(
+        (_result("C01", "full", Outcome.PASS), _result("C19", "full", Outcome.PASS)),
+        inapplicable={"C19": "no idempotency key"},
+    )
+    assert stale.stale_inapplicable == ("C19",)
+    assert not stale.ok
+    assert "DECLARED INAPPLICABLE BUT RAN C19" in "\n".join(stale.problems)
+
+
+def test_the_cli_text_names_a_declared_inapplicable_check_that_ran() -> None:
+    """The CLI prints ``format_report``, not ``problems``: a stale
+    declaration that only the pytest plugin could explain exited 1 with no
+    stated cause. The text now carries the same line."""
+    stale = ConformanceReport(
+        (_result("C01", "full", Outcome.PASS), _result("C19", "full", Outcome.PASS)),
+        inapplicable={"C19": "no idempotency key"},
+    )
+    text = format_report(stale)
+    assert "DECLARED INAPPLICABLE BUT RAN C19: " in text
+    assert "(no idempotency key)" in text
+    assert text.endswith("NOT OK")

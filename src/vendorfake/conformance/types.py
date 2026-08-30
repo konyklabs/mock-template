@@ -22,7 +22,7 @@ to be ``ok`` when a check skipped everywhere -- see
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING
@@ -198,3 +198,30 @@ class ConformanceTarget:
     #: process, and a suite that assumed otherwise would report a cross-process
     #: determinism result it had never measured.
     out_of_process: Sequence[str] = field(default=())
+    #: Path parameters that name the TENANT a credential is scoped to, filled
+    #: with the seeded value instead of the probe segment. A vendor whose
+    #: every route lives under ``/merchants/{mId}/...`` -- Clover -- cannot be
+    #: driven otherwise: the probe value can never be the merchant the
+    #: published credential belongs to, so every authenticated probe would
+    #: answer the same refusal as a bad token and the example-body contracts
+    #: could never commit anything. Only the named parameters are filled;
+    #: every other ``{param}`` stays the probe, for the reason the module
+    #: docstring of ``env.py`` gives. Empty for a vendor like Square, whose
+    #: path parameters all identify resources below the auth boundary.
+    path_params: Mapping[str, str] = field(default_factory=dict)
+    #: Check id -> profiles on which a skip is expected and permanent FOR THIS
+    #: TARGET. ``None`` means the committed manifest's matrix, which describes
+    #: the vendor shipped with the suite; a second vendor's profiles lack
+    #: different capabilities and carry their own matrix. Same rules as the
+    #: manifest under ``--strict``: an undeclared skip fails, and so does a
+    #: declared skip that stops happening.
+    expected_skips: Mapping[str, Sequence[str]] | None = None
+    #: Check id -> why this vendor can never be asked it. Distinct from a skip
+    #: matrix on purpose: a contract skipped on every profile is a contract
+    #: nobody tested, and the anti-vacuity rule refuses it -- unless the
+    #: target says, by name and with a reason, that the vendor's API has no
+    #: such thing (Clover documents no idempotency key, so the replay contract
+    #: cannot be asked of it). The report prints the reason, drops the check
+    #: from never-ran, and fails if a check declared inapplicable ever runs:
+    #: a declaration that outlives the gap it describes is stale.
+    inapplicable: Mapping[str, str] = field(default_factory=dict)

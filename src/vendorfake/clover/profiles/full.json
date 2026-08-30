@@ -1,12 +1,36 @@
 {
   "name": "full",
-  "summary": "Every declared capability on. The default profile. Orders and inventory arrive in PR C, webhooks in PR D, the seed scenario in PR E; until then the unit starts empty.",
-  "capabilities": ["oauth", "chaos"],
+  "summary": "Every capability on. The default profile. Seeds the whole scenario: merchant, items, modifiers, employees, tenders, order types, tax rates, a customer, an open order, two bearers and a pre-verified webhook subscriber.",
+  "capabilities": [
+    "oauth",
+    "orders",
+    "payments",
+    "inventory",
+    "merchant",
+    "customers",
+    "webhooks",
+    "chaos",
+    "webhooks.chaos"
+  ],
+  "seed": "seed/default.seed.json",
   "vendor": {
     "client_id": "UNITCLOVERAPP",
     "client_secret": "unit-clover-app-secret",
     "redirect_uri": "https://example.test/oauth/callback"
   },
-  "chaos": { "seed": 20260829, "rules": [], "strict_rules": true },
-  "clock": { "mode": "real" }
+  "webhooks": {
+    "retry": {
+      "time_scale": 0.000167,
+      "timeout_ms": 2000
+    },
+    "subscribers": []
+  },
+  "clock": {
+    "mode": "real"
+  },
+  "chaos": {
+    "seed": 20260829,
+    "strict_rules": true,
+    "rules": []
+  }
 }

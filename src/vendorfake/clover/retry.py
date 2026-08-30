@@ -24,16 +24,38 @@ A consumer must not carry any of these numbers to the real Clover platform.
 The Square package's retry module is the shape template; the difference is
 that every value there is verbatim from Square's docs and every value here is
 labelled invention.
+
+WHAT COUNTS AS DELIVERED. The one sentence Clover publishes on the consumer's
+side is "the response ... needs to be a 200 OK code". The core's dispatcher
+accepts any 2xx (``200 <= status < 300``), so a callback answering 204 is
+delivered here and -- reading the documentation literally -- might not be
+against Clover. JUDGMENT, recorded rather than resolved: narrowing it would be
+a core change for a reading the page does not clearly support. Anything else
+-- a 4xx, a 5xx, a timeout, a refused connection -- is retried on the
+schedule above until it succeeds or the schedule is exhausted.
+
+THE DELIVERY HEADERS named below are this fake's, not Clover's; the reasoning
+is in :mod:`vendorfake.clover.delivery_headers`. The retry reasons are the
+core's neutral outcome names verbatim, because Clover publishes no vocabulary
+to translate them into.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from vendorfake.core.config.models import ProfileDocument, RetryPolicy, WebhooksSection
+from vendorfake.core.webhooks.models import DeliveryOutcome
 
 __all__ = [
     "CLOVER_RETRY_SCHEDULE_MS",
     "CLOVER_TIMEOUT_MS",
     "CLOVER_TIME_SCALE",
+    "CONTENT_TYPE",
+    "INITIAL_DELIVERY_HEADER",
+    "RETRY_NUMBER_HEADER",
+    "RETRY_REASONS",
+    "RETRY_REASON_HEADER",
     "clover_retry_defaults",
 ]
 
@@ -54,6 +76,27 @@ CLOVER_TIME_SCALE = 1 / 6000
 first retry becomes 5 milliseconds, and every interval keeps its ratio to every
 other. A mock affordance, kept separate from the schedule itself so that
 neither can be mistaken for the other."""
+
+CONTENT_TYPE = "application/json"
+"""The content type every delivery carries. Documented by example: the
+payload on the webhooks page is a JSON document."""
+
+RETRY_NUMBER_HEADER = "x-vendorfake-retry-number"
+RETRY_REASON_HEADER = "x-vendorfake-retry-reason"
+"""Retry-only, and this fake's own -- JUDGMENT, see ``delivery_headers.py``."""
+
+INITIAL_DELIVERY_HEADER = "x-vendorfake-initial-delivery"
+"""On every attempt with the same value, so a consumer can measure total
+latency across a cascade. Same provenance as the two above."""
+
+RETRY_REASONS: Mapping[DeliveryOutcome, str] = {
+    DeliveryOutcome.TIMEOUT: DeliveryOutcome.TIMEOUT.value,
+    DeliveryOutcome.TRANSPORT_ERROR: DeliveryOutcome.TRANSPORT_ERROR.value,
+    DeliveryOutcome.HTTP_ERROR: DeliveryOutcome.HTTP_ERROR.value,
+}
+"""Core outcome -> the string on the wire. The identity map, spelled out,
+because the hook exists for a vendor with a documented vocabulary and this
+one has none: the mapping is where Clover's words would go if it had any."""
 
 
 def clover_retry_defaults() -> ProfileDocument:

@@ -12,11 +12,16 @@ touching a vendor sandbox.
 Two vendors ship today. **Square (Connect v2)** is complete — OAuth2 (code +
 PKCE flows), orders with a real lifecycle, locations and catalog, and webhook
 subscriptions whose deliveries are signed the way Square signs them and
-retried on Square's documented schedule. **Clover (REST v3)** is in progress:
-at this commit the `clover` unit serves the OAuth v2 surface (authorize, token
-exchange, single-use refresh rotation, and the documented 401-for-everything
-auth behaviour) plus the control plane; orders, inventory, webhooks and the
-seed scenario are landing in follow-up PRs.
+retried on Square's documented schedule. **Clover (REST v3)** ships the
+same shape: OAuth v2 (authorize, token exchange, single-use refresh rotation,
+the documented 401-for-everything auth behaviour), orders and line items with
+client-owned totals, the atomic order/checkout calculators with taxes,
+inventory with modifier groups, the merchant's employees/tenders/order
+types/default service charge, customers, external-tender payments that lock
+the order, print events, webhooks in Clover's aggregate-payload shape with
+the static `X-Clover-Auth` header and the dashboard verification handshake,
+and a seeded scenario — see [Clover quickstart](#clover-quickstart) and [the
+webhook an order fires](#the-webhook-an-order-fires).
 
 Because two vendors are installed, every command names one: `--vendor square`
 (or `--vendor clover`), or set `VENDORFAKE_VENDOR`. With no selector the
@@ -191,6 +196,145 @@ routes with summaries, `GET /__unit/info` (or `vendorfake info --vendor square`)
 describes the whole unit — capabilities, auth, signing scheme, fault catalogue,
 retry schedule — and `vendorfake openapi --vendor square` prints an OpenAPI 3.1
 document.
+
+## Clover quickstart
+
+Serve the Clover unit (defaults to the `full` profile):
+
+```sh
+vendorfake serve --vendor clover
+```
+
+The scenario is pre-seeded — merchant `HRVSTRYE12345` ("Harvest & Rye"),
+three items, a modifier group, two employees, two tenders, two order types,
+two tax rates, the default service charge, a customer, one open order, a
+full-permission bearer `unit-seeded-clover-access-token-full-permissions`
+(and a read-only one), and a pre-verified webhook subscriber whose auth code
+is `unit-seeded-clover-webhook-auth-code` — so the first call needs no setup.
+Every `/v3` path is scoped to the merchant:
+
+```sh
+SEED=unit-seeded-clover-access-token-full-permissions
+M=HRVSTRYE12345
+
+curl -s http://localhost:8080/v3/merchants/$M/items -H "Authorization: Bearer $SEED"
+# -> {"elements":[{"href":"https://apisandbox.dev.clover.com/v3/merchants/HRVSTRYE12345/items/CRAFTBEER0750",
+#     "id":"CRAFTBEER0750","hidden":false,"available":true,"name":"Craft Beer","price":750,
+#     "priceType":"FIXED","defaultTaxRates":false,"isRevenue":false,"modifiedTime":1755786102000}, ...
+```
+
+### The OAuth v2 dance
+
+The unit's app credentials are `UNITCLOVERAPP` / `unit-clover-app-secret`.
+Clover's redirect names the merchant and echoes the app:
+
+```sh
+curl -si "http://localhost:8080/oauth/v2/authorize?client_id=UNITCLOVERAPP" | grep -i '^location'
+# location: https://example.test/oauth/callback?merchant_id=HRVSTRYE12345&client_id=UNITCLOVERAPP&code=6299bf64-a9b0-4939-9cdb-6b095853ee99
+```
+
+Exchange the `code`; expirations are Unix **seconds** (access tokens live 30
+minutes, as documented):
+
+```sh
+curl -s -X POST http://localhost:8080/oauth/v2/token -H 'Content-Type: application/json' -d '{
+  "client_id": "UNITCLOVERAPP", "client_secret": "unit-clover-app-secret",
+  "code": "6299bf64-a9b0-4939-9cdb-6b095853ee99"
+}'
+# -> {"access_token":"bc63dfc1-ecd2-455a-8681-6c46385f398c","access_token_expiration":1788100237,
+#     "refresh_token":"cea1ad66-d073-4345-bd1f-72ccbf4e25a6","refresh_token_expiration":1819634437}
+```
+
+Refresh takes no client secret, and the refresh token is single use — send
+it twice and the second call is a 401:
+
+```sh
+curl -s -X POST http://localhost:8080/oauth/v2/refresh -H 'Content-Type: application/json' -d '{
+  "client_id": "UNITCLOVERAPP", "refresh_token": "cea1ad66-d073-4345-bd1f-72ccbf4e25a6"
+}'
+# -> {"access_token":"ecf2ddac-34fa-4794-9458-98c0850294fb","access_token_expiration":1788100237,
+#     "refresh_token":"9fa9acdf-604b-4feb-a89e-c6ec5766c617","refresh_token_expiration":1819634437}
+```
+
+### An atomic order, and the payment that locks it
+
+Plain `POST /orders` never totals an order (Clover leaves that to the app —
+`total` is yours to set). The atomic endpoint does, taxes and the merchant's
+default service charge included:
+
+```sh
+curl -s -X POST http://localhost:8080/v3/merchants/$M/atomic_order/orders \
+  -H "Authorization: Bearer $SEED" -H 'Content-Type: application/json' -d '{
+  "orderCart": {
+    "orderType": {"id": "KFRPRVCZ73JHM"},
+    "lineItems": [
+      {"item": {"id": "ESPRESSO00300"}, "modifications": [{"modifier": {"id": "MODIFIEROAT01"}}]},
+      {"item": {"id": "CROISSANT0450"}}
+    ],
+    "serviceCharge": {"id": "SVCCHARGE0001"}
+  }
+}'
+# -> {"id":"240Q4JZPXN595","currency":"USD","total":1002,"state":"open","paymentState":"OPEN", ...
+#     "serviceCharge":{"id":"SVCCHARGE0001","name":"Service","percentageDecimal":180000,"enabled":true},
+#     "subtotal":800,"totalTaxAmount":58,"taxSummaries":[{"id":"TAXDEFAULT001","name":"Sales Tax","rate":725000,"amount":58}]}
+
+curl -s -X POST http://localhost:8080/v3/merchants/$M/orders/240Q4JZPXN595/payments \
+  -H "Authorization: Bearer $SEED" -H 'Content-Type: application/json' -d '{
+  "tender": {"id": "TENDEREXTRN01"}, "employee": {"id": "EMPLBARISTA01"}, "amount": 1002, "offline": false
+}'
+# -> {"id":"HXKE0KIJDFK14","order":{"id":"240Q4JZPXN595"},
+#     "tender":{"href":"https://apisandbox.dev.clover.com/v3/merchants/HRVSTRYE12345/tenders/TENDEREXTRN01","id":"TENDEREXTRN01"},
+#     "amount":1002,"cashbackAmount":0,"employee":{"id":"EMPLBARISTA01"},"createdTime":1788098437885, ...,
+#     "offline":false,"result":"SUCCESS"}
+
+curl -s http://localhost:8080/v3/merchants/$M/orders/240Q4JZPXN595 -H "Authorization: Bearer $SEED"
+# -> {"id":"240Q4JZPXN595","currency":"USD","total":1002,"state":"locked","paymentState":"PAID", ...}
+```
+
+A wrong bearer, an expired one, a token without the permission, or another
+merchant's `{mId}` all answer the same `{"message":"401 Unauthorized"}` —
+Clover documents no 403 — and the `unit_error` sidecar says which it was.
+
+### The webhook an order fires
+
+Clover has no subscription API — callbacks are configured in the developer
+dashboard — so the unit ships one pre-verified subscriber as a template
+(`wbhk_seed_quickstart`, pointed at `https://example.test/webhooks/clover`
+where nothing listens, and therefore **disabled**) and two ways to add your
+own: the control plane, pre-verified with the auth code you choose, or the
+dashboard stand-in at `POST /__clover/webhooks/subscriptions`, which runs the
+documented verification handshake. With a receiver on `localhost:19999`:
+
+```sh
+curl -s -X POST http://localhost:8080/__unit/webhooks/subscriptions -H 'Content-Type: application/json' -d '{
+  "notification_url": "http://localhost:19999/webhooks",
+  "event_types": ["O:*"], "signature_key": "my-local-auth-code"
+}'
+# -> {"subscription":{"id":"wbhk_ctl_02","notification_url":"http://localhost:19999/webhooks","event_types":["O:*"], ...}}
+
+curl -s -X POST http://localhost:8080/v3/merchants/$M/orders \
+  -H "Authorization: Bearer $SEED" -H 'Content-Type: application/json' \
+  -d '{"currency": "USD", "total": 1500, "state": "open", "title": "Table 4"}'
+# -> {"id":"NEUU09PKXV0AV","currency":"USD","total":1500,"state":"open","paymentState":"OPEN","title":"Table 4", ...}
+```
+
+What the receiver saw — the documented aggregate payload, authenticated by
+the documented static header and nothing else (no HMAC, no timestamp):
+
+```
+X-Clover-Auth: my-local-auth-code
+{"appId":"UNITCLOVERAPP","merchants":{"HRVSTRYE12345":[{"objectId":"O:NEUU09PKXV0AV","type":"CREATE","ts":1788100424155}]}}
+```
+
+Retries follow a schedule Clover does not publish (`30s, 2m, 10m, 30m, 2h`,
+labelled JUDGMENT in `clover/retry.py`), compressed on the shipped profiles
+so a test can watch the whole cascade.
+
+The same six profiles ship for Clover (`--vendor clover --profile <name>`);
+`chaos-demo` rate-limits every third order create and expires the token on
+the fourth order read. Clover clients usually configure the OAuth host and
+the `/v3` API host separately; the unit serves both on one origin, so point
+both settings at it.
 
 ## Profiles
 

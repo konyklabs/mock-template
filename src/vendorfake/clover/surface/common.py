@@ -31,13 +31,34 @@ millisecond where it still works.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+import re
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Protocol, runtime_checkable
 
 from vendorfake.clover.config import CloverConfig
 from vendorfake.clover.ids import CloverIds
+from vendorfake.core.kernel.types import HandlerArgs, UnitContext, UnitError, UnitErrorKind
 from vendorfake.core.time.clock import Clock
 
-__all__ = ["CloverDeps", "is_past_ms", "wire_seconds"]
+__all__ = [
+    "DEFAULT_LIMIT",
+    "MAX_EXPANSIONS",
+    "MAX_LIMIT",
+    "CloverDeps",
+    "elements",
+    "expansions",
+    "int_param",
+    "is_past_ms",
+    "page_window",
+    "require_merchant",
+    "wire_seconds",
+]
+
+DEFAULT_LIMIT = 100
+MAX_LIMIT = 1000
+""""limit" default 100 and maximum 1000, with "offset" -- documented for both
+the orders and the items lists (https://docs.clover.com/dev/docs/ordergetorders,
+https://docs.clover.com/dev/docs/inventorygetitems)."""
 
 
 @runtime_checkable
@@ -69,3 +90,148 @@ def wire_seconds(instant_ms: int) -> int:
     side.
     """
     return instant_ms // 1000
+
+
+def require_merchant(args: HandlerArgs) -> str:
+    """The ``{mId}`` of the request, checked against the bearer's merchant.
+
+    JUDGMENT -- a token presented against another merchant's path, or an
+    unknown one, answers **401**: Clover documents no error for the mismatch,
+    and the conflation rule (https://docs.clover.com/dev/docs/401-unauthorized)
+    makes "this token is not good for this" a 401 whatever the reason. No
+    detail, so the wire body is the same ``401 Unauthorized`` every other
+    authorization failure sends; the sidecar says ``merchant_mismatch``.
+    """
+    merchant_id = args.params["mId"]
+    principal = args.auth.principal_id if args.auth is not None else None
+    if principal != merchant_id:
+        raise UnitError(
+            UnitErrorKind.UNAUTHORIZED,
+            info={"reason": "merchant_mismatch", "path_merchant": merchant_id},
+        )
+    return merchant_id
+
+
+def merchant_row(ctx: UnitContext, collection: str, row_id: str, merchant_id: str) -> dict[str, Any] | None:
+    """A reference row (employee, order type, customer) of *this* merchant,
+    or ``None``.
+
+    JUDGMENT, consistent with :func:`require_merchant`: a row stamped with
+    another merchant's ``merchant_id`` is as absent as no row at all, so a
+    reference to it fails the way a dangling one does and never leaks that
+    the other merchant's record exists. ``merchant_id`` is this unit's own
+    scoping field on those rows, stamped at hydration and on create, and
+    stripped from every projection.
+    """
+    row = ctx.store.collection(collection).get(row_id)
+    if row is None or row.get("merchant_id") != merchant_id:
+        return None
+    return dict(row)
+
+
+def owned_by(merchant_id: str) -> Callable[[Mapping[str, Any]], bool]:
+    """The list predicate for the same scoping rule as :func:`merchant_row`."""
+    return lambda row: row.get("merchant_id") == merchant_id
+
+
+_INTEGER = re.compile(r"^-?\d+$")
+"""One optional minus, then digits. ``--5``, ``+5``, ``5x`` and ``1e3`` are
+all refused: ``str.isdigit`` after ``lstrip("-")`` let ``--5`` through to
+``int()`` and a 500."""
+
+
+def int_param(raw: str, field: str, *, minimum: int | None = None) -> int:
+    """``raw`` as an integer, or a 400 naming ``field``.
+
+    The one integer parser for query strings and filter values, so every
+    surface refuses the same spellings the same way. Refused rather than
+    ignored: ``limit=abc`` silently becoming the default is how a consumer
+    who mistyped a page size never learns.
+    """
+    stripped = raw.strip()
+    if not _INTEGER.match(stripped):
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"{field} must be an integer.",
+            field=field,
+            info={"supplied": raw},
+        )
+    value = int(stripped)
+    if minimum is not None and value < minimum:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"{field} must be an integer >= {minimum}.",
+            field=field,
+            info={"supplied": raw},
+        )
+    return value
+
+
+def _query_int(args: HandlerArgs, name: str, default: int, *, minimum: int) -> int:
+    raw = args.query(name)
+    if raw is None:
+        return default
+    return int_param(raw, name, minimum=minimum)
+
+
+def page_window(args: HandlerArgs) -> tuple[int, int]:
+    """``(limit, offset)`` from the query: limit default 100, clamped to the
+    documented maximum of 1000 (JUDGMENT on clamping rather than refusing an
+    over-large limit -- the docs state the maximum, not the response to
+    exceeding it, and clamping is what the core's own paginator does);
+    offset default 0."""
+    limit = min(_query_int(args, "limit", DEFAULT_LIMIT, minimum=1), MAX_LIMIT)
+    offset = _query_int(args, "offset", 0, minimum=0)
+    return limit, offset
+
+
+MAX_EXPANSIONS = 3
+""""maximum of three fields per API call" (https://docs.clover.com/dev/docs/expanding-fields)."""
+
+
+def expansions(args: HandlerArgs, allowed: frozenset[str]) -> frozenset[str]:
+    """``expand=a,b,c``: known names only, at most three."""
+    raw = args.query("expand")
+    if raw is None or not raw.strip():
+        return frozenset()
+    wanted = [part.strip() for part in raw.split(",") if part.strip()]
+    # JUDGMENT: a dotted expansion implies its parent -- `lineItems.discounts`
+    # alone shows the line items with their discounts. Clover documents the
+    # dotted syntax ("one nesting level") and nothing about the parent being
+    # absent; implying it is the only reading under which the syntax is
+    # usable inside the three-expansion cap, and the implied parent does not
+    # count against that cap.
+    implied = [name.split(".", 1)[0] for name in wanted if "." in name]
+    unknown = [name for name in wanted if name not in allowed]
+    # An implied parent is bound by the same set as a named one: a dotted
+    # name whose parent is not expandable is unknown, and the refusal names
+    # the expansion as supplied so the caller sees what was rejected.
+    unknown += [name for name in wanted if "." in name and name.split(".", 1)[0] not in allowed and name in allowed]
+    if unknown:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"Unknown expansion(s): {', '.join(unknown)}.",
+            field="expand",
+            info={"allowed": sorted(allowed)},
+        )
+    if len(set(wanted)) > MAX_EXPANSIONS:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"At most {MAX_EXPANSIONS} fields can be expanded per call.",
+            field="expand",
+            info={"supplied": wanted},
+        )
+    return frozenset(wanted) | frozenset(implied)
+
+
+def elements(items: Sequence[dict[str, Any]], hrefs: Sequence[str]) -> dict[str, Any]:
+    """Clover's list envelope: ``{"elements": [{"href": ..., ...}, ...]}``.
+
+    The envelope and the per-element ``href`` are documented verbatim
+    (https://docs.clover.com/dev/docs/paginating-elements). JUDGMENT that an
+    element is the *whole* object plus its href: the example abbreviates
+    elements to ``href`` and ``id``, and a list that returned only ids would
+    make every consumer fetch each element separately. ``elements`` is always
+    present, empty when nothing matched: it is the answer to the request.
+    """
+    return {"elements": [{"href": href, **item} for href, item in zip(hrefs, items, strict=True)]}

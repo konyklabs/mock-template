@@ -1,0 +1,246 @@
+{
+  "_comment": [
+    "Seed scenario for the Clover unit. Fork-owned data, not code.",
+    "Entity documents use Clover's own camelCase field names -- what the store",
+    "holds and the wire carries -- so a documented example pastes straight in;",
+    "the top level is snake_case like every other JSON this project publishes.",
+    "Ids are 13 uppercase alphanumerics, the shape every Clover example uses.",
+    "  order type id      https://docs.clover.com/dev/docs/creating-custom-orders (KFRPRVCZ73JHM)",
+    "  Craft Beer at 750  https://docs.clover.com/dev/reference/inventorycreateitem",
+    "  percentageDecimal  https://docs.clover.com/dev/reference/merchantgetdefaultservicecharge (percent x 10000)",
+    "  tax rate scale     JUDGMENT, percent x 100000 -- see model/order.py TAX_RATE_SCALE",
+    "The open order's total is client-set (750, its one line): Clover leaves",
+    "totals to the app, and so does this fake. Timestamps are fixed (ms) so",
+    "list filters are reproducible; token expirations are stamped at hydrate.",
+    "The webhook subscriber is pre-verified (no `verified` key), shipped DISABLED so a served unit does not retry into its dead .test host; its signature_key is the X-Clover-Auth code."
+  ],
+  "merchant": {
+    "id": "HRVSTRYE12345",
+    "name": "Harvest & Rye",
+    "currency": "USD",
+    "owner": {
+      "id": "OWNERHRVST001",
+      "name": "R. Harvest"
+    },
+    "address": {
+      "address1": "1 Main St",
+      "city": "Springfield",
+      "state": "IL",
+      "zip": "62701",
+      "country": "US"
+    }
+  },
+  "tax_rates": [
+    {
+      "id": "TAXDEFAULT001",
+      "name": "Sales Tax",
+      "rate": 725000,
+      "isDefault": true
+    },
+    {
+      "id": "TAXBEVERAGE01",
+      "name": "Beverage Tax",
+      "rate": 1000000,
+      "isDefault": false
+    }
+  ],
+  "modifier_groups": [
+    {
+      "id": "MODGROUPMILK1",
+      "name": "Milk",
+      "showByDefault": true,
+      "modifierIds": [
+        "MODIFIEROAT01",
+        "MODIFIERSOY01"
+      ]
+    }
+  ],
+  "modifiers": [
+    {
+      "id": "MODIFIEROAT01",
+      "name": "Oat milk",
+      "price": 50,
+      "available": true,
+      "modifierGroup": {
+        "id": "MODGROUPMILK1"
+      }
+    },
+    {
+      "id": "MODIFIERSOY01",
+      "name": "Soy milk",
+      "price": 50,
+      "available": false,
+      "modifierGroup": {
+        "id": "MODGROUPMILK1"
+      }
+    }
+  ],
+  "items": [
+    {
+      "id": "CRAFTBEER0750",
+      "name": "Craft Beer",
+      "price": 750,
+      "modifiedTime": 1755786102000,
+      "defaultTaxRates": false,
+      "taxRates": [
+        {
+          "id": "TAXBEVERAGE01"
+        }
+      ]
+    },
+    {
+      "id": "ESPRESSO00300",
+      "name": "Espresso",
+      "price": 300,
+      "modifiedTime": 1755786102000,
+      "modifierGroupIds": [
+        "MODGROUPMILK1"
+      ]
+    },
+    {
+      "id": "CROISSANT0450",
+      "name": "Croissant",
+      "price": 450,
+      "modifiedTime": 1755786102000
+    }
+  ],
+  "employees": [
+    {
+      "id": "OWNERHRVST001",
+      "name": "R. Harvest",
+      "nickname": "Rye",
+      "role": "ADMIN",
+      "isOwner": true
+    },
+    {
+      "id": "EMPLBARISTA01",
+      "name": "B. Rista",
+      "role": "EMPLOYEE",
+      "isOwner": false
+    }
+  ],
+  "tenders": [
+    {
+      "id": "TENDERCASH001",
+      "label": "Cash",
+      "labelKey": "com.clover.tender.cash",
+      "enabled": true,
+      "visible": true,
+      "opensCashDrawer": true,
+      "editable": false
+    },
+    {
+      "id": "TENDEREXTRN01",
+      "label": "Online Order",
+      "labelKey": "com.clover.tender.external_payment",
+      "enabled": true,
+      "visible": true,
+      "opensCashDrawer": false,
+      "editable": true
+    }
+  ],
+  "order_types": [
+    {
+      "id": "KFRPRVCZ73JHM",
+      "label": "Dine In",
+      "labelKey": "com.clover.order_type.dine_in",
+      "taxable": true,
+      "isDefault": true,
+      "filterCategories": false,
+      "isHidden": false,
+      "fee": 0
+    },
+    {
+      "id": "ORDTYPETAKE01",
+      "label": "Take Out",
+      "labelKey": "com.clover.order_type.take_out",
+      "taxable": true,
+      "isDefault": false,
+      "filterCategories": false,
+      "isHidden": false,
+      "fee": 0
+    }
+  ],
+  "service_charges": [
+    {
+      "id": "SVCCHARGE0001",
+      "name": "Service",
+      "percentageDecimal": 180000,
+      "enabled": true,
+      "isDefault": true
+    }
+  ],
+  "customers": [
+    {
+      "id": "CUSTOMERADA01",
+      "firstName": "Ada",
+      "lastName": "Lovelace",
+      "customerSince": 1755786102000,
+      "addresses": [
+        {
+          "address1": "12 Analytical Way",
+          "city": "London",
+          "country": "GB"
+        }
+      ]
+    }
+  ],
+  "orders": [
+    {
+      "id": "SEEDORDER0001",
+      "total": 750,
+      "state": "open",
+      "title": "Table 1",
+      "externalReferenceId": "seed-open-order",
+      "createdTime": 1755786102000,
+      "orderType": {
+        "id": "KFRPRVCZ73JHM"
+      },
+      "employee": {
+        "id": "EMPLBARISTA01"
+      },
+      "lineItems": [
+        {
+          "id": "SEEDLINE00001",
+          "item": {
+            "id": "CRAFTBEER0750"
+          }
+        }
+      ]
+    }
+  ],
+  "tokens": [
+    {
+      "id": "tok_seed_full",
+      "access_token": "unit-seeded-clover-access-token-full-permissions",
+      "refresh_token": "unit-seeded-clover-refresh-token-full-permissions"
+    },
+    {
+      "id": "tok_seed_readonly",
+      "access_token": "unit-seeded-clover-access-token-read-only",
+      "refresh_token": "unit-seeded-clover-refresh-token-read-only",
+      "permissions": [
+        "ORDERS_R",
+        "INVENTORY_R",
+        "MERCHANT_R",
+        "EMPLOYEES_R",
+        "CUSTOMERS_R"
+      ]
+    }
+  ],
+  "webhook_subscriptions": [
+    {
+      "id": "wbhk_seed_quickstart",
+      "name": "Quickstart receiver",
+      "notification_url": "https://example.test/webhooks/clover",
+      "event_types": [
+        "O:*",
+        "I:*",
+        "C:*",
+        "P:*"
+      ],
+      "signature_key": "unit-seeded-clover-webhook-auth-code",
+      "enabled": false
+    }
+  ]
+}

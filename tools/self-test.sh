@@ -22,11 +22,14 @@ step() {
   return 0
 }
 
-# The target the conformance steps below drive. It lives on the test side of
-# the tree because the `http` transport needs a real server and the suite may
-# never import one; see tests/conformance/harness.py. An external vendor names
-# its own here, or exports VENDORFAKE_CONFORMANCE_TARGET.
-TARGET="tests.conformance.harness:target"
+# The targets the conformance steps below drive, one per built-in vendor. They
+# live on the test side of the tree because the `http` transport needs a real
+# server and the suite may never import one; see tests/conformance/harness.py.
+# An external vendor names its own here, or exports VENDORFAKE_CONFORMANCE_TARGET.
+TARGETS=(
+  "square=tests.conformance.harness:target"
+  "clover=tests.conformance.harness:clover_target"
+)
 
 step "ruff check"        uv run ruff check .
 step "ruff format"       uv run ruff format --check .
@@ -41,14 +44,19 @@ step "wheel data"        uv run python tools/check_wheel_data.py
 # pytest plugin an installed wheel exposes. `--strict` makes any skip that
 # conformance/manifest.json does not declare a failure, and the matrix run is
 # the only place the aggregate rule -- every contract passed on at least one
-# profile -- is answerable at all.
-step "conformance matrix" \
-  uv run python -m vendorfake.conformance --target "$TARGET" --transport inprocess --strict
-step "conformance http" \
-  uv run python -m vendorfake.conformance --target "$TARGET" --transport http --profile full
-step "conformance plugin" \
-  uv run python -m pytest --pyargs vendorfake.conformance -q \
-    --conformance-target "$TARGET" --conformance-strict
+# profile -- is answerable at all. Every target runs every step: a vendor
+# whose matrix only ever ran on a laptop would ship a regression green.
+for entry in "${TARGETS[@]}"; do
+  vendor="${entry%%=*}"
+  TARGET="${entry#*=}"
+  step "matrix ($vendor)" \
+    uv run python -m vendorfake.conformance --target "$TARGET" --transport inprocess --strict
+  step "http ($vendor)" \
+    uv run python -m vendorfake.conformance --target "$TARGET" --transport http --profile full
+  step "plugin ($vendor)" \
+    uv run python -m pytest --pyargs vendorfake.conformance -q \
+      --conformance-target "$TARGET" --conformance-strict
+done
 
 printf '\n\033[1m== summary ==\033[0m\n'
 failed=0

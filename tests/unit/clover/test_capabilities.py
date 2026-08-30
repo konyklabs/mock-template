@@ -1,4 +1,4 @@
-"""Capability declarations, the excused webhook gates, and the informational
+"""Capability declarations, the (now empty) excuse list, and the informational
 not-modelled record."""
 
 from __future__ import annotations
@@ -9,8 +9,7 @@ from vendorfake.core.capability.gates import CORE_GATED_CAPABILITIES, check_capa
 
 def test_every_core_gated_capability_is_declared_or_excused() -> None:
     """The core refuses to start a vendor that gates on a capability it never
-    declared. This vendor declares chaos and excuses the two webhook gates
-    until PR D ships the seams that would make them deliverable."""
+    declared. This vendor declares all three core-gated capabilities."""
     report = check_capability_declarations(CLOVER_CAPABILITIES, CLOVER_NOT_SUPPORTED)
     assert report.ok, report.problems
     declared = {decl.name for decl in CLOVER_CAPABILITIES}
@@ -18,28 +17,32 @@ def test_every_core_gated_capability_is_declared_or_excused() -> None:
         assert gate.capability.value in declared or gate.capability.value in CLOVER_NOT_SUPPORTED
 
 
-def test_the_webhook_gates_are_excused_not_declared_until_pr_d() -> None:
+def test_the_webhook_gates_are_declared_together_with_their_seams() -> None:
     """Declaring webhooks while signer and events are None would be
     enabled-but-dead: the dispatcher silently no-ops when either seam is
-    missing, which is exactly the state the declaration system exists to
-    prevent."""
-    assert set(CLOVER_NOT_SUPPORTED) == {"webhooks", "webhooks.chaos"}
-    for name, reason in CLOVER_NOT_SUPPORTED.items():
-        assert "PR D" in reason, name
+    missing. Both gates are declared, both seams exist, and nothing is
+    excused any more."""
+    from vendorfake.clover.vendor import create_clover_vendor
+
+    assert CLOVER_NOT_SUPPORTED == {}
     declared = {decl.name for decl in CLOVER_CAPABILITIES}
-    assert not declared & set(CLOVER_NOT_SUPPORTED)
+    assert {"webhooks", "webhooks.chaos"} <= declared
+    vendor = create_clover_vendor()
+    assert vendor.signer is not None
+    assert vendor.events is not None
+    chaos = next(decl for decl in CLOVER_CAPABILITIES if decl.name == "webhooks.chaos")
+    assert set(chaos.requires) == {"webhooks", "chaos"}
 
 
-def test_only_surfaces_that_own_routes_are_declared() -> None:
-    """Conformance C02 refuses a `surface` capability that owns no route, so
-    `orders` and `inventory` are declared in PR C with their routes, not
-    before. Every declared surface capability owns at least one route now."""
+def test_every_declared_surface_owns_routes_and_every_route_is_owned() -> None:
+    """Conformance C02 refuses a `surface` capability that owns no route and
+    a route whose capability is undeclared; both directions pinned here."""
     from vendorfake.clover.vendor import create_clover_vendor
 
     surface = {decl.name for decl in CLOVER_CAPABILITIES if decl.kind == "surface"}
-    assert surface == {"oauth"}
+    assert surface == {"oauth", "orders", "payments", "inventory", "merchant", "customers", "webhooks"}
     owned = {route.capability for route in create_clover_vendor().routes}
-    assert surface <= owned, (surface, owned)
+    assert surface == owned, (surface, owned)
 
 
 def test_a_disabled_capability_answers_explicitly_and_never_with_a_404() -> None:
@@ -70,9 +73,9 @@ def test_a_disabled_capability_answers_explicitly_and_never_with_a_404() -> None
         unit.stop()
 
 
-def test_chaos_is_the_one_behaviour_capability() -> None:
+def test_the_two_behaviour_capabilities_are_the_core_gated_ones() -> None:
     behaviour = {decl.name: decl for decl in CLOVER_CAPABILITIES if decl.kind == "behavior"}
-    assert set(behaviour) == {"chaos"}
+    assert set(behaviour) == {"chaos", "webhooks.chaos"}
     assert behaviour["chaos"].requires == ()
 
 
@@ -80,11 +83,11 @@ def test_the_not_modelled_record_covers_the_briefed_omissions_with_reasons() -> 
     """Informational, never handed to the core -- the core would refuse names
     it does not gate on. Every entry carries prose a consumer can read."""
     assert set(CLOVER_NOT_MODELED) == {
-        "payments",
-        "customers",
-        "employees",
-        "tax-rates",
-        "modifier-groups",
+        "card-payments",
+        "customer-contact-details",
+        "employee-management",
+        "tax-exemption-rules",
+        "modifier-management",
         "token-migration",
         "rate-limit-accounting",
         "90-day-filter-restriction",

@@ -21,11 +21,21 @@ construction, then :meth:`CloverVendor.hydrate` re-resolves from
 ``POST /__unit/state/reset`` -- rebuilds what depends on it (the error
 shaper), and re-seeds the id stream from the unit's seed.
 
-PR-B shape: **the OAuth surface and the real auth adapter are live**; orders,
-inventory and merchant land in PR C. ``signer`` and ``events`` stay ``None``
-and the two webhook gates sit in ``not_supported`` until PR D ships the seams
-that would make them deliverable (see ``capabilities.py``). The machines,
-retry defaults, error table, id stream and configuration are final-shape.
+PR-C+D shape: **OAuth, orders, payments, inventory, merchant, customers and
+the webhook seams are all live** -- the static-header signer, the
+journal-driven event mapper and the dashboard stand-in surface, with
+``webhooks`` and ``webhooks.chaos`` declared (see ``capabilities.py``). The
+machines, retry defaults, error table, id stream and configuration are
+final-shape.
+
+The webhook seams, and why they are two
+--------------------------------------
+``signer`` and ``events`` are separate properties because they answer separate
+questions: what a mutation *means* on the wire, and how a delivery is proven to
+have come from here. The dispatcher requires both before it will deliver
+anything. Both hold *this vendor* rather than a copy of its configuration, so
+the ``appId`` in a payload is the profile's ``client_id`` and not the built-in
+default's.
 
 ``api_version`` is ``None``, and that is a statement about Clover rather than
 an omission: Clover documents no version request or response header -- the
@@ -43,10 +53,19 @@ from vendorfake.clover.auth import CloverAuth
 from vendorfake.clover.capabilities import CLOVER_CAPABILITIES, CLOVER_NOT_SUPPORTED
 from vendorfake.clover.config import CloverConfig, resolve_clover_config
 from vendorfake.clover.errors import CloverErrorShaper
+from vendorfake.clover.events import CloverEventMapper
 from vendorfake.clover.ids import CloverIds
 from vendorfake.clover.machine import ORDER_MACHINE, ORDER_MACHINE_NAME
 from vendorfake.clover.retry import clover_retry_defaults
+from vendorfake.clover.seed.hydrate import hydrate_clover
+from vendorfake.clover.signer import CloverWebhookSigner
+from vendorfake.clover.surface.customers import customer_routes
+from vendorfake.clover.surface.inventory import inventory_routes
+from vendorfake.clover.surface.merchant import merchant_routes
 from vendorfake.clover.surface.oauth import oauth_routes
+from vendorfake.clover.surface.orders import order_routes
+from vendorfake.clover.surface.payments import payment_routes
+from vendorfake.clover.surface.webhooks import webhook_routes
 from vendorfake.core.config.models import ProfileDocument
 from vendorfake.core.kernel.types import (
     AuthAdapter,
@@ -58,8 +77,6 @@ from vendorfake.core.kernel.types import (
     Route,
     Signer,
     UnitContext,
-    UnitError,
-    UnitErrorKind,
     UnitRequest,
     VendorDefinition,
 )
@@ -111,9 +128,11 @@ class CloverVendor:
         "_base_config",
         "_config",
         "_errors",
+        "_events",
         "_ids",
         "_routes",
         "_seed",
+        "_signer",
     )
 
     def __init__(self, *, config: CloverConfig | None = None, seed: int = 1) -> None:
@@ -127,6 +146,8 @@ class CloverVendor:
         # force on the next request. Same rule as the surfaces; see
         # `surface/common.py`.
         self._auth = CloverAuth(self)
+        self._signer = CloverWebhookSigner()
+        self._events = CloverEventMapper(self)
         self._routes: tuple[Route, ...] | None = None
 
     def _build_errors(self) -> CloverErrorShaper:
@@ -179,11 +200,21 @@ class CloverVendor:
 
         Cached because ``Route`` handlers are bound methods of a surface
         object and rebuilding them on every access would make two reads of
-        this property produce routes that compare unequal. OAuth for now;
-        orders, inventory and merchant land in PR C, webhooks in PR D.
+        this property produce routes that compare unequal. The webhook
+        stand-in is last so the literal ``/oauth`` and ``/v3`` surfaces match
+        first, and so conformance probes that take "the first mutating route"
+        find a real Clover endpoint.
         """
         if self._routes is None:
-            self._routes = oauth_routes(self)
+            self._routes = (
+                oauth_routes(self)
+                + order_routes(self)
+                + payment_routes(self)
+                + inventory_routes(self)
+                + merchant_routes(self)
+                + customer_routes(self)
+                + webhook_routes(self)
+            )
         return self._routes
 
     @property
@@ -196,15 +227,14 @@ class CloverVendor:
 
     @property
     def signer(self) -> Signer | None:
-        """``None`` until PR D. The dispatcher delivers nothing for a vendor
-        without a signer, which is the correct behaviour for a vendor that has
-        no webhook surface yet."""
-        return None
+        """The static ``X-Clover-Auth`` scheme and every delivery header.
+        See :mod:`.signer`."""
+        return self._signer
 
     @property
     def events(self) -> EventMapper | None:
-        """``None`` until PR D, for the same reason as :attr:`signer`."""
-        return None
+        """Journal entry to the documented aggregate payload. See :mod:`.events`."""
+        return self._events
 
     @property
     def magic(self) -> MagicTriggerSpec | None:
@@ -236,24 +266,15 @@ class CloverVendor:
     # -- lifecycle ---------------------------------------------------------
 
     def hydrate(self, ctx: UnitContext, seed: object) -> None:
-        """Phase two of configuration; the seed scenario lands in PR E.
+        """Phase two of configuration, then load the seed scenario.
 
         The configuration step happens first and unconditionally, so that a
-        profile's ``vendor`` block is in force even with nothing to seed. A
-        profile that *does* name a seed document is refused loudly rather than
-        silently ignored -- a scenario that "loaded" into nothing would be the
-        worst version of this gap.
+        profile's ``vendor`` block is in force even when hydration fails --
+        and so that the tokens the scenario seeds are stamped with the expiry
+        the *profile's* TTL implies rather than the built-in default's.
         """
         self._resolve_config(ctx)
-        if seed is not None:
-            raise UnitError(
-                UnitErrorKind.INVALID_VALUE,
-                detail=(
-                    "This Clover vendor has no seed parser yet (the scenario lands in PR E); "
-                    "remove the profile's seed path."
-                ),
-                field="seed",
-            )
+        hydrate_clover(ctx, seed, self._config)
 
     def _resolve_config(self, ctx: UnitContext) -> None:
         """Re-resolve from the profile, then rebuild what depends on it.

@@ -1,0 +1,32 @@
+{
+  "name": "no-chaos",
+  "summary": "Full surface with delivery faults switched off: requests can still be made to fail deliberately, but a webhook that is sent is sent honestly, once.",
+  "capabilities": [
+    "oauth",
+    "orders",
+    "payments",
+    "inventory",
+    "merchant",
+    "customers",
+    "webhooks",
+    "chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "UNITCLOVERAPP",
+    "client_secret": "unit-clover-app-secret",
+    "redirect_uri": "https://example.test/oauth/callback"
+  },
+  "webhooks": {
+    "retry": {
+      "time_scale": 0.000167,
+      "timeout_ms": 2000
+    },
+    "subscribers": []
+  },
+  "chaos": {
+    "seed": 20260829,
+    "strict_rules": true,
+    "rules": []
+  }
+}

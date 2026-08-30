@@ -157,11 +157,100 @@ def test_a_full_order_round_trips_its_documented_fields() -> None:
         orderType=OrderTypeRefWire(id="KFRPRVCZ73JHM"),
         lineItems=(LineItemWire(id="L1", price=750, item=ItemRefWire(id="NEWITEM123ABC")),),
     )
-    wire = order.wire()
+    wire = order.wire(expand={"lineItems"})
     assert wire["state"] == "open"
     assert wire["orderType"] == {"id": "KFRPRVCZ73JHM"}
     assert wire["lineItems"][0]["item"] == {"id": "NEWITEM123ABC"}
     assert wire["lineItems"][0]["price"] == 750
+    assert "lineItems" not in order.wire()  # nested collections need an expansion
+
+
+def test_the_atomic_total_arithmetic_from_the_documented_units() -> None:
+    """price x unitQty/1000 (absent = one unit), negative amounts, whole
+    percentages of the undiscounted base, percentageDecimal = percent x 10000
+    on the discounted subtotal, half-up on cents (JUDGMENT)."""
+    from vendorfake.clover.model.order import atomic_total, line_total
+
+    assert line_total({"price": 750}) == 750
+    assert line_total({"price": 750, "unitQty": 2000}) == 1500
+    assert line_total({"price": 333, "unitQty": 1500}) == 500  # 499.5 -> half-up
+    assert line_total({"price": 1000, "discounts": [{"amount": -200}]}) == 800
+    assert line_total({"price": 1000, "discounts": [{"percentage": 15}]}) == 850
+    assert atomic_total([{"price": 1000}], [{"amount": -200}]) == 800
+    assert atomic_total([{"price": 1000}], [{"percentage": 10}]) == 900
+    assert atomic_total([{"price": 1000}], [], {"percentageDecimal": 180000}) == 1180
+    assert atomic_total([{"price": 1000}], [{"amount": -200}], {"percentageDecimal": 180000}) == 944
+    assert atomic_total([]) == 0
+    # A disabled service charge charges nothing; modifications scale with unitQty.
+    assert atomic_total([{"price": 1000}], [], {"percentageDecimal": 180000, "enabled": False}) == 1000
+    assert line_total({"price": 300, "unitQty": 2000, "modifications": [{"amount": 50}]}) == 700
+    # A line's own discounts floor at zero (JUDGMENT): exactly zeroed, and over-discounted.
+    assert line_total({"price": 450, "discounts": [{"amount": -450}]}) == 0
+    assert line_total({"price": 450, "discounts": [{"amount": -1000}]}) == 0
+    assert line_total({"price": 450, "discounts": [{"percentage": 100}]}) == 0
+
+
+def test_the_totals_block_never_goes_negative() -> None:
+    """The #25 gate repro: a -1000 line discount on a 450 line taxed at
+    7.25% produced subtotal -550, tax -40 and a persisted total of -40. Every
+    figure floors at zero, and the block refuses to exist otherwise."""
+    from vendorfake.clover.model.order import AtomicTotals, atomic_totals
+
+    sales = {"id": "T1", "name": "Sales", "rate": 725000}
+    over = atomic_totals([{"price": 450, "discounts": [{"amount": -1000}]}], [[sales]])
+    assert (over.subtotal, over.totalTaxAmount, over.total) == (0, 0, 0)
+    assert over.taxSummaries[0]["amount"] == 0
+    zeroed = atomic_totals([{"price": 450, "discounts": [{"amount": -450}]}], [[sales]])
+    assert (zeroed.subtotal, zeroed.totalTaxAmount, zeroed.total) == (0, 0, 0)
+    with pytest.raises(ValueError, match="atomic total is negative: -1"):
+        AtomicTotals(subtotal=0, total=-1, totalTaxAmount=0, taxSummaries=())
+
+
+def test_the_totals_block_taxes_each_line_at_its_own_rates() -> None:
+    """subtotal, totalTaxAmount, taxSummaries and a receipt total; tax is
+    per line on the line's discounted total at rate / TAX_RATE_SCALE percent
+    (JUDGMENT scale, one constant)."""
+    from vendorfake.clover.model.order import TAX_RATE_SCALE, atomic_totals
+
+    assert TAX_RATE_SCALE == 100000
+    sales = {"id": "T1", "name": "Sales", "rate": 725000}
+    beverage = {"id": "T2", "name": "Beverage", "rate": 1000000}
+    totals = atomic_totals(
+        [{"price": 1500}, {"price": 300}, {"price": 1000, "discounts": [{"percentage": 50}]}],
+        [[beverage], [sales], [sales]],
+        [{"amount": -200}],
+        {"percentageDecimal": 180000},
+    )
+    assert totals.subtotal == 2300
+    # tax: 150 + 22 (21.75) + 36 (36.25) = 208
+    assert totals.totalTaxAmount == 208
+    assert {s["id"]: s["amount"] for s in totals.taxSummaries} == {"T2": 150, "T1": 58}
+    assert totals.total == (2300 - 200) + round(2100 * 0.18) + 208
+    assert set(totals.wire()) == {"subtotal", "total", "totalTaxAmount", "taxSummaries"}
+
+
+def test_projection_omits_unexpanded_nested_collections_and_caps_at_100() -> None:
+    from vendorfake.clover.model.order import NESTED_CAP, project_order
+
+    entity = {
+        "id": "X",
+        "merchant_id": "M",
+        "currency": "USD",
+        "total": 1,
+        "lineItems": [{"id": f"L{i}", "price": 1, "discounts": [{"amount": -1}]} for i in range(150)],
+        "discounts": [{"amount": -5}],
+        "serviceCharge": {"percentageDecimal": 1},
+        "version": 3,
+        "created_at": "x",
+    }
+    bare = project_order(entity)
+    assert set(bare) == {"id", "currency", "total", "paymentState"}
+    expanded = project_order(entity, {"lineItems", "lineItems.discounts", "serviceCharge"})
+    assert len(expanded["lineItems"]) == NESTED_CAP == 100
+    assert expanded["lineItems"][0]["discounts"] == [{"amount": -1}]
+    assert expanded["serviceCharge"] == {"percentageDecimal": 1}
+    assert "discounts" not in expanded
+    assert "discounts" not in project_order(entity, {"lineItems"})["lineItems"][0]
 
 
 # ---------------------------------------------------------------------------

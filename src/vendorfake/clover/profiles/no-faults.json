@@ -1,0 +1,31 @@
+{
+  "name": "no-faults",
+  "summary": "Full surface with fault injection switched off entirely. What a CI suite that only wants happy paths should run.",
+  "capabilities": [
+    "oauth",
+    "orders",
+    "payments",
+    "inventory",
+    "merchant",
+    "customers",
+    "webhooks"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "UNITCLOVERAPP",
+    "client_secret": "unit-clover-app-secret",
+    "redirect_uri": "https://example.test/oauth/callback"
+  },
+  "webhooks": {
+    "retry": {
+      "time_scale": 0.000167,
+      "timeout_ms": 2000
+    },
+    "subscribers": []
+  },
+  "chaos": {
+    "seed": 20260829,
+    "strict_rules": true,
+    "rules": []
+  }
+}

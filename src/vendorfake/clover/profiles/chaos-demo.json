@@ -1,0 +1,98 @@
+{
+  "name": "chaos-demo",
+  "summary": "Full surface with a preloaded fault set: rate limiting on every third order create, a mid-flow token expiry on the fourth order read, and a duplicated then a reordered delivery. Runs on a virtual clock.",
+  "capabilities": [
+    "oauth",
+    "orders",
+    "payments",
+    "inventory",
+    "merchant",
+    "customers",
+    "webhooks",
+    "chaos",
+    "webhooks.chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "UNITCLOVERAPP",
+    "client_secret": "unit-clover-app-secret",
+    "redirect_uri": "https://example.test/oauth/callback"
+  },
+  "webhooks": {
+    "retry": {
+      "time_scale": 0.000167,
+      "timeout_ms": 2000
+    },
+    "subscribers": []
+  },
+  "clock": {
+    "mode": "virtual",
+    "start": "2026-08-29T12:00:00.000Z"
+  },
+  "chaos": {
+    "seed": 20260829,
+    "strict_rules": true,
+    "rules": [
+      {
+        "id": "rate-limit-every-third-create",
+        "scope": "request",
+        "fault": "rate_limit",
+        "match": {
+          "route": "POST /v3/merchants/{mId}/orders"
+        },
+        "when": {
+          "every": 3
+        },
+        "params": {
+          "retry_after_seconds": 2
+        },
+        "note": "Every third CreateOrder is refused with the documented 429 and X-RateLimit headers."
+      },
+      {
+        "id": "token-expires-on-fourth-read",
+        "scope": "request",
+        "fault": "token_expiry",
+        "match": {
+          "route": "GET /v3/merchants/{mId}/orders/{orderId}"
+        },
+        "when": {
+          "nth": [
+            4
+          ]
+        },
+        "note": "The fourth GetOrder sees the conflated 401 mid-flow without the stored token changing."
+      },
+      {
+        "id": "duplicate-order-created",
+        "scope": "webhook",
+        "fault": "webhook.duplicate",
+        "match": {
+          "event_type": "O:CREATE"
+        },
+        "when": {
+          "nth": [
+            1
+          ]
+        },
+        "params": {
+          "copies": 1
+        },
+        "note": "The first O:CREATE is delivered twice with the same event id."
+      },
+      {
+        "id": "reorder-order-updated",
+        "scope": "webhook",
+        "fault": "webhook.out_of_order",
+        "match": {
+          "event_type": "O:UPDATE"
+        },
+        "when": {
+          "nth": [
+            1
+          ]
+        },
+        "note": "The first O:UPDATE is held until the following event has been delivered."
+      }
+    ]
+  }
+}

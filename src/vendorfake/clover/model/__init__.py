@@ -8,4 +8,6 @@ project entities out through them.
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from vendorfake.clover.model.webhooks import EventWire, PayloadWire
+
+__all__: list[str] = ["EventWire", "PayloadWire"]

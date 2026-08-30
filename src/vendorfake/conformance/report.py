@@ -29,6 +29,15 @@ put a second, silent description of a profile next to the profile. Keeping the
 pairs in ``manifest.json`` fails two ways instead, under ``--strict``: an
 undeclared skip is a failure, and a declared skip that stops happening is a
 failure too, because it means a profile changed and the record did not.
+
+A second vendor brings a second matrix (``ConformanceTarget.expected_skips``)
+and one more kind of record: a contract its API can never be asked -- Clover
+documents no idempotency key, so the replay contract has nothing to replay.
+That is ``ConformanceTarget.inapplicable``: a check id with a reason, printed
+by name, dropped from the anti-vacuity rule, and guarded from the other side
+-- a check declared inapplicable that runs is a stale declaration and fails.
+A skip matrix alone never grants this; a contract skipped on every profile
+without a stated reason is still a contract nobody tested.
 """
 
 from __future__ import annotations
@@ -68,6 +77,9 @@ class ConformanceReport:
     strict: bool = False
     #: Check id -> profiles on which a skip is expected and permanent.
     expected_skips: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    #: Check id -> why the target's vendor can never be asked it. See
+    #: ``ConformanceTarget.inapplicable``.
+    inapplicable: Mapping[str, str] = field(default_factory=dict)
     #: Whether this run covered every profile the target declares.
     #:
     #: The anti-vacuity rule -- a check that passed nowhere is a failure -- is a
@@ -108,10 +120,25 @@ class ConformanceReport:
 
     @property
     def never_ran(self) -> tuple[str, ...]:
-        """Checks that passed on no profile at all. They proved nothing."""
+        """Checks that passed on no profile at all. They proved nothing.
+
+        A check the target declares inapplicable -- by name, with a reason --
+        is not counted: it was never a contract this vendor could be asked.
+        A check that merely skipped everywhere still is.
+        """
         seen = {result.check_id for result in self.results}
         passed = {result.check_id for result in self.results if result.outcome is Outcome.PASS}
-        return tuple(sorted(seen - passed))
+        return tuple(sorted(seen - passed - set(self.inapplicable)))
+
+    @property
+    def stale_inapplicable(self) -> tuple[str, ...]:
+        """Checks declared inapplicable that ran anyway (passed or failed).
+
+        The declaration outlived the gap it described -- the vendor grew the
+        surface -- and the record must move in the same commit.
+        """
+        ran = {result.check_id for result in self.results if result.outcome in (Outcome.PASS, Outcome.FAIL)}
+        return tuple(sorted(check_id for check_id in self.inapplicable if check_id in ran))
 
     @property
     def undeclared_skips(self) -> tuple[str, ...]:
@@ -121,6 +148,8 @@ class ConformanceReport:
             if result.outcome is not Outcome.SKIP:
                 continue
             if result.profile in self.expected_skips.get(result.check_id, frozenset()):
+                continue
+            if result.check_id in self.inapplicable:
                 continue
             out.append(f"{result.check_id}-{result.profile}")
         return tuple(sorted(set(out)))
@@ -161,6 +190,12 @@ class ConformanceReport:
                 f"NEVER RAN {check_id}: it passed on no profile in this run, so it proved nothing. "
                 f"A universally skipped check is a contract nobody is testing -- give it a profile "
                 f"that meets its preconditions, or delete it from conformance/manifest.json."
+            )
+        for check_id in self.stale_inapplicable:
+            out.append(
+                f"DECLARED INAPPLICABLE BUT RAN {check_id}: the target says its vendor cannot be asked this "
+                f"({self.inapplicable[check_id]}), and it ran. The gap closed; delete the declaration in the same "
+                f"commit."
             )
         if self.strict:
             for case in self.undeclared_skips:
@@ -207,6 +242,13 @@ def format_report(report: ConformanceReport) -> str:
                 lines.append(f"        {line}")
         lines.append("")
     lines.append(f"{report.passed} passed, {report.failed} failed, {report.skipped} skipped, {report.errored} errored")
+    for check_id, reason in sorted(report.inapplicable.items()):
+        lines.append(f"inapplicable to this target: {check_id} -- {reason}")
+    for check_id in report.stale_inapplicable:
+        lines.append(
+            f"DECLARED INAPPLICABLE BUT RAN {check_id}: the target says its vendor cannot be asked this "
+            f"({report.inapplicable[check_id]}), and it ran -- delete the declaration in the same commit"
+        )
     if report.never_ran:
         note = "" if report.cross_profile else " (informational: this run covered only part of the profile matrix)"
         lines.append(f"never ran on any profile in this run: {', '.join(report.never_ran)}{note}")
