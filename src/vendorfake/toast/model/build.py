@@ -52,12 +52,19 @@ class MenuIndex:
     modifier_groups: Mapping[int, Mapping[str, Any]]
     tax_rates: Mapping[str, TaxRate]
     discounts: Mapping[str, Mapping[str, Any]]
+    #: Item or option guid -> stock status, for the OUT_OF_STOCK refusal.
+    stock: Mapping[str, str]
 
     @classmethod
     def from_store(cls, store: Store, restaurant_guid: str) -> MenuIndex:
         menu = store.collection(COL.menus).get(restaurant_guid) or {}
         groups = menu.get("modifierGroups", [])
         return cls(
+            stock={
+                str(row["id"]): str(row.get("status", "IN_STOCK"))
+                for row in store.collection(COL.stock).all()
+                if row.get("restaurant_guid") == restaurant_guid
+            },
             items=menu_items_by_guid(menu),
             options=modifier_options_by_guid(menu),
             pre_modifiers=pre_modifiers_by_guid(menu),
@@ -120,6 +127,15 @@ def build_selection(
         rates = [index.tax_rates[g] for g in source.get("taxInfo", []) if g in index.tax_rates]
         entity_type = "MenuItem"
 
+    if index.stock.get(guid) == "OUT_OF_STOCK":
+        # JUDGMENT (audit gap 4): Toast documents no answer to ordering an
+        # out-of-stock item; refusing beats silently selling it.
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"{source.get('name', 'Menu item')} ({guid}) is OUT_OF_STOCK and cannot be ordered.",
+            field=f"{field}item.guid",
+            info={"stock_status": "OUT_OF_STOCK"},
+        )
     unit = source.get("price")
     open_price = opt_cents(request.openPriceAmount, field=f"{field}openPriceAmount", allow_negative=True)
     if source.get("pricingStrategy") == "OPEN_PRICE" or (unit is None and open_price is not None):

@@ -167,6 +167,7 @@ def test_the_store_holds_the_restaurant_and_the_two_tokens(h: Harness) -> None:
     assert store.collection(COL.orders).size == 1
     assert store.collection(COL.credit_authorizations).size == 1
     assert store.collection(COL.discounts).size == 2
+    assert store.collection(COL.stock).size == 5
 
 
 def test_seeded_writes_are_marked_as_seeded(h: Harness) -> None:

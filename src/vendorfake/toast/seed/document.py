@@ -52,6 +52,7 @@ __all__ = [
     "SeedSelection",
     "SeedServiceArea",
     "SeedServiceCharge",
+    "SeedStock",
     "SeedTable",
     "SeedTaxRate",
     "SeedToken",
@@ -385,6 +386,18 @@ class SeedOrder(BaseModel):
     checks: list[SeedCheck] = Field(min_length=1)
 
 
+class SeedStock(BaseModel):
+    """A stock row for a menu item or modifier option, by guid; the
+    ``multiLocationId`` is the item's. ``quantity`` only with ``QUANTITY``."""
+
+    model_config = _SEED
+
+    guid: str = Field(min_length=1)
+    status: Literal["IN_STOCK", "QUANTITY", "OUT_OF_STOCK"] = "IN_STOCK"
+    quantity: float | None = Field(default=None, gt=0)
+    versionId: str = Field(min_length=1)
+
+
 class SeedCreditAuthorization(BaseModel):
     """A pre-authorised card payment, as ``PUT /merchants/{m}/payments/{p}``
     would have created one (authorizingCcPayments.html); ``amount`` in cents."""
@@ -407,6 +420,7 @@ class SeedDocument(BaseModel):
     tokens: list[SeedToken] = Field(default_factory=list)
     orders: list[SeedOrder] = Field(default_factory=list)
     credit_authorizations: list[SeedCreditAuthorization] = Field(default_factory=list)
+    stock: list[SeedStock] = Field(default_factory=list)
     #: The instant every config entity reports as last modified (epoch ms).
     config_modified_ms: int = 0
     dining_options: list[SeedDiningOption] = Field(default_factory=list)
@@ -477,6 +491,11 @@ def _check_references(doc: SeedDocument) -> None:
                             f"orders[{i}].checks[{j}].selections[{k}].modifiers[{m}].item",
                             f"modifier option {modifier.item!r} is absent",
                         )
+    for i, row in enumerate(doc.stock):
+        if row.guid not in item_ids and row.guid not in option_ids:
+            raise _refuse(f"stock[{i}].guid", f"{row.guid!r} is neither a menu item nor a modifier option")
+        if (row.status == "QUANTITY") != (row.quantity is not None):
+            raise _refuse(f"stock[{i}].quantity", "quantity is present exactly when status is QUANTITY")
     if menu is None:
         return
     group_refs = {group.referenceId for group in menu.modifierGroups}

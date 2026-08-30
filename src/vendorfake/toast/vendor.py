@@ -66,6 +66,7 @@ from vendorfake.toast.surface.orders import order_routes
 from vendorfake.toast.surface.partners import partner_routes
 from vendorfake.toast.surface.payments import payment_routes
 from vendorfake.toast.surface.restaurants import restaurant_routes
+from vendorfake.toast.surface.stock import stock_routes
 
 __all__ = ["TOAST_MAGIC", "ToastVendor", "create_toast_vendor"]
 
@@ -189,6 +190,7 @@ class ToastVendor:
                 + config_routes(self)
                 + restaurant_routes(self)
                 + partner_routes(self)
+                + stock_routes(self)
             )
         return self._routes
 

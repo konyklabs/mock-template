@@ -88,7 +88,7 @@ from vendorfake.toast.model.build import (
     retotal_check,
     selection_by_guid,
 )
-from vendorfake.toast.model.common import validate_body
+from vendorfake.toast.model.common import validate_body, validate_items
 from vendorfake.toast.model.dates import business_date, parse_business_date, parse_rest_date
 from vendorfake.toast.model.order import (
     AppliedDiscountRequest,
@@ -471,14 +471,7 @@ class ToastOrdersSurface:
     def add_selections(self, args: HandlerArgs) -> ReplyInit:
         ctx = args.ctx
         restaurant = require_restaurant(args)
-        raw = args.json()
-        if not isinstance(raw, list) or not raw:
-            raise UnitError(
-                UnitErrorKind.INVALID_VALUE,
-                detail="The request body must be a non-empty array of selections.",
-                field="body",
-            )
-        requests = [validate_body(SelectionRequest, row) for row in raw]
+        requests = validate_items(SelectionRequest, args.json(), what="selections")
         order = load_order(args, restaurant, args.params["guid"])
         _assert_not_voided(order)
         check = _check_of(order, args.params["checkGuid"])
@@ -521,14 +514,7 @@ class ToastOrdersSurface:
     def _apply_discounts(self, args: HandlerArgs, *, selection_guid: str | None) -> ReplyInit:
         ctx = args.ctx
         restaurant = require_restaurant(args)
-        raw = args.json()
-        if not isinstance(raw, list) or not raw:
-            raise UnitError(
-                UnitErrorKind.INVALID_VALUE,
-                detail="The request body must be a non-empty array of applied discounts.",
-                field="body",
-            )
-        requests = [validate_body(AppliedDiscountRequest, row) for row in raw]
+        requests = validate_items(AppliedDiscountRequest, args.json(), what="applied discounts")
         order = load_order(args, restaurant, args.params["guid"])
         _assert_not_voided(order)
         check = _check_of(order, args.params["checkGuid"])

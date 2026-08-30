@@ -66,6 +66,8 @@ __all__ = [
     "SEED_SCOPES",
     "SERVICE_AREA_GUID",
     "SERVICE_CHARGE_GRATUITY_GUID",
+    "STOCK_BURGER_QUANTITY",
+    "STOCK_LEMONADE_QUANTITY",
     "TABLE_1_GUID",
     "TABLE_2_GUID",
     "TAX_RATE_DEFAULT_GUID",
@@ -174,3 +176,9 @@ opened 2025-08-21T14:21:42Z which is 10:21 in New York -- business date
 CREDIT_AUTHORIZATION_GUID = "7c65cc16-0000-4000-8000-00000000e001"
 CREDIT_AUTHORIZATION_CENTS = 5000
 """The one pre-authorised card payment; a CREDIT payment names it in ``guid``."""
+
+STOCK_BURGER_QUANTITY = 12.0
+STOCK_LEMONADE_QUANTITY = 3.0
+"""Seeded QUANTITY rows: the burger is comfortably stocked; the lemonade sits
+under the documented ``low_quantity`` threshold (5), so an update that lowers
+it further is a ``low_quantity`` event and one that empties it is refused."""
