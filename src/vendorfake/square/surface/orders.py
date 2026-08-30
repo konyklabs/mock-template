@@ -69,6 +69,19 @@ increments** -- "On a 200 response, Square has incremented the order version,
 even if all requested property changes are ignored and no changes are actually
 made."
 
+The tendered floor
+------------------
+An OPEN order that has been partly tendered cannot be shrunk below what its
+tenders have applied: an update whose merged line items would total less
+than that -- ``fields_to_clear: ["line_items"]`` after a 200-cent tender on a
+500-cent order, a quantity cut, a price cut -- is refused with
+``invalid_value`` on ``order.line_items``, and nothing is written. JUDGMENT:
+Square publishes no error for it, and without the rule ``net_amount_due_money``
+would clamp to zero on an order that had been tendered past its new total and
+the next PayOrder would complete it with tenders exceeding the total. The
+check runs on a dry merge before any uid is minted, so it costs a refused
+request nothing from the id stream.
+
 The double-pay fix
 ------------------
 The reference's ``assertTransition`` returns early when ``from === to``, so
@@ -126,7 +139,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from typing import Any
 
@@ -460,11 +473,18 @@ class OrdersSurface:
                 info={"allowed": list(_CREATABLE_STATES)},
             )
 
-        # Validate the lines and the fulfillments before minting the order
-        # id, so a refused create draws nothing from the id stream and the
-        # next accepted one mints the id it would have minted anyway.
-        line_items = self._new_line_items(args.ctx, spec.line_items or [], location.currency)
-        fulfillments = self._new_fulfillments(spec.fulfillments or [], args.ctx.clock.iso_ms())
+        # Validate every line and every fulfillment before minting anything,
+        # then mint in one place, in order -- line uids, fulfillment uids, the
+        # order id -- so a refused create draws nothing from the id stream and
+        # the next accepted one mints exactly what it would have minted anyway.
+        checked_lines = self._new_line_items(args.ctx, spec.line_items or [], location.currency)
+        checked_fulfillments = self._new_fulfillments(spec.fulfillments or [], args.ctx.clock.iso_ms())
+        line_items = tuple(
+            line if line.uid else replace(line, uid=self._deps.ids.line_item_uid()) for line in checked_lines
+        )
+        fulfillments = tuple(
+            f if f.uid else replace(f, uid=self._deps.ids.fulfillment_uid()) for f in checked_fulfillments
+        )
         entity = OrderEntity(
             id=self._deps.ids.order(),
             location_id=location.id,
@@ -547,11 +567,22 @@ class OrdersSurface:
             fulfillment_patches = self._fulfillment_patches(current, patch.fulfillments)
         now = args.ctx.clock.iso_ms()
 
+        # Dry-run the line changes on a copy -- new lines under placeholder
+        # uids, which change no total -- so the tendered floor is checked and
+        # a new line missing its quantity or price is refused before any uid
+        # is minted. Then mint, in order: line uids, fulfillment uids.
+        probe = orders.require(order_id)
+        _apply_line_changes(probe, clears_line_items, _placeholders(patches), request.fields_to_clear)
+        _assert_tendered_floor(OrderEntity.from_entity(probe), subject)
+        if patches is not None:
+            patches = tuple(p if p.uid else replace(p, uid=self._deps.ids.line_item_uid()) for p in patches)
+        if fulfillment_patches is not None:
+            fulfillment_patches = tuple(
+                p if p.uid else replace(p, uid=self._deps.ids.fulfillment_uid()) for p in fulfillment_patches
+            )
+
         def mutate(draft: Entity) -> None:
-            if clears_line_items:
-                draft["line_items"] = []
-            elif patches is not None:
-                draft["line_items"] = _merge_line_items(_lines_of(draft), patches)
+            _apply_line_changes(draft, clears_line_items, patches, request.fields_to_clear)
             if fulfillment_patches is not None:
                 merged = _merge_fulfillments(_fulfillments_of(draft), fulfillment_patches, now)
                 if merged:
@@ -562,7 +593,7 @@ class OrdersSurface:
             _assign_or_clear(draft, patch, "customer_id")
             _assign_or_clear(draft, patch, "ticket_name")
             _assign_or_clear(draft, patch, "metadata")
-            _apply_fields_to_clear(draft, request.fields_to_clear)
+            _apply_order_fields_to_clear(draft, request.fields_to_clear)
             if next_state is not None and next_state != draft["state"]:
                 draft["state"] = next_state
                 if _MACHINE.is_terminal(next_state):
@@ -867,6 +898,10 @@ class OrdersSurface:
         Nothing is synthesised. A line with no quantity and a line with no
         price are both refused rather than defaulted, because the alternative
         is an order that is quietly worth nothing.
+
+        A line the caller did not name comes back with an **empty** uid; the
+        caller mints once every line and every fulfillment of the request has
+        passed, so a refusal further on draws nothing from the id stream.
         """
         built: list[OrderLineItem] = []
         for index, item in enumerate(items):
@@ -896,7 +931,7 @@ class OrdersSurface:
                 )
             built.append(
                 OrderLineItem(
-                    uid=item.uid or self._deps.ids.line_item_uid(),
+                    uid=item.uid or "",
                     quantity=item.quantity,
                     base_price_money=price,
                     name=name,
@@ -916,6 +951,9 @@ class OrdersSurface:
         synthesising a default here would silently zero a price the caller
         never named. A present-but-null optional is a *clear*, which is why the
         patch carries two collections rather than one dict.
+
+        A new line the caller did not name comes back with an empty uid, for
+        the caller to mint after the dry run; see :meth:`update_order`.
         """
         patches: list[_LinePatch] = []
         for index, item in enumerate(items):
@@ -955,9 +993,7 @@ class OrdersSurface:
             if price is not None:
                 assign["base_price_money"] = price.to_entity()
 
-            patches.append(
-                _LinePatch(uid=item.uid or self._deps.ids.line_item_uid(), assign=assign, clear=tuple(clear))
-            )
+            patches.append(_LinePatch(uid=item.uid or "", assign=assign, clear=tuple(clear)))
         return tuple(patches)
 
     # -- fulfillments -------------------------------------------------------
@@ -969,10 +1005,9 @@ class OrdersSurface:
         allows the move from PROPOSED -- a seller's own app can create an order
         that is already RESERVED -- and stamped as such a move would be.
 
-        Every fulfillment is validated before any uid is minted, so a request
-        refused on its third fulfillment draws nothing from the id stream and
-        the next accepted request mints the uids it would have minted anyway
-        -- the discipline PayOrder keeps for tender ids.
+        A fulfillment the caller did not name comes back with an empty uid;
+        the caller mints after everything in the request has passed -- the
+        discipline PayOrder keeps for tender ids.
         """
         checked: list[tuple[str | None, str, str, dict[str, Any]]] = []
         seen: set[str] = set()
@@ -995,10 +1030,7 @@ class OrdersSurface:
             if state != FulfillmentState.PROPOSED.value:
                 _stamp_transition(details, kind, state, now)
             checked.append((item.uid, kind, state, details))
-        return tuple(
-            _fulfillment(uid or self._deps.ids.fulfillment_uid(), kind, state, details)
-            for uid, kind, state, details in checked
-        )
+        return tuple(_fulfillment(uid or "", kind, state, details) for uid, kind, state, details in checked)
 
     def _fulfillment_patches(
         self, current: OrderEntity, items: Sequence[FulfillmentRequest]
@@ -1020,7 +1052,8 @@ class OrdersSurface:
         under a caller-chosen uid is idempotent data with no such consequence.
         Square publishes no sentence for either case.
 
-        Minting happens after every entry is validated, as on create.
+        A new entry comes back with an empty uid; :meth:`update_order` mints
+        after the whole request has passed, as on create.
         """
         by_uid = {f.uid: f for f in current.fulfillments}
         checked: list[tuple[str | None, dict[str, Any], dict[str, Any], tuple[str, ...]]] = []
@@ -1062,12 +1095,7 @@ class OrdersSurface:
             details_assign, details_clear = _details_assignments(item, kind, path)
             checked.append((item.uid, assign, details_assign, tuple(details_clear)))
         return tuple(
-            _FulfillmentPatch(
-                uid=uid or self._deps.ids.fulfillment_uid(),
-                assign=assign,
-                details_assign=details_assign,
-                details_clear=details_clear,
-            )
+            _FulfillmentPatch(uid=uid or "", assign=assign, details_assign=details_assign, details_clear=details_clear)
             for uid, assign, details_assign, details_clear in checked
         )
 
@@ -1204,18 +1232,49 @@ def _assign_or_clear(draft: Entity, patch: Any, name: str) -> None:
         draft.pop(name, None)
 
 
-def _apply_fields_to_clear(draft: Entity, paths: Sequence[str]) -> None:
-    """Square's dot/bracket clear notation.
+def _placeholders(patches: tuple[_LinePatch, ...] | None) -> tuple[_LinePatch, ...] | None:
+    """The patches with a distinct placeholder uid on each new line, for the
+    dry merge. A placeholder cannot collide with a stored uid (stored uids
+    never start with ``#``), and no total depends on a uid."""
+    if patches is None:
+        return None
+    return tuple(p if p.uid else replace(p, uid=f"#new{index}") for index, p in enumerate(patches))
 
-    ``reference_id``, ``line_items``, ``line_items[uid]``,
-    ``line_items[uid].note``. Anything else -- a read-only property, a field
-    this unit does not model, a typo -- is **silently ignored and the version
-    still increments**, which is Square's documented behaviour and not an
-    oversight: "On a 200 response, Square has incremented the order version,
-    even if all requested property changes are ignored and no changes are
-    actually made."
-    https://developer.squareup.com/docs/orders-api/manage-orders/update-orders
-    """
+
+def _apply_line_changes(
+    draft: Entity,
+    clears_line_items: bool,
+    patches: tuple[_LinePatch, ...] | None,
+    fields_to_clear: Sequence[str],
+) -> None:
+    """Every change an update makes to ``line_items``, in one place, so the
+    dry run and the real mutator cannot disagree about the result."""
+    if clears_line_items:
+        draft["line_items"] = []
+    elif patches is not None:
+        draft["line_items"] = _merge_line_items(_lines_of(draft), patches)
+    _apply_line_fields_to_clear(draft, fields_to_clear)
+
+
+def _assert_tendered_floor(order: OrderEntity, subject: str) -> None:
+    """Refuse a merged order whose lines total less than its tenders applied.
+    See "The tendered floor" in the module docstring."""
+    applied = sum(tender.applied for tender in order.tenders)
+    total = order_total(order)
+    if total < applied:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                f"{subject} cannot be reduced to {total}: its tenders have already applied {applied}. "
+                "An order cannot be reduced below what has been tendered."
+            ),
+            field="order.line_items",
+            info={"order_total": total, "tendered": applied},
+        )
+
+
+def _apply_line_fields_to_clear(draft: Entity, paths: Sequence[str]) -> None:
+    """The ``line_items`` half of :func:`_apply_fields_to_clear`."""
     for path in paths:
         match = _LINE_ITEM_PATH.match(path)
         if match is not None:
@@ -1228,11 +1287,34 @@ def _apply_fields_to_clear(draft: Entity, paths: Sequence[str]) -> None:
                     if line.get("uid") == uid:
                         line.pop(sub, None)
                 draft["line_items"] = lines
-            continue
-        if path == "line_items":
+        elif path == "line_items":
             draft["line_items"] = []
-        elif path in _CLEARABLE_ORDER_FIELDS:
+
+
+def _apply_order_fields_to_clear(draft: Entity, paths: Sequence[str]) -> None:
+    """The order-level half of :func:`_apply_fields_to_clear`."""
+    for path in paths:
+        if _LINE_ITEM_PATH.match(path) is None and path in _CLEARABLE_ORDER_FIELDS:
             draft.pop(path, None)
+
+
+def _apply_fields_to_clear(draft: Entity, paths: Sequence[str]) -> None:
+    """Square's dot/bracket clear notation.
+
+    ``reference_id``, ``line_items``, ``line_items[uid]``,
+    ``line_items[uid].note``. Anything else -- a read-only property, a field
+    this unit does not model, a typo -- is **silently ignored and the version
+    still increments**, which is Square's documented behaviour and not an
+    oversight: "On a 200 response, Square has incremented the order version,
+    even if all requested property changes are ignored and no changes are
+    actually made."
+    https://developer.squareup.com/docs/orders-api/manage-orders/update-orders
+
+    Split in two so the update's dry run can apply the line-item half alone;
+    this whole is what the pair does together.
+    """
+    _apply_line_fields_to_clear(draft, paths)
+    _apply_order_fields_to_clear(draft, paths)
 
 
 def _require_fulfillment_type(raw: str | None, field: str) -> str:

@@ -597,6 +597,59 @@ def test_pay_order_with_opaque_ids_refuses_an_order_with_nothing_due(h: Harness)
     assert retrieve_order(h, order["id"])["state"] == "OPEN"
 
 
+def test_an_order_cannot_be_shrunk_below_what_its_tenders_applied(h: Harness) -> None:
+    """The gate's repro: a 200 tender on a 500 order, then
+    `fields_to_clear: ["line_items"]`. Refused (JUDGMENT, "The tendered
+    floor"), nothing written, and the follow-up PayOrder with no ids still
+    tenders the real 300 due rather than completing a zeroed order."""
+    order = create_order(h, 500)
+    assert pay(h, 200, key="part", order_id=order["id"]).status == 200
+    seq = journal_seq(h)
+    cleared = h.api.put(
+        f"/v2/orders/{order['id']}",
+        {"idempotency_key": "shrink", "order": {"version": 2}, "fields_to_clear": ["line_items"]},
+        headers=h.auth,
+    )
+    assert cleared.status == 400
+    assert first_error(cleared)["field"] == "order.line_items"
+    assert cleared.json()["unit_error"] == {**cleared.json()["unit_error"], "order_total": 0, "tendered": 200}
+    assert journal_seq(h) == seq
+
+    current = retrieve_order(h, order["id"])
+    assert current["version"] == 2
+    assert current["net_amount_due_money"] == {"amount": 300, "currency": "USD"}
+    # A cut that stays at or above the floor is fine: 500 -> 200 exactly.
+    uid = current["line_items"][0]["uid"]
+    trimmed = h.api.put(
+        f"/v2/orders/{order['id']}",
+        {
+            "idempotency_key": "trim",
+            "order": {"version": 2, "line_items": [{"uid": uid, "base_price_money": {"amount": 200}}]},
+        },
+        headers=h.auth,
+    )
+    assert trimmed.status == 200, trimmed.text
+    assert trimmed.json()["order"]["state"] == "OPEN"
+    assert trimmed.json()["order"]["net_amount_due_money"] == {"amount": 0, "currency": "USD"}
+    below = h.api.put(
+        f"/v2/orders/{order['id']}",
+        {
+            "idempotency_key": "cut",
+            "order": {"version": 3, "line_items": [{"uid": uid, "quantity": "0"}]},
+        },
+        headers=h.auth,
+    )
+    assert below.status == 400
+    assert first_error(below)["field"] == "order.line_items"
+    # PayOrder with no ids on the trimmed order: nothing due, no ids -> the
+    # documented empty-list completion, and the tenders reconcile to 200.
+    done = h.api.post(f"/v2/orders/{order['id']}/pay", {"idempotency_key": "close"}, headers=h.auth)
+    assert done.status == 200, done.text
+    assert done.json()["order"]["state"] == "COMPLETED"
+    assert sum(t["amount_money"]["amount"] for t in done.json()["order"]["tenders"]) == 200
+    assert done.json()["order"]["total_money"] == {"amount": 200, "currency": "USD"}
+
+
 def test_pay_order_with_an_empty_list_completes_a_zero_total_order(h: Harness) -> None:
     """ "Orders with a total amount of `0` can be marked as paid by specifying
     an empty array of `payment_ids` in the request." """

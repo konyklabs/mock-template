@@ -481,9 +481,14 @@ def amount_due(order: OrderEntity) -> int:
     One definition, used by every check that asks "can this payment take
     this much?" -- CreatePayment, CompletePayment, PayOrder -- and by the
     projection's ``net_amount_due_money``. A tip never reduces what is due
-    and never counts toward completing the order. Clamped at zero, so an
-    over-tendered scenario (which only a seed can now produce) reports
-    nothing due rather than owing the buyer money.
+    and never counts toward completing the order.
+
+    Clamped at zero. No route can tender past the total any more -- the
+    Payments surface refuses past the due, PayOrder tenders exactly the due,
+    and UpdateOrder refuses to shrink an order below what its tenders applied
+    (the tendered floor) -- so the clamp is reachable only from a scenario
+    that seeds tenders exceeding its lines, and there it reports nothing due
+    rather than owing the buyer money.
     """
     applied = sum(tender.applied for tender in order.tenders)
     return max(0, order_total(order) - applied)

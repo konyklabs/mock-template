@@ -148,6 +148,73 @@ def line_item_rejected(h: Harness) -> None:
     assert response.status == 400, response.text
 
 
+LINE = {"quantity": "1", "base_price_money": {"amount": 100}}
+
+
+def line_and_fulfillment_ids(h: Harness) -> list[str]:
+    response = h.api.post(
+        "/v2/orders",
+        {
+            "idempotency_key": "ok-mixed",
+            "order": {"location_id": SEED_LOCATION_ID, "line_items": [LINE], "fulfillments": [{"type": "PICKUP"}]},
+        },
+        headers=h.auth,
+    )
+    assert response.status == 200, response.text
+    body = response.json()["order"]
+    return [body["id"], body["line_items"][0]["uid"], body["fulfillments"][0]["uid"]]
+
+
+def line_then_bad_fulfillment_rejected(h: Harness) -> None:
+    """A valid line, then a fulfillment with no type: the line's uid must not
+    have been minted before the fulfillment was refused."""
+    response = h.api.post(
+        "/v2/orders",
+        {
+            "idempotency_key": "bad-mixed",
+            "order": {"location_id": SEED_LOCATION_ID, "line_items": [LINE], "fulfillments": [{"uid": "x"}]},
+        },
+        headers=h.auth,
+    )
+    assert response.status == 400, response.text
+
+
+def update_line_and_fulfillment_ids(h: Harness) -> list[str]:
+    created = h.api.post(
+        "/v2/orders", {"idempotency_key": "base", "order": {"location_id": SEED_LOCATION_ID}}, headers=h.auth
+    ).json()["order"]
+    response = h.api.put(
+        f"/v2/orders/{created['id']}",
+        {
+            "idempotency_key": "ok",
+            "order": {"version": 1, "line_items": [LINE], "fulfillments": [{"type": "DELIVERY"}]},
+        },
+        headers=h.auth,
+    )
+    assert response.status == 200, response.text
+    body = response.json()["order"]
+    return [body["line_items"][0]["uid"], body["fulfillments"][0]["uid"]]
+
+
+def update_line_then_bad_fulfillment_rejected(h: Harness) -> None:
+    response = h.api.put(
+        f"/v2/orders/{SEED_OPEN_ORDER_ID}",
+        {"idempotency_key": "bad", "order": {"version": 1, "line_items": [LINE], "fulfillments": [{"type": "DRONE"}]}},
+        headers=h.auth,
+    )
+    assert response.status == 400, response.text
+
+
+def update_new_line_missing_price_rejected(h: Harness) -> None:
+    """The dry merge catches a new line without a price before any uid."""
+    response = h.api.put(
+        f"/v2/orders/{SEED_OPEN_ORDER_ID}",
+        {"idempotency_key": "bad-line", "order": {"version": 1, "line_items": [{"quantity": "1"}]}},
+        headers=h.auth,
+    )
+    assert response.status == 400, response.text
+
+
 def fulfillment_update_ids(h: Harness) -> list[str]:
     created = h.api.post(
         "/v2/orders", {"idempotency_key": "base", "order": {"location_id": SEED_LOCATION_ID}}, headers=h.auth
@@ -207,6 +274,17 @@ def minted(ids: Ids, *, after: Reject | None) -> list[str]:
         pytest.param(fulfillment_ids, line_item_rejected, id="order-line-items"),
         pytest.param(fulfillment_update_ids, fulfillment_update_rejected, id="update-fulfillments"),
         pytest.param(fulfillment_update_ids, fulfillment_update_stale_version, id="update-fulfillments-stale-version"),
+        pytest.param(
+            line_and_fulfillment_ids, line_then_bad_fulfillment_rejected, id="create-line-then-bad-fulfillment"
+        ),
+        pytest.param(
+            update_line_and_fulfillment_ids,
+            update_line_then_bad_fulfillment_rejected,
+            id="update-line-then-bad-fulfillment",
+        ),
+        pytest.param(
+            update_line_and_fulfillment_ids, update_new_line_missing_price_rejected, id="update-new-line-missing-price"
+        ),
     ],
 )
 def test_a_rejected_request_leaves_the_next_ids_unchanged(ids: Ids, reject: Reject) -> None:

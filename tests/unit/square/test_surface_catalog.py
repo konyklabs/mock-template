@@ -328,3 +328,39 @@ def test_upsert_needs_items_write_which_the_read_only_token_lacks(h: Harness) ->
     )
     assert response.status == 403
     assert first_error(response)["code"] == "INSUFFICIENT_SCOPES"
+
+
+def test_every_upsert_strictly_advances_the_catalog_version_even_within_one_millisecond() -> None:
+    """On a virtual clock nothing moves between two upserts, so the version
+    must advance on its own or a stale write would be accepted: A -> B ->
+    (stale A) must be VERSION_MISMATCH, and C then succeeds under B's."""
+    for scoped in build_harness("orders-only", env={"VENDORFAKE_CLOCK": "virtual"}):
+        first = retrieve(scoped, TEA_ITEM_ID).json()["object"]
+        a = upsert(
+            scoped,
+            {"type": "ITEM", "id": TEA_ITEM_ID, "version": first["version"], "item_data": {"name": "A"}},
+            key="v-a",
+        ).json()["catalog_object"]
+        b = upsert(
+            scoped,
+            {"type": "ITEM", "id": TEA_ITEM_ID, "version": a["version"], "item_data": {"name": "B"}},
+            key="v-b",
+        ).json()["catalog_object"]
+        assert a["version"] > first["version"]
+        assert b["version"] > a["version"]
+        assert a["updated_at"] == b["updated_at"]
+        stale = upsert(
+            scoped,
+            {"type": "ITEM", "id": TEA_ITEM_ID, "version": a["version"], "item_data": {"name": "lost"}},
+            key="v-stale",
+        )
+        assert stale.status == 400
+        assert first_error(stale)["code"] == "VERSION_MISMATCH"
+        assert retrieve(scoped, TEA_ITEM_ID).json()["object"]["item_data"]["name"] == "B"
+        c = upsert(
+            scoped,
+            {"type": "ITEM", "id": TEA_ITEM_ID, "version": b["version"], "item_data": {"name": "C"}},
+            key="v-c",
+        )
+        assert c.status == 200, c.text
+        assert c.json()["catalog_object"]["version"] > b["version"]

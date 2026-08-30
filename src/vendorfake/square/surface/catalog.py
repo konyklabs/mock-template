@@ -327,9 +327,14 @@ class CatalogSurface:
         first write, so a conflict on the third variation leaves the item and
         the first two untouched. The writes that follow each journal separately
         -- the mapper turns every one into a ``catalog.version.updated`` -- and
-        each written object takes the same new ``version``, the clock's
+        each written object takes the same new ``version``: the clock's
         millisecond instant, which is what Square's catalog version is shaped
-        like.
+        like, or one more than the highest version being replaced when the
+        clock has not moved past it. Strictly advancing on every write is what
+        makes the version a concurrency token at all: two upserts inside one
+        millisecond -- every pair, on a virtual clock -- would otherwise stamp
+        the same number and a write carrying the first's version would be
+        accepted over the second's.
 
         A variation's ``item_variation_data.item_id`` may name the enclosing
         item's temporary id, which is how Square's own example creates an item
@@ -337,8 +342,13 @@ class CatalogSurface:
         """
         request = validate_body(UpsertCatalogObjectRequest, args.body())
         collection = args.ctx.store.collection(COL.catalog)
-        now_version = int(args.ctx.clock.now())
-        planned = self._plan(collection, request.object, now_version, set(), path="object")
+        planned = self._plan(collection, request.object, int(args.ctx.clock.now()), set(), path="object")
+        version = max(
+            int(args.ctx.clock.now()),
+            max((plan.replaces_version or 0) for plan in planned) + 1,
+        )
+        for plan in planned:
+            plan.entity["catalog_version"] = version
 
         # Everything above could refuse; nothing below can. Mint now, in
         # request order, and resolve the temporary ids the plans refer to.
