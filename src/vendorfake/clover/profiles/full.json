@@ -1,6 +1,6 @@
 {
   "name": "full",
-  "summary": "Every capability on. The default profile. Seeds the whole scenario: merchant, items, modifiers, employees, tenders, order types, tax rates, a customer, an open order and two bearers. Webhooks are exercised through the dashboard stand-in and the control plane.",
+  "summary": "Every capability on. The default profile. Seeds the whole scenario: merchant, items, modifiers, employees, tenders, order types, tax rates, a customer, an open order, two bearers and a pre-verified webhook subscriber.",
   "capabilities": [
     "oauth",
     "orders",
@@ -19,9 +19,18 @@
     "redirect_uri": "https://example.test/oauth/callback"
   },
   "webhooks": {
-    "retry": { "time_scale": 0.000167, "timeout_ms": 2000 },
+    "retry": {
+      "time_scale": 0.000167,
+      "timeout_ms": 2000
+    },
     "subscribers": []
   },
-  "clock": { "mode": "real" },
-  "chaos": { "seed": 20260829, "strict_rules": true, "rules": [] }
+  "clock": {
+    "mode": "real"
+  },
+  "chaos": {
+    "seed": 20260829,
+    "strict_rules": true,
+    "rules": []
+  }
 }

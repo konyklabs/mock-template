@@ -205,9 +205,11 @@ vendorfake serve --vendor clover
 
 The scenario is pre-seeded — merchant `HRVSTRYE12345` ("Harvest & Rye"),
 three items, a modifier group, two employees, two tenders, two order types,
-two tax rates, the default service charge, a customer, one open order, and a
-full-permission bearer `unit-seeded-clover-access-token-full-permissions` —
-so the first call needs no setup. Every `/v3` path is scoped to the merchant:
+two tax rates, the default service charge, a customer, one open order, a
+full-permission bearer `unit-seeded-clover-access-token-full-permissions`
+(and a read-only one), and a pre-verified webhook subscriber whose auth code
+is `unit-seeded-clover-webhook-auth-code` — so the first call needs no setup.
+Every `/v3` path is scoped to the merchant:
 
 ```sh
 SEED=unit-seeded-clover-access-token-full-permissions
@@ -290,6 +292,41 @@ curl -s http://localhost:8080/v3/merchants/$M/orders/240Q4JZPXN595 -H "Authoriza
 A wrong bearer, an expired one, a token without the permission, or another
 merchant's `{mId}` all answer the same `{"message":"401 Unauthorized"}` —
 Clover documents no 403 — and the `unit_error` sidecar says which it was.
+
+### The webhook an order fires
+
+Clover has no subscription API — callbacks are configured in the developer
+dashboard — so the unit ships a pre-verified subscriber (pointed at
+`https://example.test/webhooks/clover`, where nothing listens) and two ways
+to add your own: the control plane, pre-verified with the auth code you
+choose, or the dashboard stand-in at `POST /__clover/webhooks/subscriptions`,
+which runs the documented verification handshake. With a receiver on
+`localhost:19999`:
+
+```sh
+curl -s -X POST http://localhost:8080/__unit/webhooks/subscriptions -H 'Content-Type: application/json' -d '{
+  "notification_url": "http://localhost:19999/webhooks",
+  "event_types": ["O:*"], "signature_key": "my-local-auth-code"
+}'
+# -> {"subscription":{"id":"wbhk_ctl_02","notification_url":"http://localhost:19999/webhooks","event_types":["O:*"], ...}}
+
+curl -s -X POST http://localhost:8080/v3/merchants/$M/orders \
+  -H "Authorization: Bearer $SEED" -H 'Content-Type: application/json' \
+  -d '{"currency": "USD", "total": 1500, "state": "open", "title": "Table 4"}'
+# -> {"id":"NEUU09PKXV0AV","currency":"USD","total":1500,"state":"open","paymentState":"OPEN","title":"Table 4", ...}
+```
+
+What the receiver saw — the documented aggregate payload, authenticated by
+the documented static header and nothing else (no HMAC, no timestamp):
+
+```
+X-Clover-Auth: my-local-auth-code
+{"appId":"UNITCLOVERAPP","merchants":{"HRVSTRYE12345":[{"objectId":"O:NEUU09PKXV0AV","type":"CREATE","ts":1788100424155}]}}
+```
+
+Retries follow a schedule Clover does not publish (`30s, 2m, 10m, 30m, 2h`,
+labelled JUDGMENT in `clover/retry.py`), compressed on the shipped profiles
+so a test can watch the whole cascade.
 
 The same six profiles ship for Clover (`--vendor clover --profile <name>`);
 `chaos-demo` rate-limits every third order create and expires the token on

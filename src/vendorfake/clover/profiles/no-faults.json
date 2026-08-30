@@ -7,13 +7,21 @@
     "payments",
     "inventory",
     "merchant",
-    "customers"
+    "customers",
+    "webhooks"
   ],
   "seed": "seed/default.seed.json",
   "vendor": {
     "client_id": "UNITCLOVERAPP",
     "client_secret": "unit-clover-app-secret",
     "redirect_uri": "https://example.test/oauth/callback"
+  },
+  "webhooks": {
+    "retry": {
+      "time_scale": 0.000167,
+      "timeout_ms": 2000
+    },
+    "subscribers": []
   },
   "chaos": {
     "seed": 20260829,

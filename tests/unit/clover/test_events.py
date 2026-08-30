@@ -66,7 +66,9 @@ def sink() -> MemorySink:
 
 @pytest.fixture
 def h(sink: MemorySink) -> Iterator[Harness]:
-    yield from build_harness("full", sink=sink)
+    for built in build_harness("full", sink=sink):
+        built.drop_seeded_subscriber()  # this suite counts deliveries to the callback it registers
+        yield built
 
 
 def subscribe(h: Harness) -> None:
@@ -237,6 +239,12 @@ def test_a_mutation_in_a_unit_with_no_merchant_is_not_delivered_and_is_logged(si
 
     unit = create_unit(vendor="clover", profile="full", sink=sink, logger=Recording())
     try:
+        # The shipped seed hydrates one merchant; remove it so the unit
+        # genuinely has none. A merchant delete is not a mapped event.
+        merchants = unit.context.store.collection(COL.merchants)
+        for merchant in merchants.all():
+            merchants.delete(str(merchant["id"]), {"operation_id": "TestTeardown"})
+        assert merchants.all() == []
         unit.context.store.collection("subscriptions").insert(SUBSCRIBE | {"id": "wbhk_test"}, {"source": "test"})
         unit.context.store.collection("orders").insert({"id": "ORD0000000001"}, {"operation_id": "CreateOrder"})
         unit.context.webhooks.drain()
@@ -247,10 +255,10 @@ def test_a_mutation_in_a_unit_with_no_merchant_is_not_delivered_and_is_logged(si
 
 
 def test_the_mapper_keys_on_the_collection_names_the_orders_branch_uses() -> None:
-    """The contract with feat/34-clover-orders, as four literals: a rename of
-    a collection on either side must go red here rather than present as "a
-    mutation delivered nothing". TODO(rebase onto orders): once EVENT_KEYS is
-    derived from COL, this assertion is what keeps COL honest instead."""
+    """Four literals, on purpose: EVENT_KEYS is derived from COL, so this is
+    the assertion that keeps COL's spelling of the four collections honest --
+    a rename there would otherwise move the mapper along with it and present
+    as nothing at all."""
     assert EVENT_KEYS == {"orders": "O", "items": "I", "customers": "C", "payments": "P"}
     assert list(EVENT_KEYS) == ["orders", "items", "customers", "payments"]
 
@@ -277,6 +285,22 @@ def test_a_control_plane_state_update_delivers_an_update_event(h: Harness, sink:
     assert updated.status == 200, updated.text
     types = [body["merchants"][MERCHANT_ID][0]["type"] for body in delivered_bodies(h, sink)]
     assert types == ["CREATE", "UPDATE"]
+
+
+def test_loading_the_scenario_emits_nothing(h: Harness, sink: MemorySink) -> None:
+    """Subscribe to everything, reset, and load the scenario again. The
+    shipped scenario (items, customers, tenders, an order, ...) writes under
+    `{"seed": True}`, which the dispatcher skips; so re-hydrating pushes no
+    I:CREATE per seeded item. The
+    journal is checked too, so the assertion is not vacuous: the scenario
+    really did write to mapped collections."""
+    subscribe(h)
+    assert h.api.post("/__unit/state/reset", {}).status == 200  # re-hydrates the shipped scenario
+    entries = h.api.get("/__unit/journal").json()["entries"]
+    seeded = [e for e in entries if e["collection"] in EVENT_KEYS and e.get("meta", {}).get("seed") is True]
+    assert seeded, entries[:5]
+    assert all(e.get("meta", {}).get("seed") is True for e in entries), entries
+    assert delivered_bodies(h, sink) == []
 
 
 def test_seed_writes_deliver_nothing(h: Harness, sink: MemorySink) -> None:

@@ -303,21 +303,15 @@ CLOVER_EXPECTED_SKIPS: dict[str, tuple[str, ...]] = {
     # the capability a contract needs.
     "C07": ("oauth-only",),
     "C08": ("no-faults",),
+    "C09": ("oauth-only", "orders-only"),
     "C12": ("no-faults",),
+    "C16": ("oauth-only", "orders-only"),
     "C17": ("oauth-only",),
+    "C18": ("oauth-only", "orders-only"),
+    "C21": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
 }
 
-_WEBHOOKS_PENDING = (
-    "the clover webhook surface, signer and event mapper ship in PR D of konyklabs/roadmap#34; "
-    "until that merge the vendor excuses the webhooks gate. PR D deletes this row, and the suite "
-    "fails if it forgets: a check declared inapplicable that runs is stale."
-)
-
 CLOVER_INAPPLICABLE: dict[str, str] = {
-    "C09": _WEBHOOKS_PENDING,
-    "C16": _WEBHOOKS_PENDING,
-    "C18": _WEBHOOKS_PENDING,
-    "C21": _WEBHOOKS_PENDING,
     "C19": (
         "Clover's REST API documents no idempotency key on any endpoint, so no clover route carries an "
         "IdempotencySpec and the replay contract can never be asked of this vendor."

@@ -1,6 +1,6 @@
 {
   "name": "chaos-demo",
-  "summary": "Full surface with a preloaded fault set: rate limiting on every third order create and a mid-flow token expiry on the fourth order read. Runs on a virtual clock. Delivery faults join when the webhook surface merges.",
+  "summary": "Full surface with a preloaded fault set: rate limiting on every third order create, a mid-flow token expiry on the fourth order read, and a duplicated then a reordered delivery. Runs on a virtual clock.",
   "capabilities": [
     "oauth",
     "orders",
@@ -8,13 +8,22 @@
     "inventory",
     "merchant",
     "customers",
-    "chaos"
+    "webhooks",
+    "chaos",
+    "webhooks.chaos"
   ],
   "seed": "seed/default.seed.json",
   "vendor": {
     "client_id": "UNITCLOVERAPP",
     "client_secret": "unit-clover-app-secret",
     "redirect_uri": "https://example.test/oauth/callback"
+  },
+  "webhooks": {
+    "retry": {
+      "time_scale": 0.000167,
+      "timeout_ms": 2000
+    },
+    "subscribers": []
   },
   "clock": {
     "mode": "virtual",
@@ -52,6 +61,37 @@
           ]
         },
         "note": "The fourth GetOrder sees the conflated 401 mid-flow without the stored token changing."
+      },
+      {
+        "id": "duplicate-order-created",
+        "scope": "webhook",
+        "fault": "webhook.duplicate",
+        "match": {
+          "event_type": "O:CREATE"
+        },
+        "when": {
+          "nth": [
+            1
+          ]
+        },
+        "params": {
+          "copies": 1
+        },
+        "note": "The first O:CREATE is delivered twice with the same event id."
+      },
+      {
+        "id": "reorder-order-updated",
+        "scope": "webhook",
+        "fault": "webhook.out_of_order",
+        "match": {
+          "event_type": "O:UPDATE"
+        },
+        "when": {
+          "nth": [
+            1
+          ]
+        },
+        "note": "The first O:UPDATE is held until the following event has been delivered."
       }
     ]
   }

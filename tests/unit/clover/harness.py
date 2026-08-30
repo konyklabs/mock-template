@@ -33,6 +33,7 @@ from vendorfake.clover.seed.constants import (
     SEED_MERCHANT_ID,
     SEED_OPEN_ORDER_ID,
     SEED_READ_ONLY_ACCESS_TOKEN,
+    SEED_WEBHOOK_SUBSCRIPTION_ID,
     SERVICE_CHARGE_DEFAULT_ID,
     TAX_BEVERAGE_ID,
     TAX_BEVERAGE_RATE,
@@ -43,6 +44,7 @@ from vendorfake.clover.seed.constants import (
 )
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.transport.inprocess import InProcessClient, InProcessResponse, in_process
+from vendorfake.core.webhooks.sink import MemorySink
 
 CLIENT_ID = "UNITCLOVERAPP"
 CLIENT_SECRET = "unit-clover-app-secret"
@@ -148,6 +150,11 @@ class Harness:
         body: dict[str, Any] = response.json()
         return body
 
+    def drop_seeded_subscriber(self) -> None:
+        """Remove the scenario's pre-verified webhook subscriber, for suites
+        that count deliveries to subscribers they register themselves."""
+        assert self.api.delete(f"/__unit/webhooks/subscriptions/{SEED_WEBHOOK_SUBSCRIPTION_ID}").status in (200, 204)
+
     def clear_seed_orders(self) -> None:
         """Soft-delete the scenario's open order, for tests that need an
         empty list to reason about."""
@@ -175,6 +182,10 @@ class Harness:
 def harness(profile: str = "full", **kwargs: Any) -> Iterator[Harness]:
     """Start a unit on ``profile``, yield it with the seeded bearer, stop it
     however the test ends."""
+    # An in-memory sink unless the test brings its own: the scenario ships a
+    # pre-verified subscriber, and a real sink would try to deliver every
+    # mutation to its `.test` callback and retry on the schedule.
+    kwargs.setdefault("sink", MemorySink())
     unit = create_unit(vendor="clover", profile=profile, logger=Silent(), **kwargs)
     try:
         yield Harness(unit=unit, api=in_process(unit), auth={"authorization": f"Bearer {SEED_ACCESS_TOKEN}"})

@@ -68,13 +68,16 @@ def test_no_faults_switches_chaos_off_and_the_others_keep_it() -> None:
         assert h.post("/orders", {"total": 1, "note": "chaos:rate_limit"}).status == 200  # the trigger is inert
 
 
-def test_chaos_demo_ships_two_rules_on_a_virtual_clock_and_every_one_fires() -> None:
+def test_chaos_demo_ships_four_rules_on_a_virtual_clock_and_the_request_rules_fire() -> None:
     document = _document("chaos-demo")
     assert document["clock"]["mode"] == "virtual"
     assert [rule["id"] for rule in document["chaos"]["rules"]] == [
         "rate-limit-every-third-create",
         "token-expires-on-fourth-read",
+        "duplicate-order-created",
+        "reorder-order-updated",
     ]
+    assert {rule["scope"] for rule in document["chaos"]["rules"]} == {"request", "webhook"}
     for h in harness("chaos-demo"):
         statuses = [h.post("/orders", {"total": 1}).status for _ in range(3)]
         assert statuses == [200, 200, 429]
@@ -84,7 +87,7 @@ def test_chaos_demo_ships_two_rules_on_a_virtual_clock_and_every_one_fires() -> 
         assert h.get(f"/orders/{order['id']}").status == 200  # the stored token never changed
 
 
-SEED_DIGEST = "833ceeeccaca33d31bf8b10f850cb77796b22ef9743a09f3b0afdc089c42743f"
+SEED_DIGEST = "121fafa293b18c2b5cc44e3baecbdd567e5789ecff69f2d5bacde3564bfcae95"
 """The entity digest of the shipped scenario, pinned as a literal.
 
 Identical on every profile because seeded ids come from the document, never

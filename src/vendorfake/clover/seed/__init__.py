@@ -4,9 +4,8 @@ One merchant ("Harvest & Rye"), two tax rates, three items (the documented
 "Craft Beer" at 750 among them), a modifier group, two employees, two tenders,
 two order types, the default service charge, a customer, one open order with
 a client-set total, and two pre-minted bearers -- full-permission and
-read-only. :mod:`.constants` names every id; :mod:`.document` is the schema;
-:mod:`.hydrate` loads it. Webhook subscribers join the document when the
-webhook surface merges.
+read-only -- and one pre-verified webhook subscriber. :mod:`.constants`
+names every id; :mod:`.document` is the schema; :mod:`.hydrate` loads it.
 """
 
 from __future__ import annotations
@@ -34,6 +33,9 @@ from vendorfake.clover.seed.constants import (
     SEED_READ_ONLY_PERMISSIONS,
     SEED_READ_ONLY_REFRESH_TOKEN,
     SEED_REFRESH_TOKEN,
+    SEED_WEBHOOK_AUTH_CODE,
+    SEED_WEBHOOK_SUBSCRIPTION_ID,
+    SEED_WEBHOOK_URL,
     SERVICE_CHARGE_DEFAULT_ID,
     TAX_BEVERAGE_ID,
     TAX_BEVERAGE_RATE,
@@ -69,6 +71,9 @@ __all__ = [
     "SEED_READ_ONLY_PERMISSIONS",
     "SEED_READ_ONLY_REFRESH_TOKEN",
     "SEED_REFRESH_TOKEN",
+    "SEED_WEBHOOK_AUTH_CODE",
+    "SEED_WEBHOOK_SUBSCRIPTION_ID",
+    "SEED_WEBHOOK_URL",
     "SERVICE_CHARGE_DEFAULT_ID",
     "TAX_BEVERAGE_ID",
     "TAX_BEVERAGE_RATE",

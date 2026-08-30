@@ -48,12 +48,16 @@ def sink() -> MemorySink:
 def h(sink: MemorySink) -> Iterator[Harness]:
     """The full profile: a real clock, the schedule scaled so the first retry
     is five milliseconds rather than thirty seconds."""
-    yield from build_harness("full", sink=sink)
+    for built in build_harness("full", sink=sink):
+        built.drop_seeded_subscriber()  # these suites count deliveries to callbacks they register
+        yield built
 
 
 @pytest.fixture
 def virtual(sink: MemorySink) -> Iterator[Harness]:
-    yield from build_harness("full", sink=sink, env={"VENDORFAKE_CLOCK": "virtual"})
+    for built in build_harness("full", sink=sink, env={"VENDORFAKE_CLOCK": "virtual"}):
+        built.drop_seeded_subscriber()
+        yield built
 
 
 def register(h: Harness, url: str = HOOKS, **spec: Any) -> dict[str, Any]:
@@ -285,6 +289,7 @@ def test_the_allow_insecure_callbacks_switch_lifts_the_check_for_a_local_receive
     live, so the profile's value is the one in force."""
     env = {"VENDORFAKE_VENDOR_ALLOW_INSECURE_CALLBACKS": "true"}
     for h in build_harness("full", sink=sink, env=env):
+        h.drop_seeded_subscriber()
         assert h.unit.context.vendor.config.allow_insecure_callbacks is True  # type: ignore[attr-defined]
         verified = register_and_verify(h, sink, INSECURE_HOOKS)
         assert verified["url"] == INSECURE_HOOKS
@@ -300,6 +305,7 @@ def test_a_profile_declared_http_subscriber_is_exempt_and_still_delivers(sink: M
     a scenario may point them at whatever its author's receiver listens on."""
     env = {"VENDORFAKE_WEBHOOK_URL": INSECURE_HOOKS, "VENDORFAKE_WEBHOOK_SIGNATURE_KEY": "seeded-auth-code"}
     for h in build_harness("full", sink=sink, env=env):
+        h.drop_seeded_subscriber()
         assert h.unit.context.vendor.config.allow_insecure_callbacks is False  # type: ignore[attr-defined]
         (row,) = h.api.get("/__clover/webhooks/subscriptions").json()["subscriptions"]
         assert row["url"] == INSECURE_HOOKS
@@ -437,6 +443,7 @@ def test_a_profile_declared_subscriber_is_delivered_to_with_its_auth_code(sink: 
         "VENDORFAKE_WEBHOOK_SIGNATURE_KEY": "seeded-auth-code",
     }
     for h in build_harness("full", sink=sink, env=env):
+        h.drop_seeded_subscriber()
         (row,) = h.api.get("/__clover/webhooks/subscriptions").json()["subscriptions"]
         assert row["verified"] is True
         assert row["eventKeys"] == ["O", "I", "C", "P"]

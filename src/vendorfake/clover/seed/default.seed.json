@@ -11,13 +11,17 @@
     "  tax rate scale     JUDGMENT, percent x 100000 -- see model/order.py TAX_RATE_SCALE",
     "The open order's total is client-set (750, its one line): Clover leaves",
     "totals to the app, and so does this fake. Timestamps are fixed (ms) so",
-    "list filters are reproducible; token expirations are stamped at hydrate."
+    "list filters are reproducible; token expirations are stamped at hydrate.",
+    "The webhook subscriber is pre-verified (no `verified` key); its signature_key is the X-Clover-Auth code."
   ],
   "merchant": {
     "id": "HRVSTRYE12345",
     "name": "Harvest & Rye",
     "currency": "USD",
-    "owner": { "id": "OWNERHRVST001", "name": "R. Harvest" },
+    "owner": {
+      "id": "OWNERHRVST001",
+      "name": "R. Harvest"
+    },
     "address": {
       "address1": "1 Main St",
       "city": "Springfield",
@@ -27,15 +31,49 @@
     }
   },
   "tax_rates": [
-    { "id": "TAXDEFAULT001", "name": "Sales Tax", "rate": 725000, "isDefault": true },
-    { "id": "TAXBEVERAGE01", "name": "Beverage Tax", "rate": 1000000, "isDefault": false }
+    {
+      "id": "TAXDEFAULT001",
+      "name": "Sales Tax",
+      "rate": 725000,
+      "isDefault": true
+    },
+    {
+      "id": "TAXBEVERAGE01",
+      "name": "Beverage Tax",
+      "rate": 1000000,
+      "isDefault": false
+    }
   ],
   "modifier_groups": [
-    { "id": "MODGROUPMILK1", "name": "Milk", "showByDefault": true, "modifierIds": ["MODIFIEROAT01", "MODIFIERSOY01"] }
+    {
+      "id": "MODGROUPMILK1",
+      "name": "Milk",
+      "showByDefault": true,
+      "modifierIds": [
+        "MODIFIEROAT01",
+        "MODIFIERSOY01"
+      ]
+    }
   ],
   "modifiers": [
-    { "id": "MODIFIEROAT01", "name": "Oat milk", "price": 50, "available": true, "modifierGroup": { "id": "MODGROUPMILK1" } },
-    { "id": "MODIFIERSOY01", "name": "Soy milk", "price": 50, "available": false, "modifierGroup": { "id": "MODGROUPMILK1" } }
+    {
+      "id": "MODIFIEROAT01",
+      "name": "Oat milk",
+      "price": 50,
+      "available": true,
+      "modifierGroup": {
+        "id": "MODGROUPMILK1"
+      }
+    },
+    {
+      "id": "MODIFIERSOY01",
+      "name": "Soy milk",
+      "price": 50,
+      "available": false,
+      "modifierGroup": {
+        "id": "MODGROUPMILK1"
+      }
+    }
   ],
   "items": [
     {
@@ -44,20 +82,42 @@
       "price": 750,
       "modifiedTime": 1755786102000,
       "defaultTaxRates": false,
-      "taxRates": [{ "id": "TAXBEVERAGE01" }]
+      "taxRates": [
+        {
+          "id": "TAXBEVERAGE01"
+        }
+      ]
     },
     {
       "id": "ESPRESSO00300",
       "name": "Espresso",
       "price": 300,
       "modifiedTime": 1755786102000,
-      "modifierGroupIds": ["MODGROUPMILK1"]
+      "modifierGroupIds": [
+        "MODGROUPMILK1"
+      ]
     },
-    { "id": "CROISSANT0450", "name": "Croissant", "price": 450, "modifiedTime": 1755786102000 }
+    {
+      "id": "CROISSANT0450",
+      "name": "Croissant",
+      "price": 450,
+      "modifiedTime": 1755786102000
+    }
   ],
   "employees": [
-    { "id": "OWNERHRVST001", "name": "R. Harvest", "nickname": "Rye", "role": "ADMIN", "isOwner": true },
-    { "id": "EMPLBARISTA01", "name": "B. Rista", "role": "EMPLOYEE", "isOwner": false }
+    {
+      "id": "OWNERHRVST001",
+      "name": "R. Harvest",
+      "nickname": "Rye",
+      "role": "ADMIN",
+      "isOwner": true
+    },
+    {
+      "id": "EMPLBARISTA01",
+      "name": "B. Rista",
+      "role": "EMPLOYEE",
+      "isOwner": false
+    }
   ],
   "tenders": [
     {
@@ -102,7 +162,13 @@
     }
   ],
   "service_charges": [
-    { "id": "SVCCHARGE0001", "name": "Service", "percentageDecimal": 180000, "enabled": true, "isDefault": true }
+    {
+      "id": "SVCCHARGE0001",
+      "name": "Service",
+      "percentageDecimal": 180000,
+      "enabled": true,
+      "isDefault": true
+    }
   ],
   "customers": [
     {
@@ -110,7 +176,13 @@
       "firstName": "Ada",
       "lastName": "Lovelace",
       "customerSince": 1755786102000,
-      "addresses": [{ "address1": "12 Analytical Way", "city": "London", "country": "GB" }]
+      "addresses": [
+        {
+          "address1": "12 Analytical Way",
+          "city": "London",
+          "country": "GB"
+        }
+      ]
     }
   ],
   "orders": [
@@ -121,9 +193,20 @@
       "title": "Table 1",
       "externalReferenceId": "seed-open-order",
       "createdTime": 1755786102000,
-      "orderType": { "id": "KFRPRVCZ73JHM" },
-      "employee": { "id": "EMPLBARISTA01" },
-      "lineItems": [{ "id": "SEEDLINE00001", "item": { "id": "CRAFTBEER0750" } }]
+      "orderType": {
+        "id": "KFRPRVCZ73JHM"
+      },
+      "employee": {
+        "id": "EMPLBARISTA01"
+      },
+      "lineItems": [
+        {
+          "id": "SEEDLINE00001",
+          "item": {
+            "id": "CRAFTBEER0750"
+          }
+        }
+      ]
     }
   ],
   "tokens": [
@@ -136,7 +219,28 @@
       "id": "tok_seed_readonly",
       "access_token": "unit-seeded-clover-access-token-read-only",
       "refresh_token": "unit-seeded-clover-refresh-token-read-only",
-      "permissions": ["ORDERS_R", "INVENTORY_R", "MERCHANT_R", "EMPLOYEES_R", "CUSTOMERS_R"]
+      "permissions": [
+        "ORDERS_R",
+        "INVENTORY_R",
+        "MERCHANT_R",
+        "EMPLOYEES_R",
+        "CUSTOMERS_R"
+      ]
+    }
+  ],
+  "webhook_subscriptions": [
+    {
+      "id": "wbhk_seed_quickstart",
+      "name": "Quickstart receiver",
+      "notification_url": "https://example.test/webhooks/clover",
+      "event_types": [
+        "O:*",
+        "I:*",
+        "C:*",
+        "P:*"
+      ],
+      "signature_key": "unit-seeded-clover-webhook-auth-code",
+      "enabled": true
     }
   ]
 }

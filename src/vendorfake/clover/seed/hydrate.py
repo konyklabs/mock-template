@@ -28,6 +28,7 @@ from vendorfake.clover.entities import COL, ItemEntity, MerchantEntity, OrderEnt
 from vendorfake.clover.seed.document import SeedDocument, SeedOrder, parse_seed_document
 from vendorfake.core.kernel.types import UnitContext
 from vendorfake.core.util.json import compact
+from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION
 
 __all__ = ["SEED_META", "hydrate_clover"]
 
@@ -48,6 +49,7 @@ def hydrate_clover(ctx: UnitContext, seed: object, config: CloverConfig) -> Seed
     _insert_customers(ctx, doc)
     _insert_orders(ctx, doc)
     _insert_tokens(ctx, doc, config)
+    _insert_subscriptions(ctx, doc)
     return doc
 
 
@@ -194,5 +196,31 @@ def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: CloverConfig) ->
                 permissions=tuple(config.permissions if token.permissions is None else token.permissions),
                 createdTime=now,
             ).to_entity(),
+            SEED_META,
+        )
+
+
+def _insert_subscriptions(ctx: UnitContext, doc: SeedDocument) -> None:
+    """Subscribers declared by the scenario rather than by the profile.
+
+    Built as a plain dict because the subscription entity belongs to the core
+    -- the dispatcher reads it through ``Subscription.from_entity`` -- and a
+    vendor-side mirror of its field names would be a second place to keep
+    them. No ``verified`` key: that is what the webhook surface reads as
+    pre-verified.
+    """
+    subscriptions = ctx.store.collection(SUBSCRIPTION_COLLECTION)
+    for subscription in doc.webhook_subscriptions:
+        subscriptions.insert(
+            compact(
+                {
+                    "id": subscription.id,
+                    "name": subscription.name or "Seeded subscription",
+                    "notification_url": subscription.notification_url,
+                    "event_types": list(subscription.event_types),
+                    "signature_key": subscription.signature_key,
+                    "enabled": subscription.enabled,
+                }
+            ),
             SEED_META,
         )

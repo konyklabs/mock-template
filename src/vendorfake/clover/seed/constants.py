@@ -43,6 +43,9 @@ __all__ = [
     "SEED_READ_ONLY_PERMISSIONS",
     "SEED_READ_ONLY_REFRESH_TOKEN",
     "SEED_REFRESH_TOKEN",
+    "SEED_WEBHOOK_AUTH_CODE",
+    "SEED_WEBHOOK_SUBSCRIPTION_ID",
+    "SEED_WEBHOOK_URL",
     "SERVICE_CHARGE_DEFAULT_ID",
     "TAX_BEVERAGE_ID",
     "TAX_BEVERAGE_RATE",
@@ -120,3 +123,14 @@ SEED_READ_ONLY_PERMISSIONS: tuple[str, ...] = ("ORDERS_R", "INVENTORY_R", "MERCH
 """A second token that cannot write, so "401 on the write path" is testable
 -- and the conformance suite's forbidden-permission clause askable -- without
 minting anything."""
+
+SEED_WEBHOOK_SUBSCRIPTION_ID = "wbhk_seed_quickstart"
+SEED_WEBHOOK_URL = "https://example.test/webhooks/clover"
+SEED_WEBHOOK_AUTH_CODE = "unit-seeded-clover-webhook-auth-code"
+"""The pre-verified subscriber the scenario ships: every event key, delivered
+with ``X-Clover-Auth: unit-seeded-clover-webhook-auth-code``. Clover's real
+auth code is a UUID shown once in the dashboard; this one is readable and
+obviously fake for the same reason the seeded bearers are. The callback host
+is the reserved ``.test`` domain, so a served unit's deliveries to it fail and
+retry on the declared schedule rather than reaching anybody -- point a
+subscriber of your own at a local receiver to watch a delivery land (README)."""

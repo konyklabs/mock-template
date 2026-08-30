@@ -46,6 +46,7 @@ __all__ = [
     "SeedTaxRate",
     "SeedTender",
     "SeedToken",
+    "SeedWebhookSubscription",
     "parse_seed_document",
 ]
 
@@ -245,6 +246,22 @@ class SeedToken(BaseModel):
     client_id: str | None = None
 
 
+class SeedWebhookSubscription(BaseModel):
+    """A pre-verified callback, in the core's own subscription vocabulary
+    (``notification_url``, ``event_types`` patterns such as ``O:*``,
+    ``signature_key`` = the ``X-Clover-Auth`` code). No ``verified`` key is
+    what makes it pre-verified to the webhook surface."""
+
+    model_config = _SEED
+
+    id: str = Field(min_length=1)
+    name: str | None = None
+    notification_url: str = Field(min_length=1)
+    event_types: list[str] = Field(default_factory=lambda: ["*"])
+    signature_key: str = Field(min_length=1)
+    enabled: bool = True
+
+
 class SeedDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -263,6 +280,7 @@ class SeedDocument(BaseModel):
     customers: list[SeedCustomer] = Field(default_factory=list)
     orders: list[SeedOrder] = Field(default_factory=list)
     tokens: list[SeedToken] = Field(default_factory=list)
+    webhook_subscriptions: list[SeedWebhookSubscription] = Field(default_factory=list)
 
 
 def _refuse(path: str, message: str) -> UnitError:

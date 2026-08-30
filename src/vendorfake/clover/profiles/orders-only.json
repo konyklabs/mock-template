@@ -1,6 +1,6 @@
 {
   "name": "orders-only",
-  "summary": "Orders, payments and the reference data they point at. No OAuth dance: authenticate with a seeded token.",
+  "summary": "Orders, payments and the reference data they point at. No OAuth dance, no webhooks: authenticate with a seeded token.",
   "capabilities": [
     "orders",
     "payments",
