@@ -90,8 +90,8 @@ from vendorfake.clover.machine import ORDER_MACHINE, OrderState
 from vendorfake.clover.model.common import validate_body
 from vendorfake.clover.model.order import (
     EXPANDABLE,
-    MAX_EXPANSIONS,
     AtomicOrderRequest,
+    AtomicTotals,
     BulkLineItemsRequest,
     DiscountRequest,
     LineItemRequest,
@@ -99,11 +99,13 @@ from vendorfake.clover.model.order import (
     OrderCartRequest,
     OrderCreateRequest,
     OrderPatchRequest,
-    atomic_total,
+    atomic_totals,
     project_order,
     supplied,
 )
-from vendorfake.clover.surface.common import CloverDeps, elements, page_window, require_merchant
+from vendorfake.clover.model.references import PrintEventRequest
+from vendorfake.clover.surface.common import CloverDeps, elements, expansions, page_window, require_merchant
+from vendorfake.clover.surface.inventory import item_tax_rates
 from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitContext, UnitError, UnitErrorKind
 from vendorfake.core.state.machine import StateMachine
@@ -120,7 +122,9 @@ BULK_MAX = 100
 
 _MACHINE = StateMachine(ORDER_MACHINE)
 
-_ATOMIC_EXPAND = frozenset({"lineItems", "discounts", "serviceCharge", "lineItems.discounts"})
+_ATOMIC_EXPAND = frozenset(
+    {"lineItems", "discounts", "serviceCharge", "customers", "lineItems.discounts", "lineItems.modifications"}
+)
 
 _FILTER_FIELDS: Mapping[str, str] = {
     "state": "state",
@@ -239,6 +243,16 @@ class CloverOrdersSurface:
                 operation_id="BulkCreateLineItems",
                 summary="Add up to 100 line items, each with a price.",
             ),
+            Route(
+                method="POST",
+                path=f"{base}/print_event",
+                capability=CAPABILITY,
+                handler=self.create_print_event,
+                auth="bearer",
+                scopes=("ORDERS_W",),
+                operation_id="CreatePrintEvent",
+                summary="Ask the merchant's default order printer to print an order; journalled, no other effect.",
+            ),
         )
 
     # -- POST /orders --------------------------------------------------------
@@ -246,7 +260,7 @@ class CloverOrdersSurface:
     def create_order(self, args: HandlerArgs) -> ReplyInit:
         merchant_id = require_merchant(args)
         request = validate_body(OrderCreateRequest, args.body())
-        expand = _expansions(args)
+        expand = expansions(args, EXPANDABLE)
         _check_state_value(request.state)
         merchant = _the_merchant(args.ctx, merchant_id)
         now = _now(args.ctx)
@@ -270,6 +284,8 @@ class CloverOrdersSurface:
             manualTransaction=request.manualTransaction,
             groupLineItems=request.groupLineItems,
             orderType=None if request.orderType is None else request.orderType.wire(),
+            employee=None if request.employee is None else {"id": request.employee.id},
+            customers=tuple({"id": customer.id} for customer in request.customers or []),
         )
         stored = args.ctx.store.collection(COL.orders).insert(entity.to_entity(), {"operation_id": "CreateOrder"})
         return json_(project_order(stored, expand))
@@ -280,7 +296,7 @@ class CloverOrdersSurface:
         """Insertion order, filtered, then windowed -- stable, so two pages
         never overlap and their union is the whole list."""
         merchant_id = require_merchant(args)
-        expand = _expansions(args)
+        expand = expansions(args, EXPANDABLE)
         predicate = _filter(args.query("filter"))
         limit, offset = page_window(args)
         orders = [
@@ -301,7 +317,7 @@ class CloverOrdersSurface:
 
     def get_order(self, args: HandlerArgs) -> ReplyInit:
         merchant_id = require_merchant(args)
-        expand = _expansions(args)
+        expand = expansions(args, EXPANDABLE)
         order = _require_order(args.ctx.store.collection(COL.orders), args.params["orderId"], merchant_id)
         return json_(project_order(order.to_entity(), expand))
 
@@ -310,7 +326,7 @@ class CloverOrdersSurface:
     def update_order(self, args: HandlerArgs) -> ReplyInit:
         merchant_id = require_merchant(args)
         request = validate_body(OrderPatchRequest, args.body())
-        expand = _expansions(args)
+        expand = expansions(args, EXPANDABLE)
         orders = args.ctx.store.collection(COL.orders)
         current = _require_order(orders, args.params["orderId"], merchant_id)
         subject = f"Order {current.id}"
@@ -333,6 +349,13 @@ class CloverOrdersSurface:
                     draft.pop(name, None)
                 elif name == "orderType":
                     draft[name] = value.wire()
+                elif name == "employee":
+                    # Round-tripped as a reference: consumers attach it before
+                    # paying, and a fake that dropped it would lose the field
+                    # silently.
+                    draft[name] = {"id": value.id}
+                elif name == "customers":
+                    draft[name] = [{"id": customer.id} for customer in value]
                 elif name in ("paymentState", "payType"):
                     draft[name] = value.value
                 else:
@@ -418,17 +441,20 @@ class CloverOrdersSurface:
 
     def create_atomic_order(self, args: HandlerArgs) -> ReplyInit:
         """ "Creates an order and calculates the order totals" -- the one
-        create path that totals, and it does so exactly once, here."""
+        create path that totals, and it does so exactly once, here. The
+        answer is the stored order plus the documented totals block
+        (``subtotal``, ``totalTaxAmount``, ``taxSummaries``) the checkout
+        reference lists."""
         merchant_id = require_merchant(args)
         cart = validate_body(AtomicOrderRequest, args.body()).orderCart
         merchant = _the_merchant(args.ctx, merchant_id)
-        lines, discounts, charge, total = self._price_cart(args.ctx, cart)
+        lines, discounts, charge, totals = self._price_cart(args.ctx, cart)
         now = _now(args.ctx)
         entity = OrderEntity(
             id=self._deps.ids.order(),
             merchant_id=merchant_id,
             currency=cart.currency or merchant.currency,
-            total=total,
+            total=totals.total,
             # JUDGMENT: the docs recommend "manually setting the order state
             # value to Open"; an atomic order is created open.
             state=OrderState.OPEN.value,
@@ -439,30 +465,35 @@ class CloverOrdersSurface:
             note=cart.note,
             externalReferenceId=cart.externalReferenceId,
             orderType=None if cart.orderType is None else cart.orderType.wire(),
+            employee=None if cart.employee is None else {"id": cart.employee.id},
+            customers=tuple({"id": customer.id} for customer in cart.customers or []),
             lineItems=tuple(lines),
             discounts=tuple(discounts),
             serviceCharge=charge,
         )
         stored = args.ctx.store.collection(COL.orders).insert(entity.to_entity(), {"operation_id": "CreateAtomicOrder"})
-        return json_(project_order(stored, _ATOMIC_EXPAND))
+        return json_({**project_order(stored, _ATOMIC_EXPAND), **totals.wire()})
 
     def checkout_atomic_order(self, args: HandlerArgs) -> ReplyInit:
         """The calculator: the same arithmetic, nothing stored, nothing
         journalled. The answer is order-shaped without an id, because no
-        order exists."""
+        order exists, plus the documented ``total``/``subtotal``/
+        ``totalTaxAmount``/``taxSummaries`` block."""
         merchant_id = require_merchant(args)
         cart = validate_body(AtomicOrderRequest, args.body()).orderCart
         merchant = _the_merchant(args.ctx, merchant_id)
-        lines, discounts, charge, total = self._price_cart(args.ctx, cart)
+        lines, discounts, charge, totals = self._price_cart(args.ctx, cart)
         return json_(
             compact(
                 {
                     "currency": cart.currency or merchant.currency,
-                    "total": total,
+                    **totals.wire(),
                     "title": cart.title,
                     "note": cart.note,
                     "externalReferenceId": cart.externalReferenceId,
                     "orderType": None if cart.orderType is None else cart.orderType.wire(),
+                    "employee": None if cart.employee is None else {"id": cart.employee.id},
+                    "customers": [{"id": customer.id} for customer in cart.customers or []] or None,
                     "lineItems": [LineItemWire.model_validate(line).wire() for line in lines] or None,
                     "discounts": discounts or None,
                     "serviceCharge": charge,
@@ -470,34 +501,90 @@ class CloverOrdersSurface:
             )
         )
 
+    # -- POST /print_event ---------------------------------------------------
+
+    def create_print_event(self, args: HandlerArgs) -> ReplyInit:
+        """ "Submits the Printrequest" for one order
+        (https://docs.clover.com/dev/reference/ordercreateprintevent-3). The
+        response is the documented event -- ``id``, ``orderRef{id}``,
+        ``state: CREATED``, ``createdTime``, ``modifiedTime``, ``printTime``
+        (https://docs.clover.com/dev/docs/printing-orders-rest-api) -- minus
+        ``deviceRef``: the real response names the firing device, and this
+        unit has none (JUDGMENT: omitted rather than invented). The event is
+        stored and journalled so a consumer can assert the print was asked
+        for; nothing else happens."""
+        merchant_id = require_merchant(args)
+        request = validate_body(PrintEventRequest, args.body())
+        _require_order(args.ctx.store.collection(COL.orders), request.orderRef.id, merchant_id)
+        now = _now(args.ctx)
+        event = {
+            "id": self._deps.ids.print_event(),
+            "orderRef": {"id": request.orderRef.id},
+            "state": "CREATED",
+            "createdTime": now,
+            "modifiedTime": now,
+            "printTime": now,
+        }
+        args.ctx.store.collection(COL.print_events).insert(event, {"operation_id": "CreatePrintEvent"})
+        return json_(event)
+
     # -- shared --------------------------------------------------------------
 
     def _price_cart(
         self, ctx: UnitContext, cart: OrderCartRequest
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None, int]:
-        """Resolve a cart's lines, validate its discounts, compute the total."""
-        lines = [
-            self._build_line(ctx, line, field=f"orderCart.lineItems[{index}].")
-            for index, line in enumerate(cart.lineItems)
-        ]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None, AtomicTotals]:
+        """Resolve a cart's lines and their tax rates, validate its discounts,
+        resolve a service charge that references the merchant's default, and
+        compute the documented totals block."""
+        lines: list[dict[str, Any]] = []
+        line_rates: list[list[dict[str, Any]]] = []
+        for index, line in enumerate(cart.lineItems):
+            built, rates = self._build_line(ctx, line, field=f"orderCart.lineItems[{index}].", with_rates=True)
+            lines.append(built)
+            line_rates.append(rates)
         discounts = [_discount(d, f"orderCart.discounts[{i}].") for i, d in enumerate(cart.discounts or [])]
-        charge = (
-            None
-            if cart.serviceCharge is None
-            else compact(
+        charge = self._service_charge(ctx, cart)
+        return lines, discounts, charge, atomic_totals(lines, line_rates, discounts, charge)
+
+    def _service_charge(self, ctx: UnitContext, cart: OrderCartRequest) -> dict[str, Any] | None:
+        """A cart's service charge: inline values, or the merchant's default
+        when the cart references it by ``id`` (the ``GET
+        /default_service_charge`` record). An unknown id is a 400."""
+        requested = cart.serviceCharge
+        if requested is None:
+            return None
+        if requested.id is not None:
+            stored = ctx.store.collection(COL.service_charges).get(requested.id)
+            if stored is None:
+                raise UnitError(
+                    UnitErrorKind.INVALID_VALUE,
+                    detail=f"Service charge {requested.id} was not found.",
+                    field="orderCart.serviceCharge.id",
+                )
+            return compact(
                 {
-                    "name": cart.serviceCharge.name,
-                    "percentageDecimal": cart.serviceCharge.percentageDecimal,
-                    "enabled": cart.serviceCharge.enabled,
+                    "id": stored.get("id"),
+                    "name": stored.get("name"),
+                    "percentageDecimal": stored.get("percentageDecimal"),
+                    "enabled": stored.get("enabled"),
                 }
             )
+        return compact(
+            {
+                "name": requested.name,
+                "percentageDecimal": requested.percentageDecimal or 0,
+                "enabled": requested.enabled,
+            }
         )
-        return lines, discounts, charge, atomic_total(lines, discounts, charge)
 
-    def _build_line(self, ctx: UnitContext, request: LineItemRequest, *, field: str) -> dict[str, Any]:
+    def _build_line(self, ctx: UnitContext, request: LineItemRequest, *, field: str, with_rates: bool = False) -> Any:
         """One stored line from a request: "either a price or an item object
         with an inventory item id". An item reference must resolve, and it
-        supplies the price and name the request left out."""
+        supplies the price and name the request left out; a modification's
+        modifier must resolve and supplies its price when ``amount`` is
+        absent. With ``with_rates`` the line's tax rates come back too: the
+        item's (its explicit associations or the merchant's defaults), or
+        the line's own ``taxRates`` references for a bare-price line."""
         item: ItemEntity | None = None
         if request.item is not None:
             stored = ctx.store.collection(COL.items).get(request.item.id)
@@ -517,7 +604,10 @@ class CloverOrdersSurface:
         price = request.price if request.price is not None else (item.price if item is not None else 0)
         name = request.name if request.name is not None else (item.name if item is not None else None)
         discounts = [_discount(d, f"{field}discounts[{i}].") for i, d in enumerate(request.discounts or [])]
-        return compact(
+        modifications = [
+            self._modification(ctx, m, f"{field}modifications[{i}].") for i, m in enumerate(request.modifications or [])
+        ]
+        line = compact(
             {
                 "id": self._deps.ids.line_item(),
                 "name": name,
@@ -529,6 +619,46 @@ class CloverOrdersSurface:
                 "refunded": False,
                 "item": None if item is None else {"id": item.id},
                 "discounts": discounts or None,
+                "modifications": modifications or None,
+            }
+        )
+        if not with_rates:
+            return line
+        if item is not None:
+            rates = item_tax_rates(ctx, item)
+        else:
+            tax_rates = ctx.store.collection(COL.tax_rates)
+            rates = []
+            for index, ref in enumerate(request.taxRates or []):
+                found = tax_rates.get(ref.id)
+                if found is None:
+                    raise UnitError(
+                        UnitErrorKind.INVALID_VALUE,
+                        detail=f"Tax rate {ref.id} was not found.",
+                        field=f"{field}taxRates[{index}].id",
+                    )
+                rates.append(dict(found))
+        return line, rates
+
+    def _modification(self, ctx: UnitContext, request: Any, field: str) -> dict[str, Any]:
+        """A line modification, as the atomic tutorial shows one:
+        ``{"modifier": {"id", "name", "available"}, "amount"}``."""
+        stored = ctx.store.collection(COL.modifiers).get(request.modifier.id)
+        if stored is None:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"Modifier {request.modifier.id} was not found.",
+                field=f"{field}modifier.id",
+            )
+        price = stored.get("price")
+        return compact(
+            {
+                "id": self._deps.ids.line_item(),
+                "name": request.name if request.name is not None else stored.get("name"),
+                "amount": request.amount if request.amount is not None else (price if isinstance(price, int) else 0),
+                "modifier": compact(
+                    {"id": stored.get("id"), "name": stored.get("name"), "available": stored.get("available", True)}
+                ),
             }
         )
 
@@ -607,30 +737,6 @@ def _require_order(orders: Collection, order_id: str, merchant_id: str) -> Order
         if order.merchant_id == merchant_id and not order.is_deleted:
             return order
     raise UnitError(UnitErrorKind.NOT_FOUND, detail=f"Order {order_id} was not found.", field="orderId")
-
-
-def _expansions(args: HandlerArgs) -> frozenset[str]:
-    """``expand=a,b,c``: known names only, at most three."""
-    raw = args.query("expand")
-    if raw is None or not raw.strip():
-        return frozenset()
-    wanted = [part.strip() for part in raw.split(",") if part.strip()]
-    unknown = [name for name in wanted if name not in EXPANDABLE]
-    if unknown:
-        raise UnitError(
-            UnitErrorKind.INVALID_VALUE,
-            detail=f"Unknown expansion(s): {', '.join(unknown)}.",
-            field="expand",
-            info={"allowed": sorted(EXPANDABLE)},
-        )
-    if len(set(wanted)) > MAX_EXPANSIONS:
-        raise UnitError(
-            UnitErrorKind.INVALID_VALUE,
-            detail=f"At most {MAX_EXPANSIONS} fields can be expanded per call.",
-            field="expand",
-            info={"supplied": wanted},
-        )
-    return frozenset(wanted)
 
 
 def _filter(raw: str | None) -> Any:

@@ -31,7 +31,7 @@ Defaults, labelled:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any
 
@@ -39,7 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from vendorfake.core.util.json import compact
 
-__all__ = ["ItemCreateRequest", "ItemWire", "PriceType", "project_item"]
+__all__ = ["ITEM_EXPANDABLE", "ItemCreateRequest", "ItemPatchRequest", "ItemWire", "PriceType", "project_item"]
 
 _REQUEST = ConfigDict(extra="ignore", frozen=True)
 """The parse path: item documents arrive decoded, so ``"priceType":
@@ -113,7 +113,74 @@ class ItemCreateRequest(BaseModel):
     code: str | None = None
 
 
-def project_item(entity: Mapping[str, Any]) -> dict[str, Any]:
-    """A stored item as Clover JSON. The entity uses the wire's own field
-    names, so it validates straight into :class:`ItemWire`."""
-    return ItemWire.model_validate(entity).wire()
+class ItemPatchRequest(BaseModel):
+    """``POST .../items/{itemId}`` -- "Updates an existing inventory item"
+    (https://docs.clover.com/dev/reference/inventoryupdateitem). Sparse: only
+    the fields sent change. Flipping ``available`` is the sold-out use case."""
+
+    model_config = _REQUEST
+
+    name: str | None = Field(default=None, min_length=1)
+    price: int | None = None
+    hidden: bool | None = None
+    available: bool | None = None
+    priceType: PriceType | None = None
+    defaultTaxRates: bool | None = None
+    isRevenue: bool | None = None
+    sku: str | None = None
+    code: str | None = None
+
+
+ITEM_EXPANDABLE: frozenset[str] = frozenset({"modifierGroups", "taxRates"})
+"""``expand=modifierGroups`` is the documented way to see an item's groups
+(https://docs.clover.com/dev/docs/managing-modifier-groups-modifiers);
+``taxRates`` follows the same mechanism."""
+
+
+def project_item(
+    entity: Mapping[str, Any],
+    expand: Iterable[str] = (),
+    *,
+    modifier_groups: Sequence[Mapping[str, Any]] = (),
+    tax_rates: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """A stored item as Clover JSON, with the requested expansions.
+
+    ``modifierGroups`` expands to the documented ``{"elements": [{id, name,
+    showByDefault, modifierIds}]}`` shape -- ``modifierIds`` is the
+    comma-joined string the documented example shows, not an array.
+    ``taxRates`` expands to ``{"elements": [{id, name, rate, isDefault}]}``
+    (JUDGMENT on the shape: the expansion is not shown with an example; the
+    ``elements`` wrapper is how every other Clover expansion is documented).
+    """
+    wanted = frozenset(expand)
+    wire = ItemWire.model_validate(entity).wire()
+    if "modifierGroups" in wanted:
+        wire["modifierGroups"] = {
+            "elements": [
+                compact(
+                    {
+                        "id": group.get("id"),
+                        "name": group.get("name"),
+                        "showByDefault": group.get("showByDefault"),
+                        "modifierIds": ",".join(str(m) for m in group.get("modifierIds", [])) or None,
+                    }
+                )
+                for group in modifier_groups
+            ]
+        }
+    if "taxRates" in wanted:
+        wire["taxRates"] = {
+            "elements": [
+                compact(
+                    {
+                        "id": rate.get("id"),
+                        "name": rate.get("name"),
+                        "rate": rate.get("rate"),
+                        "isDefault": rate.get("isDefault"),
+                    }
+                )
+                for rate in tax_rates
+            ]
+        }
+    return wire

@@ -46,9 +46,12 @@ from vendorfake.clover.errors import CloverErrorShaper
 from vendorfake.clover.ids import CloverIds
 from vendorfake.clover.machine import ORDER_MACHINE, ORDER_MACHINE_NAME
 from vendorfake.clover.retry import clover_retry_defaults
+from vendorfake.clover.surface.customers import customer_routes
 from vendorfake.clover.surface.inventory import inventory_routes
+from vendorfake.clover.surface.merchant import merchant_routes
 from vendorfake.clover.surface.oauth import oauth_routes
 from vendorfake.clover.surface.orders import order_routes
+from vendorfake.clover.surface.payments import payment_routes
 from vendorfake.core.config.models import ProfileDocument
 from vendorfake.core.kernel.types import (
     AuthAdapter,
@@ -185,7 +188,14 @@ class CloverVendor:
         PR D.
         """
         if self._routes is None:
-            self._routes = oauth_routes(self) + order_routes(self) + inventory_routes(self)
+            self._routes = (
+                oauth_routes(self)
+                + order_routes(self)
+                + payment_routes(self)
+                + inventory_routes(self)
+                + merchant_routes(self)
+                + customer_routes(self)
+            )
         return self._routes
 
     @property

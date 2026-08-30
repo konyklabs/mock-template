@@ -43,9 +43,12 @@ from vendorfake.clover.model.order import (
     project_order,
 )
 from vendorfake.clover.retry import CLOVER_RETRY_SCHEDULE_MS
+from vendorfake.clover.surface.customers import customer_routes
 from vendorfake.clover.surface.inventory import inventory_routes
+from vendorfake.clover.surface.merchant import merchant_routes
 from vendorfake.clover.surface.oauth import FAILED_CODE_MESSAGE, oauth_routes
 from vendorfake.clover.surface.orders import order_routes
+from vendorfake.clover.surface.payments import payment_routes
 from vendorfake.clover.vendor import CLOVER_MAGIC, CloverVendor, create_clover_vendor
 from vendorfake.core.kernel.types import VendorDefinition
 
@@ -86,9 +89,12 @@ __all__ = [
     "TokenResponse",
     "atomic_total",
     "create_clover_vendor",
+    "customer_routes",
     "inventory_routes",
+    "merchant_routes",
     "oauth_routes",
     "order_routes",
+    "payment_routes",
     "project_item",
     "project_order",
     "resolve_clover_config",

@@ -59,6 +59,10 @@ DEFAULT_PERMISSIONS: tuple[str, ...] = (
     "INVENTORY_R",
     "INVENTORY_W",
     "MERCHANT_R",
+    "EMPLOYEES_R",
+    "CUSTOMERS_R",
+    "CUSTOMERS_W",
+    "PAYMENTS_W",
 )
 """The permission set the modelled surface needs.
 

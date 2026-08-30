@@ -70,6 +70,7 @@ documented nested cap.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -82,13 +83,18 @@ __all__ = [
     "EXPANDABLE",
     "MAX_EXPANSIONS",
     "NESTED_CAP",
+    "TAX_RATE_SCALE",
     "AtomicOrderRequest",
+    "AtomicTotals",
     "BulkLineItemsRequest",
     "DiscountRequest",
     "DiscountWire",
     "ItemRefWire",
     "LineItemRequest",
     "LineItemWire",
+    "ModificationRequest",
+    "ModificationWire",
+    "ModifierRefWire",
     "OrderCartRequest",
     "OrderCreateRequest",
     "OrderPatchRequest",
@@ -96,9 +102,12 @@ __all__ = [
     "OrderWire",
     "PayType",
     "PaymentState",
+    "RefRequest",
+    "RefWire",
     "ServiceChargeRequest",
     "ServiceChargeWire",
     "atomic_total",
+    "atomic_totals",
     "line_total",
     "project_order",
     "supplied",
@@ -121,8 +130,35 @@ guarantee survives without strictness: lax ``int`` still refuses a fractional
 ``20.99``, which is the coercion that would actually corrupt an amount.
 """
 
-EXPANDABLE: frozenset[str] = frozenset({"lineItems", "discounts", "orderType", "serviceCharge", "lineItems.discounts"})
-"""The expansions this unit accepts; see the module docstring."""
+EXPANDABLE: frozenset[str] = frozenset(
+    {
+        "lineItems",
+        "discounts",
+        "orderType",
+        "serviceCharge",
+        "employee",
+        "customers",
+        "payments",
+        "lineItems.discounts",
+        "lineItems.modifications",
+    }
+)
+"""The expansions this unit accepts; see the module docstring. ``orderType``
+and ``employee`` are references and show their ``{"id"}`` either way;
+``customers``, ``payments``, ``lineItems``, ``discounts``, ``serviceCharge``
+and the two dotted line-item collections appear only when expanded."""
+
+TAX_RATE_SCALE = 100000
+"""JUDGMENT -- the scale of a tax rate's ``rate`` integer: percent x 100000,
+so 7.25% is ``725000``. Clover's reference types ``rate`` as an integer "for
+percentage based discounts like sales tax" and ``taxSummaries[].rate`` as
+"Rate in percentage for this order tax rate"
+(https://docs.clover.com/dev/reference/taxrategettaxrates,
+https://docs.clover.com/dev/reference/ordercheckoutatomicorder) and states
+NO scale on either page. The one documented fixed-point percentage on the
+platform is ``percentageDecimal`` = percent x 10000 (merchantgetdefaultservicecharge);
+a rate one order finer is this project's reading, held in one constant so a
+consumer who learns the real scale changes one line. **NOT VERIFIED.**"""
 
 MAX_EXPANSIONS = 3
 """"maximum of three fields per API call" (expanding-fields)."""
@@ -221,6 +257,54 @@ class ServiceChargeWire(BaseModel):
         )
 
 
+class RefWire(BaseModel):
+    """A bare ``{"id"}`` reference -- an employee, a customer, a payment."""
+
+    model_config = _REQUEST
+
+    id: str
+
+    def wire(self) -> dict[str, Any]:
+        return {"id": self.id}
+
+
+class ModifierRefWire(BaseModel):
+    """The modifier a modification points at, as the atomic tutorial shows it:
+    ``{"id", "name", "available"}`` (https://docs.clover.com/dev/docs/create-an-atomic-order)."""
+
+    model_config = _REQUEST
+
+    id: str
+    name: str | None = None
+    available: bool | None = None
+
+    def wire(self) -> dict[str, Any]:
+        return compact({"id": self.id, "name": self.name, "available": self.available})
+
+
+class ModificationWire(BaseModel):
+    """One line-item modification: ``{"modifier": {...}, "amount": 25}`` per
+    the atomic tutorial. ``amount`` in cents, per unit (JUDGMENT: it scales
+    with ``unitQty`` like the price does; Clover documents no rule)."""
+
+    model_config = _REQUEST
+
+    id: str | None = None
+    name: str | None = None
+    amount: int = 0
+    modifier: ModifierRefWire | None = None
+
+    def wire(self) -> dict[str, Any]:
+        return compact(
+            {
+                "id": self.id,
+                "name": self.name,
+                "amount": self.amount,
+                "modifier": None if self.modifier is None else self.modifier.wire(),
+            }
+        )
+
+
 class LineItemWire(BaseModel):
     """One line item. ``price`` in integer cents; ``unitQty`` fixed-point x1000."""
 
@@ -238,8 +322,9 @@ class LineItemWire(BaseModel):
     refunded: bool = False
     item: ItemRefWire | None = None
     discounts: tuple[DiscountWire, ...] = ()
+    modifications: tuple[ModificationWire, ...] = ()
 
-    def wire(self, *, with_discounts: bool = True) -> dict[str, Any]:
+    def wire(self, *, with_discounts: bool = True, with_modifications: bool = True) -> dict[str, Any]:
         return compact(
             {
                 "id": self.id,
@@ -253,6 +338,11 @@ class LineItemWire(BaseModel):
                 "item": None if self.item is None else self.item.wire(),
                 "discounts": (
                     [discount.wire() for discount in self.discounts] if with_discounts and self.discounts else None
+                ),
+                "modifications": (
+                    [modification.wire() for modification in self.modifications]
+                    if with_modifications and self.modifications
+                    else None
                 ),
             }
         )
@@ -284,9 +374,12 @@ class OrderWire(BaseModel):
     manualTransaction: bool | None = None
     groupLineItems: bool | None = None
     orderType: OrderTypeRefWire | None = None
+    employee: RefWire | None = None
+    customers: tuple[RefWire, ...] = ()
     lineItems: tuple[LineItemWire, ...] = ()
     discounts: tuple[DiscountWire, ...] = ()
     serviceCharge: ServiceChargeWire | None = None
+    payments: tuple[RefWire, ...] = ()
 
     def wire(self, *, expand: Iterable[str] = ()) -> dict[str, Any]:
         """The order as JSON, absent optionals omitted, nested collections
@@ -295,6 +388,7 @@ class OrderWire(BaseModel):
         wanted = frozenset(expand)
         lines = self.lineItems[:NESTED_CAP] if "lineItems" in wanted else ()
         line_discounts = "lineItems.discounts" in wanted
+        line_modifications = "lineItems.modifications" in wanted
         return compact(
             {
                 "id": self.id,
@@ -315,7 +409,17 @@ class OrderWire(BaseModel):
                 "clientCreatedTime": self.clientCreatedTime,
                 "deletedTime": self.deletedTime,
                 "orderType": None if self.orderType is None else self.orderType.wire(),
-                "lineItems": [line.wire(with_discounts=line_discounts) for line in lines] if lines else None,
+                "employee": None if self.employee is None else self.employee.wire(),
+                "customers": (
+                    [customer.wire() for customer in self.customers[:NESTED_CAP]]
+                    if "customers" in wanted and self.customers
+                    else None
+                ),
+                "lineItems": (
+                    [line.wire(with_discounts=line_discounts, with_modifications=line_modifications) for line in lines]
+                    if lines
+                    else None
+                ),
                 "discounts": (
                     [discount.wire() for discount in self.discounts[:NESTED_CAP]]
                     if "discounts" in wanted and self.discounts
@@ -323,6 +427,11 @@ class OrderWire(BaseModel):
                 ),
                 "serviceCharge": (
                     self.serviceCharge.wire() if "serviceCharge" in wanted and self.serviceCharge is not None else None
+                ),
+                "payments": (
+                    [payment.wire() for payment in self.payments[:NESTED_CAP]]
+                    if "payments" in wanted and self.payments
+                    else None
                 ),
             }
         )
@@ -363,13 +472,34 @@ class DiscountRequest(BaseModel):
 
 
 class ServiceChargeRequest(BaseModel):
-    """``percentageDecimal`` = percent x 10000."""
+    """``percentageDecimal`` = percent x 10000. An ``id`` alone references the
+    merchant's default service charge, which the surface resolves."""
 
     model_config = _REQUEST
 
+    id: str | None = None
     name: str | None = None
-    percentageDecimal: int = 0
+    percentageDecimal: int | None = None
     enabled: bool | None = None
+
+
+class RefRequest(BaseModel):
+    """``{"id": ...}`` as a caller sends a reference."""
+
+    model_config = _REQUEST
+
+    id: str = Field(min_length=1)
+
+
+class ModificationRequest(BaseModel):
+    """``{"modifier": {"id"}, "amount"?}``; a missing ``amount`` is the
+    modifier's price (resolved by the surface)."""
+
+    model_config = _REQUEST
+
+    modifier: RefRequest
+    amount: int | None = None
+    name: str | None = None
 
 
 class LineItemRequest(BaseModel):
@@ -389,6 +519,10 @@ class LineItemRequest(BaseModel):
     unitQty: int | None = None
     printed: bool | None = None
     discounts: list[DiscountRequest] | None = None
+    modifications: list[ModificationRequest] | None = None
+    #: Explicit tax rates for a bare-price line; an item-backed line takes
+    #: the item's.
+    taxRates: list[RefRequest] | None = None
 
 
 class BulkLineItemsRequest(BaseModel):
@@ -424,6 +558,8 @@ class OrderCreateRequest(BaseModel):
     manualTransaction: bool | None = None
     groupLineItems: bool | None = None
     orderType: OrderTypeRefWire | None = None
+    employee: RefRequest | None = None
+    customers: list[RefRequest] | None = None
 
 
 class OrderPatchRequest(OrderCreateRequest):
@@ -442,6 +578,8 @@ class OrderCartRequest(BaseModel):
     title: str | None = None
     note: str | None = None
     externalReferenceId: str | None = None
+    employee: RefRequest | None = None
+    customers: list[RefRequest] | None = None
     lineItems: list[LineItemRequest] = Field(default_factory=list)
     discounts: list[DiscountRequest] | None = None
     serviceCharge: ServiceChargeRequest | None = None
@@ -487,9 +625,14 @@ def line_total(line: Mapping[str, Any]) -> int:
     base_price = price if isinstance(price, int) and not isinstance(price, bool) else 0
     qty = line.get("unitQty")
     unit_qty = qty if isinstance(qty, int) and not isinstance(qty, bool) else 1000
-    base = js_round(base_price * unit_qty / 1000)
+    per_unit = base_price + sum(_int_or_zero(m.get("amount")) for m in line.get("modifications") or [])
+    base = js_round(per_unit * unit_qty / 1000)
     discounts = line.get("discounts") or []
     return base + _discount_total(discounts, base)
+
+
+def _int_or_zero(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def atomic_total(
@@ -497,19 +640,82 @@ def atomic_total(
     discounts: Sequence[Mapping[str, Any]] = (),
     service_charge: Mapping[str, Any] | None = None,
 ) -> int:
-    """The total an ``/atomic_order/*`` endpoint computes, in cents.
+    """The pre-tax total an ``/atomic_order/*`` endpoint computes, in cents.
 
     ``sum(line totals) + order discounts + service charge``, where the service
     charge is ``percentageDecimal / 10000`` percent of the discounted subtotal
     (JUDGMENT on the base: Clover documents the unit of ``percentageDecimal``
     and not what it applies to; a charge on the discounted amount is what a
-    receipt shows). Taxes are out of scope (``CLOVER_NOT_MODELED``).
+    receipt shows). Tax is added by :func:`atomic_totals`.
     """
     subtotal = sum(line_total(line) for line in lines)
     discounted = subtotal + _discount_total(discounts, subtotal)
-    charge = 0
-    if service_charge is not None:
-        decimal = service_charge.get("percentageDecimal")
-        if isinstance(decimal, int) and not isinstance(decimal, bool):
-            charge = js_round(discounted * decimal / 10000 / 100)
-    return discounted + charge
+    return discounted + _service_charge_amount(discounted, service_charge)
+
+
+def _service_charge_amount(base: int, service_charge: Mapping[str, Any] | None) -> int:
+    if service_charge is None or service_charge.get("enabled") is False:
+        return 0
+    decimal = service_charge.get("percentageDecimal")
+    if isinstance(decimal, int) and not isinstance(decimal, bool):
+        return js_round(base * decimal / 10000 / 100)
+    return 0
+
+
+@dataclass(frozen=True, slots=True)
+class AtomicTotals:
+    """What the documented checkout response carries at the top level:
+    ``total``, ``subtotal``, ``totalTaxAmount`` and ``taxSummaries``
+    (https://docs.clover.com/dev/reference/ordercheckoutatomicorder)."""
+
+    subtotal: int
+    total: int
+    totalTaxAmount: int
+    taxSummaries: tuple[dict[str, Any], ...]
+
+    def wire(self) -> dict[str, Any]:
+        return {
+            "subtotal": self.subtotal,
+            "total": self.total,
+            "totalTaxAmount": self.totalTaxAmount,
+            "taxSummaries": [dict(summary) for summary in self.taxSummaries],
+        }
+
+
+def atomic_totals(
+    lines: Sequence[Mapping[str, Any]],
+    line_rates: Sequence[Sequence[Mapping[str, Any]]],
+    discounts: Sequence[Mapping[str, Any]] = (),
+    service_charge: Mapping[str, Any] | None = None,
+) -> AtomicTotals:
+    """The whole documented totals block for a cart.
+
+    ``line_rates[i]`` is the tax rates (``{id, name, rate}``) that apply to
+    ``lines[i]``. JUDGMENT, all labelled: tax is computed per line on the
+    line's own discounted total (before order-level discounts and the service
+    charge -- Clover documents the fields and not the base), each rate is
+    ``rate / TAX_RATE_SCALE`` percent rounded half-up per line, ``subtotal``
+    is the sum of line totals, and ``total`` is the discounted subtotal plus
+    the service charge plus ``totalTaxAmount`` -- a receipt total. The
+    reference describes ``total`` only as "Total price of the order in cents".
+    """
+    subtotal = sum(line_total(line) for line in lines)
+    pre_tax = atomic_total(lines, discounts, service_charge)
+    summaries: dict[str, dict[str, Any]] = {}
+    for line, rates in zip(lines, line_rates, strict=True):
+        base = line_total(line)
+        for rate in rates:
+            scale = _int_or_zero(rate.get("rate"))
+            amount = js_round(base * scale / TAX_RATE_SCALE / 100)
+            key = str(rate.get("id", rate.get("name", "")))
+            summary = summaries.setdefault(
+                key, compact({"id": rate.get("id"), "name": rate.get("name"), "rate": scale, "amount": 0})
+            )
+            summary["amount"] += amount
+    tax = sum(summary["amount"] for summary in summaries.values())
+    return AtomicTotals(
+        subtotal=subtotal,
+        total=pre_tax + tax,
+        totalTaxAmount=tax,
+        taxSummaries=tuple(summaries.values()),
+    )

@@ -41,9 +41,11 @@ from vendorfake.core.time.clock import Clock
 
 __all__ = [
     "DEFAULT_LIMIT",
+    "MAX_EXPANSIONS",
     "MAX_LIMIT",
     "CloverDeps",
     "elements",
+    "expansions",
     "is_past_ms",
     "page_window",
     "require_merchant",
@@ -137,6 +139,34 @@ def page_window(args: HandlerArgs) -> tuple[int, int]:
     limit = min(_query_int(args, "limit", DEFAULT_LIMIT, minimum=1), MAX_LIMIT)
     offset = _query_int(args, "offset", 0, minimum=0)
     return limit, offset
+
+
+MAX_EXPANSIONS = 3
+""""maximum of three fields per API call" (https://docs.clover.com/dev/docs/expanding-fields)."""
+
+
+def expansions(args: HandlerArgs, allowed: frozenset[str]) -> frozenset[str]:
+    """``expand=a,b,c``: known names only, at most three."""
+    raw = args.query("expand")
+    if raw is None or not raw.strip():
+        return frozenset()
+    wanted = [part.strip() for part in raw.split(",") if part.strip()]
+    unknown = [name for name in wanted if name not in allowed]
+    if unknown:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"Unknown expansion(s): {', '.join(unknown)}.",
+            field="expand",
+            info={"allowed": sorted(allowed)},
+        )
+    if len(set(wanted)) > MAX_EXPANSIONS:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"At most {MAX_EXPANSIONS} fields can be expanded per call.",
+            field="expand",
+            info={"supplied": wanted},
+        )
+    return frozenset(wanted)
 
 
 def elements(items: Sequence[dict[str, Any]], hrefs: Sequence[str]) -> dict[str, Any]:

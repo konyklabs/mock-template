@@ -22,6 +22,10 @@ Because two vendors are installed, every command names one: `--vendor square`
 (or `--vendor clover`), or set `VENDORFAKE_VENDOR`. With no selector the
 command refuses and lists what it found — it never guesses.
 
+Clover clients usually configure the OAuth host and the `/v3` API host
+separately; the `clover` unit serves both prefixes (`/oauth/v2/*` and
+`/v3/merchants/*`) on one origin, so point both settings at the unit.
+
 ## Install
 
 Not yet on PyPI. Until v0.1 is published, install from source:

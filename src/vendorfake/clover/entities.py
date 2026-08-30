@@ -65,17 +65,50 @@ MAX_LINE_ITEMS_PER_ORDER = 3000
 
 @dataclass(frozen=True, slots=True)
 class CloverCollections:
-    """The store collections this vendor uses, named once."""
+    """The store collections this vendor uses, named once.
+
+    The reference-data collections (employees, tenders, order types, the
+    default service charge, tax rates, modifier groups, modifiers) hold plain
+    documents shaped as their Clover reference pages list them and are
+    projected as stored; only the entities the surfaces *mutate* have typed
+    readers below.
+    """
 
     merchants: str = "merchants"
     items: str = "items"
     orders: str = "orders"
     codes: str = "authorization_codes"
     tokens: str = "tokens"
+    employees: str = "employees"
+    tenders: str = "tenders"
+    order_types: str = "order_types"
+    service_charges: str = "service_charges"
+    tax_rates: str = "tax_rates"
+    modifier_groups: str = "modifier_groups"
+    modifiers: str = "modifiers"
+    customers: str = "customers"
+    payments: str = "payments"
+    print_events: str = "print_events"
 
     def names(self) -> tuple[str, ...]:
         """Every collection name, in declaration order."""
-        return (self.merchants, self.items, self.orders, self.codes, self.tokens)
+        return (
+            self.merchants,
+            self.items,
+            self.orders,
+            self.codes,
+            self.tokens,
+            self.employees,
+            self.tenders,
+            self.order_types,
+            self.service_charges,
+            self.tax_rates,
+            self.modifier_groups,
+            self.modifiers,
+            self.customers,
+            self.payments,
+            self.print_events,
+        )
 
 
 COL = CloverCollections()
@@ -182,6 +215,12 @@ class ItemEntity:
     code: str | None = None
     #: Epoch ms, per the documented example (``modifiedTime: 1755786102000``).
     modifiedTime: int | None = None
+    #: Explicit tax-rate associations, ``[{"id"}]``, used when
+    #: ``defaultTaxRates`` is false (taxratecreateordeletetaxrateitems).
+    taxRates: tuple[dict[str, Any], ...] = ()
+    #: Modifier-group associations, ids only; the ``modifierGroups``
+    #: expansion resolves them (modifiercreateordeleteitemmodifiergroups).
+    modifierGroupIds: tuple[str, ...] = ()
 
     @classmethod
     def from_entity(cls, entity: Mapping[str, Any]) -> ItemEntity:
@@ -197,6 +236,8 @@ class ItemEntity:
             sku=_opt_str(entity.get("sku")),
             code=_opt_str(entity.get("code")),
             modifiedTime=_opt_int(entity.get("modifiedTime")),
+            taxRates=tuple(_dict_list(entity.get("taxRates"))),
+            modifierGroupIds=_str_tuple(entity.get("modifierGroupIds")),
         )
 
     def to_entity(self) -> Entity:
@@ -213,6 +254,8 @@ class ItemEntity:
                 "sku": self.sku,
                 "code": self.code,
                 "modifiedTime": self.modifiedTime,
+                "taxRates": list(self.taxRates) if self.taxRates else None,
+                "modifierGroupIds": list(self.modifierGroupIds) if self.modifierGroupIds else None,
             }
         )
 
@@ -259,9 +302,14 @@ class OrderEntity:
     manualTransaction: bool | None = None
     groupLineItems: bool | None = None
     orderType: dict[str, Any] | None = None
+    #: ``{"id"}`` references a consumer attaches before paying.
+    employee: dict[str, Any] | None = None
+    customers: tuple[dict[str, Any], ...] = ()
     lineItems: tuple[dict[str, Any], ...] = ()
     discounts: tuple[dict[str, Any], ...] = ()
     serviceCharge: dict[str, Any] | None = None
+    #: ``[{"id"}]`` references to the payments collection.
+    payments: tuple[dict[str, Any], ...] = ()
 
     @classmethod
     def from_entity(cls, entity: Mapping[str, Any]) -> OrderEntity:
@@ -285,9 +333,12 @@ class OrderEntity:
             manualTransaction=_opt_bool(entity.get("manualTransaction")),
             groupLineItems=_opt_bool(entity.get("groupLineItems")),
             orderType=_opt_mapping(entity.get("orderType")),
+            employee=_opt_mapping(entity.get("employee")),
+            customers=tuple(_dict_list(entity.get("customers"))),
             lineItems=tuple(_dict_list(entity.get("lineItems"))),
             discounts=tuple(_dict_list(entity.get("discounts"))),
             serviceCharge=_opt_mapping(entity.get("serviceCharge")),
+            payments=tuple(_dict_list(entity.get("payments"))),
         )
 
     def to_entity(self) -> Entity:
@@ -312,9 +363,12 @@ class OrderEntity:
                 "manualTransaction": self.manualTransaction,
                 "groupLineItems": self.groupLineItems,
                 "orderType": self.orderType,
+                "employee": self.employee,
+                "customers": list(self.customers) if self.customers else None,
                 "lineItems": list(self.lineItems),
                 "discounts": list(self.discounts) if self.discounts else None,
                 "serviceCharge": self.serviceCharge,
+                "payments": list(self.payments) if self.payments else None,
             }
         )
 
