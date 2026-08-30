@@ -2,6 +2,7 @@
   "name": "full",
   "summary": "Every capability on. The default profile. Seeds the whole scenario.",
   "capabilities": [
+    "auth",
     "chaos"
   ],
   "seed": "seed/default.seed.json",

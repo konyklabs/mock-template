@@ -48,9 +48,9 @@ def test_a_typo_on_the_module_still_raises_attribute_error() -> None:
         toast.VENDORS  # type: ignore[attr-defined]  # noqa: B018
 
 
-def test_the_foundation_has_no_routes_yet_and_the_webhook_seams_are_absent() -> None:
+def test_the_login_is_the_first_route_and_the_webhook_seams_are_absent() -> None:
     vendor = create_toast_vendor()
-    assert vendor.routes == ()
+    assert [route.key for route in vendor.routes][:1] == ["POST /authentication/v1/authentication/login"]
     assert vendor.routes is vendor.routes
     assert vendor.signer is None and vendor.events is None
     assert isinstance(vendor.auth, ToastAuth)
@@ -149,7 +149,7 @@ def test_a_toast_unit_starts_on_the_full_profile_with_an_empty_surface() -> None
     try:
         assert unit.name == "toast"
         assert unit.context.config.profile == "full"
-        assert set(unit.context.config.capabilities) == {"chaos"}
+        assert set(unit.context.config.capabilities) == {"auth", "chaos"}
         assert unit.context.store.collection(COL.restaurants).size == 1
     finally:
         unit.stop()

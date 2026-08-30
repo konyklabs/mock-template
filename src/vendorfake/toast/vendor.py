@@ -59,6 +59,7 @@ from vendorfake.toast.machine import (
 )
 from vendorfake.toast.retry import toast_retry_defaults
 from vendorfake.toast.seed.hydrate import hydrate_toast
+from vendorfake.toast.surface.auth import auth_routes
 
 __all__ = ["TOAST_MAGIC", "ToastVendor", "create_toast_vendor"]
 
@@ -171,9 +172,10 @@ class ToastVendor:
 
     @property
     def routes(self) -> Sequence[Route]:
-        """The vendor surface, built once and cached. Empty at step 1."""
+        """The vendor surface, built once and cached: the login first, so the
+        first route of the table is the one a consumer calls first."""
         if self._routes is None:
-            self._routes = ()
+            self._routes = auth_routes(self)
         return self._routes
 
     @property
