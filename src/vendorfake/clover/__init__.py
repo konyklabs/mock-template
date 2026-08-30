@@ -25,6 +25,7 @@ from vendorfake.clover.capabilities import CLOVER_CAPABILITIES, CLOVER_NOT_MODEL
 from vendorfake.clover.config import DEFAULT_PERMISSIONS, CloverConfig, resolve_clover_config
 from vendorfake.clover.entities import COL
 from vendorfake.clover.errors import CLOVER_ERROR_TABLE, CloverErrorShaper
+from vendorfake.clover.events import CLOVER_EVENT_TYPES, CloverEventMapper
 from vendorfake.clover.ids import CloverIds
 from vendorfake.clover.machine import ORDER_MACHINE, ORDER_MACHINE_NAME, OrderState
 from vendorfake.clover.model.inventory import ItemWire, PriceType
@@ -39,13 +40,17 @@ from vendorfake.clover.model.order import (
     PayType,
 )
 from vendorfake.clover.retry import CLOVER_RETRY_SCHEDULE_MS
+from vendorfake.clover.signer import AUTH_HEADER, CloverWebhookSigner, verify_clover_auth
 from vendorfake.clover.surface.oauth import FAILED_CODE_MESSAGE, oauth_routes
+from vendorfake.clover.surface.webhooks import webhook_routes
 from vendorfake.clover.vendor import CLOVER_MAGIC, CloverVendor, create_clover_vendor
 from vendorfake.core.kernel.types import VendorDefinition
 
 __all__ = [
+    "AUTH_HEADER",
     "CLOVER_CAPABILITIES",
     "CLOVER_ERROR_TABLE",
+    "CLOVER_EVENT_TYPES",
     "CLOVER_MAGIC",
     "CLOVER_NOT_MODELED",
     "CLOVER_NOT_SUPPORTED",
@@ -60,8 +65,10 @@ __all__ = [
     "CloverAuth",
     "CloverConfig",
     "CloverErrorShaper",
+    "CloverEventMapper",
     "CloverIds",
     "CloverVendor",
+    "CloverWebhookSigner",
     "ItemRefWire",
     "ItemWire",
     "LineItemWire",
@@ -79,6 +86,8 @@ __all__ = [
     "create_clover_vendor",
     "oauth_routes",
     "resolve_clover_config",
+    "verify_clover_auth",
+    "webhook_routes",
 ]
 
 

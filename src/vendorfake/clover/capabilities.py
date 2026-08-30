@@ -8,14 +8,13 @@ chooses not to implement.
 INVARIANT: **every capability the core gates on is accounted for.** The core
 fails at construction when one of its gated capabilities (``chaos``,
 ``webhooks``, ``webhooks.chaos``) is neither declared here nor excused in
-``VendorDefinition.not_supported`` with a reason. This vendor declares
-``chaos`` and excuses the two webhook gates: with no signer and no event
-mapper the dispatcher would silently no-op
-(``WebhookDispatcher`` returns before preparing anything when either seam is
-``None``), and a capability that is *declared* while structurally undeliverable
-is exactly the enabled-but-dead state the declaration system exists to
-prevent. PR D ships the surface, the signer and the mapper together and moves
-both names back into :data:`CLOVER_CAPABILITIES`.
+``VendorDefinition.not_supported`` with a reason. This vendor declares all
+three: ``webhooks`` and ``webhooks.chaos`` arrived together with the signer,
+the event mapper and the dashboard stand-in surface (PR D), which is the
+order the declaration system demands -- a capability *declared* while the
+dispatcher would silently no-op on a missing seam is the enabled-but-dead
+state it exists to prevent, and PRs A-C excused both names for exactly that
+reason.
 
 The core is also strict the other way: ``not_supported`` may not name anything
 the core does *not* gate on ("not_supported names {name}, which the core does
@@ -46,25 +45,31 @@ CLOVER_CAPABILITIES: tuple[CapabilityDecl, ...] = (
     # and neither is core-gated, so they cannot be excused in
     # CLOVER_NOT_SUPPORTED either -- they are simply not declared yet.
     CapabilityDecl(
+        name="webhooks",
+        summary=(
+            "Event delivery with the documented aggregate payload and X-Clover-Auth header, the dashboard "
+            "stand-in for registering and verifying a callback, and a JUDGMENT retry schedule."
+        ),
+    ),
+    CapabilityDecl(
         name="chaos",
         summary="Request-scope fault injection: rate limits, timeouts, server errors, token expiry.",
         kind="behavior",
     ),
+    CapabilityDecl(
+        name="webhooks.chaos",
+        summary="Delivery faults: duplication, reordering, dropped acknowledgements, delay.",
+        kind="behavior",
+        requires=("webhooks", "chaos"),
+    ),
 )
 
-CLOVER_NOT_SUPPORTED: Mapping[str, str] = {
-    "webhooks": (
-        "The webhook surface, the X-Clover-Auth signer and the event mapper ship together in PR D of "
-        "konyklabs/roadmap#34; declaring the capability before the seams exist would be enabled-but-dead."
-    ),
-    "webhooks.chaos": (
-        "Delivery-scope faults need a delivery to inject into; arrives with the webhook surface in PR D "
-        "of konyklabs/roadmap#34."
-    ),
-}
-"""The two webhook gates, excused until PR D ships the seams that make them
-deliverable. Both names are core-gated, which is what lets them live here; the
-documented Clover features this fake omits outright are recorded in
+CLOVER_NOT_SUPPORTED: Mapping[str, str] = {}
+"""Empty, and deliberately so: every core-gated capability is declared above.
+
+A name here would be one the core gates on and this vendor does not
+implement, with the reason it does not apply. The documented Clover features
+this fake omits outright are a different kind of fact and are recorded in
 :data:`CLOVER_NOT_MODELED` instead -- see the module docstring.
 """
 
