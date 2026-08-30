@@ -162,3 +162,30 @@ def test_an_address_with_no_unit_behind_it_is_an_error_not_a_crash(capsys: pytes
     code = main(["--base-url", "http://127.0.0.1:1"])
     assert code == 2
     assert "cannot reach a unit at http://127.0.0.1:1" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# --strict on a run no profile of which offers a virtual clock.
+# ---------------------------------------------------------------------------
+
+
+def test_a_strict_run_with_no_virtual_clock_refuses_to_certify_the_retry_schedule(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """N-2 (konyklabs/roadmap#15): the container case, spelled as a narrowed matrix.
+
+    Every skip in this run is declared -- C21 skips on ``full`` by the manifest
+    -- and until this rule a strict one-profile run certified a unit that
+    retried once against eleven declared intervals. The same run without
+    ``--strict`` stays informational, which is what keeps ``--profile`` usable.
+    """
+    strict = main(["--target", HARNESS_TARGET, "--transport", "inprocess", "--profile", "full", "--strict"])
+    printed = capsys.readouterr().out
+    assert strict == 1, printed
+    assert "never observed in this run: C21" in printed, printed
+    assert "VENDORFAKE_CLOCK=virtual" in printed, printed
+
+    lenient = main(["--target", HARNESS_TARGET, "--transport", "inprocess", "--profile", "full"])
+    printed = capsys.readouterr().out
+    assert lenient == 0, printed
+    assert "never observed" not in printed, printed

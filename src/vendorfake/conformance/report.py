@@ -80,6 +80,15 @@ class ConformanceReport:
     #: Check id -> why the target's vendor can never be asked it. See
     #: ``ConformanceTarget.inapplicable``.
     inapplicable: Mapping[str, str] = field(default_factory=dict)
+    #: Check id -> why strict mode refuses this run for never having observed
+    #: it, computed by the runner. Distinct from ``never_ran``: that rule is
+    #: about a matrix and is switched off for a one-profile container run,
+    #: which is exactly where this one bites -- five of the six shipped
+    #: profiles offer no virtual clock, so a ``--base-url`` run against any
+    #: of them skipped the retry-schedule contract, declared, and was green
+    #: for a unit that retried once against eleven declared intervals
+    #: (konyklabs/roadmap#10, N-2; tracked as konyklabs/roadmap#15).
+    unobserved: Mapping[str, str] = field(default_factory=dict)
     #: Whether this run covered every profile the target declares.
     #:
     #: The anti-vacuity rule -- a check that passed nowhere is a failure -- is a
@@ -198,6 +207,11 @@ class ConformanceReport:
                 f"commit."
             )
         if self.strict:
+            for check_id, reason in sorted(self.unobserved.items()):
+                out.append(
+                    f"NEVER OBSERVED {check_id}: {reason} Strict mode refuses to certify a unit on a contract "
+                    f"no profile in the run could ask, whether or not each skip was declared."
+                )
             for case in self.undeclared_skips:
                 out.append(
                     f"UNDECLARED SKIP {case}: strict mode refuses a skip that conformance/manifest.json "
@@ -252,6 +266,8 @@ def format_report(report: ConformanceReport) -> str:
     if report.never_ran:
         note = "" if report.cross_profile else " (informational: this run covered only part of the profile matrix)"
         lines.append(f"never ran on any profile in this run: {', '.join(report.never_ran)}{note}")
+    for check_id, reason in sorted(report.unobserved.items()) if report.strict else ():
+        lines.append(f"never observed in this run: {check_id} -- {reason}")
     if report.strict and report.undeclared_skips:
         lines.append(f"undeclared skips: {', '.join(report.undeclared_skips)}")
     if report.strict and report.stale_expected_skips:

@@ -140,8 +140,12 @@ class _Ledger:
     profiles: tuple[str, ...] = ()
     transports: tuple[str, ...] = ()
     whole_matrix: bool = False
+    strict: bool = False
     contracts: int = 0
     inapplicable: dict[str, str] = field(default_factory=dict)
+    #: Contracts whose precondition is about the run rather than the vendor;
+    #: see ``runner.unobserved_contracts``.
+    run_bound: frozenset[str] = frozenset()
     outcomes: dict[str, set[Outcome]] = field(default_factory=dict)
 
     def arm(
@@ -152,14 +156,17 @@ class _Ledger:
         transports: Sequence[str],
         specs: Sequence[CheckSpec],
         whole_matrix: bool,
+        strict: bool = False,
     ) -> None:
         self.armed = True
         self.target_name = target.name
         self.profiles = tuple(profiles)
         self.transports = tuple(transports)
         self.whole_matrix = whole_matrix
+        self.strict = strict
         self.contracts = len(specs)
         self.inapplicable = dict(target.inapplicable)
+        self.run_bound = frozenset(spec.id for spec in specs if spec.requires.virtual_clock)
         self.outcomes = {}
 
     def record(self, check_id: str, outcome: Outcome) -> None:
@@ -200,9 +207,30 @@ class _Ledger:
         """
         return len(self.outcomes) == self.contracts
 
+    @property
+    def unobserved(self) -> tuple[str, ...]:
+        """Run-bound contracts every case of which skipped: the run never looked."""
+        return tuple(sorted(cid for cid in self.run_bound if self.outcomes.get(cid) == {Outcome.SKIP}))
+
     def problems(self) -> tuple[str, ...]:
-        if not (self.armed and self.whole_matrix and self.complete):
+        if not (self.armed and self.complete):
             return ()
+        # The strict rule for a run-bound contract applies to ANY complete
+        # run, a single profile included: that is the container case it
+        # exists for. The matrix rules below need the whole matrix.
+        never_observed = (
+            tuple(
+                f"NEVER OBSERVED {check_id}: no profile in this run ({', '.join(self.profiles)}) offered a "
+                f"virtual clock, so the declared retry schedule was never observed being followed; "
+                f"--conformance-strict refuses to certify it. Start the unit with clock.mode=virtual "
+                f"(VENDORFAKE_CLOCK=virtual for a container) on at least one profile."
+                for check_id in self.unobserved
+            )
+            if self.strict
+            else ()
+        )
+        if not self.whole_matrix:
+            return never_observed
         never_ran = tuple(
             f"NEVER RAN {check_id}: it passed on none of "
             f"{', '.join(self.profiles)} in this run, so it proved nothing. A universally skipped "
@@ -216,7 +244,7 @@ class _Ledger:
             f"same commit."
             for check_id in self.stale_inapplicable
         )
-        return never_ran + stale
+        return never_observed + never_ran + stale
 
 
 LEDGER = _Ledger()
@@ -308,6 +336,7 @@ def pytest_generate_tests(metafunc: Any) -> None:
         transports=transports,
         specs=specs,
         whole_matrix=set(profiles) >= set(target.profiles) and not asked_checks,
+        strict=strict,
     )
     metafunc.parametrize(ARGNAME, cases, ids=[case.case_id for case in cases])
 
