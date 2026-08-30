@@ -101,12 +101,50 @@ def test_strict_turns_an_undeclared_skip_into_a_failure() -> None:
     )
     with pytest.raises(ConformanceFailure) as raised:
         run_case(case, _Ledger())
-    assert "manifest.json does not declare" in str(raised.value)
+    assert "nor conformance/manifest.json declares" in str(raised.value)
 
 
 def test_strict_still_permits_a_declared_skip() -> None:
     with pytest.raises(unittest.SkipTest):
         run_case(_case("C08", FAULTLESS_PROFILE, strict=True), _Ledger())
+
+
+def test_strict_permits_the_skips_a_target_declares_itself() -> None:
+    """The second vendor names its own matrix and the contracts it cannot be
+    asked; the plugin resolves both from the target, not the manifest --
+    which is what let ``plugin (clover)`` fail on C19 until it did."""
+    from tests.conformance.harness import clover_target
+
+    clover = clover_target(profiles=PROFILES, transports=("inprocess",))
+    ledger = _Ledger()
+    inapplicable = Case(spec=find_check("C19"), target=clover, profile="full", transport="inprocess", strict=True)
+    with pytest.raises(unittest.SkipTest):
+        run_case(inapplicable, ledger)
+    own_matrix = Case(spec=find_check("C07"), target=clover, profile="oauth-only", transport="inprocess", strict=True)
+    with pytest.raises(unittest.SkipTest):
+        run_case(own_matrix, ledger)
+    assert ledger.outcomes == {"C19": {Outcome.SKIP}, "C07": {Outcome.SKIP}}
+
+
+def test_the_ledger_carves_out_inapplicable_contracts_and_flags_a_stale_declaration() -> None:
+    from tests.conformance.harness import clover_target
+
+    ledger = _Ledger()
+    ledger.arm(
+        target=clover_target(),
+        profiles=("full", "no-chaos"),
+        transports=("inprocess",),
+        specs=(find_check("C01"), find_check("C19")),
+        whole_matrix=True,
+    )
+    ledger.record("C01", Outcome.PASS)
+    ledger.record("C19", Outcome.SKIP)
+    assert ledger.never_passed == ()
+    assert ledger.problems() == ()
+    ledger.record("C19", Outcome.PASS)
+    assert ledger.stale_inapplicable == ("C19",)
+    assert len(ledger.problems()) == 1
+    assert ledger.problems()[0].startswith("DECLARED INAPPLICABLE BUT RAN C19")
 
 
 def test_an_unconfigured_run_skips_once_and_says_how_to_configure_it() -> None:

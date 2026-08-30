@@ -43,12 +43,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from vendorfake.conformance.registry import expected_skips
 from vendorfake.conformance.runner import (
     TARGET_ENV_VAR,
     resolve_target,
     run_check,
     select_checks,
+    skip_is_declared,
 )
 from vendorfake.conformance.types import (
     CheckSpec,
@@ -105,10 +105,10 @@ def run_case(case: Case | None, ledger: _Ledger | None = None) -> None:
     result = run_check(case.spec, case.target, case.profile, case.transport)
     (ledger if ledger is not None else LEDGER).record(result.check_id, result.outcome)
     if result.outcome is Outcome.SKIP:
-        if case.strict and case.profile not in expected_skips().get(case.spec.id, frozenset()):
+        if case.strict and not skip_is_declared(case.target, case.spec.id, case.profile):
             raise ConformanceFailure(
-                f"{result.case_id} skipped and --conformance-strict refuses a skip that "
-                f"conformance/manifest.json does not declare: {result.detail}"
+                f"{result.case_id} skipped and --conformance-strict refuses a skip that neither the "
+                f"target's skip matrix nor conformance/manifest.json declares: {result.detail}"
             )
         raise unittest.SkipTest(f"{result.case_id}: {result.detail}")
     if result.outcome is Outcome.ERROR:
@@ -141,6 +141,7 @@ class _Ledger:
     transports: tuple[str, ...] = ()
     whole_matrix: bool = False
     contracts: int = 0
+    inapplicable: dict[str, str] = field(default_factory=dict)
     outcomes: dict[str, set[Outcome]] = field(default_factory=dict)
 
     def arm(
@@ -158,6 +159,7 @@ class _Ledger:
         self.transports = tuple(transports)
         self.whole_matrix = whole_matrix
         self.contracts = len(specs)
+        self.inapplicable = dict(target.inapplicable)
         self.outcomes = {}
 
     def record(self, check_id: str, outcome: Outcome) -> None:
@@ -165,7 +167,26 @@ class _Ledger:
 
     @property
     def never_passed(self) -> tuple[str, ...]:
-        return tuple(sorted(cid for cid, outcomes in self.outcomes.items() if Outcome.PASS not in outcomes))
+        """Contracts that passed nowhere, less the ones the target declared
+        its vendor can never be asked -- the same carve-out the report makes."""
+        return tuple(
+            sorted(
+                cid
+                for cid, outcomes in self.outcomes.items()
+                if Outcome.PASS not in outcomes and cid not in self.inapplicable
+            )
+        )
+
+    @property
+    def stale_inapplicable(self) -> tuple[str, ...]:
+        """Declared inapplicable, yet ran: the declaration is stale."""
+        return tuple(
+            sorted(
+                cid
+                for cid, outcomes in self.outcomes.items()
+                if cid in self.inapplicable and outcomes != {Outcome.SKIP}
+            )
+        )
 
     @property
     def complete(self) -> bool:
@@ -182,13 +203,20 @@ class _Ledger:
     def problems(self) -> tuple[str, ...]:
         if not (self.armed and self.whole_matrix and self.complete):
             return ()
-        return tuple(
+        never_ran = tuple(
             f"NEVER RAN {check_id}: it passed on none of "
             f"{', '.join(self.profiles)} in this run, so it proved nothing. A universally skipped "
             f"check is a contract nobody is testing -- give it a profile that meets its "
             f"preconditions, or delete it from conformance/manifest.json."
             for check_id in self.never_passed
         )
+        stale = tuple(
+            f"DECLARED INAPPLICABLE BUT RAN {check_id}: the target says its vendor cannot be asked this "
+            f"({self.inapplicable[check_id]}), and it ran. The gap closed; delete the declaration in the "
+            f"same commit."
+            for check_id in self.stale_inapplicable
+        )
+        return never_ran + stale
 
 
 LEDGER = _Ledger()

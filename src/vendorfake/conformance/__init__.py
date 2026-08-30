@@ -47,11 +47,13 @@ from vendorfake.conformance.report import CheckResult, ConformanceReport, format
 from vendorfake.conformance.runner import (
     REMOTE_CAVEAT,
     TARGET_ENV_VAR,
+    declared_skips,
     remote_target,
     resolve_target,
     run_check,
     run_conformance,
     select_checks,
+    skip_is_declared,
 )
 from vendorfake.conformance.types import (
     CheckSpec,
@@ -82,6 +84,7 @@ __all__ = [
     "Requires",
     "check",
     "concrete_path",
+    "declared_skips",
     "expected_skips",
     "find_check",
     "format_report",
@@ -92,6 +95,7 @@ __all__ = [
     "run_check",
     "run_conformance",
     "select_checks",
+    "skip_is_declared",
 ]
 
 del _checks

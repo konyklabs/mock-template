@@ -55,11 +55,13 @@ from vendorfake.conformance.types import (
 __all__ = [
     "REMOTE_CAVEAT",
     "TARGET_ENV_VAR",
+    "declared_skips",
     "remote_target",
     "resolve_target",
     "run_check",
     "run_conformance",
     "select_checks",
+    "skip_is_declared",
 ]
 
 TARGET_ENV_VAR = "VENDORFAKE_CONFORMANCE_TARGET"
@@ -301,15 +303,27 @@ def run_conformance(
         for spec in specs
     )
     derived = set(chosen_profiles) >= set(target.profiles) and not check_ids
-    declared = (
-        expected_skips()
-        if target.expected_skips is None
-        else {check_id: frozenset(profiles) for check_id, profiles in target.expected_skips.items()}
-    )
     return ConformanceReport(
         results=results,
         strict=strict,
-        expected_skips=declared,
+        expected_skips=declared_skips(target),
         inapplicable=dict(target.inapplicable),
         cross_profile=derived if cross_profile is None else cross_profile,
     )
+
+
+def declared_skips(target: ConformanceTarget) -> dict[str, frozenset[str]]:
+    """The skip matrix a target answers to: its own when it names one, the
+    manifest's otherwise. One resolution for the report, the pytest plugin
+    and any test that renders a skip -- they must never disagree about
+    which skips a vendor declared."""
+    if target.expected_skips is None:
+        return expected_skips()
+    return {check_id: frozenset(profiles) for check_id, profiles in target.expected_skips.items()}
+
+
+def skip_is_declared(target: ConformanceTarget, check_id: str, profile: str) -> bool:
+    """Whether a skip of ``check_id`` on ``profile`` is one the target
+    declared: in its skip matrix, or as a contract its vendor can never be
+    asked (``inapplicable``)."""
+    return check_id in target.inapplicable or profile in declared_skips(target).get(check_id, frozenset())
