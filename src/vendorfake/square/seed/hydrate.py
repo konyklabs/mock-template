@@ -81,16 +81,16 @@ def hydrate_square(ctx: UnitContext, seed: object, config: SquareConfig) -> Seed
 
 def _insert_merchant(ctx: UnitContext, doc: SeedDocument) -> None:
     merchant = doc.merchant
-    ctx.store.collection(COL.merchants).insert(
-        MerchantEntity(
-            id=merchant.id,
-            business_name=merchant.business_name,
-            country=merchant.country,
-            language_code=merchant.language_code,
-            currency=merchant.currency,
-        ).to_entity(),
-        SEED_META,
-    )
+    entity = MerchantEntity(
+        id=merchant.id,
+        business_name=merchant.business_name,
+        country=merchant.country,
+        language_code=merchant.language_code,
+        currency=merchant.currency,
+    ).to_entity()
+    if merchant.created_at is not None:
+        entity["created_at"] = merchant.created_at
+    ctx.store.collection(COL.merchants).insert(entity, SEED_META)
 
 
 def _insert_locations(ctx: UnitContext, doc: SeedDocument) -> None:

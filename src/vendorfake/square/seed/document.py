@@ -72,6 +72,9 @@ class SeedMerchant(BaseModel):
     country: str = "US"
     language_code: str = "en-US"
     currency: str = "USD"
+    #: Stated by the scenario, as a location's is, so that two units seeded
+    #: from one document publish one ``created_at`` on ``GET /v2/merchants``.
+    created_at: str | None = None
 
 
 class SeedLocation(BaseModel):

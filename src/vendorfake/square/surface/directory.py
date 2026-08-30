@@ -1,14 +1,18 @@
 """Merchant reference data: the entities an order points at.
 
-FOR: serving the two read endpoints a consumer needs before it can create a
-single order -- which location, and which catalog variation.
+FOR: serving the read endpoints a consumer needs before it can create a single
+order -- who the seller is, which location, and which catalog variation.
 
-=============  =============================================================
-ListLocations  ``GET /v2/locations``
-               https://developer.squareup.com/reference/square/locations-api/list-locations
-ListCatalog    ``GET /v2/catalog/list``
-               https://developer.squareup.com/reference/square/catalog-api/list-catalog
-=============  =============================================================
+=================  =============================================================
+ListMerchants      ``GET /v2/merchants``
+                   https://developer.squareup.com/reference/square/merchants-api/list-merchants
+RetrieveMerchant   ``GET /v2/merchants/{merchant_id}``
+                   https://developer.squareup.com/reference/square/merchants-api/retrieve-merchant
+ListLocations      ``GET /v2/locations``
+                   https://developer.squareup.com/reference/square/locations-api/list-locations
+ListCatalog        ``GET /v2/catalog/list``
+                   https://developer.squareup.com/reference/square/catalog-api/list-catalog
+=================  =============================================================
 
 INVARIANT: **this is a separate capability from ``order-lifecycle``, and that
 is a demonstration and not a taxonomy.** A consumer that only syncs the catalog
@@ -17,9 +21,10 @@ location ids switches it off and sees the documented 501 rather than a 404.
 Two capabilities over one obvious surface is how this project shows that
 capabilities are configuration rather than a fixed list of four.
 
-Nothing here mutates. Both routes are reads, so neither takes an idempotency
-key, neither appends to the journal and neither can emit a webhook -- which is
-the whole reason this file is short.
+Nothing here mutates. Every route is a read, so none takes an idempotency
+key, none appends to the journal and none can emit a webhook -- which is the
+whole reason this file is short. The catalog's other reads and its one write
+live in :mod:`vendorfake.square.surface.catalog`, under the same capability.
 
 ORDERING IS CODE-POINT, NOT LOCALE
 ----------------------------------
@@ -35,26 +40,29 @@ SHRINK (prototype): only ``ITEM`` and ``ITEM_VARIATION`` are modelled. Square's
 ``CatalogObjectType`` also has categories, taxes, discounts, modifiers and
 more; none of them changes an order's price in this unit, and each would be a
 row in the seed document and a branch in the projection rather than new
-behaviour. ``RetrieveCatalogObject``, ``SearchCatalogObjects`` and every write
-endpoint are likewise absent: a fake catalog that can be edited is a catalog
-whose fixtures drift from the seed document that defines the scenario.
+behaviour.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from vendorfake.core.kernel.reply import json_
-from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitError, UnitErrorKind
+from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitContext, UnitError, UnitErrorKind
 from vendorfake.core.util.json import compact
 from vendorfake.core.util.numbers import as_int
 from vendorfake.square.entities import COL
-from vendorfake.square.model.catalog import ITEM, project_catalog_object, project_location
+from vendorfake.square.model.catalog import ITEM, project_catalog_object, project_location, project_merchant
 
 __all__ = [
     "CAPABILITY",
     "CATALOG_DEFAULT_LIMIT",
     "CATALOG_MAX_LIMIT",
+    "ME",
     "DirectorySurface",
     "directory_routes",
+    "main_location_of",
 ]
 
 CAPABILITY = "merchant-directory"
@@ -69,13 +77,20 @@ CATALOG_MAX_LIMIT = 1000
 """The ceiling the core clamps to. Also JUDGMENT: Square documents a maximum
 for SearchOrders and not for ListCatalog."""
 
+ME = "me"
+"""RetrieveMerchant's alias for the caller's own merchant: "If the string
+``me`` is supplied as the ID, then the request returns the merchant that is
+currently accessible to this call."
+https://developer.squareup.com/reference/square/merchants-api/retrieve-merchant
+"""
+
 
 class DirectorySurface:
-    """The two reference-data routes.
+    """The four reference-data routes.
 
     The only surface here that holds no vendor dependency: it mints no ids and
     reads no configuration, only the store. Stated rather than left implicit,
-    because "this surface needs nothing" is a fact about the endpoints -- both
+    because "this surface needs nothing" is a fact about the endpoints -- all
     are reads over seeded reference data -- and a later handler that reaches
     for ``deps`` is making a change worth noticing.
     """
@@ -84,6 +99,26 @@ class DirectorySurface:
 
     def routes(self) -> tuple[Route, ...]:
         return (
+            Route(
+                method="GET",
+                path="/v2/merchants",
+                capability=CAPABILITY,
+                handler=self.list_merchants,
+                auth="bearer",
+                scopes=("MERCHANT_PROFILE_READ",),
+                operation_id="ListMerchants",
+                summary="Every merchant the caller can reach -- one, in this unit.",
+            ),
+            Route(
+                method="GET",
+                path="/v2/merchants/{merchant_id}",
+                capability=CAPABILITY,
+                handler=self.retrieve_merchant,
+                auth="bearer",
+                scopes=("MERCHANT_PROFILE_READ",),
+                operation_id="RetrieveMerchant",
+                summary="One merchant by id, or `me` for the caller's own.",
+            ),
             Route(
                 method="GET",
                 path="/v2/locations",
@@ -105,6 +140,49 @@ class DirectorySurface:
                 summary="Catalog objects, filtered by type and cursor-paginated.",
             ),
         )
+
+    # -- GET /v2/merchants --------------------------------------------------
+
+    def list_merchants(self, args: HandlerArgs) -> ReplyInit:
+        """Every merchant, under the key Square really uses.
+
+        The response array is named ``merchant`` -- singular -- and the cursor
+        is an **integer**: "cursor: The cursor generated by the previous
+        response", and the example response prints ``"cursor": 1``. Both are
+        Square's documented shape and neither is a typo here.
+        https://developer.squareup.com/reference/square/merchants-api/list-merchants
+
+        JUDGMENT -- the integer cursor is an offset into the merchant list,
+        which is what a value of ``1`` after a page holding one merchant means.
+        Square publishes no other reading, and this unit seeds exactly one
+        merchant, so no shipped scenario ever emits one.
+        """
+        merchants = args.ctx.store.collection(COL.merchants).all()
+        offset = _requested_offset(args.query("cursor"))
+        page = merchants[offset:]
+        return json_({"merchant": [project_merchant(entity, main_location_of(args.ctx, entity)) for entity in page]})
+
+    # -- GET /v2/merchants/{merchant_id} ------------------------------------
+
+    def retrieve_merchant(self, args: HandlerArgs) -> ReplyInit:
+        """One merchant, resolving the documented ``me`` alias to the caller.
+
+        ``me`` is the merchant the bearer token belongs to -- the auth adapter
+        resolves ``principal_id`` to the token's ``merchant_id`` -- which is
+        the call an integration makes right after OAuth connect to learn the
+        ``business_name`` it just connected.
+        """
+        merchant_id = args.params["merchant_id"]
+        if merchant_id == ME and args.auth is not None:
+            merchant_id = args.auth.principal_id
+        stored = args.ctx.store.collection(COL.merchants).get(merchant_id)
+        if stored is None:
+            raise UnitError(
+                UnitErrorKind.NOT_FOUND,
+                detail=f"Merchant {merchant_id} was not found.",
+                field="merchant_id",
+            )
+        return json_({"merchant": project_merchant(stored, main_location_of(args.ctx, stored))})
 
     # -- GET /v2/locations --------------------------------------------------
 
@@ -173,6 +251,43 @@ class DirectorySurface:
 def directory_routes() -> tuple[Route, ...]:
     """The merchant-directory routes."""
     return DirectorySurface().routes()
+
+
+def main_location_of(ctx: UnitContext, merchant: Mapping[str, Any]) -> str | None:
+    """The merchant's ``main_location_id``: its first seeded location.
+
+    JUDGMENT. Square documents the field as "The ID of the main Location for
+    this merchant" (https://developer.squareup.com/reference/square/objects/Merchant)
+    and publishes nothing about how the main one is chosen -- it is set from
+    the Square Dashboard. The seed document lists locations in an order, and
+    the first is the one a scenario author wrote down first; ``None`` for a
+    merchant with no locations at all, which ``compact`` then omits.
+    """
+    merchant_id = str(merchant.get("id", ""))
+    for entity in ctx.store.collection(COL.locations).all():
+        if entity.get("merchant_id") == merchant_id:
+            return str(entity["id"])
+    return None
+
+
+def _requested_offset(raw: str | None) -> int:
+    """ListMerchants' integer ``cursor`` as an offset, or a 400 naming it.
+
+    Refused rather than ignored, for the reason :func:`_requested_limit` gives:
+    a consumer who sent a cursor from another endpoint by mistake should learn
+    so, not silently receive page one again.
+    """
+    if raw is None or not raw.strip():
+        return 0
+    value = as_int(raw, -1)
+    if value < 0 or str(value) != raw.strip():
+        raise UnitError(
+            UnitErrorKind.INVALID_CURSOR,
+            detail="cursor must be the integer returned by the previous ListMerchants response.",
+            field="cursor",
+            info={"supplied": raw},
+        )
+    return value
 
 
 def _requested_types(raw: str | None) -> frozenset[str]:

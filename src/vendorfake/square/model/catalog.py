@@ -1,7 +1,7 @@
-"""Merchant reference data on the wire: locations and catalog objects.
+"""Merchant reference data on the wire: the merchant, locations and catalog objects.
 
-FOR: projecting the two entity kinds an order points at into the documented
-Square JSON, so that a consumer priming its own fixtures from
+FOR: projecting the entity kinds an order points at into the documented Square
+JSON, so that a consumer priming its own fixtures from ``GET /v2/merchants``,
 ``GET /v2/locations`` and ``GET /v2/catalog/list`` gets the shapes its SDK
 deserialises.
 
@@ -40,14 +40,43 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from vendorfake.core.util.json import compact
-from vendorfake.square.entities import CatalogObjectEntity, LocationEntity
+from vendorfake.square.entities import CatalogObjectEntity, LocationEntity, MerchantEntity
 
-__all__ = ["ITEM", "ITEM_VARIATION", "project_catalog_object", "project_location"]
+__all__ = ["ITEM", "ITEM_VARIATION", "project_catalog_object", "project_location", "project_merchant"]
 
 ITEM = "ITEM"
 ITEM_VARIATION = "ITEM_VARIATION"
 """The two ``CatalogObjectType`` values this unit models. Square publishes
 more; see the SHRINK in :mod:`vendorfake.square.surface.directory`."""
+
+
+def project_merchant(entity: Mapping[str, Any], main_location_id: str | None) -> dict[str, Any]:
+    """One stored merchant as Square's ``Merchant`` JSON.
+
+    Field set and order from
+    https://developer.squareup.com/reference/square/objects/Merchant:
+    ``id, business_name, country, language_code, currency, status,
+    main_location_id, created_at``.
+
+    ``main_location_id`` is resolved by the caller rather than stored, because
+    Square defines it as "The ID of the main Location for this merchant" and
+    the seed document has no such field -- the first seeded location is the
+    main one. JUDGMENT, recorded on :func:`~vendorfake.square.surface.directory.main_location_of`.
+    """
+    merchant = MerchantEntity.from_entity(entity)
+    created_at = entity.get("created_at")
+    return compact(
+        {
+            "id": merchant.id,
+            "business_name": merchant.business_name,
+            "country": merchant.country,
+            "language_code": merchant.language_code,
+            "currency": merchant.currency,
+            "status": merchant.status,
+            "main_location_id": main_location_id,
+            "created_at": None if created_at is None else str(created_at),
+        }
+    )
 
 
 def project_location(entity: Mapping[str, Any]) -> dict[str, Any]:

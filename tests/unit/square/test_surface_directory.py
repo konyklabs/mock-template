@@ -121,6 +121,8 @@ def test_each_route_declares_the_scope_square_documents_for_it() -> None:
     """
     routes = {route.path: tuple(route.scopes) for route in directory_routes()}
     assert routes == {
+        "/v2/merchants": ("MERCHANT_PROFILE_READ",),
+        "/v2/merchants/{merchant_id}": ("MERCHANT_PROFILE_READ",),
         "/v2/locations": ("MERCHANT_PROFILE_READ",),
         "/v2/catalog/list": ("ITEMS_READ",),
     }

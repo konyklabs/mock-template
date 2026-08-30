@@ -230,6 +230,8 @@ def test_the_shipped_surfaces_are_wired_and_cached() -> None:
         ("GET", "/v2/orders/{order_id}"),
         ("PUT", "/v2/orders/{order_id}"),
         ("POST", "/v2/orders/{order_id}/pay"),
+        ("GET", "/v2/merchants"),
+        ("GET", "/v2/merchants/{merchant_id}"),
         ("GET", "/v2/locations"),
         ("GET", "/v2/catalog/list"),
         ("GET", "/v2/webhooks/event-types"),
