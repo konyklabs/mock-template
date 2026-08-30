@@ -10,10 +10,9 @@ CreateCustomer        ``POST /v3/merchants/{mId}/customers``
 Documented: a customer carries ``firstName``, ``lastName`` (each "Maximum 64
 characters") and ``addresses[{address1, address2, city, state, zip,
 country}]``; the list takes ``filter`` and the elements envelope. As on the
-orders list, one ``filter`` per request: the core collapses a repeated query
-key to its last value (``surface/orders.py`` says why), so
-``filter=firstName=Ada`` and ``filter=lastName=Lovelace`` are two requests
-here rather than one.
+orders list, ``filter`` repeats and the clauses are ANDed:
+``filter=firstName=Ada&filter=lastName=Lovelace`` is one request, read through
+``args.query_all`` (konyklabs/roadmap#37).
 
 JUDGMENT: a create must carry at least one of the two names (the page says
 only "the request body cannot be null"); ``customerSince`` is stamped at
@@ -58,7 +57,7 @@ class CloverCustomersSurface:
                 auth="bearer",
                 scopes=("CUSTOMERS_R",),
                 operation_id="GetCustomers",
-                summary="Customers in the elements envelope; filter=firstName=... or lastName=...",
+                summary="Customers in the elements envelope; filter=firstName=...&filter=lastName=... (ANDed)",
             ),
             Route(
                 method="POST",
@@ -75,11 +74,7 @@ class CloverCustomersSurface:
 
     def list_customers(self, args: HandlerArgs) -> ReplyInit:
         merchant_id = require_merchant(args)
-        # TODO(konyklabs/roadmap#37): once UnitRequest exposes multi-value
-        # query access, pass every `filter=` here; the parser already ANDs a
-        # sequence, so that is the one line that changes.
-        raw = args.query("filter")
-        predicate = _filters([] if raw is None else [raw])
+        predicate = _filters(args.query_all("filter"))
         limit, offset = page_window(args)
         rows = [row for row in args.ctx.store.collection(COL.customers).all() if predicate(row)]
         page = rows[offset : offset + limit]
@@ -126,8 +121,7 @@ def _project(entity: Mapping[str, Any]) -> dict[str, Any]:
 
 def _filters(raws: Sequence[str]) -> Any:
     """``filter=firstName=Ada`` (repeatable, ANDed): equality on firstName,
-    lastName or id. Takes a sequence so the multi-value query accessor
-    (roadmap#37) plugs in without touching the parser."""
+    lastName or id. No filter at all is a predicate that keeps every row."""
     clauses: list[tuple[str, str]] = []
     for raw in raws:
         field, separator, value = raw.partition("=")

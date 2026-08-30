@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import urlencode
 
 import pytest
 
@@ -202,6 +203,31 @@ def test_filters_on_the_documented_fields(h: Harness) -> None:
     assert ids(filter=f"id={a['id']}") == [a["id"]]
     assert ids(filter=f"createdTime>={a['createdTime']}") == [a["id"], b["id"]]
     assert ids(filter="modifiedTime<=1") == []
+
+
+def test_repeated_filters_are_anded(h: Harness) -> None:
+    """The docs' own example, ``filter=createdTime>=X&filter=createdTime<=Y``:
+    a window, not the last clause alone (konyklabs/roadmap#37)."""
+    h.clear_seed_orders()
+    a = h.create_order(total=100)
+    b = h.create_order(total=300)
+    since, until = a["createdTime"], b["createdTime"]
+
+    def ids(*filters: str) -> list[str]:
+        suffix = "/orders?" + urlencode([("filter", clause) for clause in filters])
+        return [e["id"] for e in h.get(suffix).json()["elements"]]
+
+    assert ids(f"createdTime>={since}", f"createdTime<={until}") == [a["id"], b["id"]]
+    # A window that closes before it opens is empty under AND. Last-wins would
+    # keep only `createdTime>=since` and answer both orders, so the empty
+    # clause goes first on purpose.
+    assert ids(f"createdTime<={since - 1}", f"createdTime>={since}") == []
+    assert ids(f"createdTime>={since}", f"createdTime<={until}", "total<=100") == [a["id"]]
+    assert ids(f"createdTime>={since}", "total>=300") == [b["id"]]
+    # One bad clause among good ones is still a 400 naming the field.
+    bad = h.get("/orders?" + urlencode([("filter", f"createdTime>={since}"), ("filter", "employee=E")]))
+    assert bad.status == 400
+    assert bad.json()["unit_error"]["field"] == "filter"
 
 
 def test_unknown_or_malformed_filters_are_400(h: Harness) -> None:

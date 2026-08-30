@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from urllib.parse import urlencode
 
 import pytest
 
@@ -27,6 +28,26 @@ def test_customers_list_and_filter_by_name(h: Harness) -> None:
     assert h.get("/customers", query={"filter": "lastName=Lovelace"}).json()["elements"][0]["id"] == CUSTOMER_ADA
     assert h.get("/customers", query={"filter": "lastName=Byron"}).json() == {"elements": []}
     assert h.get("/customers", query={"filter": "email=x"}).status == 400
+
+
+def test_repeated_filters_are_anded(h: Harness) -> None:
+    """Clover's list pages repeat ``filter=``; the clauses narrow one another
+    rather than the last replacing the rest (konyklabs/roadmap#37)."""
+    byron = h.post("/customers", {"firstName": "Ada", "lastName": "Byron"}).json()
+
+    def ids(*filters: str) -> list[str]:
+        suffix = "/customers?" + urlencode([("filter", clause) for clause in filters])
+        return [e["id"] for e in h.get(suffix).json()["elements"]]
+
+    assert ids("firstName=Ada") == [CUSTOMER_ADA, byron["id"]]
+    assert ids("firstName=Ada", "lastName=Lovelace") == [CUSTOMER_ADA]
+    assert ids("lastName=Lovelace", "firstName=Ada") == [CUSTOMER_ADA]  # last-wins would answer both Adas
+    assert ids("firstName=Ada", "lastName=Byron") == [byron["id"]]
+    assert ids("firstName=Ada", "lastName=Lovelace", "id=nope") == []
+    # One bad clause among good ones is still a 400 naming the field.
+    bad = h.get("/customers?" + urlencode([("filter", "firstName=Ada"), ("filter", "email=x")]))
+    assert bad.status == 400
+    assert bad.json()["unit_error"]["field"] == "filter"
 
 
 def test_create_customer_returns_the_record_with_a_minted_id(h: Harness) -> None:

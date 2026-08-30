@@ -53,14 +53,12 @@ JUDGMENT, each labelled at its site
   own pages write ``Open`` and ``open``; an order with no state (the
   documented null, "hidden") is treated as ``open`` for transition purposes.
   Any write to a ``locked`` order -- update, line item -- is a 400.
-* **Filters**: one ``filter`` per request. Clover's list pages show
-  ``filter=`` repeated, but ``UnitRequest.query`` is a ``str -> str`` mapping
-  in every binding of this core and a repeated key collapses to its last
-  value (``asgi/adapt.py``); that is a core property, not one this surface
-  can change, so it is stated rather than worked around. An unknown filter
-  field is a 400; the docs list the fields and not the response to a wrong
-  one. ``deletedTime`` is not filterable here because deleted orders are
-  never listed.
+* **Filters**: ``filter=`` repeats, as Clover's list pages show
+  (``filter=createdTime>=...&filter=createdTime<=...``), and the clauses are
+  ANDed; every value is read through ``args.query_all``
+  (konyklabs/roadmap#37). An unknown filter field is a 400; the docs list
+  the fields and not the response to a wrong one. ``deletedTime`` is not
+  filterable here because deleted orders are never listed.
 * **Defaults on create**: a missing ``currency`` is the merchant's (an order
   cannot be denominated in something the seller does not take); a missing
   ``total`` is ``0`` (the field is client-owned, and the client said
@@ -76,7 +74,7 @@ lock, cap, missing price, unknown item -- is computed before the write.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from vendorfake.clover.entities import (
@@ -312,7 +310,7 @@ class CloverOrdersSurface:
         row from the union -- the list reports what exists now."""
         merchant_id = require_merchant(args)
         expand = expansions(args, EXPANDABLE)
-        predicate = _filter(args.query("filter"))
+        predicate = _filters(args.query_all("filter"))
         limit, offset = page_window(args)
         orders = [
             order
@@ -812,15 +810,19 @@ def _require_order(orders: Collection, order_id: str, merchant_id: str) -> Order
     raise UnitError(UnitErrorKind.NOT_FOUND, detail=f"Order {order_id} was not found.", field="orderId")
 
 
-def _filter(raw: str | None) -> Any:
-    """``filter=<field><op><value>`` as a predicate over orders, or a 400.
+def _filters(raws: Sequence[str]) -> Any:
+    """Every ``filter=`` clause ANDed into one predicate; none keeps every order."""
+    clauses = [_filter(raw) for raw in raws]
+    return lambda order: all(clause(order) for clause in clauses)
+
+
+def _filter(raw: str) -> Any:
+    """One ``filter=<field><op><value>`` as a predicate over orders, or a 400.
 
     ``>=`` and ``<=`` are tried before ``=`` so ``total>=1500`` is not read
     as the field ``total>`` equal to ``1500``; a bare ``>`` or ``<`` is
     named as unsupported rather than reported as "no operator".
     """
-    if raw is None:
-        return lambda order: True
     for op in (">=", "<=", "="):
         if op in raw:
             field, value = raw.split(op, 1)
