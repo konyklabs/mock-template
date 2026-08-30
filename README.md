@@ -114,7 +114,34 @@ def test_an_order_is_paid_and_the_webhook_verifies():
         )
 ```
 
-`unit("clover")` works the same; `seed.path("/items")` fills in the merchant.
+Clover is the same shape with its own vocabulary — event types are
+`<object>:<change>` (`O:CREATE`, `P:UPDATE`, ...; a glob such as `O:*` is
+fine), the "signature key" is the `X-Clover-Auth` code, and every `/v3`
+path lives under the merchant, which `seed.path()` fills in:
+
+```python
+from vendorfake.testing import unit, webhook_receiver
+from vendorfake.clover.signer import verify_clover_auth
+
+
+def test_a_clover_order_fires_a_webhook_with_the_auth_code():
+    with unit("clover") as clover, webhook_receiver() as receiver:
+        seed = clover.seed  # CloverSeed
+        clover.subscribe(receiver.url, ["O:*"], signature_key="auth-code-from-the-dashboard")
+
+        created = clover.client.post(
+            seed.path("/orders"), headers=seed.auth, json={"currency": "USD", "total": 1500, "state": "open"}
+        )
+        assert created.status_code == 200
+        clover.drain()
+
+        (delivery,) = receiver.received
+        assert verify_clover_auth(delivery.headers, "auth-code-from-the-dashboard")
+```
+
+`subscribe` checks the event types against the vendor's vocabulary and
+refuses one it will never send — a Square type on a Clover unit would
+otherwise register happily and never fire.
 When your service needs a URL, `served("square")` runs the shipped
 `vendorfake serve` in a child process and yields one, and
 `serve_in_thread(started)` gives a URL onto an in-process unit. Every driver
@@ -150,6 +177,7 @@ values are readable and obviously fake by design.
 | Orders | open `CAISENgvlJ6jLWAzERDzjyHVybY`, completed `CAISEM82RcpmcFBM0TfOyiHV3es` | open `SEEDORDER0001` |
 | Payment plumbing | `POST /v2/payments` with `source_id: "EXTERNAL"` | tender `TENDEREXTRN01` (external), `TENDERCASH001`; employees `EMPLBARISTA01`, `OWNERHRVST001`; service charge `SVCCHARGE0001` (18%) |
 | Webhooks | register with the full-access bearer; the `signature_key` comes back | pre-verified subscriber `wbhk_seed_quickstart` (auth code `unit-seeded-clover-webhook-auth-code`), **disabled**; register your own through `POST /__unit/webhooks/subscriptions` |
+| Event types | `order.created`, `order.updated`, `payment.created`, `payment.updated`, `catalog.version.updated`, `inventory.count.updated` (`GET /v2/webhooks/event-types`) | `O:`, `I:`, `C:`, `P:` (orders, inventory items, customers, payments) × `CREATE`, `UPDATE`, `DELETE` — e.g. `O:CREATE`; globs like `O:*` accepted |
 
 In Python these are `square.seed.*` / `clover.seed.*` on a started unit
 (`vendorfake.testing.SquareSeed`, `CloverSeed`).

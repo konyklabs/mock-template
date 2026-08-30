@@ -31,9 +31,12 @@ these helpers and one written against the container.
 
 from __future__ import annotations
 
+import collections
+import queue
 import re
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -45,6 +48,7 @@ import httpx
 from vendorfake.core.kernel.types import Logger
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.logging import JsonLogger
+from vendorfake.core.webhooks.models import matches_event_type
 from vendorfake.core.webhooks.sink import DeliverySink
 from vendorfake.registry import create_unit
 from vendorfake.testing.receiver import Delivery, WebhookReceiver, webhook_receiver
@@ -52,6 +56,8 @@ from vendorfake.testing.seeds import CloverSeed, SquareSeed, seed_for
 from vendorfake.testing.transport import UnitTransport
 
 __all__ = [
+    "LOG_LINES",
+    "SERVE_COMMAND",
     "CloverSeed",
     "Delivery",
     "Driver",
@@ -114,7 +120,26 @@ class Driver:
         has a dashboard, and a test that only wants deliveries to arrive
         should not have to know which. ``signature_key`` is the HMAC key for
         Square and the ``X-Clover-Auth`` code for Clover.
+
+        ``event_types`` are checked against the vendor's vocabulary when the
+        seed publishes one: the control plane accepts any string, so a Square
+        type on a Clover unit would register fine and then never fire -- the
+        test passes its setup and fails much later, with nothing to say why.
+        Globs the dispatcher honours (``O:*``, ``*``) pass if they match at
+        least one published type.
         """
+        vocabulary = None if self.seed is None else self.seed.event_types
+        if vocabulary is not None:
+            unknown = [
+                pattern
+                for pattern in event_types
+                if not any(matches_event_type([pattern], known) for known in vocabulary)
+            ]
+            if unknown:
+                raise ValueError(
+                    f"{self.vendor!r} sends none of {unknown}; its event types are {list(vocabulary)} "
+                    "(a glob that matches at least one of them, or '*', is accepted)"
+                )
         body: dict[str, Any] = {
             "notification_url": notification_url,
             "event_types": list(event_types),
@@ -172,10 +197,22 @@ class ServedUnit(Driver):
     """From :func:`served`: a child process the block will stop."""
 
     process: subprocess.Popen[str] = field(kw_only=True)
+    _output: _ChildOutput = field(kw_only=True, repr=False)
 
     @property
     def pid(self) -> int:
         return self.process.pid
+
+    def logs(self) -> list[str]:
+        """The child's most recent output, stdout and stderr interleaved.
+
+        Bounded (:data:`LOG_LINES`): a chatty child on ``--log-level debug``
+        keeps writing for the life of the test, and the pipe must be read
+        continuously or the child blocks on it once 64 KB is buffered. The
+        reader thread that prevents that keeps the tail here, which is the
+        part a failing test wants to print anyway.
+        """
+        return self._output.tail()
 
 
 def _seed_of(built: Unit) -> SquareSeed | CloverSeed | None:
@@ -263,12 +300,15 @@ def served(
     the operating system choose, and the CLI announces the number before it
     accepts a request. The child is asked to stop with ``SIGTERM`` -- uvicorn's
     graceful path -- and killed only if it ignores that.
+
+    Both pipes are read on a daemon thread for the life of the child, so a
+    child that logs more than the pipe buffers cannot block mid-test, and
+    ``timeout_s`` is a real deadline: a child that never announces -- wedged,
+    or not vendorfake at all -- is stopped and reported rather than waited
+    on forever.
     """
     argv = [
-        sys.executable,
-        "-m",
-        "vendorfake",
-        "serve",
+        *SERVE_COMMAND,
         "--vendor",
         vendor,
         "--profile",
@@ -281,8 +321,9 @@ def served(
         log_level,
     ]
     process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    output = _ChildOutput(process)
     try:
-        base_url = _wait_for_announcement(process, timeout_s)
+        base_url = _wait_for_announcement(process, output, timeout_s)
         with httpx.Client(base_url=base_url, timeout=30.0) as client:
             health = client.get("/__unit/health").json()
             yield ServedUnit(
@@ -296,27 +337,89 @@ def served(
                 # them is a case for `unit()`, where the seed reads the config.
                 seed=seed_for(str(health["vendor"]), {}),
                 process=process,
+                _output=output,
             )
     finally:
         _stop(process)
+        output.join()
 
 
-def _wait_for_announcement(process: subprocess.Popen[str], timeout_s: float) -> str:
-    assert process.stdout is not None
+SERVE_COMMAND: tuple[str, ...] = (sys.executable, "-m", "vendorfake", "serve")
+"""What :func:`served` runs, before the flags. A module attribute so a test
+of the startup deadline can substitute a child that never announces."""
+
+LOG_LINES = 500
+"""How much of a child's output :meth:`ServedUnit.logs` keeps."""
+
+
+class _ChildOutput:
+    """Reads a child's stdout and stderr to the end, on threads.
+
+    Every line goes into one bounded tail (for :meth:`ServedUnit.logs`), and
+    stdout lines also go onto a queue so that :func:`_wait_for_announcement`
+    can wait for the port with a timeout -- ``readline()`` on the pipe itself
+    has none, and a child that prints nothing would have held the caller for
+    as long as it lived.
+    """
+
+    def __init__(self, process: subprocess.Popen[str]) -> None:
+        self._process = process
+        self._tail: collections.deque[str] = collections.deque(maxlen=LOG_LINES)
+        self._lock = threading.Lock()
+        self.stdout: queue.Queue[str | None] = queue.Queue()
+        self._threads = [
+            threading.Thread(target=self._pump, args=(process.stdout, self.stdout), daemon=True),
+            threading.Thread(target=self._pump, args=(process.stderr, None), daemon=True),
+        ]
+        for thread in self._threads:
+            thread.start()
+
+    def _pump(self, stream: Any, sink: queue.Queue[str | None] | None) -> None:
+        if stream is None:  # pragma: no cover - Popen was given PIPE for both
+            return
+        for line in stream:
+            with self._lock:
+                self._tail.append(line.rstrip("\n"))
+            if sink is not None:
+                sink.put(line)
+        if sink is not None:
+            sink.put(None)
+
+    def tail(self) -> list[str]:
+        with self._lock:
+            return list(self._tail)
+
+    def join(self) -> None:
+        for thread in self._threads:
+            thread.join(timeout=SHUTDOWN_TIMEOUT_S)
+        for stream in (self._process.stdout, self._process.stderr):
+            if stream is not None:
+                stream.close()
+
+
+def _wait_for_announcement(process: subprocess.Popen[str], output: _ChildOutput, timeout_s: float) -> str:
     deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        line = process.stdout.readline()
-        if line:
-            found = _LISTENING.search(line)
-            if found is not None:
-                return f"http://{found.group(1)}:{found.group(2)}"
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _stop(process)
+            raise RuntimeError(
+                f"vendorfake serve did not announce a port within {timeout_s}s; last output:\n"
+                + "\n".join(output.tail()[-20:])
+            )
+        try:
+            line = output.stdout.get(timeout=min(remaining, 0.25))
+        except queue.Empty:
             continue
-        if process.poll() is not None:
-            stderr = process.stderr.read() if process.stderr is not None else ""
-            raise RuntimeError(f"vendorfake serve exited with {process.returncode} before it bound:\n{stderr}")
-        time.sleep(0.01)
-    _stop(process)
-    raise RuntimeError(f"vendorfake serve did not announce a port within {timeout_s}s")
+        if line is None:
+            # stdout closed: the child exited without announcing.
+            process.wait(timeout=SHUTDOWN_TIMEOUT_S)
+            raise RuntimeError(
+                f"vendorfake serve exited with {process.returncode} before it bound:\n" + "\n".join(output.tail()[-20:])
+            )
+        found = _LISTENING.search(line)
+        if found is not None:
+            return f"http://{found.group(1)}:{found.group(2)}"
 
 
 def _stop(process: subprocess.Popen[str]) -> None:
@@ -327,6 +430,3 @@ def _stop(process: subprocess.Popen[str]) -> None:
         except subprocess.TimeoutExpired:  # pragma: no cover - only on a hang
             process.kill()
             process.wait(timeout=5)
-    for stream in (process.stdout, process.stderr):
-        if stream is not None:
-            stream.close()

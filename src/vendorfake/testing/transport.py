@@ -8,15 +8,24 @@ served URL, and the request goes to :meth:`Unit.handle` in this thread.
 INVARIANT: **the bytes are the unit's bytes.** The request body is read once
 and handed over untouched as ``raw_body``; the response body is the unit's
 ``UnitResponse.body`` placed into an ``httpx.Response`` without re-encoding.
-Conformance contract C10 proves the in-process and HTTP bindings agree byte
-for byte, so a test that passes here passes against the served unit and the
-container -- that is the property that makes an in-process fixture a fair
-rehearsal rather than a convenience.
+
+INVARIANT: **the request is normalised the way the ASGI adapter normalises
+it**, so that a test which is green here is green against the served unit and
+the container. This is a third binding -- the conformance suite's C10 compares
+the ``InProcessClient`` with HTTP, and that client's ``Mapping[str, str]``
+headers cannot even express a repeated header -- so parity is pinned by a
+test of its own (``tests/unit/testing``) that sends the same request through
+this transport and through a real server and compares the echoed bytes. The
+one normalisation with room to differ is repeated headers:
+``vendorfake.asgi.adapt.request_headers`` joins them with ``", "``, and so
+does :func:`_headers` below. It is mirrored rather than imported because that
+helper takes a Starlette ``Request``, and importing the adapter here would
+make ``unit()`` pay for the web framework.
 
 WHY NOT ``httpx.ASGITransport``. It exists and it would exercise the FastAPI
 adapter, but it is asynchronous only: ``httpx.Client`` cannot use it, and a
 pytest consumer writes synchronous tests. The ASGI adapter is exercised by
-:func:`vendorfake.testing.served`, which runs the real server.
+:func:`vendorfake.testing.served` and :func:`vendorfake.testing.serve_in_thread`.
 """
 
 from __future__ import annotations
@@ -27,6 +36,18 @@ from vendorfake.core.kernel.unit import Unit, make_request
 from vendorfake.core.transport.inprocess import TRANSPORT
 
 __all__ = ["UnitTransport"]
+
+
+def _headers(request: httpx.Request) -> dict[str, str]:
+    """Names lower-cased, repeated names joined with ``", "`` -- the same
+    shape ``vendorfake.asgi.adapt.request_headers`` produces over a socket."""
+    headers: dict[str, str] = {}
+    for raw_name, raw_value in request.headers.raw:
+        name = raw_name.decode("latin-1").lower()
+        value = raw_value.decode("latin-1")
+        existing = headers.get(name)
+        headers[name] = value if existing is None else f"{existing}, {value}"
+    return headers
 
 
 class UnitTransport(httpx.BaseTransport):
@@ -42,12 +63,11 @@ class UnitTransport(httpx.BaseTransport):
         # ``make_request`` splits the query off and parses it the way every
         # other binding does, so a repeated key survives here too.
         raw_path = request.url.raw_path.decode("ascii")
-        headers = {name.decode("latin-1"): value.decode("latin-1") for name, value in request.headers.raw}
         answered = self._unit.handle(
             make_request(
                 method=request.method,
                 path=raw_path,
-                headers=headers,
+                headers=_headers(request),
                 raw_body=request.read(),
                 transport=TRANSPORT,
             )
