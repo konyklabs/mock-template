@@ -34,6 +34,7 @@ from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 __all__ = [
     "SeedCatalog",
     "SeedDocument",
+    "SeedInventoryCount",
     "SeedItem",
     "SeedLineItem",
     "SeedLocation",
@@ -258,6 +259,19 @@ class SeedLoyaltyAccount(BaseModel):
     enrolled_at: str | None = None
 
 
+class SeedInventoryCount(BaseModel):
+    """The IN_STOCK quantity of one variation at one location, at a stated
+    instant. https://developer.squareup.com/reference/square/objects/InventoryCount"""
+
+    model_config = _SEED
+
+    catalog_object_id: str = Field(min_length=1)
+    location_id: str = Field(min_length=1)
+    #: A decimal string, as Square sends it.
+    quantity: str = Field(min_length=1)
+    calculated_at: str | None = None
+
+
 class SeedToken(BaseModel):
     """A token already issued to the application.
 
@@ -307,6 +321,7 @@ class SeedDocument(BaseModel):
     orders: tuple[SeedOrder, ...] = ()
     loyalty_program: SeedLoyaltyProgram | None = None
     loyalty_accounts: tuple[SeedLoyaltyAccount, ...] = ()
+    inventory_counts: tuple[SeedInventoryCount, ...] = ()
     tokens: tuple[SeedToken, ...] = ()
     webhook_subscriptions: tuple[SeedSubscription, ...] = ()
 

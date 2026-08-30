@@ -54,6 +54,7 @@ __all__ = [
     "AuthorizationCodeEntity",
     "CatalogObjectEntity",
     "Fulfillment",
+    "InventoryCountEntity",
     "LocationEntity",
     "LoyaltyAccountEntity",
     "LoyaltyEventEntity",
@@ -66,6 +67,7 @@ __all__ = [
     "SquareCollections",
     "Tender",
     "TokenEntity",
+    "inventory_count_id",
 ]
 
 
@@ -81,6 +83,7 @@ class SquareCollections:
     loyalty_programs: str = "loyalty_programs"
     loyalty_accounts: str = "loyalty_accounts"
     loyalty_events: str = "loyalty_events"
+    inventory_counts: str = "inventory_counts"
     codes: str = "authorization_codes"
     tokens: str = "tokens"
 
@@ -95,6 +98,7 @@ class SquareCollections:
             self.loyalty_programs,
             self.loyalty_accounts,
             self.loyalty_events,
+            self.inventory_counts,
             self.codes,
             self.tokens,
         )
@@ -801,6 +805,61 @@ class LoyaltyEventEntity:
                 "source": self.source,
             }
         )
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryCountEntity:
+    """The IN_STOCK quantity of one variation at one location.
+
+    https://developer.squareup.com/reference/square/objects/InventoryCount.
+    Keyed by ``catalog_object_id`` and ``location_id`` -- the entity id is the
+    two joined -- because Square's count has no id of its own: "The current
+    calculated stock count for a given CatalogObject at a given set of
+    Locations". ``quantity`` is a **decimal string**, as Square sends it.
+    ``calculated_at`` is stated by a seeded count and stamped from the clock
+    on a change.
+    """
+
+    catalog_object_id: str
+    location_id: str
+    quantity: str = "0"
+    state: str = "IN_STOCK"
+    catalog_object_type: str = "ITEM_VARIATION"
+    calculated_at: str = ""
+
+    @property
+    def id(self) -> str:
+        return inventory_count_id(self.catalog_object_id, self.location_id)
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> InventoryCountEntity:
+        return cls(
+            catalog_object_id=_str(entity.get("catalog_object_id")),
+            location_id=_str(entity.get("location_id")),
+            quantity=_str(entity.get("quantity"), "0"),
+            state=_str(entity.get("state"), "IN_STOCK"),
+            catalog_object_type=_str(entity.get("catalog_object_type"), "ITEM_VARIATION"),
+            calculated_at=_str(entity.get("calculated_at")),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "catalog_object_id": self.catalog_object_id,
+                "location_id": self.location_id,
+                "quantity": self.quantity,
+                "state": self.state,
+                "catalog_object_type": self.catalog_object_type,
+                "calculated_at": self.calculated_at or None,
+            }
+        )
+
+
+def inventory_count_id(catalog_object_id: str, location_id: str) -> str:
+    """The store id of a count: object and location, joined. Deterministic,
+    so two units seeded alike hold the same ids and a change finds its row."""
+    return f"{catalog_object_id}:{location_id}"
 
 
 @dataclass(frozen=True, slots=True)

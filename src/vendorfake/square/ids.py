@@ -94,6 +94,12 @@ class SquareIds:
     def catalog_object(self) -> str:
         return self._pick(_UPPER_ALNUM, 24)
 
+    def inventory_change(self) -> str:
+        """24 upper-case alphanumerics -- the shape of an InventoryAdjustment
+        or InventoryPhysicalCount id in Square's examples. JUDGMENT on the
+        shape; the examples show it without stating a rule."""
+        return self._pick(_UPPER_ALNUM, 24)
+
     def tender(self) -> str:
         return self._pick(_MIXED, 27)
 

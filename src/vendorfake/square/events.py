@@ -31,10 +31,27 @@ mutation of any other collection -- maps to nothing. Square publishes
 model, and it publishes no order-deleted event at all, because Square orders
 are not deleted.
 
-SHRINK (prototype): the OAuth, location and catalog collections emit nothing.
-Square does publish ``oauth.authorization.revoked`` and catalog events; adding
-them is a row in this mapper and a row in :data:`SQUARE_EVENT_TYPES`, which is
-the shape this file is in so that the next event type is not a redesign.
+Two more, each carrying what its page documents and nothing more:
+
+``catalog.version.updated``
+    Every committed write to the catalog collection, with
+    ``data.object.catalog_version.updated_at`` -- the one field Square's page
+    shows (https://developer.squareup.com/reference/square/webhooks/catalog.version.updated).
+    JUDGMENT, twice: one event per written object rather than one per
+    request, because the journal is per object and an upsert of an item and
+    two variations is three commits; and ``data.id`` carries the written
+    object's id, where Square's example shows a placeholder.
+``inventory.count.updated``
+    Every committed change to a stock count, with the count under
+    ``data.object.inventory_counts`` -- an array, as the page shows
+    (https://developer.squareup.com/reference/square/webhooks/inventory.count.updated),
+    holding the one count that changed. ``data.id`` is the count's store id.
+
+SHRINK (prototype): the OAuth, location and loyalty collections emit nothing.
+Square publishes ``oauth.authorization.revoked`` and the ``loyalty.*`` events;
+adding one is a row in this mapper and a row in :data:`SQUARE_EVENT_TYPES`,
+which is the shape this file is in so that the next event type is not a
+redesign.
 """
 
 from __future__ import annotations
@@ -43,17 +60,21 @@ from collections.abc import Sequence
 
 from vendorfake.core.kernel.types import EventMeta, JournalEntry, MappedEvent, UnitContext
 from vendorfake.square.config import SquareConfig
-from vendorfake.square.entities import COL, OrderEntity, PaymentEntity
+from vendorfake.square.entities import COL, InventoryCountEntity, OrderEntity, PaymentEntity
 from vendorfake.square.model.payment import project_payment
 from vendorfake.square.model.webhooks import (
+    CatalogVersionUpdatedSummary,
     EventDataWire,
     EventEnvelopeWire,
+    InventoryCountSummary,
     OrderCreatedSummary,
     OrderUpdatedSummary,
 )
 from vendorfake.square.surface.common import SquareDeps
 
 __all__ = [
+    "CATALOG_VERSION_UPDATED",
+    "INVENTORY_COUNT_UPDATED",
     "ORDER_CREATED",
     "ORDER_UPDATED",
     "PAYMENT_CREATED",
@@ -66,8 +87,17 @@ ORDER_CREATED = "order.created"
 ORDER_UPDATED = "order.updated"
 PAYMENT_CREATED = "payment.created"
 PAYMENT_UPDATED = "payment.updated"
+CATALOG_VERSION_UPDATED = "catalog.version.updated"
+INVENTORY_COUNT_UPDATED = "inventory.count.updated"
 
-SQUARE_EVENT_TYPES: tuple[str, ...] = (ORDER_CREATED, ORDER_UPDATED, PAYMENT_CREATED, PAYMENT_UPDATED)
+SQUARE_EVENT_TYPES: tuple[str, ...] = (
+    ORDER_CREATED,
+    ORDER_UPDATED,
+    PAYMENT_CREATED,
+    PAYMENT_UPDATED,
+    CATALOG_VERSION_UPDATED,
+    INVENTORY_COUNT_UPDATED,
+)
 """Every event type this unit can emit, in the order
 ``GET /v2/webhooks/event-types`` lists them.
 
@@ -87,6 +117,8 @@ _DATA_TYPES: dict[str, str] = {
     # ``data.object.payment`` is the full Payment.
     PAYMENT_CREATED: "payment",
     PAYMENT_UPDATED: "payment",
+    CATALOG_VERSION_UPDATED: "catalog",
+    INVENTORY_COUNT_UPDATED: "inventory",
 }
 
 
@@ -113,6 +145,10 @@ class SquareEventMapper:
     def map(self, entry: JournalEntry, ctx: UnitContext) -> Sequence[MappedEvent]:
         if entry.collection == COL.payments:
             return self._payment(entry, ctx)
+        if entry.collection == COL.catalog:
+            return self._catalog(entry, ctx)
+        if entry.collection == COL.inventory_counts:
+            return self._inventory(entry, ctx)
         if entry.collection != COL.orders:
             return ()
         stored = ctx.store.collection(COL.orders).get(entry.id)
@@ -147,6 +183,70 @@ class SquareEventMapper:
             ).wire()
 
         return (MappedEvent(type=event_type, entity_id=payment.id, build=build),)
+
+    def _catalog(self, entry: JournalEntry, ctx: UnitContext) -> Sequence[MappedEvent]:
+        stored = ctx.store.collection(COL.catalog).get(entry.id)
+        if stored is None or entry.op == "delete":
+            return ()
+        merchant_id = _merchant_id(ctx)
+        summary = CatalogVersionUpdatedSummary(updated_at=str(stored.get("updated_at", entry.at)))
+        object_id = str(stored["id"])
+
+        def build(meta: EventMeta) -> object:
+            return EventEnvelopeWire(
+                merchant_id=merchant_id,
+                type=CATALOG_VERSION_UPDATED,
+                event_id=meta.event_id,
+                created_at=meta.created_at,
+                data=EventDataWire(
+                    type=_DATA_TYPES[CATALOG_VERSION_UPDATED],
+                    id=object_id,
+                    object={"catalog_version": summary.wire()},
+                ),
+            ).wire()
+
+        return (MappedEvent(type=CATALOG_VERSION_UPDATED, entity_id=object_id, build=build),)
+
+    def _inventory(self, entry: JournalEntry, ctx: UnitContext) -> Sequence[MappedEvent]:
+        stored = ctx.store.collection(COL.inventory_counts).get(entry.id)
+        if stored is None or entry.op == "delete":
+            return ()
+        count = InventoryCountEntity.from_entity(stored)
+        merchant_id = _merchant_id(ctx)
+        summary = InventoryCountSummary(
+            calculated_at=count.calculated_at or str(stored.get("updated_at", entry.at)),
+            catalog_object_id=count.catalog_object_id,
+            catalog_object_type=count.catalog_object_type,
+            location_id=count.location_id,
+            quantity=count.quantity,
+            state=count.state,
+        )
+
+        def build(meta: EventMeta) -> object:
+            return EventEnvelopeWire(
+                merchant_id=merchant_id,
+                type=INVENTORY_COUNT_UPDATED,
+                event_id=meta.event_id,
+                created_at=meta.created_at,
+                data=EventDataWire(
+                    type=_DATA_TYPES[INVENTORY_COUNT_UPDATED],
+                    id=count.id,
+                    object={"inventory_counts": [summary.wire()]},
+                ),
+            ).wire()
+
+        return (MappedEvent(type=INVENTORY_COUNT_UPDATED, entity_id=count.id, build=build),)
+
+
+def _merchant_id(ctx: UnitContext) -> str:
+    """The seller, for an envelope whose entity carries no ``merchant_id``.
+
+    A catalog object and a stock count belong to the seller rather than to a
+    location, so the merchant is read from the one merchant the scenario
+    seeds. Empty if a scenario seeds none, which no shipped one does.
+    """
+    merchants = ctx.store.collection(COL.merchants).all()
+    return "" if not merchants else str(merchants[0]["id"])
 
 
 def _order_event(order: OrderEntity, event_type: str) -> MappedEvent:

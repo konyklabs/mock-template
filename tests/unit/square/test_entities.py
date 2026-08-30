@@ -26,6 +26,7 @@ def test_the_collection_names() -> None:
         "loyalty_programs",
         "loyalty_accounts",
         "loyalty_events",
+        "inventory_counts",
         "authorization_codes",
         "tokens",
     )

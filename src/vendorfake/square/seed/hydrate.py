@@ -34,6 +34,7 @@ from vendorfake.square.config import SquareConfig
 from vendorfake.square.entities import (
     COL,
     CatalogObjectEntity,
+    InventoryCountEntity,
     LocationEntity,
     LoyaltyAccountEntity,
     LoyaltyProgramEntity,
@@ -71,6 +72,7 @@ def hydrate_square(ctx: UnitContext, seed: object, config: SquareConfig) -> Seed
     _insert_catalog(ctx, doc)
     _insert_orders(ctx, doc)
     _insert_loyalty(ctx, doc)
+    _insert_inventory(ctx, doc)
     _insert_tokens(ctx, doc, config)
     _insert_subscriptions(ctx, doc, config)
     return doc
@@ -309,6 +311,37 @@ def _insert_loyalty(ctx: UnitContext, doc: SeedDocument) -> None:
             entity["created_at"] = account.enrolled_at
             entity["updated_at"] = account.enrolled_at
         accounts.insert(entity, SEED_META)
+
+
+def _insert_inventory(ctx: UnitContext, doc: SeedDocument) -> None:
+    """Stock counts, each naming a variation and a location that exist."""
+    catalog = ctx.store.collection(COL.catalog)
+    locations = ctx.store.collection(COL.locations)
+    counts = ctx.store.collection(COL.inventory_counts)
+    for count in doc.inventory_counts:
+        stored = catalog.get(count.catalog_object_id)
+        if stored is None or not CatalogObjectEntity.from_entity(stored).is_variation:
+            raise UnitError(
+                UnitErrorKind.INTERNAL,
+                detail=f"Seed inventory count references unknown catalog variation {count.catalog_object_id}.",
+                info={"catalog_object_id": count.catalog_object_id},
+            )
+        if locations.get(count.location_id) is None:
+            raise UnitError(
+                UnitErrorKind.INTERNAL,
+                detail=f"Seed inventory count references unknown location {count.location_id}.",
+                info={"location_id": count.location_id},
+            )
+        entity = InventoryCountEntity(
+            catalog_object_id=count.catalog_object_id,
+            location_id=count.location_id,
+            quantity=count.quantity,
+            calculated_at=count.calculated_at or "",
+        ).to_entity()
+        if count.calculated_at is not None:
+            entity["created_at"] = count.calculated_at
+            entity["updated_at"] = count.calculated_at
+        counts.insert(entity, SEED_META)
 
 
 def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: SquareConfig) -> None:

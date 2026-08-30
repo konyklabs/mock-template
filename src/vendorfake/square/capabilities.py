@@ -45,6 +45,10 @@ SQUARE_CAPABILITIES: tuple[CapabilityDecl, ...] = (
         summary="External payments against orders: create, complete, cancel, retrieve.",
     ),
     CapabilityDecl(
+        name="inventory",
+        summary="Stock counts per variation and location: physical counts, adjustments, retrieval.",
+    ),
+    CapabilityDecl(
         name="loyalty",
         summary="The seller's loyalty program: find or enrol a buyer by phone, accumulate points for an order.",
     ),

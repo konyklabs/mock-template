@@ -93,6 +93,13 @@ def test_every_constant_names_something_the_document_contains(document: dict[str
     assert account.id == seed_constants.SEED_LOYALTY_ACCOUNT_ID
     assert account.phone_number == seed_constants.SEED_LOYALTY_ACCOUNT_PHONE
     assert account.customer_id == seed_constants.SEED_LOYALTY_CUSTOMER_ID
+    by_object = {count.catalog_object_id: count for count in doc.inventory_counts}
+    assert by_object[seed_constants.TEA_MUG_VARIATION_ID].quantity == seed_constants.SEED_INVENTORY_TEA_MUG_QUANTITY
+    assert (
+        by_object[seed_constants.COLD_BREW_SMALL_VARIATION_ID].quantity
+        == seed_constants.SEED_INVENTORY_COLD_BREW_SMALL_QUANTITY
+    )
+    assert {count.calculated_at for count in doc.inventory_counts} == {seed_constants.SEED_INVENTORY_CALCULATED_AT}
 
 
 def test_a_misspelled_key_is_a_startup_failure_naming_it(document: dict[str, Any]) -> None:
@@ -128,6 +135,7 @@ def test_the_store_holds_what_the_document_describes(h: Harness) -> None:
         "orders": 2,
         "loyalty_programs": 1,
         "loyalty_accounts": 1,
+        "inventory_counts": 2,
         "tokens": 2,
     }
 

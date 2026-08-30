@@ -1,7 +1,7 @@
 {
   "name": "no-faults",
   "summary": "Full surface with fault injection switched off entirely. What a CI suite that only wants happy paths should run.",
-  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "payments", "loyalty", "webhooks"],
+  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "payments", "loyalty", "inventory", "webhooks"],
   "seed": "seed/default.seed.json",
   "vendor": {
     "application_id": "sandbox-sq0idb-unit-square-application",

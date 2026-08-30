@@ -33,6 +33,9 @@ __all__ = [
     "SEED_COMPLETED_ORDER_ID",
     "SEED_COMPLETED_ORDER_TENDER_ID",
     "SEED_COMPLETED_ORDER_TOTAL",
+    "SEED_INVENTORY_CALCULATED_AT",
+    "SEED_INVENTORY_COLD_BREW_SMALL_QUANTITY",
+    "SEED_INVENTORY_TEA_MUG_QUANTITY",
     "SEED_KIOSK_LOCATION_ID",
     "SEED_LOCATION_ID",
     "SEED_LOYALTY_ACCOUNT_ID",
@@ -110,6 +113,13 @@ SEED_LOYALTY_CUSTOMER_ID = "QPTXM8PQNX3Q726ZYHPMNP46XC"
 """The seeded buyer: ids from Square's loyalty examples, phone in the E.164
 form the mapping documents."""
 
+SEED_INVENTORY_TEA_MUG_QUANTITY = "25"
+SEED_INVENTORY_COLD_BREW_SMALL_QUANTITY = "8"
+SEED_INVENTORY_CALCULATED_AT = "2026-08-01T09:00:00.000Z"
+"""Two IN_STOCK counts at the Grant Park location, so a batch-retrieve on a
+fresh unit returns something and a physical count has a baseline to change.
+Quantities are decimal strings, as Square's ``InventoryCount`` sends them."""
+
 SEED_ACCESS_TOKEN = "EAAAl-unit-seeded-access-token-full-scopes"
 SEED_REFRESH_TOKEN = "EQAAl-unit-seeded-refresh-token-full-scopes"
 SEED_SCOPES: tuple[str, ...] = (
@@ -122,6 +132,8 @@ SEED_SCOPES: tuple[str, ...] = (
     "PAYMENTS_WRITE",
     "LOYALTY_READ",
     "LOYALTY_WRITE",
+    "INVENTORY_READ",
+    "INVENTORY_WRITE",
     "DEVELOPER_APPLICATION_WEBHOOKS_WRITE",
 )
 """The full seeded grant.
@@ -143,6 +155,7 @@ SEED_READ_ONLY_SCOPES: tuple[str, ...] = (
     "ITEMS_READ",
     "PAYMENTS_READ",
     "LOYALTY_READ",
+    "INVENTORY_READ",
 )
 """A second token that cannot write, so "403 on the write path" is testable
 without minting anything."""

@@ -153,20 +153,27 @@
       "enrolled_at": "2026-08-01T10:00:00.000Z"
     }
   ],
+  "inventory_counts": [
+    { "catalog_object_id": "2TZFAOHWGG7PAK2QEXWYPZSP", "location_id": "18YC4JDH91E1H", "quantity": "25",
+      "calculated_at": "2026-08-01T09:00:00.000Z" },
+    { "catalog_object_id": "HURXQOOAIC4IZSI2BEXQRYFY", "location_id": "18YC4JDH91E1H", "quantity": "8",
+      "calculated_at": "2026-08-01T09:00:00.000Z" }
+  ],
   "tokens": [
     {
       "id": "tok_seed_full",
       "access_token": "EAAAl-unit-seeded-access-token-full-scopes",
       "refresh_token": "EQAAl-unit-seeded-refresh-token-full-scopes",
       "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ORDERS_WRITE", "ITEMS_READ", "ITEMS_WRITE",
-                 "PAYMENTS_READ", "PAYMENTS_WRITE", "LOYALTY_READ", "LOYALTY_WRITE",
-                 "DEVELOPER_APPLICATION_WEBHOOKS_WRITE"]
+                 "PAYMENTS_READ", "PAYMENTS_WRITE", "LOYALTY_READ", "LOYALTY_WRITE", "INVENTORY_READ",
+                 "INVENTORY_WRITE", "DEVELOPER_APPLICATION_WEBHOOKS_WRITE"]
     },
     {
       "id": "tok_seed_readonly",
       "access_token": "EAAAl-unit-seeded-access-token-read-only",
       "refresh_token": "EQAAl-unit-seeded-refresh-token-read-only",
-      "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ITEMS_READ", "PAYMENTS_READ", "LOYALTY_READ"]
+      "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ITEMS_READ", "PAYMENTS_READ", "LOYALTY_READ",
+                 "INVENTORY_READ"]
     }
   ]
 }

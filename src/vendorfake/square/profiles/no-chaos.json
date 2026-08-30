@@ -1,7 +1,7 @@
 {
   "name": "no-chaos",
   "summary": "Full surface with delivery faults switched off: requests can still be made to fail deliberately, but a webhook that is sent is sent honestly, once.",
-  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "payments", "loyalty", "webhooks", "chaos"],
+  "capabilities": ["oauth", "order-lifecycle", "merchant-directory", "payments", "loyalty", "inventory", "webhooks", "chaos"],
   "seed": "seed/default.seed.json",
   "vendor": {
     "application_id": "sandbox-sq0idb-unit-square-application",
