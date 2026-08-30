@@ -64,6 +64,7 @@ the registry rather than to configuration."""
 _BUILTIN: Mapping[str, str] = {
     "clover": "vendorfake.clover:VENDOR",
     "square": "vendorfake.square:VENDOR",
+    "toast": "vendorfake.toast:VENDOR",
 }
 """Vendors shipped in this distribution, as ``module:attribute`` targets.
 

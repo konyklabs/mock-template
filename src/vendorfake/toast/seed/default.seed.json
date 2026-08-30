@@ -1,0 +1,52 @@
+{
+  "_comment": [
+    "Seed scenario for the Toast unit. Fork-owned data, not code.",
+    "Entity documents use Toast's own camelCase field names; the top level is snake_case.",
+    "Guids are lowercase UUIDs, the one documented shape (apiUnderstandingGuidsEntityIdentifiersAndMultilocationIds_V2.html).",
+    "  restaurant shape   toast-restaurants-api.yaml (general/location/urls/schedules/delivery/onlineOrdering/prepTimes)",
+    "  closeoutHour 4     JUDGMENT business-date arithmetic, see model/dates.py",
+    "The seeded tokens are readable strings a human types into curl; minted tokens are JWT-shaped.",
+    "Token expirations are stamped at hydrate from the configured TTL (19168 s, the documented example)."
+  ],
+  "restaurant": {
+    "guid": "e6a4a8d2-0000-4000-8000-000000000001",
+    "general": {
+      "name": "Harvest & Rye — Toast",
+      "locationName": "Springfield",
+      "locationCode": "SPR",
+      "description": "The Toast unit's one restaurant.",
+      "timeZone": "America/New_York",
+      "closeoutHour": 4,
+      "managementGroupGuid": "e6a4a8d2-0000-4000-8000-0000000000a1",
+      "currencyCode": "USD"
+    },
+    "location": {
+      "address1": "1 Main St",
+      "city": "Springfield",
+      "stateCode": "IL",
+      "zipCode": "62701",
+      "country": "US",
+      "phone": "2175550100",
+      "latitude": 39.7817,
+      "longitude": -89.6501
+    }
+  },
+  "tokens": [
+    {
+      "id": "b1a2c3d4-0000-4000-8000-0000000000f1",
+      "access_token": "unit-seeded-toast-access-token-full-scopes"
+    },
+    {
+      "id": "b1a2c3d4-0000-4000-8000-0000000000f2",
+      "access_token": "unit-seeded-toast-access-token-read-only",
+      "scopes": [
+        "orders:read",
+        "menus:read",
+        "config:read",
+        "restaurants:read",
+        "partners:read",
+        "stock:read"
+      ]
+    }
+  ]
+}
