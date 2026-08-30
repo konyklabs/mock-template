@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from vendorfake.clover.events import VERIFICATION_EVENT_TYPE
+from vendorfake.clover.events import VERIFICATION_EVENT_TYPE, verification_event_id
 from vendorfake.clover.signer import (
     AUTH_HEADER,
     CLOVER_SIGNER_PROPERTIES,
@@ -38,6 +38,7 @@ def sign_input(
     body: bytes = BODY,
     attempt: int = 1,
     event_type: str = "O:CREATE",
+    event_id: str = "e1",
 ) -> SignInput:
     return SignInput(
         notification_url=url,
@@ -45,7 +46,11 @@ def sign_input(
         secret=secret,
         attempt=attempt,
         event=PreparedEvent(
-            type=event_type, event_id="e1", entity_id="GHIVJT2ABCRSC", created_at="2026-01-01T00:00:00.000Z", body={}
+            type=event_type,
+            event_id=event_id,
+            entity_id="GHIVJT2ABCRSC",
+            created_at="2026-01-01T00:00:00.000Z",
+            body={},
         ),
     )
 
@@ -96,10 +101,23 @@ def test_each_declared_direction_actually_holds(signer: CloverWebhookSigner) -> 
     assert signer.sign(sign_input(attempt=6))[AUTH_HEADER] == base
 
 
-def test_the_verification_post_carries_no_auth_header(signer: CloverWebhookSigner) -> None:
-    """The auth code is documented as sent *after* the callback URL is
-    validated, and the verification POST is what validates it."""
-    assert signer.sign(sign_input(event_type=VERIFICATION_EVENT_TYPE)) == {}
+def test_the_units_own_verification_post_carries_no_auth_header(signer: CloverWebhookSigner) -> None:
+    """JUDGMENT: the auth code is documented as sent *after* the callback URL
+    is validated and the doc says nothing about the verification POST; this
+    unit reads "after" as "not before". The unit's own verification is the
+    one whose id the surface minted for it."""
+    own = sign_input(event_type=VERIFICATION_EVENT_TYPE, event_id=verification_event_id("GHIVJT2ABCRSC"))
+    assert signer.sign(own) == {}
+
+
+def test_the_verification_type_alone_does_not_drop_the_header(signer: CloverWebhookSigner) -> None:
+    """`POST /__unit/webhooks/emit` can name any type but not this id, so an
+    emitted 'verification' event is signed like everything else. Without the
+    id check the emitter would be a way to send unauthenticated deliveries."""
+    forged = sign_input(event_type=VERIFICATION_EVENT_TYPE, event_id="e1")
+    assert signer.sign(forged) == {AUTH_HEADER: CODE}
+    wrong_entity = sign_input(event_type=VERIFICATION_EVENT_TYPE, event_id=verification_event_id("SOMEONEELSE00"))
+    assert signer.sign(wrong_entity) == {AUTH_HEADER: CODE}
 
 
 def test_signing_is_deterministic(signer: CloverWebhookSigner) -> None:
@@ -142,4 +160,5 @@ def test_describe_names_the_header_the_absence_of_an_algorithm_and_the_source(
     assert described["header"] == "X-Clover-Auth"
     assert "no HMAC" in described["algorithm"]
     assert described["reference"] == "https://docs.clover.com/dev/docs/webhooks"
+    assert described["verification"].startswith("JUDGMENT:")
     assert VERIFICATION_EVENT_TYPE in described["verification"]

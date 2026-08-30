@@ -70,6 +70,7 @@ __all__ = [
     "VERIFICATION_EVENT_TYPE",
     "CloverEventMapper",
     "event_type",
+    "verification_event_id",
 ]
 
 KEY_ORDERS = "O"
@@ -109,6 +110,18 @@ validated, so this is the one delivery that must not carry it."""
 def event_type(key: str, change: str) -> str:
     """``O`` + ``CREATE`` -> ``O:CREATE``. Spelled once."""
     return f"{key}:{change}"
+
+
+def verification_event_id(subscription_id: str) -> str:
+    """The event id of a subscription's verification POST.
+
+    Load-bearing, not decoration: the signer recognises the unit's own
+    verification delivery by this id *and* the type, because the type alone is
+    forgeable -- ``POST /__unit/webhooks/emit`` accepts any type string -- and
+    the id is not: the emitter derives its ids from a digest and nothing else
+    in the process builds a :class:`PreparedEvent` with this shape.
+    """
+    return f"{VERIFICATION_EVENT_TYPE}:{subscription_id}"
 
 
 CLOVER_EVENT_TYPES: tuple[str, ...] = tuple(

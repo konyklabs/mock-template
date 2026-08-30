@@ -121,10 +121,13 @@ class VerifySubscriptionRequest(BaseModel):
 class SubscriptionWire(BaseModel):
     """One subscription as the stand-in reports it.
 
-    ``authCode`` is present only once the callback is verified: the documented
-    flow hands the auth code out after validation, and a record that showed it
-    beforehand would let a consumer skip the handshake this surface exists to
-    rehearse.
+    ``authCode`` is present only once the callback is verified, because that
+    is when the documented flow hands it out. This is a property of the
+    stand-in's projection and nothing stronger: the code is the core's
+    ``signature_key``, and ``GET /__unit/webhooks/subscriptions`` -- the open
+    control plane -- returns that verbatim for every subscriber, pending or
+    not. A consumer who wants to skip the handshake can; the stand-in simply
+    does not hand them the shortcut in the flow it models.
     """
 
     model_config = _WIRE

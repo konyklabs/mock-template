@@ -20,11 +20,27 @@ declaration and checks each direction *as declared*, which is what makes a
 static scheme conformant rather than merely tolerated (``checks/webhooks.py``,
 C09).
 
-THE ONE EXCEPTION is the verification handshake. The auth code is documented
-as sent only *after* validation, and the verification POST is what validates,
-so the delivery carrying ``{"verificationCode": ...}`` goes out with no
-``X-Clover-Auth``. :meth:`CloverWebhookSigner.sign` recognises that event by
-its type; the surface that sends it is :mod:`vendorfake.clover.surface.webhooks`.
+THE ONE EXCEPTION is the verification handshake, and it is JUDGMENT. The
+documentation says the auth code is sent "in every message header after the
+webhook callback URL is validated"; it does not say what the verification
+POST itself carries. Reading "after" as "not before" is an inference, and
+this unit sends the delivery carrying ``{"verificationCode": ...}`` with no
+``X-Clover-Auth`` on that inference. The failure mode runs one way: a consumer
+whose callback rejects unauthenticated POSTs passes the handshake here and may
+find the real platform behaves differently -- either sending the code
+unauthenticated too, or not. :meth:`CloverWebhookSigner.describe` publishes
+the label so an operator reading ``/__unit/info`` sees it as a reading and
+not a fact.
+
+HOW THE SIGNER KNOWS. :meth:`CloverWebhookSigner.sign` recognises the unit's
+own verification delivery by its type **and** its event id
+(:func:`~vendorfake.clover.events.verification_event_id`). The type alone
+would be forgeable: ``POST /__unit/webhooks/emit`` accepts any type string and
+fans out to every ``*`` subscriber, so a caller could push an unauthenticated
+delivery to a verified callback by naming the type. The emitter derives its
+event ids from a digest and cannot produce ``verification:<id>``; only
+:mod:`vendorfake.clover.surface.webhooks` does. An emitted event of that type
+therefore carries the header like any other.
 
 Where the secret lives: the core's subscription entity has one ``signature_key``
 and the dispatcher hands it to the signer as ``SignInput.secret``. For Clover
@@ -38,7 +54,7 @@ import hmac
 from collections.abc import Mapping
 
 from vendorfake.clover.delivery_headers import CloverDeliveryHeaders
-from vendorfake.clover.events import VERIFICATION_EVENT_TYPE
+from vendorfake.clover.events import VERIFICATION_EVENT_TYPE, verification_event_id
 from vendorfake.core.kernel.types import SignerProperties, SignInput
 from vendorfake.core.webhooks.models import DeliveryMetadata
 
@@ -95,12 +111,14 @@ class CloverWebhookSigner:
         return CLOVER_SIGNER_PROPERTIES
 
     def sign(self, payload: SignInput) -> Mapping[str, str]:
-        """``X-Clover-Auth: <secret>``, or nothing for the verification POST.
+        """``X-Clover-Auth: <secret>``, or nothing for the unit's own
+        verification POST (JUDGMENT; see the module docstring).
 
         Nothing else from the payload is read: not the body, not the URL, not
         the attempt. A retry carries the same header as the first send.
         """
-        if payload.event.type == VERIFICATION_EVENT_TYPE:
+        event = payload.event
+        if event.type == VERIFICATION_EVENT_TYPE and event.event_id == verification_event_id(event.entity_id):
             return {}
         return {AUTH_HEADER: payload.secret}
 
@@ -116,7 +134,9 @@ class CloverWebhookSigner:
             "payload": "none -- the header is the subscription's auth code verbatim",
             "reference": _DOC_URL,
             "verification": (
-                f"the {VERIFICATION_EVENT_TYPE!r} delivery carries no {AUTH_HEADER}: the code is "
-                "documented as sent only after the callback URL is validated"
+                f"JUDGMENT: the unit's own {VERIFICATION_EVENT_TYPE!r} delivery carries no {AUTH_HEADER}. "
+                "Clover documents the code as sent 'in every message header after the webhook callback "
+                "URL is validated' and says nothing about the verification POST itself; a callback that "
+                "rejects unauthenticated POSTs passes here and may behave differently against Clover."
             ),
         }

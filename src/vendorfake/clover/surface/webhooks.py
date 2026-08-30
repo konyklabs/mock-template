@@ -92,7 +92,7 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
-from vendorfake.clover.events import VERIFICATION_EVENT_TYPE, event_type
+from vendorfake.clover.events import VERIFICATION_EVENT_TYPE, event_type, verification_event_id
 from vendorfake.clover.model.common import validate_body
 from vendorfake.clover.model.webhooks import (
     ALL_EVENT_KEYS,
@@ -187,10 +187,29 @@ class CloverWebhooksSurface:
         verification POST is exactly a targeted send, so "not yet receiving
         events" is expressed as "subscribed to nothing" rather than as
         disabled. ``verify`` is what fills the event types in.
+
+        JUDGMENT -- **refused with 503 while delivery is disabled.** A profile
+        with ``webhooks.disable_delivery`` makes ``enqueue_to`` a silent no-op,
+        so the code could never reach the callback, no delivery record would
+        carry it, and ``verify`` could never succeed -- a 201 there would be a
+        registration that can only ever hang. Clover has no equivalent state,
+        so the refusal is this fake's; it names the alternative (a pre-verified
+        subscriber through the control plane) rather than leaving the consumer
+        to discover the hang.
         """
         ctx = args.ctx
         request = validate_body(RegisterSubscriptionRequest, args.body())
         self._require_https(request.url)
+        if not ctx.webhooks.enabled:
+            raise UnitError(
+                UnitErrorKind.UNAVAILABLE,
+                detail=(
+                    "Webhook delivery is disabled on this unit (webhooks.disable_delivery), so the verification "
+                    "code could never reach the callback and this registration could never be verified. Register "
+                    "a pre-verified subscriber through POST /__unit/webhooks/subscriptions instead."
+                ),
+                field="url",
+            )
         ids = self._deps.ids
         subscription_id = ids.internal("wbhk")
         verification_code = ids.verification_code()
@@ -212,7 +231,7 @@ class CloverWebhooksSurface:
         ctx.webhooks.enqueue_to(
             PreparedEvent(
                 type=VERIFICATION_EVENT_TYPE,
-                event_id=f"{VERIFICATION_EVENT_TYPE}:{subscription_id}",
+                event_id=verification_event_id(subscription_id),
                 entity_id=subscription_id,
                 created_at=ctx.clock.iso_ms(),
                 body={"verificationCode": verification_code},

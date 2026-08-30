@@ -320,6 +320,55 @@ def test_every_stand_in_summary_says_it_is_not_a_clover_endpoint() -> None:
         assert all(r["summary"].startswith("Stand-in (not a Clover endpoint)") for r in routes), routes
 
 
+def test_registering_while_delivery_is_disabled_is_refused_not_left_hanging(h: Harness, sink: MemorySink) -> None:
+    """JUDGMENT: with delivery off, `enqueue_to` no-ops, no record carries the
+    code, and verify could never succeed. A 201 would be a registration that
+    can only hang; a 503 says so and names the alternative."""
+    h.unit.context.webhooks.set_enabled(False)
+    response = h.api.post("/__clover/webhooks/subscriptions", {"url": HOOKS})
+    assert response.status == 503, response.text
+    assert response.headers["x-unit-error"] == "unavailable"
+    assert "disable_delivery" in response.json()["message"]
+    assert "/__unit/webhooks/subscriptions" in response.json()["message"]
+    assert h.api.get("/__clover/webhooks/subscriptions").json()["subscriptions"] == []
+    assert sink.received == []
+
+
+def test_an_emitted_event_of_the_verification_type_still_carries_the_auth_header(h: Harness, sink: MemorySink) -> None:
+    """POST /__unit/webhooks/emit accepts any type string. The signer must
+    recognise the unit's *own* verification POST by its id as well, or the
+    emitter is a way to push an unauthenticated delivery to every verified
+    callback by naming the type."""
+    verified = register_and_verify(h, sink)
+    emitted = h.api.post(
+        "/__unit/webhooks/emit",
+        {"type": "verification", "entity_id": verified["id"], "body": {"verificationCode": "forged"}},
+    )
+    assert emitted.status == 202, emitted.text
+    h.api.post("/__unit/webhooks/drain", {})
+    assert sink.received == []
+
+    # Even a subscriber that asked for everything gets the header on it.
+    h.api.post(
+        "/__unit/webhooks/subscriptions",
+        {"id": "wbhk_star", "notification_url": OTHER_HOOKS, "event_types": ["*"], "signature_key": "star-code"},
+    )
+    h.api.post("/__unit/webhooks/emit", {"type": "verification", "entity_id": "wbhk_star", "body": {}})
+    h.api.post("/__unit/webhooks/drain", {})
+    (request,) = sink.received
+    assert request.url == OTHER_HOOKS
+    assert request.headers[AUTH_HEADER] == "star-code"
+
+
+def test_the_unverified_verification_reading_is_published_as_judgment(h: Harness) -> None:
+    """The doc says the code is sent 'after the callback URL is validated'
+    and nothing about the verification POST; /__unit/info must present the
+    unauthenticated verification POST as a reading, not a fact."""
+    described = h.api.get("/__unit/info").json()["signer"]
+    assert described["verification"].startswith("JUDGMENT:")
+    assert "after the webhook callback URL is validated" in described["verification"]
+
+
 def test_ids_and_codes_are_deterministic_per_seed() -> None:
     """Two units on the same profile mint the same subscription id, so a
     transcript of the handshake diffs between runs."""
