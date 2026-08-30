@@ -1,17 +1,12 @@
 """Two units, the same traffic, the same digest -- across every write path.
 
-`Store.entity_digest` is the determinism evidence, and it excludes the
-vendor's `volatile_fields` so two units seeded alike hash alike whatever the
-wall clock said. That claim held for the seed on its own; each write path
-this branch added stamps something from the clock, and each is driven here
-against two units whose clocks are deliberately an hour apart.
-
-KNOWN GAP, konyklabs/roadmap#35: `volatile_fields` names top-level entity
-fields only, so a clock stamp nested inside a list -- a tender's
-`created_at`, a fulfillment's `placed_at` -- cannot be excluded. Those paths
-are marked `xfail(strict=True)` against the issue: the test documents the
-hole and turns red the day the mechanism closes it, so the marks get removed
-rather than forgotten.
+`Store.entity_digest` is the determinism evidence, and it ignores the values
+of the vendor's `volatile_fields` -- at any depth, since konyklabs/roadmap#35
+-- so two units seeded alike hash alike whatever the wall clock said. Each
+write path that stamps something from the clock is driven here against two
+units whose clocks are deliberately an hour apart, including the three whose
+stamps live inside a list (a tender's `created_at`, a fulfillment's
+`placed_at`) and were `xfail` until the digest reached them.
 """
 
 from __future__ import annotations
@@ -33,8 +28,6 @@ from vendorfake.square.seed.constants import (
 )
 
 Traffic = Callable[[Harness], None]
-
-NESTED_STAMP = "konyklabs/roadmap#35: a wall-clock stamp nested in a list is beyond volatile_fields"
 
 
 def order(h: Harness, amount: int = 500, **extra: Any) -> str:
@@ -194,15 +187,9 @@ HOUR_MS = 60 * 60 * 1000
         pytest.param(loyalty_enrol_and_accumulate, id="loyalty-enrol-accumulate"),
         pytest.param(payment_without_order, id="payment-no-order"),
         pytest.param(order_update, id="order-update"),
-        pytest.param(
-            payment_against_order, id="payment-tenders-order", marks=pytest.mark.xfail(strict=True, reason=NESTED_STAMP)
-        ),
-        pytest.param(pay_order_opaque, id="pay-order", marks=pytest.mark.xfail(strict=True, reason=NESTED_STAMP)),
-        pytest.param(
-            order_with_fulfillment,
-            id="order-with-fulfillment",
-            marks=pytest.mark.xfail(strict=True, reason=NESTED_STAMP),
-        ),
+        pytest.param(payment_against_order, id="payment-tenders-order"),
+        pytest.param(pay_order_opaque, id="pay-order"),
+        pytest.param(order_with_fulfillment, id="order-with-fulfillment"),
     ],
 )
 def test_two_units_driven_alike_an_hour_apart_digest_alike(traffic: Traffic) -> None:
@@ -226,3 +213,51 @@ def test_the_clock_gap_is_real() -> None:
             listed = h.api.post("/v2/catalog/search", {"begin_time": "2026-01-01T00:00:00Z"}, headers=h.auth).json()
             stamps.append(listed["latest_time"])
     assert stamps[1] != stamps[3]
+
+
+# ---------------------------------------------------------------------------
+# A transition a wall-clock stamp marks is still state.
+# ---------------------------------------------------------------------------
+
+
+def test_a_spent_code_and_a_revoked_token_move_the_digest_by_their_mark_alone() -> None:
+    """`used_at` and `revoked_at` are volatile -- their instants stay out of
+    the digest -- but their *presence* is the only record that a code was
+    spent or a token revoked. The measured hole this closes: the digest was
+    byte-identical with the mark present and removed, so a mutant that
+    stopped marking would not have moved it. Each mark is popped from the
+    live map (no version bump, nothing else changes) and the digest must
+    move."""
+    from tests.unit.square.harness import APPLICATION_ID
+    from vendorfake.square.entities import COL
+
+    for h in build_harness("full"):
+        store = h.unit.context.store
+        code = h.code()
+        token = h.token(
+            client_secret=h.client_auth["authorization"].split()[1], grant_type="authorization_code", code=code
+        )
+        assert token.status == 200, token.text
+        spent = store.raw(COL.codes)[code]
+        assert spent.get("used_at")
+        with_mark = store.entity_digest()
+        spent.pop("used_at")
+        assert store.entity_digest() != with_mark
+
+        revoked = h.api.post(
+            "/oauth2/revoke",
+            {
+                "client_id": APPLICATION_ID,
+                "access_token": token.json()["access_token"],
+                "revoke_only_access_token": True,
+            },
+            headers=h.client_auth,
+        )
+        assert revoked.status == 200, revoked.text
+        record = next(
+            e for e in store.raw(COL.tokens).values() if e.get("access_token") == token.json()["access_token"]
+        )
+        assert record.get("revoked_at")
+        with_mark = store.entity_digest()
+        record.pop("revoked_at")
+        assert store.entity_digest() != with_mark

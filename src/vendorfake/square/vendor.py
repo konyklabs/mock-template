@@ -156,20 +156,42 @@ _VOLATILE_FIELDS: tuple[str, ...] = (
     "calculated_at",
     "enrolled_at",
     "mapping_created_at",
+    # Fulfillment-details stamps, one level down inside `fulfillments[]`: the
+    # creation stamp and every transition stamp `_TRANSITION_STAMPS` in
+    # surface/orders.py can set. The digest matches names at any depth, so a
+    # name here covers `tenders[].created_at` too without listing it (the
+    # core already covers `created_at`).
+    "placed_at",
+    "accepted_at",
+    "rejected_at",
+    "ready_at",
+    "expired_at",
+    "picked_up_at",
+    "canceled_at",
+    "packaged_at",
+    "shipped_at",
+    "failed_at",
+    "delivered_at",
+    "completed_at",
+    "in_progress_at",
 )
-"""Entity fields excluded from the state digest because they carry wall-clock
-time. Two units seeded identically a second apart, and driven with the same
-traffic, must still agree, and these are the fields that would otherwise make
-them differ.
+"""Entity fields whose values are excluded from the state digest because they
+carry wall-clock time. Two units seeded identically a second apart, and driven
+with the same traffic, must still agree, and these are the fields that would
+otherwise make them differ.
 
-KNOWN GAP, tracked as konyklabs/roadmap#35 -- **the digest excludes top-level
-fields only.** Three wall-clock stamps live one level down and cannot be
-named here: ``tenders[].created_at`` (PayOrder and every payment capture),
-``fulfillments[].pickup_details.placed_at`` and its transition siblings, and
-``reward_tiers[].created_at`` when a scenario omits it. Two units driven
-through those paths a millisecond apart digest differently, and
-``tests/unit/square/test_digest_determinism.py`` marks each such path
-``xfail`` against the issue rather than pretending the digest covers it."""
+Two properties of the digest matter here, both the core's
+(``Store.entity_digest``): a name matches **at any depth**, so the stamps
+inside ``tenders[]``, ``fulfillments[].pickup_details`` and
+``reward_tiers[]`` are covered; and a set field still hashes as *set*, so a
+spent authorization code (``used_at``) and a fresh one digest differently
+although the instant itself is ignored. ``tests/unit/square/test_digest_determinism.py``
+drives every write path that stamps something against two units an hour apart.
+
+Not listed on purpose: ``pickup_at``, ``deliver_at``, ``courier_pickup_at``
+and the other caller-supplied *schedule* instants. They are what the consumer
+asked for, not what the clock said, and two consumers asking for different
+pickup times are different state."""
 
 
 class SquareVendor:

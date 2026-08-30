@@ -968,8 +968,11 @@ class VendorDefinition(Protocol):
 
     @property
     def volatile_fields(self) -> Sequence[str]:
-        """Entity fields excluded from the state digest because they carry
-        wall-clock time. ``created_at``/``updated_at`` are excluded already."""
+        """Entity field names whose *values* the state digest ignores because
+        they carry wall-clock time. The name matches at any depth, and a set
+        field still hashes as "set", so a transition the stamp marks moves the
+        digest while the instant does not. ``created_at``/``updated_at`` are
+        covered already."""
         ...
 
     def hydrate(self, ctx: UnitContext, seed: object) -> None:

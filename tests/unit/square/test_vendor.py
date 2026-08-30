@@ -97,7 +97,11 @@ def test_the_retry_defaults_carry_squares_documented_schedule() -> None:
 
 
 def test_volatile_fields_are_the_wall_clock_ones() -> None:
-    assert set(create_square_vendor().volatile_fields) == {
+    """Every stamp a mutation takes from the clock, including the ones that
+    live inside `fulfillments[].<type>_details` -- and none of the schedule
+    instants a caller supplies (`pickup_at`, `deliver_at`), which are state."""
+    fields = set(create_square_vendor().volatile_fields)
+    assert fields == {
         "expires_at",
         "refresh_token_expires_at",
         "closed_at",
@@ -108,7 +112,21 @@ def test_volatile_fields_are_the_wall_clock_ones() -> None:
         "calculated_at",
         "enrolled_at",
         "mapping_created_at",
+        "placed_at",
+        "accepted_at",
+        "rejected_at",
+        "ready_at",
+        "expired_at",
+        "picked_up_at",
+        "canceled_at",
+        "packaged_at",
+        "shipped_at",
+        "failed_at",
+        "delivered_at",
+        "completed_at",
+        "in_progress_at",
     }
+    assert not fields & {"pickup_at", "deliver_at", "courier_pickup_at"}
 
 
 def test_magic_triggers_name_fields_a_consumer_can_actually_set() -> None:

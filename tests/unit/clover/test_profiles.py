@@ -87,15 +87,16 @@ def test_chaos_demo_ships_four_rules_on_a_virtual_clock_and_the_request_rules_fi
         assert h.get(f"/orders/{order['id']}").status == 200  # the stored token never changed
 
 
-SEED_DIGEST = "1baf5d0af37c744b45f30a31fe7348e08ddd21a78d92aa25d298288939fbd4a3"
+SEED_DIGEST = "512b326c99fbee5b98fb8a08e39700b5cbde435ff7c308b231eca408c33fc091"
 """The entity digest of the shipped scenario, pinned as a literal.
 
 Identical on every profile because seeded ids come from the document, never
-from the id stream, and every hydrate-time instant is a volatile field the
-digest ignores. A change to the scenario changes this line on purpose; a
-change to anything else that moves it is the regression this test exists to
-catch (the same claim the conformance C06/C22 contracts make across units
-and across processes)."""
+from the id stream, and every hydrate-time instant is a volatile field whose
+value the digest ignores. A change to the scenario changes this line on
+purpose; a change to anything else that moves it is the regression this test
+exists to catch (the same claim the conformance C06/C22 contracts make across
+units and across processes). Re-pinned for konyklabs/roadmap#35, when the
+digest began hashing a volatile field's presence rather than dropping it."""
 
 
 @pytest.mark.parametrize("name", SHIPPED)
