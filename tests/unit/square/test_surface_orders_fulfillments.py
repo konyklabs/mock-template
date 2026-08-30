@@ -24,7 +24,10 @@ from vendorfake.square.seed.constants import SEED_LOCATION_ID, SEED_OPEN_ORDER_I
 
 @pytest.fixture
 def h() -> Iterator[Harness]:
-    yield from build_harness("orders-only")
+    """On a virtual clock: several tests below assert a stamp this unit sets
+    inside the mutator against the store's own `updated_at`, and on a real
+    clock those are two reads a millisecond apart."""
+    yield from build_harness("orders-only", env={"VENDORFAKE_CLOCK": "virtual"})
 
 
 def create(h: Harness, fulfillments: list[dict[str, Any]], key: str = "ff-create") -> dict[str, Any]:
