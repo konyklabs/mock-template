@@ -1427,6 +1427,12 @@ register(
         defect="Every successful response claims to be an idempotent replay, the first execution included.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C19"}),
+        also_trips=frozenset({"C24"}),
+        cascade=(
+            "The marker is evidence both contracts read: C19's first-execution clause and C24's "
+            "partner clause each assert its absence on a response that replayed nothing, so a unit "
+            "stamping it unconditionally genuinely violates both."
+        ),
         vendor=lambda inner: VendorOverlay(inner, routes=wrap_vendor_handlers(_stamp_replay_marker)),
     )
 )

@@ -39,6 +39,38 @@ _MUTATING_METHODS = frozenset({"POST", "PUT"})
 _REPLAY_HEADER = "x-unit-idempotent-replay"
 _IGNORED_BODY_HEADER = "x-unit-idempotent-ignored-body"
 _IDEMPOTENCY_CONFLICT = "idempotency_conflict"
+_BEFORE_THE_HANDLER = frozenset(
+    {
+        "not_found",
+        "method_not_allowed",
+        "capability_disabled",
+        "unauthorized",
+        "token_expired",
+        "token_revoked",
+        "forbidden_scope",
+        "rate_limited",
+        "timeout",
+        "unavailable",
+    }
+)
+"""Kinds the pipeline can produce BEFORE the idempotency step: the router's
+404 and 405, the capability gate, the auth step, and the pre-auth faults. A
+partner answer in this set proves nothing about scopes -- the request may
+never have reached the key lookup at all -- so C24 refuses it rather than
+counting it as "the second route answered for itself". ``not_found`` is here
+even though a handler can also raise it, because from outside the two are one
+kind: a partner that would 404 its probe entity must publish example_params
+naming a seeded one (Route.example_params)."""
+
+_QUERY_A: dict[str, str] = {"conformance": "query-a"}
+_QUERY_B: dict[str, str] = {"conformance": "query-b"}
+"""Two queries that differ only in a value, deliberately.
+
+The fingerprint is a digest of whatever the caller called the query, so two
+that differ in one character are the strongest form of the test: a comparison
+that had degraded to "same length" or "both truthy" would still pass for two
+queries that differed structurally.
+"""
 
 
 @check(
@@ -631,6 +663,10 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
       selection prefers any other scope over it); every operation sharing one
       is not.
     """
+    # A profile may preload a standing rule on exactly these routes, and a
+    # pre-auth fault from it is indistinguishable from a pre-handler refusal
+    # this contract fails on. Same reason C12, C14, C17 and C18 reset first.
+    env.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
     first_route = next(
         row
         for row in env.example_routes(methods=_MUTATING_METHODS, idempotent=True)
@@ -682,6 +718,16 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
         f"record under the second operation's lookup, which is exactly the collapse this contract "
         f"exists to catch -- and the different bytes it answers with are the reason a weaker "
         f"assertion missed it.",
+    )
+    require(
+        second.error_kind not in _BEFORE_THE_HANDLER,
+        f"{second_route.key} (scope {second_scope!r}) answered {second.status} with "
+        f"x-unit-error={second.error_kind!r}, a refusal the pipeline produces BEFORE the "
+        f"idempotency step. Nothing about key scoping was asked: the request never demonstrably "
+        f"reached the lookup, and a partner that cannot get past routing, the capability gate or "
+        f"auth would let this contract pass vacuously. Publish example_params naming a seeded "
+        f"entity for the partner route, or fix whatever refused the request upstream of step 7 "
+        f"of core/kernel/unit.py::_run_pipeline.",
     )
     require(
         _REPLAY_HEADER not in second.headers and _IGNORED_BODY_HEADER not in second.headers,
