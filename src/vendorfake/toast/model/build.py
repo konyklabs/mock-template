@@ -300,8 +300,11 @@ def retotal_check(check: dict[str, Any], index: MenuIndex) -> None:
         selections_total += price
         taxes += tax
     if check.get("taxExempt"):
-        # JUDGMENT: a tax-exempt check levies nothing, whatever the
-        # selections computed; the specification documents the flag alone.
+        # JUDGMENT: a tax-exempt check levies nothing -- the specification
+        # documents the flag alone -- and the exemption is written all the way
+        # down, so a selection never contradicts its check by carrying a
+        # ``tax`` the check does not levy.
+        _exempt_selections(check.get("selections", []))
         taxes = 0
     discounted = 0
     for applied in check.get("appliedDiscounts", []):
@@ -312,6 +315,16 @@ def retotal_check(check: dict[str, Any], index: MenuIndex) -> None:
     check["amount"] = max(0, selections_total - discounted)
     check["taxAmount"] = taxes
     check["totalAmount"] = check["amount"] + taxes
+
+
+def _exempt_selections(selections: Any) -> None:
+    if not isinstance(selections, list):
+        return
+    for selection in selections:
+        if isinstance(selection, dict):
+            selection["tax"] = 0
+            selection["appliedTaxes"] = []
+            _exempt_selections(selection.get("modifiers"))
 
 
 def selection_by_guid(check: Mapping[str, Any], guid: str) -> dict[str, Any] | None:

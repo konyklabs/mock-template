@@ -35,14 +35,22 @@ JUDGMENT, each labelled
   types (audit gap 6: undocumented for OTHER); ``tipAmount`` defaults to 0
   and ``amountTendered`` to ``amount``;
 * **a check is PAID** when its payments' amounts cover ``totalAmount``; a
-  payment on a PAID check is refused (400); the order's ``paidDate`` is set
-  when every check is PAID;
+  payment on a PAID check is refused (400), and so is a payment in the SAME
+  request array whose earlier elements already cover the check -- validation
+  runs against an accumulating view of the whole array (a
+  :class:`PaymentBatch`), before any id is drawn or any write happens, so a
+  refusal in the third element leaves nothing of the first two;
+* the same batch is what makes a CREDIT authorisation single-use *within* one
+  array: the second element naming the same authorisation guid is the same
+  400 the store-level replay gets, never a write that could collide;
 * **the tip PATCH** answers the Payment, and refuses a voided one (400).
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any
 
 from vendorfake.core.kernel.reply import json_
@@ -64,6 +72,7 @@ __all__ = [
     "CREDIT_NOT_AUTHORIZED",
     "PAYMENT_AMOUNT_EMPTY",
     "UNSUPPORTED_PAYMENT_TYPE",
+    "PaymentBatch",
     "ToastPaymentsSurface",
     "add_payment",
     "payment_routes",
@@ -79,6 +88,24 @@ CREDIT_NOT_AUTHORIZED = "Credit card payments must be authorized before you add 
 """Documented phrases."""
 
 _CHECK_MACHINE = StateMachine(CHECK_MACHINE)
+
+
+@dataclass(slots=True)
+class PaymentBatch:
+    """What one request's earlier payments have already claimed.
+
+    ``add_payment`` validates one element; this is the memory between
+    elements, so the whole array is judged as it will land rather than each
+    element against a store none of them has touched yet. One batch per
+    validation pass, always -- the id-drawing pass gets a fresh one, so both
+    passes see the same world and agree.
+    """
+
+    #: CREDIT authorisation guids captured by earlier elements.
+    captured: set[str] = dataclass_field(default_factory=set)
+    #: Cents earlier elements put on each check, keyed by ``id(check)`` --
+    #: the dict object identity, because a rehearsal check has no guid yet.
+    covered: dict[int, int] = dataclass_field(default_factory=dict)
 
 
 class ToastPaymentsSurface:
@@ -140,11 +167,17 @@ class ToastPaymentsSurface:
         order = load_order(args, restaurant, args.params["guid"])
         _assert_not_voided(order)
         check = _check_of(order, args.params["checkGuid"])
-        # Every refusal, with no id drawn: a dry run of each payment.
+        # Every refusal, with no id drawn: a dry run of the WHOLE array
+        # against one accumulating batch, then a second pass with a fresh
+        # batch that draws the ids.
+        rehearsal = PaymentBatch()
         for i, request in enumerate(requests):
-            add_payment(ctx, restaurant, order, check, request, field=f"[{i}].", mint=None)
+            add_payment(ctx, restaurant, order, check, request, field=f"[{i}].", mint=None, batch=rehearsal)
+        batch = PaymentBatch()
         docs = [
-            add_payment(ctx, restaurant, order, check, request, field=f"[{i}].", mint=self._deps.ids.payment)
+            add_payment(
+                ctx, restaurant, order, check, request, field=f"[{i}].", mint=self._deps.ids.payment, batch=batch
+            )
             for i, request in enumerate(requests)
         ]
         for doc in docs:
@@ -232,6 +265,18 @@ def payment_routes(deps: ToastDeps) -> tuple[Route, ...]:
     return ToastPaymentsSurface(deps).routes()
 
 
+def _covered_cents(ctx: UnitContext, check: Mapping[str, Any]) -> int:
+    """What the store's non-voided payments already put on ``check``."""
+    guid = check.get("guid")
+    if not isinstance(guid, str):
+        return 0
+    return sum(
+        int(row.get("amount", 0))
+        for row in ctx.store.collection(COL.payments).all()
+        if row.get("checkGuid") == guid and row.get("paymentStatus") != "VOIDED"
+    )
+
+
 def payments_for(ctx: UnitContext, order: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     """Every payment document the order's checks reference, by guid."""
     collection = ctx.store.collection(COL.payments)
@@ -253,13 +298,17 @@ def add_payment(
     *,
     field: str,
     mint: Callable[[], str] | None,
+    batch: PaymentBatch,
 ) -> dict[str, Any]:
-    """Validate one payment against its check and build its document.
+    """Validate one payment against its check AND against the request's own
+    earlier payments, then build its document.
 
     Nothing is written here: the caller inserts and then settles the order,
-    so one request with three payments journals under one operation id.
-    With ``mint=None`` nothing is drawn either -- the callers rehearse every
-    payment that way before drawing a single id.
+    so one request with three payments journals under one operation id. With
+    ``mint=None`` nothing is drawn either -- the callers rehearse the whole
+    array that way, over one ``batch``, before drawing a single id; a refusal
+    anywhere therefore leaves the store, the journal and both id streams
+    exactly as they were (konyklabs/roadmap#39 review, B1).
     """
     if check.get("paymentStatus") in (
         CheckPaymentStatus.PAID.value,
@@ -269,6 +318,17 @@ def add_payment(
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,
             detail=f"Check {check.get('guid')} is {check.get('paymentStatus')} and takes no further payment.",
+            field=f"{field}amount",
+        )
+    already_covered = _covered_cents(ctx, check) + batch.covered.get(id(check), 0)
+    total = int(check.get("totalAmount", 0))
+    if already_covered >= total and total > 0:
+        # JUDGMENT: the earlier elements of this very array already cover the
+        # check, so this one would over-pay a check that is about to be PAID --
+        # the same refusal a second request after settling would get.
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"Check {check.get('guid')} is already covered by the preceding payments and takes no further payment.",
             field=f"{field}amount",
         )
     kind = request.type.upper()
@@ -307,6 +367,7 @@ def add_payment(
         "paymentStatus": "CAPTURED",
         "refundStatus": "NONE",
     }
+    batch.covered[id(check)] = batch.covered.get(id(check), 0) + amount
     if kind == "OTHER":
         if request.otherPayment is None:
             raise UnitError(
@@ -328,12 +389,16 @@ def add_payment(
         )
         if authorization is None:
             raise UnitError(UnitErrorKind.INVALID_VALUE, detail=CREDIT_NOT_AUTHORIZED, field=f"{field}guid")
-        if ctx.store.collection(COL.payments).get(str(authorization["id"])) is not None:
+        auth_guid = str(authorization["id"])
+        if auth_guid in batch.captured or ctx.store.collection(COL.payments).get(auth_guid) is not None:
+            # Captured by the store OR by an earlier element of this array:
+            # the same 400 either way, and never a write that could collide.
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail=f"Authorization {request.guid} was already captured.",
                 field=f"{field}guid",
             )
+        batch.captured.add(auth_guid)
         authorized = int(authorization.get("amount", 0))
         if amount > authorized:
             raise UnitError(
@@ -342,7 +407,7 @@ def add_payment(
                 field=f"{field}amount",
                 info={"authorized_cents": authorized},
             )
-        document["id"] = str(authorization["id"])
+        document["id"] = auth_guid
         document["cardEntryMode"] = str(authorization.get("cardEntryMode", "PRE_AUTHED"))
         document["cardType"] = authorization.get("cardType")
         document["last4Digits"] = authorization.get("last4Digits")
