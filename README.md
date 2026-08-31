@@ -158,6 +158,46 @@ def test_a_clover_order_fires_a_webhook_with_the_auth_code():
         assert verify_clover_auth(delivery.headers, "auth-code-from-the-dashboard")
 ```
 
+Toast scopes a request to its restaurant with the
+`Toast-Restaurant-External-ID` **header** rather than a path segment, so
+there is no `seed.path()`: `seed.auth` carries the bearer and that header
+together, which is what every restaurant-scoped call needs. A bearer on its
+own is a 400, not a 401 — the token is fine, the request just never named a
+restaurant. Event types are `order_updated`, `menus_updated`, `in_stock`,
+`out_of_stock`, `low_quantity`, and deliveries are signed with an HMAC in
+`Toast-Signature`:
+
+```python
+from vendorfake.testing import unit, webhook_receiver
+from vendorfake.toast.signer import verify_toast_signature
+
+
+def test_a_toast_order_fires_a_webhook_under_the_restaurant_header():
+    with unit("toast") as toast, webhook_receiver() as receiver:
+        seed = toast.seed  # ToastSeed
+        toast.subscribe(receiver.url, ["order_updated"], signature_key="shared-secret")
+
+        created = toast.client.post(
+            "/orders/v2/orders",
+            headers=seed.auth,  # bearer AND Toast-Restaurant-External-ID
+            json={
+                "entityType": "Order",
+                "diningOption": {"guid": seed.dining_option_dine_in_guid},
+                "checks": [
+                    {
+                        "entityType": "Check",
+                        "selections": [{"item": {"guid": seed.item_soup_guid}, "quantity": 1}],
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 200
+        toast.drain()
+
+        (delivery,) = receiver.received
+        assert verify_toast_signature("shared-secret", delivery.body, delivery.header("toast-signature") or "")
+```
+
 `subscribe` checks the event types against the vendor's vocabulary and
 refuses one it will never send — a Square type on a Clover unit would
 otherwise register happily and never fire.
@@ -172,13 +212,24 @@ When your service needs a URL, `served("square")` runs the shipped
 `vendorfake serve` in a child process and yields one, and
 `serve_in_thread(started)` gives a URL onto an in-process unit. Every driver
 wraps the control plane: `add_chaos_rule`, `reset_chaos`, `reset`,
-`deliveries`, `advance_clock`. Note that `reset` returns to the seed
-scenario and drops every subscriber a test registered — subscribe after
-the reset, not before it.
+`deliveries`, `advance_clock`, `pending_webhook_timers`. Note that `reset`
+returns to the seed scenario and drops every subscriber a test registered —
+subscribe after the reset, not before it.
+
+`drain()` sleeps the retry timers for real, scaled by the profile's
+`time_scale`, so an exhausting cascade takes as long as the scaled schedule
+says — about fifteen seconds on the shipped Square profiles, which is the
+worst case here. The unit's drain is bounded by passes rather than by
+settlement, so on a *custom* profile with an uncompressed schedule it would
+give up with retries still due; the driver checks for that and raises rather
+than let the next assertion run against deliveries that never happened.
+Drive an uncompressed schedule with a virtual clock
+(`VENDORFAKE_CLOCK=virtual` and `advance_clock`) instead of draining.
 
 [`examples/pytest-consumer`](examples/pytest-consumer) is a complete
-standalone project — ten tests, both vendors, about a second — plus a
-Testcontainers variant against the image. `uv sync && uv run pytest` inside it.
+standalone project — ten tests against Square and Clover, about a second —
+plus a Testcontainers variant against the image. `uv sync && uv run pytest`
+inside it.
 
 ### Vitest
 
@@ -193,22 +244,33 @@ tests read raw bytes from. `npm install && npm test`.
 Every profile ships the same scenario, so a fresh unit needs no setup. The
 values are readable and obviously fake by design.
 
-| | Square | Clover |
-|---|---|---|
-| App credentials | `sandbox-sq0idb-unit-square-application` / `sandbox-sq0csb-unit-square-secret` | `UNITCLOVERAPP` / `unit-clover-app-secret` |
-| Redirect URI the app registered | `https://example.test/oauth/callback` | `https://example.test/oauth/callback` |
-| Full-access bearer | `EAAAl-unit-seeded-access-token-full-scopes` | `unit-seeded-clover-access-token-full-permissions` |
-| Read-only bearer | `EAAAl-unit-seeded-access-token-read-only` | `unit-seeded-clover-access-token-read-only` |
-| Merchant | `MLQW2MYBY81PZ` | `HRVSTRYE12345` ("Harvest & Rye") |
-| Location / order type | location `18YC4JDH91E1H` (Grant Park), kiosk `057P5VYJ4A5X1` | order types `KFRPRVCZ73JHM` (dine-in), `ORDTYPETAKE01` |
-| Catalog | Tea `W62UWFY35CWMYGVWK6TWJDNI` with variations Mug `2TZFAOHWGG7PAK2QEXWYPZSP` (150) and Pot; Cold Brew `BJNQCF2FJ6S6UIDT65ABHLRX` | items `CRAFTBEER0750` (750), `ESPRESSO00300` (300, modifier group `MODGROUPMILK1`: oat `MODIFIEROAT01`, soy `MODIFIERSOY01`), `CROISSANT0450` (450) |
-| Orders | open `CAISENgvlJ6jLWAzERDzjyHVybY`, completed `CAISEM82RcpmcFBM0TfOyiHV3es` | open `SEEDORDER0001` |
-| Payment plumbing | `POST /v2/payments` with `source_id: "EXTERNAL"` | tender `TENDEREXTRN01` (external), `TENDERCASH001`; employees `EMPLBARISTA01`, `OWNERHRVST001`; service charge `SVCCHARGE0001` (18%) |
-| Webhooks | register with the full-access bearer; the `signature_key` comes back | pre-verified subscriber `wbhk_seed_quickstart` (auth code `unit-seeded-clover-webhook-auth-code`), **disabled**; register your own through `POST /__unit/webhooks/subscriptions` |
-| Event types | `order.created`, `order.updated`, `payment.created`, `payment.updated`, `catalog.version.updated`, `inventory.count.updated` (`GET /v2/webhooks/event-types`) | `O:`, `I:`, `C:`, `P:` (orders, inventory items, customers, payments) × `CREATE`, `UPDATE`, `DELETE` — e.g. `O:CREATE`; globs like `O:*` accepted |
+| | Square | Clover | Toast |
+|---|---|---|---|
+| App credentials | `sandbox-sq0idb-unit-square-application` / `sandbox-sq0csb-unit-square-secret` | `UNITCLOVERAPP` / `unit-clover-app-secret` | `unit-toast-client-id` / `unit-toast-client-secret` |
+| OAuth shape | authorize redirect (`https://example.test/oauth/callback`) + code exchange | authorize redirect (same URI) + code exchange, single-use refresh | no redirect: machine-client `POST /authentication/v1/authentication/login` |
+| Full-access bearer | `EAAAl-unit-seeded-access-token-full-scopes` | `unit-seeded-clover-access-token-full-permissions` | `unit-seeded-toast-access-token-full-scopes` |
+| Read-only bearer | `EAAAl-unit-seeded-access-token-read-only` | `unit-seeded-clover-access-token-read-only` | `unit-seeded-toast-access-token-read-only` |
+| Tenant, and how requests name it | merchant `MLQW2MYBY81PZ` (implicit in the token) | merchant `HRVSTRYE12345` ("Harvest & Rye") in every `/v3` **path** | restaurant `e6a4a8d2-0000-4000-8000-000000000001` ("Harvest & Rye — Toast") in the `Toast-Restaurant-External-ID` **header** |
+| Location / order type | location `18YC4JDH91E1H` (Grant Park), kiosk `057P5VYJ4A5X1` | order types `KFRPRVCZ73JHM` (dine-in), `ORDTYPETAKE01` | dining options `…d001` (dine-in), `…d002` (take-out) |
+| Catalog | Tea `W62UWFY35CWMYGVWK6TWJDNI` with variations Mug `2TZFAOHWGG7PAK2QEXWYPZSP` (150) and Pot; Cold Brew `BJNQCF2FJ6S6UIDT65ABHLRX` | items `CRAFTBEER0750` (750), `ESPRESSO00300` (300, modifier group `MODGROUPMILK1`: oat `MODIFIEROAT01`, soy `MODIFIERSOY01`), `CROISSANT0450` (450) | menu `…c001`: Soup `…c201` (899), Burger `…c202` (sides modifier group `…c301`), Lemonade `…c203` |
+| Orders | open `CAISENgvlJ6jLWAzERDzjyHVybY`, completed `CAISEM82RcpmcFBM0TfOyiHV3es` | open `SEEDORDER0001` | open `9a7b6c5d-0000-4000-8000-00000000f001` with one check `…f101` |
+| Payment plumbing | `POST /v2/payments` with `source_id: "EXTERNAL"` | tender `TENDEREXTRN01` (external), `TENDERCASH001`; employees `EMPLBARISTA01`, `OWNERHRVST001`; service charge `SVCCHARGE0001` (18%) | alternate payment type `…d101` on `POST …/checks/{c}/payments` |
+| Webhooks | register with the full-access bearer; the `signature_key` comes back | pre-verified subscriber `wbhk_seed_quickstart` (auth code `unit-seeded-clover-webhook-auth-code`), **disabled**; register through `POST /__unit/webhooks/subscriptions` | subscriber `sub_seed_quickstart` (secret `unit-seeded-toast-webhook-secret`, `Toast-Signature` HMAC), **disabled**; register through `POST /__unit/webhooks/subscriptions` |
+| Event types | `order.created`, `order.updated`, `payment.created`, `payment.updated`, `catalog.version.updated`, `inventory.count.updated` (`GET /v2/webhooks/event-types`) | `O:`, `I:`, `C:`, `P:` (orders, inventory items, customers, payments) × `CREATE`, `UPDATE`, `DELETE` — e.g. `O:CREATE`; globs like `O:*` accepted | `order_updated`, `in_stock`, `out_of_stock`, `low_quantity`, `menus_updated` |
 
-In Python these are `square.seed.*` / `clover.seed.*` on a started unit
-(`vendorfake.testing.SquareSeed`, `CloverSeed`).
+Toast's guids are truncated above to their last four characters. They come
+in four families, each with its own fixed prefix and the same
+`-0000-4000-8000-` middle: `e6a4a8d2…` the restaurant and its management
+group, `3c9a1f00…` the menu and everything on it, `5d0e2b11…` restaurant
+configuration (dining options, payment types, tax rates), `9a7b6c5d…`
+orders and checks. So the dine-in dining option in full is
+`5d0e2b11-0000-4000-8000-00000000d001`. Every value is also an attribute on
+the seed object, which is the form to use in a test.
+
+In Python these are `.seed.*` attributes on a started unit
+(`vendorfake.testing.SquareSeed`, `CloverSeed`, `ToastSeed`). Toast's
+`seed.auth` carries the bearer **and** the `Toast-Restaurant-External-ID`
+header together, because a restaurant-scoped call needs both.
 
 **Clover has two hosts in your configuration** — the OAuth host
 (`sandbox.dev.clover.com`) and the API host (`apisandbox.dev.clover.com`). The
@@ -243,12 +305,13 @@ everything. The `chaos-demo` profile ships a preloaded set. Details and the
 ### Running the conformance suite against your unit
 
 The contracts the fake holds itself to — determinism, byte-identical bindings,
-signature properties, the catch-all — ship in the wheel, and so do targets for
-both vendors:
+signature properties, the catch-all — ship in the wheel, and so does a target
+for every vendor:
 
 ```sh
 vendorfake-conformance --target vendorfake.testing.conformance:square_target
 vendorfake-conformance --target vendorfake.testing.conformance:clover_target --transport http --profile full
+vendorfake-conformance --target vendorfake.testing.conformance:toast_target --strict
 pytest --pyargs vendorfake.conformance --conformance-target vendorfake.testing.conformance:square_target
 
 vendorfake-conformance --base-url http://localhost:8080     # a unit already running, e.g. the container

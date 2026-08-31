@@ -34,13 +34,17 @@ __all__ = [
     "CLOVER_INAPPLICABLE",
     "OUT_OF_PROCESS_TRANSPORT",
     "PROFILES",
+    "TOAST_EXPECTED_SKIPS",
+    "TOAST_INAPPLICABLE",
     "clover_target",
     "square_target",
     "target",
+    "toast_target",
 ]
 
 PROFILES: tuple[str, ...] = ("full", "no-chaos", "no-faults", "orders-only", "oauth-only", "chaos-demo")
-"""The six profiles both built-in vendors ship, so one matrix shape covers both."""
+"""The six profiles every built-in vendor ships, so one matrix shape covers
+all of them."""
 
 OUT_OF_PROCESS_TRANSPORT = "subprocess"
 """A unit served by ``vendorfake serve`` in a child process. Declared in
@@ -64,6 +68,25 @@ CLOVER_INAPPLICABLE: Mapping[str, str] = {
     "C19": (
         "Clover's REST API documents no idempotency key on any endpoint, so no clover route carries an "
         "IdempotencySpec and the replay contract can never be asked of this vendor."
+    ),
+}
+
+TOAST_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
+    "C07": ("oauth-only",),
+    "C08": ("no-faults",),
+    "C09": ("oauth-only", "orders-only"),
+    "C12": ("no-faults",),
+    "C16": ("oauth-only", "orders-only"),
+    "C17": ("oauth-only",),
+    "C18": ("oauth-only", "orders-only"),
+    "C21": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
+}
+
+TOAST_INAPPLICABLE: Mapping[str, str] = {
+    "C19": (
+        "Toast's REST APIs document no idempotency key on any endpoint (the orders API deduplicates on the "
+        "caller's unique externalId instead), so no toast route carries an IdempotencySpec and the replay "
+        "contract can never be asked of this vendor."
     ),
 }
 
@@ -171,4 +194,16 @@ def clover_target() -> ConformanceTarget:
         path_params={"mId": SEED_MERCHANT_ID},
         expected_skips=CLOVER_EXPECTED_SKIPS,
         inapplicable=CLOVER_INAPPLICABLE,
+    )
+
+
+def toast_target() -> ConformanceTarget:
+    """The third vendor. No ``path_params``: Toast scopes a request to its
+    restaurant with the ``Toast-Restaurant-External-ID`` header, which the
+    vendor's credentials publish together with the bearer, so every probe
+    path stays the probe."""
+    return target(
+        "toast",
+        expected_skips=TOAST_EXPECTED_SKIPS,
+        inapplicable=TOAST_INAPPLICABLE,
     )

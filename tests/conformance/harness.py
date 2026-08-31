@@ -59,6 +59,8 @@ from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.registry import create_unit
 from vendorfake.testing.conformance import CLOVER_EXPECTED_SKIPS as _CLOVER_EXPECTED_SKIPS
 from vendorfake.testing.conformance import CLOVER_INAPPLICABLE as _CLOVER_INAPPLICABLE
+from vendorfake.testing.conformance import TOAST_EXPECTED_SKIPS as _TOAST_EXPECTED_SKIPS
+from vendorfake.testing.conformance import TOAST_INAPPLICABLE as _TOAST_INAPPLICABLE
 
 VENDOR = "square"
 
@@ -360,24 +362,10 @@ TOAST_VENDOR = "toast"
 TOAST_PROFILES: tuple[str, ...] = PROFILES
 """The same six names again, so one matrix shape covers all three vendors."""
 
-TOAST_EXPECTED_SKIPS: dict[str, tuple[str, ...]] = {
-    "C07": ("oauth-only",),
-    "C08": ("no-faults",),
-    "C09": ("oauth-only", "orders-only"),
-    "C12": ("no-faults",),
-    "C16": ("oauth-only", "orders-only"),
-    "C17": ("oauth-only",),
-    "C18": ("oauth-only", "orders-only"),
-    "C21": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
-}
-
-TOAST_INAPPLICABLE: dict[str, str] = {
-    "C19": (
-        "Toast's REST APIs document no idempotency key on any endpoint (the orders API deduplicates on the "
-        "caller's unique externalId instead), so no toast route carries an IdempotencySpec and the replay "
-        "contract can never be asked of this vendor."
-    ),
-}
+TOAST_EXPECTED_SKIPS = _TOAST_EXPECTED_SKIPS
+TOAST_INAPPLICABLE = _TOAST_INAPPLICABLE
+"""Toast's skip matrix, owned by the wheel's own target for the same reason
+as Clover's above."""
 
 
 def toast_target(

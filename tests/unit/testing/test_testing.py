@@ -27,6 +27,7 @@ from vendorfake.testing import (
     ServedUnit,
     SquareSeed,
     StartedUnit,
+    ToastSeed,
     serve_in_thread,
     served,
     unit,
@@ -239,6 +240,56 @@ def test_a_driver_refuses_loudly_when_the_control_plane_does() -> None:
         square.advance_clock(1000)  # a real clock cannot be advanced
 
 
+def test_a_toast_unit_answers_seeded_calls_under_the_restaurant_header() -> None:
+    with unit("toast") as toast:
+        assert isinstance(toast.seed, ToastSeed)
+        seed = toast.seed
+        menus = toast.client.get("/menus/v3/menus", headers=seed.auth)
+        assert menus.status_code == 200
+        assert menus.json()["restaurantGuid"] == seed.restaurant_guid
+        order = toast.client.get(f"/orders/v2/orders/{seed.open_order_guid}", headers=seed.auth)
+        assert order.status_code == 200
+        # Toast scopes with the header, not the path: the bearer alone is
+        # refused, which is why the seed pairs them in `auth`.
+        bare = toast.client.get("/menus/v3/menus", headers=seed.bearer_only)
+        assert bare.status_code == 400
+        assert "Toast-Restaurant-External-ID" in bare.json()["message"]
+        with pytest.raises(ValueError, match="'toast' sends none of"):
+            toast.subscribe("http://127.0.0.1:1/x", ["order.created"], "sec")
+        toast.subscribe("http://127.0.0.1:1/x", ["order_updated", "menus_updated"], "sec")
+
+
+def test_every_installed_vendor_ships_a_conformance_target_and_a_seed() -> None:
+    """The gap class this pins: a fourth vendor landing without a shipped
+    target or seed. Toast was that gap once -- it merged while this package
+    still described two vendors -- and the instance is less interesting than
+    the rule. Every name the registry resolves must have a ``<vendor>_target``
+    factory in ``vendorfake.testing.conformance``, and a started unit must
+    carry a seed with a bearer and a non-empty event vocabulary
+    (``subscribe``'s validation runs on the latter).
+
+    Driven through :func:`unit` rather than calling ``seed_for`` directly, so
+    the config keys the seed reads are the ones a real unit publishes: a seed
+    that only builds from a hand-written mapping would pass while the
+    consumer path raised."""
+    from vendorfake import available_vendors
+    from vendorfake.testing import conformance as shipped
+
+    vendors = available_vendors()
+    assert len(vendors) >= 3
+    for vendor in vendors:
+        factory = getattr(shipped, f"{vendor}_target", None)
+        assert factory is not None, f"vendorfake.testing.conformance ships no {vendor}_target"
+        built = factory()
+        assert built.name == vendor
+        assert tuple(built.profiles) == shipped.PROFILES
+        with unit(vendor) as driver:
+            seed = driver.seed
+            assert seed is not None, f"vendorfake.testing.seeds.seed_for knows no {vendor!r}"
+            assert seed.event_types, f"{vendor!r} publishes no event types for subscribe() validation"
+            assert "Authorization" in seed.auth, f"{vendor!r}'s seed.auth carries no bearer"
+
+
 # ---------------------------------------------------------------------------
 # A URL: in a thread, and in a child process.
 # ---------------------------------------------------------------------------
@@ -252,6 +303,61 @@ def test_serve_in_thread_shares_state_with_the_in_process_client() -> None:
         fetched = over_http.client.get(f"/v2/orders/{order['id']}", headers=square.seed.auth)
         assert fetched.status_code == 200
         assert fetched.json()["order"]["id"] == order["id"]
+
+
+def _slow_retry_square_profile(tmp_path: Any) -> str:
+    """Square's full profile with one unscaled seven-second retry: long
+    enough that a retry is demonstrably *pending* while a test looks, short
+    enough that the unit's own stop() -- which drains for real -- does not
+    hold the suite the way a genuinely uncompressed schedule would."""
+    from importlib.resources import files
+
+    profile = json.loads((files("vendorfake.square") / "profiles" / "full.json").read_text())
+    profile["webhooks"]["retry"]["schedule_ms"] = [7_000]
+    profile["webhooks"]["retry"]["time_scale"] = 1.0
+    path = tmp_path / "slow-retry.json"
+    path.write_text(json.dumps(profile))
+    return str(path)
+
+
+def test_pending_webhook_timers_sees_a_scheduled_retry(tmp_path: Any) -> None:
+    with unit("square", _slow_retry_square_profile(tmp_path)) as square, webhook_receiver() as receiver:
+        receiver.respond_with = lambda index: 500 if index == 0 else 200
+        square.subscribe(receiver.url, ["order.created"], "k")
+        assert square.pending_webhook_timers() == []
+        _create_square_order(square)
+        receiver.wait_for(1)  # attempt 1 failed; the retry is now a timer
+        (timer,) = square.pending_webhook_timers()
+        assert str(timer["label"]).startswith("webhook")
+        assert float(timer["due_in_ms"]) > 5_000
+
+
+def test_drain_raises_instead_of_pretending_an_early_return_settled(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dangerous half of the pass-bounded drain: on an uncompressed
+    schedule the unit's drain returns EARLY with retries still scheduled.
+    Reaching that for real costs ~125s of wall clock (500 passes x 250ms),
+    so the drain POST alone is stubbed to return at once; the state it
+    returns into -- a genuinely pending retry timer on the unit's real
+    clock -- is not stubbed, and the check that raises reads it over the
+    same client every other call uses."""
+    with unit("square", _slow_retry_square_profile(tmp_path)) as square, webhook_receiver() as receiver:
+        receiver.respond_with = lambda index: 500 if index == 0 else 200
+        square.subscribe(receiver.url, ["order.created"], "k")
+        _create_square_order(square)
+        receiver.wait_for(1)
+
+        real_post = square.client.post
+
+        def post_without_the_wait(url: str, **kwargs: Any) -> httpx.Response:
+            if str(url).endswith("/__unit/webhooks/drain"):
+                return httpx.Response(200, json={"deliveries": 1}, request=httpx.Request("POST", url))
+            return real_post(url, **kwargs)
+
+        monkeypatch.setattr(square.client, "post", post_without_the_wait)
+        with pytest.raises(RuntimeError, match=r"pass-bounded .* run the unit on a virtual clock"):
+            square.drain()
 
 
 def test_drain_over_a_thread_server_settles_a_real_retry_cascade() -> None:

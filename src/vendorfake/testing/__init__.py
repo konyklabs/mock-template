@@ -55,7 +55,7 @@ from vendorfake.core.webhooks.models import matches_event_type
 from vendorfake.core.webhooks.sink import DeliverySink
 from vendorfake.registry import create_unit
 from vendorfake.testing.receiver import Delivery, WebhookReceiver, webhook_receiver
-from vendorfake.testing.seeds import CloverSeed, SquareSeed, seed_for
+from vendorfake.testing.seeds import CloverSeed, SquareSeed, ToastSeed, seed_for
 from vendorfake.testing.transport import UnitTransport
 
 __all__ = [
@@ -69,6 +69,7 @@ __all__ = [
     "ServedUnit",
     "SquareSeed",
     "StartedUnit",
+    "ToastSeed",
     "UnitTransport",
     "WebhookReceiver",
     "serve_in_thread",
@@ -107,7 +108,7 @@ class Driver:
     profile: str
     base_url: str
     client: httpx.Client
-    seed: SquareSeed | CloverSeed | None
+    seed: SquareSeed | CloverSeed | ToastSeed | None
 
     # -- reading ------------------------------------------------------------
 
@@ -167,23 +168,53 @@ class Driver:
         return self._json(self.client.post("/__unit/webhooks/subscriptions", json=body), expect=(200, 201))
 
     def drain(self, *, timeout_s: float | None = DRAIN_TIMEOUT_S) -> None:
-        """Block until every pending delivery -- retries included -- has settled.
+        """Wait for pending deliveries -- retries included -- to settle, and
+        refuse to pretend they did when they did not.
 
-        On a **real** clock (every shipped profile) the unit does not skip
-        ahead: it sleeps the actual retry timers, scaled by the profile's
-        ``time_scale``, so a cascade that retries to exhaustion legitimately
-        takes the sum of the vendor's scaled schedule -- about fifteen
-        seconds for Square's shipped profiles. ``timeout_s`` bounds this
-        one call (``None`` waits forever); the default covers the shipped
-        profiles with room. A custom profile with an *uncompressed* schedule
-        would sleep the documented hours -- drive those with a virtual clock
-        (``VENDORFAKE_CLOCK=virtual`` and :meth:`advance_clock`) instead of
-        draining in real time.
+        What ``POST /__unit/webhooks/drain`` actually guarantees is
+        **pass-bounded, not "until settled"**: the unit loops at most 500
+        passes, each sleeping up to 250 ms on a real clock, so the call
+        returns after roughly 125 s of real time *whatever is still
+        scheduled*. On the shipped profiles that bound is never reached --
+        their retry schedules are compressed by ``time_scale``, and the
+        longest cascade (Square's eleven retries to exhaustion) settles in
+        about fifteen seconds. On a custom profile with an *uncompressed*
+        schedule the unit's drain returns early, deliveries still pending.
 
-        Against a :func:`unit` client the call cannot time out at all --
-        see :class:`~vendorfake.testing.transport.UnitTransport`.
+        An early return is indistinguishable from settled at the call site,
+        so this method checks afterwards and raises ``RuntimeError`` naming
+        the still-pending timer rather than letting the next assertion run
+        against deliveries that have not happened
+        (:meth:`pending_webhook_timers` is the same check, callable on its
+        own). For an uncompressed schedule do not drain in real time at all:
+        run the unit on a virtual clock (``VENDORFAKE_CLOCK=virtual``) and
+        :meth:`advance_clock` past the schedule.
+
+        ``timeout_s`` bounds the HTTP wait for this one call (``None``: no
+        HTTP timeout). Against a :func:`unit` client it is not honoured and
+        the call blocks until the unit's drain returns -- see
+        :class:`~vendorfake.testing.transport.UnitTransport`.
         """
         self._json(self.client.post("/__unit/webhooks/drain", json={}, timeout=timeout_s))
+        pending = self.pending_webhook_timers()
+        if pending:
+            nearest = min(pending, key=lambda timer: float(timer["due_in_ms"]))
+            raise RuntimeError(
+                f"drain returned with {len(pending)} webhook timer(s) still pending -- the unit's drain is "
+                f"pass-bounded and gave up before {nearest['label']!r} (due in {float(nearest['due_in_ms']):.0f} ms). "
+                f"This profile's retry schedule is too long to drain in real time: run the unit on a virtual "
+                f"clock (VENDORFAKE_CLOCK=virtual) and advance_clock() past the schedule instead."
+            )
+
+    def pending_webhook_timers(self) -> list[dict[str, Any]]:
+        """Delivery retries still scheduled, as the clock reports them.
+
+        Empty means settled. The filter mirrors the dispatcher's own timer
+        labelling (``webhook:...`` / ``webhook-retry:...``); other machinery
+        may hold timers of its own, and those are not deliveries.
+        """
+        timers = self.info()["clock"]["pending_timers"]
+        return [timer for timer in timers if str(timer.get("label", "")).startswith("webhook")]
 
     # -- state and faults ----------------------------------------------------
 
@@ -260,7 +291,7 @@ class ServedUnit(Driver):
         return self._output.tail()
 
 
-def _seed_of(built: Unit) -> SquareSeed | CloverSeed | None:
+def _seed_of(built: Unit) -> SquareSeed | CloverSeed | ToastSeed | None:
     return seed_for(built.name, built.context.config.vendor_config)
 
 
