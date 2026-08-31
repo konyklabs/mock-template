@@ -111,10 +111,35 @@ _VOLATILE_FIELDS: tuple[str, ...] = (
     "publishedDate",
 )
 """Entity fields excluded from the state digest because they carry wall-clock
-time. Every stored instant is a camelCase Toast field or a ``_ms`` internal
-one, so each is listed. ``access_token`` is here because a minted JWT carries
-``iat``/``exp`` claims and therefore differs per run on a real clock; the
-seeded tokens are constants regardless."""
+time. The core matches these names at ANY depth (konyklabs/roadmap#35), which
+Toast leans on harder than the other vendors: an order nests its checks and
+selections, so ``checks[].createdDate`` and ``selections[].modifiedDate`` are
+scrubbed by the same names as the top-level order stamps. ``access_token`` is
+here because a minted JWT carries ``iat``/``exp`` claims and therefore differs
+per run on a real clock; the seeded tokens are constants regardless. The
+digest keeps each scrubbed field's *presence*, so a void that only stamps
+``voidDate`` still moves it."""
+
+_OPAQUE_FIELDS: tuple[str, ...] = (
+    "appliedServiceCharges",
+    "curbsidePickupInfo",
+    "appliedPackagingInfo",
+    "marketplaceFacilitatorTaxInfo",
+    "thirdPartyProviderInfo",
+    "location",
+    "urls",
+    "schedules",
+    "delivery",
+    "onlineOrdering",
+    "prepTimes",
+    "pricingRules",
+    "availability",
+    "contentAdvisories",
+)
+"""Caller (or seed) free-form subtrees the digest takes verbatim: the wire
+stores them as sent (``TOAST_NOT_MODELED``), so a caller's own ``modifiedDate``
+inside ``appliedServiceCharges`` is state, not a stamp, and the volatile scrub
+must not descend into it."""
 
 
 class ToastVendor:
@@ -239,6 +264,10 @@ class ToastVendor:
     @property
     def volatile_fields(self) -> Sequence[str]:
         return _VOLATILE_FIELDS
+
+    @property
+    def opaque_fields(self) -> Sequence[str]:
+        return _OPAQUE_FIELDS
 
     @property
     def profile_dir(self) -> Path:

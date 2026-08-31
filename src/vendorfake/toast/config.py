@@ -43,6 +43,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from vendorfake.core.config.models import merged_over
+
 __all__ = [
     "DEFAULT_SCOPES",
     "DOCUMENTED_SCOPES",
@@ -149,9 +151,10 @@ class ToastConfig(BaseModel):
     low_quantity_threshold: float = Field(default=5.0, ge=0)
 
     def merged_with(self, block: Mapping[str, Any]) -> ToastConfig:
-        """This config with ``block`` laid over it; an unknown key is still
-        refused, because the merge revalidates rather than patching."""
-        return ToastConfig.model_validate({**self.model_dump(), **dict(block)})
+        """This config with ``block`` laid over it: the profile wins, an
+        unknown key is still refused. The idiom is the core's
+        :func:`~vendorfake.core.config.models.merged_over`."""
+        return merged_over(self, block)
 
     @property
     def access_token_ttl(self) -> timedelta:

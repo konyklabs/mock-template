@@ -105,8 +105,11 @@ def test_a_handlers_own_detail_wins_over_the_tables_message() -> None:
 def test_the_sidecar_carries_kind_provenance_and_field_and_switches_off() -> None:
     err = UnitError(UnitErrorKind.MISSING_FIELD, field="checks", info={"extra": "kept", TOAST_CODE_INFO_KEY: 10025})
     with_sidecar = shaper(sidecar=True).shape(err, fake_ctx()).body
+    # The sidecar is the core's (kernel/shaping.py) and spreads the whole
+    # info document, the toast_code override included -- debug data, on purpose.
     assert with_sidecar["unit_error"] == {
         "extra": "kept",
+        TOAST_CODE_INFO_KEY: 10025,
         "kind": "missing_field",
         "status_provenance": "judgment",
         "field": "checks",

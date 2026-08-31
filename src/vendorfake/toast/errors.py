@@ -5,9 +5,13 @@ status and Toast's ``ErrorMessage`` body, so that adding this vendor is a
 lookup table rather than error handling scattered through handlers.
 
 INVARIANT: **the table is exhaustive, and every row says where its status came
-from.** Exhaustiveness is checked at import. Provenance is a real field because
-the ``unit_error`` sidecar publishes it and :meth:`ToastErrorShaper.describe`
-renders the whole table.
+from.** Exhaustiveness is checked at import and again at unit construction on
+``describe()``'s answer. Provenance is a real field because the ``unit_error``
+sidecar publishes it and :meth:`ToastErrorShaper.describe` renders the whole
+table for ``GET /__unit/errors``. The sidecar, the ``retry-after`` and
+``x-unit-capability`` mechanism headers and the exhaustiveness check are the
+core's (``core/kernel/shaping.py``); this module is Toast's table, envelope
+and the documented rate-limit headers.
 
 The envelope -- DOCUMENTED
 --------------------------
@@ -60,8 +64,14 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
+from vendorfake.core.kernel.shaping import (
+    Provenance,
+    assert_error_table_total,
+    mechanism_headers,
+    unit_error_sidecar,
+)
 from vendorfake.core.kernel.types import (
     ShapedError,
     UnitContext,
@@ -87,8 +97,6 @@ __all__ = [
     "ToastErrorShaper",
 ]
 
-Provenance = Literal["documented", "judgment"]
-
 CODE_PAYMENT_AMOUNT_EMPTY = 10025
 """The one documented ``code``: "Payment amount cannot be empty"."""
 
@@ -106,8 +114,6 @@ _RATE_LIMIT_NOTE = (
     "(https://doc.toasttab.com/doc/devguide/apiRateLimiting.html); the body and the header values are "
     "judgment, because a chaos-injected 429 tripped no real limit."
 )
-
-_DEFAULT_RETRY_AFTER_S = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,25 +245,16 @@ class ToastErrorShaper:
             requestId=self._request_ids.request_id(),
         ).wire()
         if self._sidecar:
-            body["unit_error"] = compact(
-                {
-                    **{k: v for k, v in info.items() if k != TOAST_CODE_INFO_KEY},
-                    "kind": err.kind.value,
-                    "status_provenance": mapping.provenance,
-                    "field": err.field or None,
-                }
-            )
-        headers: dict[str, str] = {}
+            body["unit_error"] = unit_error_sidecar(err, mapping.provenance, field=err.field or None)
+        headers = mechanism_headers(err, retry_after_header=self._retry_after_header)
+        if "retry-after" in headers:
+            # The core's mechanism header, in the casing Toast documents.
+            headers[RETRY_AFTER_HEADER] = headers.pop("retry-after")
         if err.kind is UnitErrorKind.RATE_LIMITED:
-            retry_after = as_int(info.get("retry_after_seconds"), _DEFAULT_RETRY_AFTER_S)
+            retry_after = as_int(info.get("retry_after_seconds"), 1)
             headers[RATE_LIMIT_BY_HEADER] = "ENDPOINT"
             headers[RATE_LIMIT_REMAINING_HEADER] = "0"
             headers[RATE_LIMIT_RESET_HEADER] = str(math.floor(ctx.clock.now() / 1000) + retry_after)
-            if self._retry_after_header:
-                headers[RETRY_AFTER_HEADER] = str(retry_after)
-        if err.kind is UnitErrorKind.CAPABILITY_DISABLED:
-            capability = info.get("capability")
-            headers["x-unit-capability"] = capability if isinstance(capability, str) else ""
         return ShapedError(status=mapping.status, body=body, headers=headers)
 
     def not_found(self, req: UnitRequest, ctx: UnitContext) -> ShapedError:
@@ -280,9 +277,9 @@ class ToastErrorShaper:
         return {kind.value: mapping.as_json() for kind, mapping in TOAST_ERROR_TABLE.items()}
 
 
-if set(TOAST_ERROR_TABLE) != set(UnitErrorKind):
-    _missing = sorted(kind.value for kind in UnitErrorKind if kind not in TOAST_ERROR_TABLE)
-    raise RuntimeError(f"TOAST_ERROR_TABLE must map every UnitErrorKind exactly once; missing: {_missing or 'none'}")
+# Exhaustiveness, at import, as a raise and never as an `assert` -- see
+# core/kernel/shaping.py for why.
+assert_error_table_total(TOAST_ERROR_TABLE, name="TOAST_ERROR_TABLE")
 
 if CODE_PAYMENT_AMOUNT_EMPTY in {mapping.code for mapping in TOAST_ERROR_TABLE.values()}:
     raise RuntimeError("the judgment code scheme must not reuse the one documented code, 10025")
