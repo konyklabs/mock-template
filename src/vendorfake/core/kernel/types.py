@@ -407,6 +407,14 @@ class PaginationSpec:
     offset_param: str = "offset"
     #: Dot path, within one row, to the identifier rows are compared by.
     id_path: str = "id"
+    #: ``False`` declares that this route pages but the identity walk cannot
+    #: be driven, with :attr:`unwalkable_reason` saying why -- rows with no
+    #: per-row identifier, a page size that cannot be narrowed. The point is
+    #: that a paginating route is never silently absent from the conformance
+    #: walk: it is either walked or excused on the record, and an empty
+    #: reason fails the walk outright.
+    walkable: bool = True
+    unwalkable_reason: str = ""
 
     def as_json(self) -> dict[str, object]:
         return {
@@ -418,6 +426,8 @@ class PaginationSpec:
             "next_cursor_path": self.next_cursor_path,
             "offset_param": self.offset_param,
             "id_path": self.id_path,
+            "walkable": self.walkable,
+            "unwalkable_reason": self.unwalkable_reason,
         }
 
 

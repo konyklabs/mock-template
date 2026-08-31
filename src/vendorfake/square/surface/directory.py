@@ -116,6 +116,16 @@ class DirectorySurface:
                 scopes=("MERCHANT_PROFILE_READ",),
                 operation_id="ListMerchants",
                 summary="Every merchant the caller can reach -- one, in this unit.",
+                pagination=PaginationSpec(
+                    style="cursor",
+                    items_path="merchant",
+                    walkable=False,
+                    unwalkable_reason=(
+                        "Square's documented cursor here is an integer offset and the endpoint takes "
+                        "no limit parameter, so the page size cannot be narrowed and no page "
+                        "boundary can be forced over the single seeded merchant."
+                    ),
+                ),
             ),
             Route(
                 method="GET",

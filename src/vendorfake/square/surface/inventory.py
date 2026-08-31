@@ -65,6 +65,7 @@ from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import (
     HandlerArgs,
     IdempotencySpec,
+    PaginationSpec,
     ReplyInit,
     Route,
     UnitContext,
@@ -152,12 +153,18 @@ class InventorySurface:
                 scopes=("INVENTORY_READ",),
                 operation_id="BatchRetrieveInventoryCounts",
                 summary="Counts filtered by object, location, state or change time.",
-                # Deliberately no PaginationSpec, though this route pages: an
-                # InventoryCount has no id -- Square keys it on the
-                # (object, location, state) triple and documents no identifier
-                # -- and the conformance walk compares rows by the single
-                # declared id_path, so declaring one here would either invent
-                # a field or false-fail on two locations counting one object.
+                pagination=PaginationSpec(
+                    style="cursor",
+                    where="body",
+                    items_path="counts",
+                    walkable=False,
+                    unwalkable_reason=(
+                        "An InventoryCount has no id: Square keys it on the (object, location, "
+                        "state) triple and documents no identifier, and the identity walk compares "
+                        "rows by one declared path -- naming any single field would false-fail on "
+                        "two locations counting one object."
+                    ),
+                ),
             ),
             Route(
                 method="GET",
@@ -168,6 +175,16 @@ class InventorySurface:
                 scopes=("INVENTORY_READ",),
                 operation_id="RetrieveInventoryCount",
                 summary="One variation's counts across locations.",
+                pagination=PaginationSpec(
+                    style="cursor",
+                    items_path="counts",
+                    walkable=False,
+                    unwalkable_reason=(
+                        "The rows are InventoryCounts, which carry no per-row identifier, and the "
+                        "documented endpoint reads no limit parameter, so pages cannot be narrowed "
+                        "to force a boundary."
+                    ),
+                ),
             ),
         )
 

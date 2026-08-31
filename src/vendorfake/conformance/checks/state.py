@@ -879,9 +879,10 @@ def _fetch_page(env: CheckEnv, route: RouteRow, headers: dict[str, str], params:
     id="C26",
     name="state: a declared page walk repeats no row and loses none",
     asserts=(
-        "For every enabled route declaring a PaginationSpec that holds two or more rows: walking it "
-        "one row per page yields each id exactly once, and the union of the pages equals the "
-        "unpaged listing."
+        "Every enabled route declaring a walkable PaginationSpec is walked one row per page: each "
+        "id appears exactly once and the union of the pages equals the unpaged listing. A walkable "
+        "route with fewer than two rows is a failure, not a smaller walk; walkable=false routes "
+        "are excused only by their written reason."
     ),
     requires=Requires(paginated_route=True, credentials=True),
 )
@@ -903,10 +904,21 @@ def declared_pages_never_overlap_and_lose_nothing(env: CheckEnv) -> str:
     it should list. What it must not do is disagree with itself.
     """
     walked: list[str] = []
-    too_small: list[str] = []
+    excused: list[str] = []
     problems: list[str] = []
     for route in env.paginated_routes():
         spec = dict(route.pagination or {})
+        if not spec.get("walkable", True):
+            reason = str(spec.get("unwalkable_reason", "")).strip()
+            if reason:
+                excused.append(f"{route.key} -- {reason}")
+            else:
+                problems.append(
+                    f"{route.key} declares walkable=false with no unwalkable_reason. The opt-out "
+                    f"exists so a paginating route is excused on the record, never silently; an "
+                    f"empty reason is silence with a flag on it."
+                )
+            continue
         id_path = str(spec["id_path"])
         headers = env.authorized(route)
 
@@ -916,7 +928,13 @@ def declared_pages_never_overlap_and_lose_nothing(env: CheckEnv) -> str:
             problems.append(f"{route.key}: the unpaged listing itself repeats {duplicates}.")
             continue
         if len(whole) < 2:
-            too_small.append(f"{route.key} ({len(whole)} row)")
+            problems.append(
+                f"{route.key} declares a walkable PaginationSpec and lists {len(whole)} row(s) on "
+                f"profile {env.profile!r}, so no page boundary exists and the declaration was never "
+                f"exercised. A route the walk cannot walk is a route this contract silently excludes "
+                f"-- the same subset flaw C17 had. Seed a second row for it, or declare "
+                f"walkable=false with the reason."
+            )
             continue
 
         seen: list[str] = []
@@ -970,10 +988,7 @@ def declared_pages_never_overlap_and_lose_nothing(env: CheckEnv) -> str:
         walked.append(f"{route.key} ({len(whole)} rows, {pages} pages, {spec['style']})")
 
     require(not problems, "\n".join(problems))
+    tail = f"; excused by declaration: {'; '.join(excused)}" if excused else ""
     if not walked:
-        raise ConformanceSkip(
-            f"every declared paginated route holds fewer than two rows on profile {env.profile!r} "
-            f"({', '.join(too_small)}), so no page boundary exists to walk across; seed more rows"
-        )
-    tail = f"; too small to walk: {', '.join(too_small)}" if too_small else ""
+        return f"no walkable paginated route on this profile{tail}"
     return f"walked {len(walked)} route(s) one row per page with no repeat and no loss: {'; '.join(walked)}{tail}"
