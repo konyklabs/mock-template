@@ -1,0 +1,99 @@
+{
+  "name": "chaos-demo",
+  "summary": "Full surface with a preloaded fault set: rate limiting on every third order create, a mid-flow token expiry on the fourth order read, and a duplicated then a reordered delivery. Runs on a virtual clock.",
+  "capabilities": [
+    "auth",
+    "orders",
+    "payments",
+    "menus",
+    "config",
+    "restaurants",
+    "partners",
+    "stock",
+    "webhooks",
+    "chaos",
+    "webhooks.chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "unit-toast-client-id",
+    "client_secret": "unit-toast-client-secret"
+  },
+  "webhooks": {
+    "retry": {
+      "time_scale": 0.000167,
+      "timeout_ms": 2000
+    },
+    "subscribers": []
+  },
+  "clock": {
+    "mode": "virtual",
+    "start": "2026-08-30T12:00:00.000Z"
+  },
+  "chaos": {
+    "seed": 20260830,
+    "strict_rules": true,
+    "rules": [
+      {
+        "id": "rate-limit-every-third-create",
+        "scope": "request",
+        "fault": "rate_limit",
+        "match": {
+          "route": "POST /orders/v2/orders"
+        },
+        "when": {
+          "every": 3
+        },
+        "params": {
+          "retry_after_seconds": 2
+        },
+        "note": "Every third OrderCreate is refused with the documented 429 and X-Toast-RateLimit-* headers."
+      },
+      {
+        "id": "token-expires-on-fourth-read",
+        "scope": "request",
+        "fault": "token_expiry",
+        "match": {
+          "route": "GET /orders/v2/orders/{guid}"
+        },
+        "when": {
+          "nth": [
+            4
+          ]
+        },
+        "note": "The fourth OrderGet sees the documented 401 mid-flow without the stored token changing."
+      },
+      {
+        "id": "duplicate-order-updated",
+        "scope": "webhook",
+        "fault": "webhook.duplicate",
+        "match": {
+          "event_type": "order_updated"
+        },
+        "when": {
+          "nth": [
+            1
+          ]
+        },
+        "params": {
+          "copies": 1
+        },
+        "note": "The first order_updated is delivered twice with the same guid -- the documented 'more than once'."
+      },
+      {
+        "id": "reorder-out-of-stock",
+        "scope": "webhook",
+        "fault": "webhook.out_of_order",
+        "match": {
+          "event_type": "out_of_stock"
+        },
+        "when": {
+          "nth": [
+            1
+          ]
+        },
+        "note": "The first out_of_stock is held until the following event has been delivered."
+      }
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "orders-only",
+  "summary": "Orders, payments, stock and the reference data they point at. No login, no webhooks: authenticate with a seeded token.",
+  "capabilities": [
+    "orders",
+    "payments",
+    "menus",
+    "config",
+    "restaurants",
+    "partners",
+    "stock",
+    "chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "unit-toast-client-id",
+    "client_secret": "unit-toast-client-secret"
+  },
+  "chaos": {
+    "seed": 20260830,
+    "strict_rules": true,
+    "rules": []
+  }
+}

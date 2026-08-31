@@ -40,6 +40,11 @@ REQUIRED = (
     "vendorfake/clover/profiles/chaos-demo.json",
     "vendorfake/clover/seed/default.seed.json",
     "vendorfake/toast/profiles/full.json",
+    "vendorfake/toast/profiles/no-chaos.json",
+    "vendorfake/toast/profiles/no-faults.json",
+    "vendorfake/toast/profiles/oauth-only.json",
+    "vendorfake/toast/profiles/orders-only.json",
+    "vendorfake/toast/profiles/chaos-demo.json",
     "vendorfake/toast/seed/default.seed.json",
 )
 
