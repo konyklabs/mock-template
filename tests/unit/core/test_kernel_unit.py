@@ -824,7 +824,18 @@ def test_route_info_publishes_a_pagination_declaration_whole() -> None:
         "next_cursor_path": "cursor",
         "offset_param": "offset",
         "id_path": "id",
+        "walkable": True,
+        "unwalkable_reason": "",
     }
+
+
+def test_route_info_publishes_example_params_whole() -> None:
+    """The path half of an example: without it a route addressing one entity
+    can publish a working body and still never be driven to success."""
+    info = RouteInfo.of(route("PUT", "/v2/orders/{order_id}", _handler([]), example_params={"order_id": "seed-1"}))
+    assert info.as_json()["example_params"] == {"order_id": "seed-1"}
+    bare = RouteInfo.of(route("PUT", "/v2/orders/{order_id}", _handler([])))
+    assert "example_params" not in bare.as_json()
 
 
 def test_a_malformed_percent_escape_reaches_the_caller_as_a_shaped_400() -> None:

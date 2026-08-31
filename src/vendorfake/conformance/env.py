@@ -109,6 +109,7 @@ class RouteRow:
     idempotency: Mapping[str, Any] | None = None
     pagination: Mapping[str, Any] | None = None
     example_body: Mapping[str, Any] | None = None
+    example_params: Mapping[str, str] | None = None
     operation_id: str | None = None
     #: The target's tenant parameters; see ``ConformanceTarget.path_params``.
     path_params: Mapping[str, str] = field(default_factory=dict)
@@ -126,6 +127,9 @@ class RouteRow:
             idempotency=None if row.get("idempotency") is None else dict(row["idempotency"]),
             pagination=None if row.get("pagination") is None else dict(row["pagination"]),
             example_body=None if row.get("example_body") is None else dict(row["example_body"]),
+            example_params=None
+            if row.get("example_params") is None
+            else {str(name): str(value) for name, value in dict(row["example_params"]).items()},
             operation_id=None if row.get("operation_id") is None else str(row["operation_id"]),
         )
 
@@ -136,6 +140,15 @@ class RouteRow:
     @property
     def probe_path(self) -> str:
         return concrete_path(self.path, self.path_params)
+
+    @property
+    def example_path(self) -> str:
+        """The path the published example applies to: the route's declared
+        example_params first, the target's tenant parameters over them (the
+        tenant is authoritative about who the credential belongs to), and the
+        probe segment for anything neither names. Equal to :attr:`probe_path`
+        for a route that declares no example_params."""
+        return concrete_path(self.path, {**(self.example_params or {}), **self.path_params})
 
 
 @dataclass(frozen=True, slots=True)

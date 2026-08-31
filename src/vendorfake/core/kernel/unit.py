@@ -249,6 +249,8 @@ class RouteInfo:
     pagination: dict[str, object] | None = None
     #: A body this route accepts. See :attr:`Route.example_body`.
     example_body: Mapping[str, Any] | None = None
+    #: Path parameters naming seeded entities the example applies to.
+    example_params: Mapping[str, str] | None = None
     operation_id: str | None = None
     summary: str | None = None
     internal: bool = False
@@ -275,6 +277,7 @@ class RouteInfo:
             idempotency=idempotency,
             pagination=None if route.pagination is None else route.pagination.as_json(),
             example_body=route.example_body,
+            example_params=None if route.example_params is None else dict(route.example_params),
             operation_id=route.operation_id,
             summary=route.summary,
             internal=route.internal,
@@ -297,6 +300,7 @@ class RouteInfo:
             ("idempotency", self.idempotency),
             ("pagination", self.pagination),
             ("example_body", None if self.example_body is None else dict(self.example_body)),
+            ("example_params", None if self.example_params is None else dict(self.example_params)),
             ("operation_id", self.operation_id),
             ("summary", self.summary),
         ):

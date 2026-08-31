@@ -1,4 +1,4 @@
-"""Forty-two units, each broken in exactly one way, and the check each must trip.
+"""Forty-three units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -1501,4 +1501,43 @@ C29 reads its fault list from the unit under test, so a unit that published
 one fault and implemented one fault produced "1 delivery faults observed" and
 a pass. The list is now cross-checked against BUILTIN_FAULTS -- the same
 shape as C11's core_gates comparison -- so under-declaring is a failure.
+"""
+
+
+def _refuse_every_mismatch(routes: Sequence[Route]) -> Sequence[Route]:
+    return tuple(
+        route
+        if route.idempotency is None
+        else dataclasses.replace(route, idempotency=dataclasses.replace(route.idempotency, on_mismatch="conflict"))
+        for route in routes
+    )
+
+
+def _publish_replay(document: dict[str, Any]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for row in document["routes"]:
+        spec = row.get("idempotency")
+        rows.append(row if spec is None else {**row, "idempotency": {**spec, "on_mismatch": "replay"}})
+    return {**document, "routes": rows}
+
+
+register(
+    Mutant(
+        id="M43",
+        name="on-mismatch-replay-refused",
+        defect="A reused key with a different body is refused on every route, while the route table promises 'replay'.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C25"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_refuse_every_mismatch),
+        control=replace_control_route("GET", "/__unit/routes", rewrite_document(_publish_replay)),
+    )
+)
+"""M35's mirror, for the branch M35 cannot reach (review of konyklabs/roadmap#15, item 6).
+
+M35 replays where the table promises conflict; this refuses where the table
+promises replay -- Square's documented UpdateOrder behaviour, "you get a 200
+response but the returned order doesn't reflect any of your updates", replaced
+with a 409 the document does not admit to. Until UpdateOrder published an
+example (example_body plus example_params), no registered mutant exercised the
+replay branch at all.
 """

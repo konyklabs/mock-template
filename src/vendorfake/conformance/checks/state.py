@@ -40,16 +40,6 @@ _REPLAY_HEADER = "x-unit-idempotent-replay"
 _IGNORED_BODY_HEADER = "x-unit-idempotent-ignored-body"
 _IDEMPOTENCY_CONFLICT = "idempotency_conflict"
 
-_QUERY_A: dict[str, str] = {"conformance": "query-a"}
-_QUERY_B: dict[str, str] = {"conformance": "query-b"}
-"""Two queries that differ only in a value, deliberately.
-
-The fingerprint is a digest of whatever the caller called the query, so two
-that differ in one character are the strongest form of the test: a comparison
-that had degraded to "same length" or "both truthy" would still pass for two
-queries that differed structurally.
-"""
-
 
 @check(
     id="C06",
@@ -122,7 +112,7 @@ def journal_is_append_only(env: CheckEnv) -> str:
         body[str(idem["key_path"])] = "conformance-journal-probe"
     created = env.client.call(
         route.method,
-        route.probe_path,
+        route.example_path,
         json_body=body,
         headers=env.authorized(route),
     )
@@ -384,7 +374,7 @@ def a_replayed_idempotency_key_does_not_run_twice(env: CheckEnv) -> str:
     body[key_path] = "conformance-idempotency-probe"
     headers = env.authorized(route)
 
-    first = env.client.call(route.method, route.probe_path, json_body=body, headers=headers)
+    first = env.client.call(route.method, route.example_path, json_body=body, headers=headers)
     require(
         200 <= first.status < 300,
         f"{route.key} refused its own published example_body: {first.status} "
@@ -406,7 +396,7 @@ def a_replayed_idempotency_key_does_not_run_twice(env: CheckEnv) -> str:
     )
     seq_after_first = int(env.get_json(f"{CONTROL_PREFIX}journal")["seq"])
 
-    second = env.client.call(route.method, route.probe_path, json_body=body, headers=headers)
+    second = env.client.call(route.method, route.example_path, json_body=body, headers=headers)
     require(
         second.status == first.status,
         f"the same request under one {key_path!r} answered {first.status} then {second.status}. A "
@@ -664,7 +654,7 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
 
     first = env.client.call(
         first_route.method,
-        first_route.probe_path,
+        first_route.example_path,
         json_body=_keyed(first_route, key),
         headers=env.authorized(first_route),
     )
@@ -678,7 +668,7 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
 
     second = env.client.call(
         second_route.method,
-        second_route.probe_path,
+        second_route.example_path,
         json_body=_keyed(second_route, key),
         headers=env.authorized(second_route),
     )
@@ -718,7 +708,7 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
 
     again = env.client.call(
         first_route.method,
-        first_route.probe_path,
+        first_route.example_path,
         json_body=_keyed(first_route, key),
         headers=env.authorized(first_route),
     )
@@ -740,9 +730,11 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
     id="C25",
     name="state: a reused idempotency key with a different body answers as the route declares",
     asserts=(
-        "On every driveable idempotent route: a key reused with a different body is refused with "
-        "idempotency_conflict where the route declares on_mismatch=conflict, and replays the stored "
-        "answer marked as ignoring the body where it declares replay -- and executes nothing either way."
+        "On every idempotent route publishing an example: a key reused with a different body is "
+        "refused with idempotency_conflict where the route declares on_mismatch=conflict, and "
+        "replays the stored answer marked as ignoring the body where it declares replay -- "
+        "executing nothing either way. Every on_mismatch value any enabled route declares must be "
+        "drivable through some example, or the declared direction was asserted by nothing."
     ),
     requires=Requires(idempotent_example=True, credentials=True),
 )
@@ -763,13 +755,15 @@ def a_reused_key_with_a_different_body_answers_as_declared(env: CheckEnv) -> str
     the comparison sees a different request without the vendor's validation
     ever being involved.
     """
+    env.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
     driven: list[str] = []
+    driven_directions: set[str] = set()
     for index, route in enumerate(env.example_routes(methods=_MUTATING_METHODS, idempotent=True)):
         spec = dict(route.idempotency or {})
         declared = str(spec.get("on_mismatch", "conflict"))
         key = f"conformance-mismatch-probe-{index}"
         headers = env.authorized(route)
-        first = env.client.call(route.method, route.probe_path, json_body=_keyed(route, key), headers=headers)
+        first = env.client.call(route.method, route.example_path, json_body=_keyed(route, key), headers=headers)
         require(
             200 <= first.status < 300,
             f"{route.key} refused its own published example_body: {first.status} "
@@ -779,7 +773,7 @@ def a_reused_key_with_a_different_body_answers_as_declared(env: CheckEnv) -> str
         seq_after_first = int(env.get_json(f"{CONTROL_PREFIX}journal")["seq"])
 
         changed = _keyed(route, key, {"conformance_mismatch": "a field the first request did not carry"})
-        second = env.client.call(route.method, route.probe_path, json_body=changed, headers=headers)
+        second = env.client.call(route.method, route.example_path, json_body=changed, headers=headers)
         if declared == "conflict":
             require(
                 second.error_kind == _IDEMPOTENCY_CONFLICT,
@@ -816,8 +810,25 @@ def a_reused_key_with_a_different_body_answers_as_declared(env: CheckEnv) -> str
             f"the declared answer to a mismatch is, the handler must not run for it.",
         )
         driven.append(f"{route.key} [{declared}] -> {second.status}:{second.error_kind or 'replay'}")
+        driven_directions.add(declared)
     require(driven, "no idempotent route publishing an example_body was enabled, so nothing was driven.")
-    return "; ".join(driven) + "; journal unmoved by every mismatch"
+    undriven = sorted(
+        {str(dict(row.idempotency or {}).get("on_mismatch", "conflict")) for row in env.idempotent_routes()}
+        - driven_directions
+    )
+    require(
+        not undriven,
+        f"some enabled route declares on_mismatch={undriven} and no route declaring it publishes an "
+        f"example this check can drive, so the declared direction was asserted by nothing -- exactly "
+        f"how the replay branch went unexercised until the review of konyklabs/roadmap#15. Publish "
+        f"example_body (and example_params, if the path names an entity) on one route per declared "
+        f"direction.",
+    )
+    return (
+        "; ".join(driven)
+        + "; journal unmoved by every mismatch; directions driven: "
+        + ", ".join(sorted(driven_directions))
+    )
 
 
 # ---------------------------------------------------------------------------

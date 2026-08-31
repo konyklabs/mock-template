@@ -325,7 +325,7 @@ def _drive_example_mutation(env: CheckEnv, label: str) -> str:
     spec = route.idempotency
     if spec is not None:
         body[str(spec["key_path"])] = f"conformance-{label}"
-    answered = env.client.call(route.method, route.probe_path, json_body=body, headers=env.authorized(route))
+    answered = env.client.call(route.method, route.example_path, json_body=body, headers=env.authorized(route))
     require(
         200 <= answered.status < 300,
         f"{route.key} refused its own published example_body: {answered.status} "

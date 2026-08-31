@@ -213,7 +213,7 @@ from vendorfake.square.model.order import (
     project_order_entry,
     supplied,
 )
-from vendorfake.square.seed.constants import SEED_KIOSK_LOCATION_ID, SEED_LOCATION_ID
+from vendorfake.square.seed.constants import SEED_KIOSK_LOCATION_ID, SEED_LOCATION_ID, SEED_OPEN_ORDER_ID
 from vendorfake.square.surface.common import SquareDeps, instant_ms
 
 __all__ = [
@@ -444,6 +444,15 @@ class OrdersSurface:
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="orders.update", on_mismatch="replay"),
                 operation_id="UpdateOrder",
                 summary="Sparse update under optimistic concurrency.",
+                # The smallest update the route accepts: the version alone --
+                # "Your request must include the order.version property" --
+                # against the seeded open order, which hydrate leaves at
+                # version 1. Without an example this is the ONLY route
+                # declaring on_mismatch="replay", so the replay half of the
+                # idempotency contract was asserted by nothing (review of
+                # konyklabs/roadmap#15, item 6).
+                example_body={"order": {"version": 1}},
+                example_params={"order_id": SEED_OPEN_ORDER_ID},
             ),
             Route(
                 method="POST",

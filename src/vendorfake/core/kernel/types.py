@@ -467,6 +467,12 @@ class Route:
     #: is deliberate rather than hidden: an example that named no seeded entity
     #: could not be a body the route accepts.
     example_body: Mapping[str, Any] | None = None
+    #: Path parameters that make the example applicable, naming seeded
+    #: entities -- the other half of :attr:`example_body` for a route whose
+    #: path addresses one entity. Without it a check can only fill the path
+    #: with a probe segment no scenario contains, so a route like UpdateOrder
+    #: can publish a working body and still never be driven to success.
+    example_params: Mapping[str, str] | None = None
     #: Stable identifier used by the spec-freshness inventory.
     operation_id: str | None = None
     summary: str | None = None
