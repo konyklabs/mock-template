@@ -213,7 +213,7 @@ from vendorfake.square.model.order import (
     project_order_entry,
     supplied,
 )
-from vendorfake.square.seed.constants import SEED_LOCATION_ID
+from vendorfake.square.seed.constants import SEED_KIOSK_LOCATION_ID, SEED_LOCATION_ID
 from vendorfake.square.surface.common import SquareDeps, instant_ms
 
 __all__ = [
@@ -403,9 +403,11 @@ class OrdersSurface:
                 summary="Filtered, sorted, cursor-paginated order search.",
                 # The page parameters travel in the body, so the walk that
                 # proves pages never overlap needs a body that works: "Your
-                # request must include one or more location_ids", and the one
-                # named is the seeded location every scenario order belongs to.
-                example_body={"location_ids": [SEED_LOCATION_ID]},
+                # request must include one or more location_ids", and BOTH
+                # seeded locations are named because the scenario splits its
+                # orders across the two -- an example reaching one location
+                # would publish a one-row listing no page walk can cross.
+                example_body={"location_ids": [SEED_LOCATION_ID, SEED_KIOSK_LOCATION_ID]},
                 pagination=PaginationSpec(style="cursor", where="body", items_path="orders"),
             ),
             Route(
