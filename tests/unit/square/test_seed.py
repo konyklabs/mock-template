@@ -89,7 +89,11 @@ def test_every_constant_names_something_the_document_contains(document: dict[str
     assert doc.loyalty_program.id == seed_constants.SEED_LOYALTY_PROGRAM_ID
     assert doc.loyalty_program.spend_amount.amount == seed_constants.SEED_LOYALTY_SPEND_AMOUNT
     assert [tier.id for tier in doc.loyalty_program.reward_tiers] == [seed_constants.SEED_LOYALTY_REWARD_TIER_ID]
-    (account,) = doc.loyalty_accounts
+    assert {account.id for account in doc.loyalty_accounts} == {
+        seed_constants.SEED_LOYALTY_ACCOUNT_ID,
+        seed_constants.SEED_LOYALTY_SECOND_ACCOUNT_ID,
+    }
+    account = next(a for a in doc.loyalty_accounts if a.id == seed_constants.SEED_LOYALTY_ACCOUNT_ID)
     assert account.id == seed_constants.SEED_LOYALTY_ACCOUNT_ID
     assert account.phone_number == seed_constants.SEED_LOYALTY_ACCOUNT_PHONE
     assert account.customer_id == seed_constants.SEED_LOYALTY_CUSTOMER_ID
@@ -134,7 +138,7 @@ def test_the_store_holds_what_the_document_describes(h: Harness) -> None:
         "catalog_objects": 6,
         "orders": 2,
         "loyalty_programs": 1,
-        "loyalty_accounts": 1,
+        "loyalty_accounts": 2,
         "inventory_counts": 2,
         "tokens": 2,
     }

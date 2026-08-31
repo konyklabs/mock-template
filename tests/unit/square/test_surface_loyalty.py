@@ -166,12 +166,17 @@ def test_search_by_customer_id_and_the_two_filters_do_not_combine(h: Harness) ->
 def test_search_limit_is_bounded_and_pages(h: Harness) -> None:
     """ "Min 1, Max 200", default 30."""
     assert enrol(h, "+14155550001", key="e1").status == 200
-    page = search(h, limit=1).json()
-    assert len(page["loyalty_accounts"]) == 1
-    assert page["cursor"]
-    rest = search(h, limit=1, cursor=page["cursor"]).json()
-    assert len(rest["loyalty_accounts"]) == 1
-    assert "cursor" not in rest
+    seen: list[str] = []
+    cursor: str | None = None
+    for _ in range(4):
+        page = search(h, limit=1, cursor=cursor).json()
+        assert len(page["loyalty_accounts"]) == 1
+        seen.extend(account["id"] for account in page["loyalty_accounts"])
+        cursor = page.get("cursor")
+        if cursor is None:
+            break
+    # Two seeded accounts plus the one just enrolled, one per page, no repeat.
+    assert len(seen) == len(set(seen)) == 3
     assert first_error(search(h, limit=0))["field"] == "limit"
     assert first_error(search(h, limit=201))["field"] == "limit"
 
