@@ -254,6 +254,14 @@ class CloverVendor:
         return _VOLATILE_FIELDS
 
     @property
+    def opaque_fields(self) -> Sequence[str]:
+        """Empty: this surface stores no caller free-form documents. Every
+        stored dict (``address``, ``orderType``, ``taxRates`` elements, ...)
+        carries Clover's own documented keys, none of which shares a name in
+        ``_VOLATILE_FIELDS``."""
+        return ()
+
+    @property
     def profile_dir(self) -> Path:
         return _PACKAGE_DIR / "profiles"
 

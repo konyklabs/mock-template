@@ -209,6 +209,10 @@ class VendorOverlay:
     def volatile_fields(self) -> Sequence[str]:
         return self._inner.volatile_fields
 
+    @property
+    def opaque_fields(self) -> Sequence[str]:
+        return self._inner.opaque_fields
+
     # -- lifecycle ---------------------------------------------------------
 
     def hydrate(self, ctx: UnitContext, seed: object) -> None:

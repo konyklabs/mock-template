@@ -192,6 +192,26 @@ def order_with_supplied_stamps(h: Harness, stamp: str = SUPPLIED_STAMP) -> str:
     return created
 
 
+def order_with_free_form_documents(h: Harness, marker: str = "A") -> str:
+    """An order whose caller free-form documents carry volatile-named keys:
+    `metadata` (Square documents its keys as arbitrary `[a-zA-Z0-9_-]`) and
+    `pickup_details.curbside_pickup_details`. All of it is caller state."""
+    return order(
+        h,
+        metadata={"created_at": marker, "used_at": marker, "note": "kept"},
+        fulfillments=[
+            {
+                "uid": "f1",
+                "type": "PICKUP",
+                "pickup_details": {
+                    "is_curbside_pickup": True,
+                    "curbside_pickup_details": {"curbside_details": f"bay {marker}", "expires_at": marker},
+                },
+            }
+        ],
+    )
+
+
 def digest_after(traffic: Traffic, *, advance_ms: int) -> str:
     for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
         if advance_ms:
@@ -217,6 +237,7 @@ HOUR_MS = 60 * 60 * 1000
         pytest.param(pay_order_opaque, id="pay-order"),
         pytest.param(order_with_fulfillment, id="order-with-fulfillment"),
         pytest.param(order_with_supplied_stamps, id="order-with-caller-supplied-stamps"),
+        pytest.param(order_with_free_form_documents, id="order-with-free-form-documents"),
     ],
 )
 def test_two_units_driven_alike_an_hour_apart_digest_alike(traffic: Traffic) -> None:
@@ -373,3 +394,52 @@ def test_a_unit_set_stamp_is_not_mirrored_and_a_cleared_one_leaves_the_mirror() 
         stored = h.unit.context.store.raw(COL.orders)[created]["fulfillments"][0]
         assert "supplied_stamps" not in stored
         assert "expires_at" not in stored["pickup_details"]
+
+
+# ---------------------------------------------------------------------------
+# Caller free-form documents are digested verbatim (opaque subtrees).
+# ---------------------------------------------------------------------------
+
+
+def digest_with_documents(marker: str) -> str:
+    for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
+        order_with_free_form_documents(h, marker)
+        return str(h.api.get("/__unit/state").json()["digest"])
+    raise AssertionError("harness yielded nothing")
+
+
+def test_metadata_values_under_volatile_names_are_state() -> None:
+    """The reviewer's repro: two identically seeded units on the same clock,
+    the same traffic, and the only difference is `metadata: {"created_at":
+    "A"}` vs `"B"`. `metadata` is a caller document -- `created_at` is a
+    legal caller key there -- so the digests must differ."""
+
+    def with_metadata(marker: str) -> str:
+        for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
+            order(h, metadata={"created_at": marker})
+            return str(h.api.get("/__unit/state").json()["digest"])
+        raise AssertionError("harness yielded nothing")
+
+    assert with_metadata("A") != with_metadata("B")
+
+
+def test_curbside_pickup_details_values_under_volatile_names_are_state() -> None:
+    """The same class, one level down inside pickup_details -- a subtree the
+    `supplied_stamps` mirror does not reach, so opacity is what covers it."""
+
+    def with_curbside(marker: str) -> str:
+        for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
+            order(
+                h,
+                fulfillments=[
+                    {
+                        "uid": "f1",
+                        "type": "PICKUP",
+                        "pickup_details": {"curbside_pickup_details": {"expires_at": marker}},
+                    }
+                ],
+            )
+            return str(h.api.get("/__unit/state").json()["digest"])
+        raise AssertionError("harness yielded nothing")
+
+    assert with_curbside("A") != with_curbside("B")

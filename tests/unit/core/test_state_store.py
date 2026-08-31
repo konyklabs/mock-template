@@ -731,6 +731,49 @@ def test_a_container_under_a_volatile_name_is_walked_not_collapsed() -> None:
     assert listed.entity_digest() == _digest_of_literal(expected)
 
 
+def test_an_opaque_subtree_is_digested_verbatim_and_wins_over_volatile() -> None:
+    """A caller free-form document keeps every value, including ones under
+    volatile names -- they are the caller's keys, not the unit's stamps."""
+
+    def store_with(doc: dict[str, object]) -> Store:
+        store = make_store()
+        store.mark_volatile("used_at")
+        store.mark_opaque("metadata")
+        store.collection("orders").insert({"id": "o1", "used_at": "2024-01-01T00:00:00Z", "metadata": doc})
+        return store
+
+    a = store_with({"created_at": "A", "note": "x"})
+    b = store_with({"created_at": "B", "note": "x"})
+    assert a.entity_digest() != b.entity_digest()
+
+    # Outside the opaque subtree the volatile rule still applies.
+    c = store_with({"created_at": "A", "note": "x"})
+    d = make_store()
+    d.mark_volatile("used_at")
+    d.mark_opaque("metadata")
+    d.collection("orders").insert(
+        {"id": "o1", "used_at": "2030-06-06T06:06:06Z", "metadata": {"created_at": "A", "note": "x"}}
+    )
+    assert c.entity_digest() == d.entity_digest()
+
+    # Opaque wins whatever the shape and wherever the depth, pinned literally.
+    nested = make_store()
+    nested.mark_opaque("metadata")
+    nested.collection("orders").insert({"id": "o1", "lines": [{"metadata": {"updated_at": "keep"}}]})
+    expected = {
+        "orders": {
+            "o1": {
+                "id": "o1",
+                "version": 1,
+                "created_at": VOLATILE_PRESENT,
+                "updated_at": VOLATILE_PRESENT,
+                "lines": [{"metadata": {"updated_at": "keep"}}],
+            }
+        }
+    }
+    assert nested.entity_digest() == _digest_of_literal(expected)
+
+
 def test_the_digest_is_the_canonical_hash_of_the_scrubbed_entities() -> None:
     """Pinned against the literal so the marker and the scrub shape are part
     of the contract, not an implementation detail a port may vary."""

@@ -185,7 +185,24 @@ pins both halves.
 Not listed on purpose: ``pickup_at``, ``deliver_at``, ``courier_pickup_at``
 and the other *schedule* instants, which only a caller ever sets. They are
 what the consumer asked for, not what the clock said, and stay in the digest
-under their own names."""
+under their own names. And name-matching stops inside the free-form subtrees
+:data:`_OPAQUE_FIELDS` declares, where every key is the caller's."""
+
+_OPAQUE_FIELDS: tuple[str, ...] = (
+    # "Application-defined data ... keys ... alphanumeric characters,
+    # underscores (_) and hyphens (-)."
+    # https://developer.squareup.com/docs/build-basics/general-considerations/metadata
+    # So `created_at` inside it is a legal caller key sharing a volatile
+    # name; the digest must take it verbatim. Orders and line items both
+    # carry one, stored exactly as sent.
+    "metadata",
+    # `pickup_details.curbside_pickup_details`, a documented free-form-ish
+    # blob this unit stores raw and never stamps.
+    "curbside_pickup_details",
+)
+"""Caller free-form subtrees the state digest takes verbatim, matched at any
+depth and winning over :data:`_VOLATILE_FIELDS`. This unit writes nothing
+inside them, so nothing there is the clock's."""
 
 
 class SquareVendor:
@@ -332,6 +349,10 @@ class SquareVendor:
     @property
     def volatile_fields(self) -> Sequence[str]:
         return _VOLATILE_FIELDS
+
+    @property
+    def opaque_fields(self) -> Sequence[str]:
+        return _OPAQUE_FIELDS
 
     @property
     def profile_dir(self) -> Path:

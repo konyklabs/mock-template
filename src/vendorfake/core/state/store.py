@@ -529,21 +529,31 @@ confused with a real value -- and is a string so the canonical JSON stays
 plain."""
 
 
-def _scrub_volatile(value: Any, volatile: set[str]) -> Any:
+def _scrub_volatile(value: Any, volatile: set[str], opaque: set[str]) -> Any:
     """``value`` with every volatile field, at any depth, reduced to whether it
     is set. Dicts and lists are walked; everything else is returned as is.
 
-    Only a **scalar** under a volatile name becomes the marker. A dict or list
-    under a volatile name is recursed into like any other container -- its own
-    keys apply -- because "volatile" describes a wall-clock value, and a
-    subtree that merely shares the name is not one; collapsing it would hide
-    every non-volatile field inside it from the digest.
+    Two refinements keep "at any depth" honest, both because volatile names
+    are the unit's vocabulary and an entity can hold documents that are not:
+
+    * A subtree under an **opaque** name (:meth:`Store.mark_opaque`) is
+      digested verbatim, never descended into. Those are caller free-form
+      documents -- Square's ``metadata`` allows any ``[a-zA-Z0-9_-]`` key, so
+      ``created_at`` inside it is a caller's key that happens to share a
+      volatile name, and blanking it would hide caller state from the digest.
+      Opaque wins over volatile, whatever the value's shape.
+    * Only a **scalar** under a volatile name becomes the marker. A dict or
+      list under a volatile name is recursed into like any other container --
+      "volatile" describes a wall-clock value, and a subtree that merely
+      shares the name is not one.
     """
     if isinstance(value, Mapping):
         out: dict[str, Any] = {}
         for key, inner in value.items():
-            if isinstance(inner, Mapping | list | tuple):
-                out[key] = _scrub_volatile(inner, volatile)
+            if key in opaque:
+                out[key] = inner
+            elif isinstance(inner, Mapping | list | tuple):
+                out[key] = _scrub_volatile(inner, volatile, opaque)
             elif key in volatile:
                 if inner is not None:
                     out[key] = VOLATILE_PRESENT
@@ -551,7 +561,7 @@ def _scrub_volatile(value: Any, volatile: set[str]) -> Any:
                 out[key] = inner
         return out
     if isinstance(value, list | tuple):
-        return [_scrub_volatile(inner, volatile) for inner in value]
+        return [_scrub_volatile(inner, volatile, opaque) for inner in value]
     return value
 
 
@@ -567,6 +577,7 @@ class Store:
         "_wrappers",
         "clock",
         "lock",
+        "opaque_fields",
         "volatile_fields",
     )
 
@@ -587,14 +598,30 @@ class Store:
         #: scenario without the state differing in any way that matters, and
         #: the digest is the determinism evidence.
         self.volatile_fields: set[str] = {"created_at", "updated_at"}
+        #: Names of caller free-form subtrees the digest takes verbatim; see
+        #: :meth:`mark_opaque`. Empty in the core: free-form documents are a
+        #: vendor's vocabulary.
+        self.opaque_fields: set[str] = set()
 
     def mark_volatile(self, *fields: str) -> None:
         """Ignore the values of further fields in the digest. A vendor declares
         its own; the name matches at any depth, so ``created_at`` on a nested
         tender is covered by the same declaration as ``created_at`` on the
-        order."""
+        order -- except inside an opaque subtree (:meth:`mark_opaque`)."""
         with self.lock:
             self.volatile_fields.update(fields)
+
+    def mark_opaque(self, *fields: str) -> None:
+        """Declare caller free-form subtrees the digest takes verbatim.
+
+        A name marked opaque -- matched at any depth, like a volatile one --
+        stops the scrub at that key: the subtree beneath it is digested
+        exactly as stored, and volatile names inside it are a caller's own
+        keys, not the unit's stamps. Opaque wins over volatile. A vendor
+        declares its own through ``VendorDefinition.opaque_fields``.
+        """
+        with self.lock:
+            self.opaque_fields.update(fields)
 
     # -- collections --------------------------------------------------------
 
@@ -752,7 +779,10 @@ class Store:
         entity is scrubbed the same way -- because a tender's ``created_at``
         or a fulfillment's ``placed_at`` is the same kind of stamp as the
         order's own, and a top-level-only rule left every nested one in the
-        digest.
+        digest. Depth-matching stops at an **opaque** subtree
+        (:meth:`mark_opaque`): a caller free-form document is digested
+        verbatim, because a volatile name inside it is the caller's key, not
+        the unit's stamp. See :func:`_scrub_volatile` for both rules.
 
         **Empty collections are skipped entirely.** Reading a collection
         materialises it, and a read must never change the digest -- without
@@ -766,7 +796,7 @@ class Store:
                 if not entities:
                     continue
                 collections[name] = {
-                    entity_id: _scrub_volatile(entities[entity_id], self.volatile_fields)
+                    entity_id: _scrub_volatile(entities[entity_id], self.volatile_fields, self.opaque_fields)
                     for entity_id in sorted(entities)
                 }
             return sha256_hex(canonical_json(collections))

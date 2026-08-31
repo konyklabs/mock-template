@@ -499,6 +499,7 @@ class Unit:
             log=self._log,
         )
         self._store.mark_volatile(*vendor.volatile_fields)
+        self._store.mark_opaque(*vendor.opaque_fields)
         # After the context exists, because the listener reaches through it on
         # its first journal entry. The `webhooks` capability gate lives inside
         # the listener rather than around this call; see `attach`.

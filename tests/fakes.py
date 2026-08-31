@@ -154,6 +154,7 @@ class FakeVendor:
     profile_dir: Path = Path("/nonexistent/profiles")
     base_dir: Path = Path("/nonexistent")
     volatile_fields: tuple[str, ...] = ()
+    opaque_fields: tuple[str, ...] = ()
     signer: object | None = None
     events: object | None = None
     name: str = "acme"

@@ -131,6 +131,15 @@ def test_volatile_fields_are_the_wall_clock_ones() -> None:
     assert not fields & {"pickup_at", "deliver_at", "courier_pickup_at", "expired_at", "rejected_at"}
 
 
+def test_opaque_fields_are_the_caller_free_form_documents() -> None:
+    """Subtrees the digest must take verbatim because every key inside is the
+    caller's -- Square's metadata allows any `[a-zA-Z0-9_-]` key, so volatile
+    names in there are caller state, not unit stamps."""
+    vendor = create_square_vendor()
+    assert set(vendor.opaque_fields) == {"metadata", "curbside_pickup_details"}
+    assert not set(vendor.opaque_fields) & set(vendor.volatile_fields)
+
+
 def test_magic_triggers_name_fields_a_consumer_can_actually_set() -> None:
     magic = create_square_vendor().magic
     assert magic is not None

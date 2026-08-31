@@ -969,10 +969,21 @@ class VendorDefinition(Protocol):
     @property
     def volatile_fields(self) -> Sequence[str]:
         """Entity field names whose *values* the state digest ignores because
-        they carry wall-clock time. The name matches at any depth, and a set
-        field still hashes as "set", so a transition the stamp marks moves the
-        digest while the instant does not. ``created_at``/``updated_at`` are
-        covered already."""
+        the unit writes them from its clock. The name matches at any depth
+        (outside opaque subtrees), and a set field still hashes as "set", so a
+        transition the stamp marks moves the digest while the instant does
+        not. ``created_at``/``updated_at`` are covered already."""
+        ...
+
+    @property
+    def opaque_fields(self) -> Sequence[str]:
+        """Names of caller free-form subtrees the state digest takes verbatim.
+
+        Matched at any depth like a volatile name, and winning over one: the
+        scrub never descends below an opaque key, so a caller's ``created_at``
+        inside Square's ``metadata`` is digested as the state it is rather
+        than blanked as the stamp it is not. Empty for a vendor whose surface
+        stores no caller free-form documents."""
         ...
 
     def hydrate(self, ctx: UnitContext, seed: object) -> None:
