@@ -604,10 +604,11 @@ def _keyed(route: RouteRow, key: str, extra: dict[str, Any] | None = None) -> di
     name="state: an idempotency key is scoped to its operation",
     asserts=(
         "A key that succeeded on one route, sent to a route declaring a different idempotency "
-        "scope, is not replayed: the second route answers for itself, with no replay marker and "
-        "different bytes, while the first route still replays the same key."
+        "scope, is not replayed, not refused as an idempotency conflict, and answers with its own "
+        "bytes -- while the first route still replays the same key. Two or more idempotent "
+        "operations whose declared scopes have all collapsed to one string are themselves a failure."
     ),
-    requires=Requires(idempotency_scopes=True, credentials=True),
+    requires=Requires(two_idempotent_routes=True, credentials=True),
 )
 def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
     """The ``scope`` field of every IdempotencySpec, asked rather than read.
@@ -621,24 +622,44 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
     clients do, because "idempotency key" reads as "request id" -- would be
     handed another operation's answer with nothing to notice it by.
 
-    The second route is driven with its own example body where it has one, so
-    the request is one the route would accept; otherwise with the key alone.
-    Either is enough: a replay is decided at step 7 of the pipeline, before
-    the handler, so the collapsed scope answers the stored response whether or
-    not the second request would have validated. The two things a scoped key
-    must produce are a second answer that is the second route's own -- no
-    marker, different bytes -- and a first route that still replays.
+    Two rules the review of the first version added, each closing a way the
+    defect escaped:
+
+    * **A partner answer from the idempotency machinery is a failure, not a
+      pass.** ``idempotency_conflict`` has different bytes and no replay
+      marker, but it is AFFIRMATIVE evidence the key was found in the
+      partner's scope -- the mismatch branch only runs on a stored record.
+      The first version accepted it and certified a collapsed store whose
+      partner happened to be sent a different body.
+    * **The precondition must survive the defect.** Requiring "a second
+      DECLARED scope" let a unit that collapsed its declarations along with
+      its store disarm the check into a skip. So the precondition asks only
+      for two idempotent routes, and the scope comparison happens here:
+      declarations that have all collapsed to one string are a failure --
+      the namespace the field exists for is gone. A *pair* sharing a scope is
+      legitimate (an alias path really shares a replay space, and the partner
+      selection prefers any other scope over it); every operation sharing one
+      is not.
     """
     first_route = next(
         row
         for row in env.example_routes(methods=_MUTATING_METHODS, idempotent=True)
-        if env.other_idempotency_scope(row) is not None
+        if env.partner_idempotent_route(row) is not None
     )
-    second_route = env.other_idempotency_scope(first_route)
+    second_route = env.partner_idempotent_route(first_route)
     if second_route is None:  # pragma: no cover - the precondition already refused this
-        raise ConformanceSkip("no second idempotency scope")
+        raise ConformanceSkip("no partner idempotent route")
     first_scope = str(dict(first_route.idempotency or {})["scope"])
     second_scope = str(dict(second_route.idempotency or {})["scope"])
+    require(
+        first_scope != second_scope,
+        f"every enabled idempotent route declares the single scope {first_scope!r} "
+        f"({', '.join(sorted(row.key for row in env.idempotent_routes()))}). The scope is the "
+        f"namespace that keeps one operation's stored answers away from another's; N operations "
+        f"declaring one string have removed it, and every consumer's key now crosses operations by "
+        f"declaration. Declare a scope per operation (a genuine alias pair may share one, provided "
+        f"the rest do not).",
+    )
     key = "conformance-idempotency-scope-probe"
 
     first = env.client.call(
@@ -662,7 +683,18 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
         headers=env.authorized(second_route),
     )
     require(
-        _REPLAY_HEADER not in second.headers,
+        second.error_kind != _IDEMPOTENCY_CONFLICT,
+        f"{second_route.key} (scope {second_scope!r}) answered {second.status} "
+        f"{_IDEMPOTENCY_CONFLICT!r} to a key it had never seen -- the key was spent on "
+        f"{first_route.key} (scope {first_scope!r}) with a different body. A conflict is not a "
+        f"refusal of the request; it is the mismatch branch of core/kernel/unit.py::_replay, which "
+        f"only runs on a record FOUND in this route's scope. The store found the first operation's "
+        f"record under the second operation's lookup, which is exactly the collapse this contract "
+        f"exists to catch -- and the different bytes it answers with are the reason a weaker "
+        f"assertion missed it.",
+    )
+    require(
+        _REPLAY_HEADER not in second.headers and _IGNORED_BODY_HEADER not in second.headers,
         f"{second_route.key} (scope {second_scope!r}) answered {second.status} carrying "
         f"{_REPLAY_HEADER}={second.headers.get(_REPLAY_HEADER)!r} to a key it had never seen -- the "
         f"key was spent on {first_route.key} (scope {first_scope!r}). The idempotency table in "

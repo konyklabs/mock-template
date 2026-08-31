@@ -1,4 +1,4 @@
-"""Forty units, each broken in exactly one way, and the check each must trip.
+"""Forty-one units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -1453,3 +1453,24 @@ register(
 and ``webhook.out_of_order`` at once left the matrix green: C14 covers the
 request-scope gate and C18 the delivery gate, and nothing observed a delivery
 fault at the sink -- the same shape as original finding 7, one level down."""
+
+
+register(
+    Mutant(
+        id="M41",
+        name="idempotency-scopes-collapse-honestly",
+        defect="Every idempotent route both stores AND declares one shared scope, so keys cross operations by declaration.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C24"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_collapse_idempotency_scopes),
+    )
+)
+"""The disarm the first C24 permitted (review of konyklabs/roadmap#15).
+
+M34 lies -- collapsed store, per-route document -- and the isolation
+assertions catch it. This mutant tells the truth about the same collapse, and
+the first C24's precondition ("a second DECLARED scope exists") then found
+nothing to compare and reported a SKIP: the check was switched off by the
+defect it hunts. The precondition now asks only for two idempotent routes,
+and declarations that have all collapsed to one string are the finding.
+"""

@@ -409,21 +409,25 @@ class CheckEnv:
         """Enabled vendor routes that declare an idempotency spec, example or not."""
         return tuple(row for row in self.vendor_routes() if row.idempotency is not None)
 
-    def other_idempotency_scope(self, route: RouteRow) -> RouteRow | None:
-        """An enabled idempotent route whose declared scope differs from ``route``'s.
+    def partner_idempotent_route(self, route: RouteRow) -> RouteRow | None:
+        """Another enabled idempotent route to send ``route``'s key to.
 
-        The one with an example body first, because a key replayed into a
-        request that then *succeeds* is stronger evidence than one refused by
-        validation; any other scope otherwise, since a replay is decided at
-        step 7 of the pipeline, before any handler could refuse anything.
+        A DIFFERENT declared scope first -- that is the pair the isolation
+        contract wants -- and within each tier the one with an example body,
+        because a key replayed into a request that then *succeeds* is stronger
+        evidence than one refused by validation. A same-scope partner is still
+        returned when no other scope exists: the check treats fully collapsed
+        declarations as its own finding, so the selection must not hide them.
         """
         scope = None if route.idempotency is None else route.idempotency.get("scope")
-        others = [
-            row
-            for row in self.idempotent_routes()
-            if row.key != route.key and (row.idempotency or {}).get("scope") != scope
-        ]
-        return next((row for row in others if row.example_body is not None), None) or (others[0] if others else None)
+        others = [row for row in self.idempotent_routes() if row.key != route.key]
+        tiers = (
+            [row for row in others if (row.idempotency or {}).get("scope") != scope and row.example_body is not None],
+            [row for row in others if (row.idempotency or {}).get("scope") != scope],
+            [row for row in others if row.example_body is not None],
+            others,
+        )
+        return next((tier[0] for tier in tiers if tier), None)
 
     def paginated_routes(self) -> tuple[RouteRow, ...]:
         """Enabled vendor routes that declare how they page."""
@@ -537,12 +541,12 @@ def unmet_precondition(requires: Requires, env: CheckEnv) -> str | None:
             f"profile {env.profile!r} enables no idempotent POST/PUT route publishing an "
             f"example_body, so no request can be sent twice under one key"
         )
-    if requires.idempotency_scopes:
+    if requires.two_idempotent_routes:
         examples = env.example_routes(methods=_MUTATING_METHODS, idempotent=True)
-        if not any(env.other_idempotency_scope(row) is not None for row in examples):
+        if not any(env.partner_idempotent_route(row) is not None for row in examples):
             return (
-                f"profile {env.profile!r} enables no second idempotent route under a different scope "
-                f"from an example-bearing one, so no key can be sent to two operations"
+                f"profile {env.profile!r} enables no second idempotent route alongside an "
+                f"example-bearing one, so no key can be sent to two operations"
             )
     if requires.paginated_route and not env.paginated_routes():
         return f"profile {env.profile!r} enables no vendor route declaring a pagination spec"

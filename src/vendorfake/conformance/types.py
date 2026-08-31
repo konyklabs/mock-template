@@ -142,9 +142,12 @@ class Requires:
     mutating_example: bool = False
     #: ...and that route also declares an idempotency spec.
     idempotent_example: bool = False
-    #: ...and some OTHER enabled route declares an idempotency spec under a
-    #: different scope, so one key can be sent to two operations.
-    idempotency_scopes: bool = False
+    #: ...and some OTHER enabled route also declares an idempotency spec, so
+    #: one key can be sent to two operations. Deliberately NOT "under a
+    #: different scope": the scope comparison happens inside the check, where
+    #: collapsed declarations are a finding -- a precondition that read the
+    #: scopes would be disarmed by the very defect the check hunts.
+    two_idempotent_routes: bool = False
     #: At least one enabled, non-internal route declares how it pages.
     paginated_route: bool = False
     #: Delivery-scope fault injection -- ``webhooks.chaos`` -- is enabled.
