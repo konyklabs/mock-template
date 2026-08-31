@@ -490,6 +490,14 @@ def _check_references(doc: SeedDocument) -> None:
     menu = doc.menu_v3
     item_ids = set() if menu is None else {item.guid for m in menu.menus for _, item in _walk_items(m.menuGroups, "")}
     option_ids = set() if menu is None else {option.guid for option in menu.modifierOptions}
+    pre_ids = set() if menu is None else {pre.guid for group in menu.preModifierGroups for pre in group.preModifiers}
+
+    def check_pre_modifiers(selection: SeedSelection, path: str) -> None:
+        if selection.preModifier is not None and selection.preModifier not in pre_ids:
+            raise _refuse(f"{path}.preModifier", f"pre-modifier {selection.preModifier!r} is absent")
+        for m, modifier in enumerate(selection.modifiers):
+            check_pre_modifiers(modifier, f"{path}.modifiers[{m}]")
+
     for i, order in enumerate(doc.orders):
         if order.diningOption not in dining_ids:
             raise _refuse(f"orders[{i}].diningOption", f"dining option {order.diningOption!r} is absent")
@@ -497,6 +505,7 @@ def _check_references(doc: SeedDocument) -> None:
             raise _refuse(f"orders[{i}].table", f"table {order.table!r} is absent")
         for j, check in enumerate(order.checks):
             for k, selection in enumerate(check.selections):
+                check_pre_modifiers(selection, f"orders[{i}].checks[{j}].selections[{k}]")
                 if selection.item not in item_ids:
                     raise _refuse(
                         f"orders[{i}].checks[{j}].selections[{k}].item", f"menu item {selection.item!r} is absent"

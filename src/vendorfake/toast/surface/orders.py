@@ -100,7 +100,7 @@ from vendorfake.toast.model.order import (
 )
 from vendorfake.toast.model.pricing import discount_amount, taxes_on
 from vendorfake.toast.surface.common import RESTAURANT_AUTH, ToastDeps, int_param, is_guid, now_ms, require_restaurant
-from vendorfake.toast.surface.payments import add_payment, payments_for, settle_order
+from vendorfake.toast.surface.payments import PaymentBatch, add_payment, payments_for, settle_order
 
 __all__ = [
     "CAPABILITY",
@@ -279,6 +279,7 @@ class ToastOrdersSurface:
         # identical in every amount, draws them.
         rehearsal = self._build(args, restaurant, request, mint=None, display_number=display_number)
         pending = [(index, check.payments or []) for index, check in enumerate(request.checks)]
+        rehearsal_batch = PaymentBatch()
         for index, payment_requests in pending:
             for i, payment in enumerate(payment_requests):
                 add_payment(
@@ -289,10 +290,12 @@ class ToastOrdersSurface:
                     payment,
                     field=f"checks[{index}].payments[{i}].",
                     mint=None,
+                    batch=rehearsal_batch,
                 )
         entity = self._build(args, restaurant, request, mint=self._deps.ids.guid, display_number=display_number)
         entity["id"] = self._deps.ids.order()
         entity["client_id"] = _client_id(args)
+        batch = PaymentBatch()
         docs = [
             add_payment(
                 ctx,
@@ -302,6 +305,7 @@ class ToastOrdersSurface:
                 payment,
                 field=f"checks[{index}].payments[{i}].",
                 mint=self._deps.ids.payment,
+                batch=batch,
             )
             for index, payment_requests in pending
             for i, payment in enumerate(payment_requests)
@@ -519,6 +523,16 @@ class ToastOrdersSurface:
         _assert_not_voided(order)
         check = _check_of(order, args.params["checkGuid"])
         _CHECK_MACHINE.assert_mutable(str(check["paymentStatus"]), f"Check {check['guid']}")
+        if check["paymentStatus"] == CheckPaymentStatus.PAID.value:
+            # Same rule, same reason, as a selection on a PAID check: a
+            # discount would drop totalAmount below what was already paid and
+            # the check's amounts would no longer match its payments
+            # (konyklabs/roadmap#39 review, B2).
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=f"Check {check['guid']} is PAID; a discount cannot be applied to a paid check.",
+                field="checkGuid",
+            )
         index = MenuIndex.from_store(ctx.store, restaurant.id)
         wanted_type = "CHECK" if selection_guid is None else "ITEM"
         target = check if selection_guid is None else selection_by_guid(check, selection_guid)
