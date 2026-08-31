@@ -19,13 +19,6 @@
     "client_id": "unit-toast-client-id",
     "client_secret": "unit-toast-client-secret"
   },
-  "webhooks": {
-    "retry": {
-      "time_scale": 0.000167,
-      "timeout_ms": 2000
-    },
-    "subscribers": []
-  },
   "clock": {
     "mode": "virtual",
     "start": "2026-08-30T12:00:00.000Z"

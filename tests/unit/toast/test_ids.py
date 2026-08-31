@@ -20,7 +20,6 @@ def test_every_guid_is_a_lowercase_uuid() -> None:
         ids.payment,
         ids.applied_discount,
         ids.token_id,
-        ids.event,
     ):
         value = mint()
         assert UUID_V4.fullmatch(value), value

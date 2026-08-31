@@ -62,7 +62,9 @@ TOAST_TIMEOUT_MS = 2_000
 TOAST_TIME_SCALE = 1 / 6000
 """Compresses the schedule so a test can watch the whole cascade: the
 five-minute first retry becomes 50 milliseconds and the ten-minute second one
-100, keeping their ratio. A mock affordance, kept apart from the schedule."""
+100, keeping their ratio. The single source: the shipped profiles set no
+``webhooks.retry`` of their own, so every one inherits this and the 2-second
+timeout through ``retry_defaults``; a consumer profile overrides it there."""
 
 CONTENT_TYPE = "application/json"
 """"Content-Type: application/json" on every delivery (apiMessageDataSchema.html)."""

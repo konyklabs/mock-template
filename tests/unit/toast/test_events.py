@@ -120,9 +120,10 @@ def test_a_menu_write_is_menus_updated(h: Harness, sink: MemorySink) -> None:
     )
     ((_, body, _),) = delivered(h, sink)
     assert body["eventCategory"] == "menus" and body["eventType"] == "menus_updated"
+    # The webhook spelling, not the REST one: a date written INTO an envelope.
     assert body["details"] == {
         "restaurantGuid": c.SEED_RESTAURANT_GUID,
-        "publishedDate": "2025-08-21T14:22:42.000+0000",
+        "publishedDate": "2025-08-21T14:22:42.000Z",
     }
 
 
@@ -156,3 +157,66 @@ def test_loading_the_scenario_emits_nothing(h: Harness, sink: MemorySink) -> Non
 
 def test_the_advertised_event_types_are_the_five_documented_ones() -> None:
     assert TOAST_EVENT_TYPES == ("order_updated", "in_stock", "out_of_stock", "low_quantity", "menus_updated")
+
+
+# ---------------------------------------------------------------------------
+# Retries: the documented five-then-ten-minute schedule, driven end to end
+# (konyklabs/roadmap#39 review, finding 11 -- ported from the Clover suite).
+# ---------------------------------------------------------------------------
+
+
+def _log(h: Harness) -> list[dict[str, Any]]:
+    h.api.post("/__unit/webhooks/drain", {})
+    return [dict(r) for r in h.api.get("/__unit/webhooks/deliveries").json()["deliveries"]]
+
+
+def test_a_failing_subscriber_walks_the_documented_schedule_then_succeeds(h: Harness, sink: MemorySink) -> None:
+    """1 -> 2 -> 3, on the vendor default's compressed intervals (300000 and
+    600000 ms scaled by 1/6000 to 50 and 100), the documented headers moving
+    exactly as documented: Toast-Attempt-Number on EVERY attempt counting from
+    1, the fake-only reason header on retries alone, one signature throughout."""
+    subscribe(h)
+    sink.respond_with = lambda _req, index: 500 if index < 2 else 200
+    h.post("/orders/v2/orders", order_body())
+    log = _log(h)
+    assert [record["status"] for record in log] == ["failed", "failed", "delivered"]
+    assert [record["attempt"] for record in log] == [1, 2, 3]
+    assert [record["next_attempt_in_ms"] for record in log[:-1]] == [50, 100]
+    assert [record["headers"]["Toast-Attempt-Number"] for record in log] == ["1", "2", "3"]
+    assert "x-vendorfake-retry-reason" not in log[0]["headers"]
+    assert [record["headers"]["x-vendorfake-retry-reason"] for record in log[1:]] == ["http_error", "http_error"]
+    assert len({record["event_id"] for record in log}) == 1
+    assert len({record["headers"]["Toast-Signature"] for record in log}) == 1  # the attempt never enters the HMAC
+
+
+def test_a_timed_out_subscriber_is_retried_with_the_timeout_reason(h: Harness, sink: MemorySink) -> None:
+    """ "return a 2xx response within the 2-second window" (apiTimeouts.html):
+    the window is the vendor default the profiles inherit."""
+    assert h.api.get("/__unit/info").json()["webhooks"]["retry"]["timeout_ms"] == 2000
+    subscribe(h)
+    sink.respond_with = lambda _req, index: 0 if index == 0 else 200
+    h.post("/orders/v2/orders", order_body())
+    log = _log(h)
+    assert [record["status"] for record in log] == ["failed", "delivered"]
+    assert log[1]["headers"]["x-vendorfake-retry-reason"] == "timeout"
+
+
+def test_the_whole_documented_schedule_runs_uncompressed_then_stops(sink: MemorySink) -> None:
+    """Three attempts in all -- "wait five minutes and then resend ... wait 10
+    minutes and resend a second time. If the second resend attempt fails, the
+    Toast platform does not send the update again" -- over fifteen minutes of
+    unit time on the virtual clock, then `exhausted` and silence."""
+    from vendorfake.toast.retry import TOAST_RETRY_SCHEDULE_MS
+
+    for h in harness("full", sink=sink, env={"VENDORFAKE_CLOCK": "virtual"}):
+        subscribe(h)
+        sink.respond_with = 500
+        assert h.api.post("/__unit/webhooks/retry-policy", {"time_scale": 1.0}).status == 200
+        started_at = h.unit.context.clock.now()
+        h.post("/orders/v2/orders", order_body())
+        log = _log(h)
+        assert len(log) == len(TOAST_RETRY_SCHEDULE_MS) + 1 == 3
+        assert [record["status"] for record in log] == ["failed", "failed", "exhausted"]
+        assert [record["next_attempt_in_ms"] for record in log[:-1]] == [300_000, 600_000]
+        assert "next_attempt_in_ms" not in log[-1]
+        assert h.unit.context.clock.now() - started_at == sum(TOAST_RETRY_SCHEDULE_MS)

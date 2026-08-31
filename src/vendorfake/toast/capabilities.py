@@ -126,9 +126,15 @@ TOAST_NOT_MODELED: Mapping[str, str] = {
         "dispatcher retries every non-2xx and offers no vendor hook, so a 400 from a subscriber is retried "
         "here where Toast would stop until the core seam lands (konyklabs/roadmap#40); recorded in retry.py."
     ),
-    "loyalty-and-service-charges-on-orders": (
-        "appliedLoyaltyInfo, appliedServiceCharges, appliedPackagingInfo and marketplace facilitator tax "
-        "info are accepted on the wire and stored verbatim, never computed."
+    "service-charge-computation": (
+        "A check's appliedServiceCharges are validated -- the serviceCharge reference must resolve and "
+        "unknown keys are refused (model/order.py) -- but chargeAmount is the caller's and is never "
+        "computed into the check's amounts."
+    ),
+    "loyalty-and-order-passthrough-blocks": (
+        "appliedLoyaltyInfo, curbsidePickupInfo, appliedPackagingInfo, marketplaceFacilitatorTaxInfo and "
+        "thirdPartyProviderInfo are accepted on the wire and stored verbatim, never computed; they are "
+        "declared opaque to the state digest (vendor.py)."
     ),
 }
 """Documented Toast behaviour this fake deliberately omits, each with its why."""

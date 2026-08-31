@@ -121,7 +121,6 @@ digest keeps each scrubbed field's *presence*, so a void that only stamps
 ``voidDate`` still moves it."""
 
 _OPAQUE_FIELDS: tuple[str, ...] = (
-    "appliedServiceCharges",
     "curbsidePickupInfo",
     "appliedPackagingInfo",
     "marketplaceFacilitatorTaxInfo",
