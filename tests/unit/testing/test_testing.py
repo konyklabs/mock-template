@@ -87,14 +87,34 @@ def test_a_vendor_error_comes_back_as_the_vendor_shapes_it() -> None:
         assert refused.headers["x-unit-error"]
 
 
-def test_the_profile_is_the_one_asked_for_and_the_environment_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("VENDORFAKE_PROFILE", "oauth-only")
+def test_the_process_environment_is_ignored_unless_passed_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The isolation invariant, tested where it can actually fail.
+
+    ``VENDORFAKE_CLOCK`` is the probe because no explicit ``unit()`` argument
+    names the clock: if ``unit()`` ever read ``os.environ``, the ambient
+    variable would flip a consumer's units to a virtual clock with nothing
+    overriding it. (An earlier version probed ``VENDORFAKE_PROFILE``, which
+    ``unit()`` always passes explicitly and ``load_profile`` then never looks
+    up -- that test passed regardless of what ``unit()`` did with ``env``.)
+    """
+    monkeypatch.setenv("VENDORFAKE_CLOCK", "virtual")
+    with unit("square") as square:
+        assert square.info()["clock"]["mode"] == "real"
+        with pytest.raises(RuntimeError, match="answered 400"):
+            square.advance_clock(1000)
+    # The same variable, passed in deliberately, is honoured.
+    with unit("square", env={"VENDORFAKE_CLOCK": "virtual"}) as square:
+        assert square.info()["clock"]["mode"] == "virtual"
+        square.advance_clock(1000)
+    assert os.environ["VENDORFAKE_CLOCK"] == "virtual"
+
+
+def test_the_profile_argument_wins_and_the_default_is_full() -> None:
     with unit("square") as square:
         assert square.profile == "full"
     with unit("square", "oauth-only") as square:
         assert square.profile == "oauth-only"
         assert square.client.get("/v2/locations", headers=square.seed.auth).status_code == 501
-    assert os.environ["VENDORFAKE_PROFILE"] == "oauth-only"
 
 
 def test_a_memory_sink_captures_instead_of_delivering() -> None:

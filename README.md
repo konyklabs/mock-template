@@ -64,13 +64,21 @@ starts, by `VENDORFAKE_VENDOR`, and the profile by `VENDORFAKE_PROFILE`
 ```sh
 docker build -t vendorfake .
 
-docker run --rm -p 8080:8080 -e VENDORFAKE_VENDOR=square vendorfake
-docker run --rm -p 8081:8080 -e VENDORFAKE_VENDOR=clover -e VENDORFAKE_PROFILE=chaos-demo vendorfake
-# equivalent: docker run --rm -p 8080:8080 vendorfake serve --vendor square --profile no-faults
+docker run --rm -p 127.0.0.1:8080:8080 -e VENDORFAKE_VENDOR=square vendorfake
+docker run --rm -p 127.0.0.1:8081:8080 -e VENDORFAKE_VENDOR=clover -e VENDORFAKE_PROFILE=chaos-demo vendorfake
+# equivalent: docker run --rm -p 127.0.0.1:8080:8080 vendorfake serve --vendor square --profile no-faults
 
 curl -s http://localhost:8080/__unit/health
 # -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"framework_answered":0}
 ```
+
+Publish the port on loopback (`-p 127.0.0.1:...`), as above: the control
+plane is deliberately unauthenticated — it hands out the seeded credentials
+and will POST webhooks at any URL it is told — so a fake published to the
+network is an outbound-request primitive for anyone who can route to your
+host. When another container or machine must reach it deliberately, put both
+on a Docker network (or use Testcontainers, as the examples do) rather than
+widening the host bind.
 
 The image runs as a non-root user, listens on 8080, and carries a
 `HEALTHCHECK` on `/__unit/info` so `docker ps` (and any orchestrator) reports
