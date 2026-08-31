@@ -39,9 +39,20 @@ class WebhookReceiver:
     """Started by :func:`webhook_receiver`; ``url`` is what to subscribe.
 
     Only ``path`` is served; any other path answers 404 and records nothing.
+
+    ``host`` is the loopback bind, so with an in-process or subprocess unit
+    ``receiver.url`` is the whole story. A unit in a **container** cannot
+    reach the host's loopback: bind ``host="0.0.0.0"`` and subscribe the
+    address the container sees on ``port`` -- Docker Desktop and colima
+    publish the host as ``http://host.docker.internal:{port}{path}``, and
+    testcontainers as ``host.testcontainers.internal`` after
+    ``exposeHostPorts`` (the Vitest example's ``setup/global.ts`` does
+    exactly this). ``url`` refuses to guess a routable address for a
+    wildcard bind.
     """
 
     path: str = "/webhooks"
+    host: str = "127.0.0.1"
     #: Arrival index -> HTTP status to answer with. Defaults to 200 for all.
     respond_with: Callable[[int], int] = field(default=lambda index: 200)
     received: list[Delivery] = field(default_factory=list)
@@ -56,7 +67,11 @@ class WebhookReceiver:
 
     @property
     def url(self) -> str:
-        return f"http://127.0.0.1:{self.port}{self.path}"
+        """The receiver as this machine reaches it. For a wildcard bind the
+        routable name depends on who is asking (see the class docstring), so
+        build that URL from :attr:`port` yourself."""
+        host = "127.0.0.1" if self.host == "0.0.0.0" else self.host
+        return f"http://{host}:{self.port}{self.path}"
 
     def start(self) -> None:
         receiver = self
@@ -87,7 +102,7 @@ class WebhookReceiver:
             def log_message(self, fmt: str, *args: object) -> None:
                 """Silence: the test's own output is the transcript."""
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = ThreadingHTTPServer((self.host, 0), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 
@@ -103,8 +118,10 @@ class WebhookReceiver:
 
         Deliveries are made from the unit's worker thread, so a test that
         asserts on ``received`` right after the request that caused them is
-        racing that thread. ``drain()`` on the unit is the other way to wait;
-        this one is for a consumer whose unit is a container.
+        racing that thread. ``drain()`` on the unit's driver is the other way
+        to wait; this one is for the unit you cannot drain in-line -- one
+        behind :func:`~vendorfake.testing.served`, or in a container (bound
+        as the class docstring describes).
         """
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
@@ -120,9 +137,13 @@ class WebhookReceiver:
 
 
 @contextmanager
-def webhook_receiver(path: str = "/webhooks") -> Iterator[WebhookReceiver]:
-    """A receiver on a free loopback port, stopped however the block ends."""
-    receiver = WebhookReceiver(path=path)
+def webhook_receiver(path: str = "/webhooks", *, host: str = "127.0.0.1") -> Iterator[WebhookReceiver]:
+    """A receiver on a free port, stopped however the block ends.
+
+    Loopback by default; ``host="0.0.0.0"`` only when a container must reach
+    it (see :class:`WebhookReceiver` for the address to subscribe then).
+    """
+    receiver = WebhookReceiver(path=path, host=host)
     receiver.start()
     try:
         yield receiver

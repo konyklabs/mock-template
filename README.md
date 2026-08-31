@@ -156,7 +156,9 @@ When your service needs a URL, `served("square")` runs the shipped
 `vendorfake serve` in a child process and yields one, and
 `serve_in_thread(started)` gives a URL onto an in-process unit. Every driver
 wraps the control plane: `add_chaos_rule`, `reset_chaos`, `reset`,
-`deliveries`, `advance_clock`.
+`deliveries`, `advance_clock`. Note that `reset` returns to the seed
+scenario and drops every subscriber a test registered — subscribe after
+the reset, not before it.
 
 [`examples/pytest-consumer`](examples/pytest-consumer) is a complete
 standalone project — ten tests, both vendors, about a second — plus a
