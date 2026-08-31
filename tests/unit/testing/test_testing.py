@@ -320,14 +320,35 @@ def _slow_retry_square_profile(tmp_path: Any) -> str:
     return str(path)
 
 
+def _await_pending_timers(driver: Driver, *, timeout_s: float = 10.0) -> list[dict[str, Any]]:
+    """Block until the dispatcher has a retry on the clock, and return them.
+
+    A delivery receipt does NOT mean the retry exists yet, which is the race
+    these two tests used to run: ``WebhookReceiver``'s handler appends to
+    ``received`` *before* it computes the status and writes the response, and
+    the timer is only scheduled once that response has crossed back over
+    loopback, been recorded and re-signed on the worker thread. The gap is
+    about a millisecond on an idle machine and unbounded on a loaded one, so
+    the timer is waited for directly rather than inferred.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        pending = driver.pending_webhook_timers()
+        if pending:
+            return pending
+        time.sleep(0.005)
+    raise AssertionError(
+        f"no webhook retry timer was scheduled within {timeout_s}s; deliveries so far: {driver.deliveries()}"
+    )
+
+
 def test_pending_webhook_timers_sees_a_scheduled_retry(tmp_path: Any) -> None:
     with unit("square", _slow_retry_square_profile(tmp_path)) as square, webhook_receiver() as receiver:
         receiver.respond_with = lambda index: 500 if index == 0 else 200
         square.subscribe(receiver.url, ["order.created"], "k")
         assert square.pending_webhook_timers() == []
         _create_square_order(square)
-        receiver.wait_for(1)  # attempt 1 failed; the retry is now a timer
-        (timer,) = square.pending_webhook_timers()
+        (timer,) = _await_pending_timers(square)
         assert str(timer["label"]).startswith("webhook")
         assert float(timer["due_in_ms"]) > 5_000
 
@@ -346,7 +367,7 @@ def test_drain_raises_instead_of_pretending_an_early_return_settled(
         receiver.respond_with = lambda index: 500 if index == 0 else 200
         square.subscribe(receiver.url, ["order.created"], "k")
         _create_square_order(square)
-        receiver.wait_for(1)
+        _await_pending_timers(square)
 
         real_post = square.client.post
 
