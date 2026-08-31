@@ -1,0 +1,25 @@
+[project]
+name = "vendorfake-pytest-consumer"
+version = "0.0.0"
+description = "A restaurant-ordering integration's test suite, run against vendorfake instead of the vendor sandboxes."
+requires-python = ">=3.11"
+dependencies = [
+  # From a checkout, this resolves to the repository two levels up (see
+  # [tool.uv.sources]). From anywhere else, replace with the public source:
+  #   "vendorfake @ git+https://github.com/konyklabs/vendorfake"
+  # or, once published, just "vendorfake".
+  "vendorfake",
+  "httpx>=0.27",
+  "pytest>=8.2",
+]
+
+[project.optional-dependencies]
+# For test_container.py: the same tests against the image, via Testcontainers.
+container = ["testcontainers>=4.0"]
+
+[tool.uv.sources]
+vendorfake = { path = "../..", editable = false }
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+addopts = "-ra"

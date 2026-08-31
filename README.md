@@ -38,18 +38,221 @@ Because several vendors are installed, every command names one: `--vendor
 square` (or `--vendor clover`, `--vendor toast`), or set `VENDORFAKE_VENDOR`. With no selector the
 command refuses and lists what it found — it never guesses.
 
-## Install
+## For consumers
 
-Not yet on PyPI. Until v0.1 is published, install from source:
+You have an integration to test and no wish to learn how the fake is built.
+This section is the whole path: install, run, point your tests at it. Every
+command below was run as written.
+
+### Install
+
+Not yet on PyPI. Install straight from the repository (Python ≥ 3.11):
 
 ```sh
-git clone https://github.com/konyklabs/vendorfake
-cd vendorfake
-uv run vendorfake serve --vendor square   # or: uv sync && .venv/bin/vendorfake serve --vendor square
+pip install "vendorfake @ git+https://github.com/konyklabs/vendorfake"
+# or, in a uv project:
+uv add "vendorfake @ git+https://github.com/konyklabs/vendorfake"
+
+vendorfake vendors            # -> clover, square
+vendorfake serve --vendor square
 ```
 
-Once v0.1 is out this becomes `pip install vendorfake` / `uv add vendorfake`.
-Python ≥ 3.11.
+That resolves `main`. `vendorfake.testing`, the container and the examples
+arrive with the change that ships this README, so if the `main` you are
+reading predates it, pin the branch or tag that carries it
+(`...vendorfake@<ref>`). From a checkout, `uv sync && uv run vendorfake serve
+--vendor square`. Once v0.1 is out this becomes `pip install vendorfake`.
+
+### Run it as a container
+
+One image serves every vendor; the vendor is chosen when the container
+starts, by `VENDORFAKE_VENDOR`, and the profile by `VENDORFAKE_PROFILE`
+(default `full`). Nothing is published to a registry yet, so build it:
+
+```sh
+docker build -t vendorfake .
+
+docker run --rm -p 127.0.0.1:8080:8080 -e VENDORFAKE_VENDOR=square vendorfake
+docker run --rm -p 127.0.0.1:8081:8080 -e VENDORFAKE_VENDOR=clover -e VENDORFAKE_PROFILE=chaos-demo vendorfake
+# equivalent: docker run --rm -p 127.0.0.1:8080:8080 vendorfake serve --vendor square --profile no-faults
+
+curl -s http://localhost:8080/__unit/health
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"framework_answered":0}
+```
+
+Publish the port on loopback (`-p 127.0.0.1:...`), as above: the control
+plane is deliberately unauthenticated — it hands out the seeded credentials
+and will POST webhooks at any URL it is told — so a fake published to the
+network is an outbound-request primitive for anyone who can route to your
+host. When another container or machine must reach it deliberately, put both
+on a Docker network (or use Testcontainers, as the examples do) rather than
+widening the host bind.
+
+The image runs as a non-root user, listens on 8080, and carries a
+`HEALTHCHECK` on `/__unit/info` so `docker ps` (and any orchestrator) reports
+`healthy` only once the unit has hydrated its seed and is answering. With no
+vendor set it refuses and lists what it found — it never guesses.
+`tools/verify_image_build.sh` is the build's own proof: it builds, serves each
+vendor, waits for the healthcheck, and fails if the Dockerfile names a vendor.
+
+### pytest
+
+`vendorfake.testing` is the fixture layer. A unit is built in your test
+process in a few milliseconds and driven through `httpx.Client` with no
+socket; webhooks still go out over real HTTP, so a receiver on loopback sees
+signed bytes. The seeded credentials and ids are attributes, so nothing is
+typed twice:
+
+```python
+from vendorfake.testing import unit, webhook_receiver
+from vendorfake.square.signer import verify_square_signature
+
+
+def test_an_order_is_paid_and_the_webhook_verifies():
+    with unit("square") as square, webhook_receiver() as receiver:
+        seed = square.seed  # SquareSeed: tokens, ids, app credentials
+        square.subscribe(receiver.url, ["order.created"], signature_key="k")
+
+        created = square.client.post(
+            "/v2/orders",
+            headers=seed.auth,
+            json={
+                "idempotency_key": "ticket-1",
+                "order": {
+                    "location_id": seed.location_id,
+                    "line_items": [{"catalog_object_id": seed.tea_mug_variation_id, "quantity": "1"}],
+                },
+            },
+        )
+        assert created.status_code == 200
+        square.drain()  # wait for deliveries, retries included
+
+        (delivery,) = receiver.received
+        assert verify_square_signature(
+            "k", receiver.url, delivery.body, delivery.header("x-square-hmacsha256-signature") or ""
+        )
+```
+
+Clover is the same shape with its own vocabulary — event types are
+`<object>:<change>` (`O:CREATE`, `P:UPDATE`, ...; a glob such as `O:*` is
+fine), the "signature key" is the `X-Clover-Auth` code, and every `/v3`
+path lives under the merchant, which `seed.path()` fills in:
+
+```python
+from vendorfake.testing import unit, webhook_receiver
+from vendorfake.clover.signer import verify_clover_auth
+
+
+def test_a_clover_order_fires_a_webhook_with_the_auth_code():
+    with unit("clover") as clover, webhook_receiver() as receiver:
+        seed = clover.seed  # CloverSeed
+        clover.subscribe(receiver.url, ["O:*"], signature_key="auth-code-from-the-dashboard")
+
+        created = clover.client.post(
+            seed.path("/orders"), headers=seed.auth, json={"currency": "USD", "total": 1500, "state": "open"}
+        )
+        assert created.status_code == 200
+        clover.drain()
+
+        (delivery,) = receiver.received
+        assert verify_clover_auth(delivery.headers, "auth-code-from-the-dashboard")
+```
+
+`subscribe` checks the event types against the vendor's vocabulary and
+refuses one it will never send — a Square type on a Clover unit would
+otherwise register happily and never fire.
+
+Ids are deterministic per unit: two `unit("square")` blocks mint the same
+order ids, tokens and codes in the same order, from separate stores. That is
+what makes an id assertion stable run to run; it also means ids are not
+unique *across* units. Pass `unit("square", seed=2)` when a test needs two
+units to diverge.
+
+When your service needs a URL, `served("square")` runs the shipped
+`vendorfake serve` in a child process and yields one, and
+`serve_in_thread(started)` gives a URL onto an in-process unit. Every driver
+wraps the control plane: `add_chaos_rule`, `reset_chaos`, `reset`,
+`deliveries`, `advance_clock`. Note that `reset` returns to the seed
+scenario and drops every subscriber a test registered — subscribe after
+the reset, not before it.
+
+[`examples/pytest-consumer`](examples/pytest-consumer) is a complete
+standalone project — ten tests, both vendors, about a second — plus a
+Testcontainers variant against the image. `uv sync && uv run pytest` inside it.
+
+### Vitest
+
+[`examples/vitest-consumer`](examples/vitest-consumer) is the same suite in
+TypeScript, sharing nothing with the fake but HTTP. Its `globalSetup` starts
+the container through testcontainers when `VENDORFAKE_IMAGE` is set, or
+`vendorfake serve` as a child process otherwise, and a webhook receiver the
+tests read raw bytes from. `npm install && npm test`.
+
+### Seeded credentials
+
+Every profile ships the same scenario, so a fresh unit needs no setup. The
+values are readable and obviously fake by design.
+
+| | Square | Clover |
+|---|---|---|
+| App credentials | `sandbox-sq0idb-unit-square-application` / `sandbox-sq0csb-unit-square-secret` | `UNITCLOVERAPP` / `unit-clover-app-secret` |
+| Redirect URI the app registered | `https://example.test/oauth/callback` | `https://example.test/oauth/callback` |
+| Full-access bearer | `EAAAl-unit-seeded-access-token-full-scopes` | `unit-seeded-clover-access-token-full-permissions` |
+| Read-only bearer | `EAAAl-unit-seeded-access-token-read-only` | `unit-seeded-clover-access-token-read-only` |
+| Merchant | `MLQW2MYBY81PZ` | `HRVSTRYE12345` ("Harvest & Rye") |
+| Location / order type | location `18YC4JDH91E1H` (Grant Park), kiosk `057P5VYJ4A5X1` | order types `KFRPRVCZ73JHM` (dine-in), `ORDTYPETAKE01` |
+| Catalog | Tea `W62UWFY35CWMYGVWK6TWJDNI` with variations Mug `2TZFAOHWGG7PAK2QEXWYPZSP` (150) and Pot; Cold Brew `BJNQCF2FJ6S6UIDT65ABHLRX` | items `CRAFTBEER0750` (750), `ESPRESSO00300` (300, modifier group `MODGROUPMILK1`: oat `MODIFIEROAT01`, soy `MODIFIERSOY01`), `CROISSANT0450` (450) |
+| Orders | open `CAISENgvlJ6jLWAzERDzjyHVybY`, completed `CAISEM82RcpmcFBM0TfOyiHV3es` | open `SEEDORDER0001` |
+| Payment plumbing | `POST /v2/payments` with `source_id: "EXTERNAL"` | tender `TENDEREXTRN01` (external), `TENDERCASH001`; employees `EMPLBARISTA01`, `OWNERHRVST001`; service charge `SVCCHARGE0001` (18%) |
+| Webhooks | register with the full-access bearer; the `signature_key` comes back | pre-verified subscriber `wbhk_seed_quickstart` (auth code `unit-seeded-clover-webhook-auth-code`), **disabled**; register your own through `POST /__unit/webhooks/subscriptions` |
+| Event types | `order.created`, `order.updated`, `payment.created`, `payment.updated`, `catalog.version.updated`, `inventory.count.updated` (`GET /v2/webhooks/event-types`) | `O:`, `I:`, `C:`, `P:` (orders, inventory items, customers, payments) × `CREATE`, `UPDATE`, `DELETE` — e.g. `O:CREATE`; globs like `O:*` accepted |
+
+In Python these are `square.seed.*` / `clover.seed.*` on a started unit
+(`vendorfake.testing.SquareSeed`, `CloverSeed`).
+
+**Clover has two hosts in your configuration** — the OAuth host
+(`sandbox.dev.clover.com`) and the API host (`apisandbox.dev.clover.com`). The
+unit serves both on one origin, so point both settings at it.
+
+### Rehearsing failures
+
+Faults are rules, not dice: same seed, same profile, same faults every run.
+Arm one through the control plane (or `square.add_chaos_rule({...})` in
+Python), then make the call your retry loop has to survive:
+
+```sh
+curl -s -X POST http://localhost:8080/__unit/chaos/rules -H 'Content-Type: application/json' -d '{
+  "id": "flaky-create-order", "scope": "request", "fault": "rate_limit",
+  "match": {"route": "POST /v2/orders"}, "when": {"nth": [1, 2]},
+  "params": {"retry_after_seconds": 2}
+}'
+# the next two POST /v2/orders -> 429 with Retry-After; the third succeeds and
+# the idempotency key still returns the same order
+```
+
+The faults every vendor supports: `rate_limit`, `server_error`,
+`unavailable`, `timeout`, `token_expiry` (one 401 without touching the stored
+token — the transient case a deactivate-on-401 handler gets wrong), and on
+deliveries `webhook.duplicate`, `webhook.delay`, `webhook.out_of_order`,
+`webhook.drop_ack`, `webhook.drop`. Clover routes are matched with the
+tenant placeholder, e.g. `"route": "POST /v3/merchants/{mId}/orders"`.
+`GET /__unit/chaos` lists the catalogue; `POST /__unit/chaos/reset` disarms
+everything. The `chaos-demo` profile ships a preloaded set. Details and the
+401 rehearsal are under [Deterministic chaos](#deterministic-chaos).
+
+### Running the conformance suite against your unit
+
+The contracts the fake holds itself to — determinism, byte-identical bindings,
+signature properties, the catch-all — ship in the wheel, and so do targets for
+both vendors:
+
+```sh
+vendorfake-conformance --target vendorfake.testing.conformance:square_target
+vendorfake-conformance --target vendorfake.testing.conformance:clover_target --transport http --profile full
+pytest --pyargs vendorfake.conformance --conformance-target vendorfake.testing.conformance:square_target
+
+vendorfake-conformance --base-url http://localhost:8080     # a unit already running, e.g. the container
+```
 
 ## Quickstart
 
