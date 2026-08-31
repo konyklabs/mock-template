@@ -185,7 +185,7 @@
       ]
     },
     {
-      "id": "CUSTOMERGRACE2",
+      "id": "GRACEHOPPER01",
       "firstName": "Grace",
       "lastName": "Hopper",
       "customerSince": 1755786102000,
@@ -236,7 +236,7 @@
       },
       "customers": [
         {
-          "id": "CUSTOMERGRACE2"
+          "id": "GRACEHOPPER01"
         }
       ],
       "lineItems": [

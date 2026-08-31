@@ -19,6 +19,7 @@ from vendorfake import create_unit
 from vendorfake.clover.entities import COL, TokenEntity
 from vendorfake.clover.seed.constants import (
     CUSTOMER_ADA_ID,
+    CUSTOMER_GRACE_ID,
     EMPLOYEE_BARISTA_ID,
     EMPLOYEE_OWNER_ID,
     ITEM_BEER_ID,
@@ -33,6 +34,7 @@ from vendorfake.clover.seed.constants import (
     SEED_MERCHANT_ID,
     SEED_OPEN_ORDER_ID,
     SEED_READ_ONLY_ACCESS_TOKEN,
+    SEED_SECOND_ORDER_ID,
     SEED_WEBHOOK_SUBSCRIPTION_ID,
     SERVICE_CHARGE_DEFAULT_ID,
     TAX_BEVERAGE_ID,
@@ -73,7 +75,9 @@ MOD_GROUP_MILK = MODIFIER_GROUP_MILK_ID
 MOD_OAT = MODIFIER_OAT_ID
 MOD_SOY = MODIFIER_SOY_ID
 CUSTOMER_ADA = CUSTOMER_ADA_ID
+CUSTOMER_GRACE = CUSTOMER_GRACE_ID
 SEED_ORDER = SEED_OPEN_ORDER_ID
+SEED_SECOND_ORDER = SEED_SECOND_ORDER_ID
 __all__ = ["TAX_BEVERAGE_RATE", "TAX_DEFAULT_RATE"]
 
 SEED_META = {"operation_id": "TestSeed", "seed": True}
@@ -156,9 +160,10 @@ class Harness:
         assert self.api.delete(f"/__unit/webhooks/subscriptions/{SEED_WEBHOOK_SUBSCRIPTION_ID}").status in (200, 204)
 
     def clear_seed_orders(self) -> None:
-        """Soft-delete the scenario's open order, for tests that need an
+        """Soft-delete every order the scenario seeds, for tests that need an
         empty list to reason about."""
-        assert self.delete(f"/orders/{SEED_ORDER}").status == 200
+        for order_id in (SEED_ORDER, SEED_SECOND_ORDER):
+            assert self.delete(f"/orders/{order_id}").status == 200
 
     def restricted_token(self, *permissions: str) -> dict[str, str]:
         """A bearer carrying only ``permissions``, inserted as seed state."""
