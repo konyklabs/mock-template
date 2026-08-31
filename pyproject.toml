@@ -44,6 +44,7 @@ vendorfake-conformance = "vendorfake.conformance.__main__:main"
 [project.entry-points."vendorfake.vendors"]
 clover = "vendorfake.clover:VENDOR"
 square = "vendorfake.square:VENDOR"
+toast = "vendorfake.toast:VENDOR"
 
 [project.entry-points.pytest11]
 vendorfake_conformance = "vendorfake.conformance.plugin"

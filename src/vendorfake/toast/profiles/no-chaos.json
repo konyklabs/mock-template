@@ -1,0 +1,26 @@
+{
+  "name": "no-chaos",
+  "summary": "Full surface with delivery faults switched off: requests can still be made to fail deliberately, but a webhook that is sent is sent honestly, once.",
+  "capabilities": [
+    "auth",
+    "orders",
+    "payments",
+    "menus",
+    "config",
+    "restaurants",
+    "partners",
+    "stock",
+    "webhooks",
+    "chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "unit-toast-client-id",
+    "client_secret": "unit-toast-client-secret"
+  },
+  "chaos": {
+    "seed": 20260830,
+    "strict_rules": true,
+    "rules": []
+  }
+}

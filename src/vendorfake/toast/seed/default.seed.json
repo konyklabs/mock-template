@@ -1,0 +1,394 @@
+{
+  "_comment": [
+    "Seed scenario for the Toast unit. Fork-owned data, not code.",
+    "Entity documents use Toast's own camelCase field names; the top level is snake_case.",
+    "Guids are lowercase UUIDs, the one documented shape (apiUnderstandingGuidsEntityIdentifiersAndMultilocationIds_V2.html);",
+    "multiLocationIds are 18-digit numeric strings like the documented 100000000171239701; referenceIds are the small ints the V3 maps use.",
+    "MONEY IS INTEGER CENTS HERE: the wire converts to decimal dollars (model/money.py).",
+    "  restaurant shape   toast-restaurants-api.yaml",
+    "  closeoutHour 4     JUDGMENT business-date arithmetic, see model/dates.py",
+    "  Tomato Soup 899    the documented /prices example: 8.99 at 0.0625 -> tax 0.56, total 9.55 (apiOrderPrices.html)",
+    "  'Enjoy more soup.' the documented AppliedDiscount name (apiDiscountingOrders.html), a 100% ITEM discount",
+    "  tax rate 0.0625    PERCENT, HALF_UP, isDefault",
+    "The seeded tokens are readable strings a human types into curl; minted tokens are JWT-shaped.",
+    "Token expirations are stamped at hydrate from the configured TTL (19168 s, the documented example).",
+    "config_modified_ms is the fixed instant every config entity reports to a lastModified filter.",
+    "The seeded order (one Lemonade, unpaid, RECEIVED) is priced at hydrate by the same builder /prices uses.",
+    "credit_authorizations stands in for the credit-cards API: a CREDIT payment names one of these guids (7c65cc16... echoes the documented example).",
+    "stock: one row per item and option (apiUsingTheStockApi.html); Lemonade at 3 is under the documented low_quantity threshold of 5.",
+    "The webhook subscriber is a template, shipped DISABLED so a served unit does not retry into its dead .test host; its signature_key is the per-subscription secret Toast-Signature is computed with."
+  ],
+  "restaurant": {
+    "guid": "e6a4a8d2-0000-4000-8000-000000000001",
+    "general": {
+      "name": "Harvest & Rye — Toast",
+      "locationName": "Springfield",
+      "locationCode": "SPR",
+      "description": "The Toast unit's one restaurant.",
+      "timeZone": "America/New_York",
+      "closeoutHour": 4,
+      "managementGroupGuid": "e6a4a8d2-0000-4000-8000-0000000000a1",
+      "currencyCode": "USD"
+    },
+    "location": {
+      "address1": "1 Main St",
+      "city": "Springfield",
+      "stateCode": "IL",
+      "zipCode": "62701",
+      "country": "US",
+      "phone": "2175550100",
+      "latitude": 39.7817,
+      "longitude": -89.6501
+    }
+  },
+  "partner": {
+    "createdByEmailAddress": "owner@example.test",
+    "externalGroupRef": "harvest-rye",
+    "externalRestaurantRef": "harvest-rye-springfield",
+    "createdDate": 1755786102000,
+    "modifiedDate": 1755786102000
+  },
+  "tokens": [
+    {
+      "id": "b1a2c3d4-0000-4000-8000-0000000000f1",
+      "access_token": "unit-seeded-toast-access-token-full-scopes"
+    },
+    {
+      "id": "b1a2c3d4-0000-4000-8000-0000000000f2",
+      "access_token": "unit-seeded-toast-access-token-read-only",
+      "scopes": [
+        "orders:read",
+        "menus:read",
+        "config:read",
+        "restaurants:read",
+        "partners:read",
+        "stock:read"
+      ]
+    }
+  ],
+  "config_modified_ms": 1755786102000,
+  "dining_options": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d001",
+      "name": "Dine In",
+      "behavior": "DINE_IN",
+      "curbside": false
+    },
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d002",
+      "name": "Take Out",
+      "behavior": "TAKE_OUT",
+      "curbside": false
+    }
+  ],
+  "alternate_payment_types": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d101",
+      "name": "External"
+    }
+  ],
+  "tax_rates": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d201",
+      "name": "Sales Tax",
+      "isDefault": true,
+      "rate": 0.0625,
+      "type": "PERCENT",
+      "roundingType": "HALF_UP"
+    }
+  ],
+  "revenue_centers": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d301",
+      "name": "Dining Room",
+      "description": "The main floor."
+    }
+  ],
+  "service_areas": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d401",
+      "name": "Main Floor",
+      "revenueCenter": "5d0e2b11-0000-4000-8000-00000000d301"
+    }
+  ],
+  "tables": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d501",
+      "name": "1",
+      "serviceArea": "5d0e2b11-0000-4000-8000-00000000d401",
+      "revenueCenter": "5d0e2b11-0000-4000-8000-00000000d301"
+    },
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d502",
+      "name": "2",
+      "serviceArea": "5d0e2b11-0000-4000-8000-00000000d401",
+      "revenueCenter": "5d0e2b11-0000-4000-8000-00000000d301"
+    }
+  ],
+  "restaurant_services": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d601",
+      "name": "Dinner"
+    }
+  ],
+  "discounts": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d701",
+      "name": "Enjoy more soup.",
+      "active": true,
+      "type": "PERCENT",
+      "percentage": 100,
+      "selectionType": "ITEM",
+      "nonExclusive": false,
+      "promoCodes": [
+        "SOUP"
+      ]
+    },
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d702",
+      "name": "Regulars",
+      "active": true,
+      "type": "PERCENT",
+      "percentage": 10,
+      "selectionType": "CHECK",
+      "nonExclusive": false,
+      "promoCodes": []
+    }
+  ],
+  "service_charges": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d801",
+      "name": "Gratuity",
+      "amountType": "PERCENT",
+      "percent": 18,
+      "gratuity": true,
+      "taxable": false,
+      "serviceChargeCalculation": "PRE_DISCOUNT",
+      "destination": "SERVER"
+    }
+  ],
+  "void_reasons": [
+    {
+      "guid": "5d0e2b11-0000-4000-8000-00000000d901",
+      "name": "Guest changed mind"
+    }
+  ],
+  "menu_v3": {
+    "lastUpdated": 1755786102000,
+    "menus": [
+      {
+        "name": "Dinner",
+        "guid": "3c9a1f00-0000-4000-8000-00000000c001",
+        "multiLocationId": "100000000171238001",
+        "description": "The evening menu.",
+        "availability": {
+          "alwaysAvailable": true
+        },
+        "menuGroups": [
+          {
+            "name": "Mains",
+            "guid": "3c9a1f00-0000-4000-8000-00000000c101",
+            "multiLocationId": "100000000171238101",
+            "menuItems": [
+              {
+                "name": "Tomato Soup",
+                "kitchenName": "SOUP",
+                "guid": "3c9a1f00-0000-4000-8000-00000000c201",
+                "multiLocationId": "100000000171238879",
+                "description": "A bowl of tomato soup.",
+                "price": 899,
+                "pricingStrategy": "BASE_PRICE",
+                "taxInfo": [
+                  "5d0e2b11-0000-4000-8000-00000000d201"
+                ],
+                "plu": "1001",
+                "sku": "SOUP-01",
+                "calories": 180,
+                "modifierGroupReferences": []
+              },
+              {
+                "name": "Rye Burger",
+                "kitchenName": "BURGER",
+                "guid": "3c9a1f00-0000-4000-8000-00000000c202",
+                "multiLocationId": "100000000171238202",
+                "description": "A burger on rye, with a side.",
+                "price": 1250,
+                "pricingStrategy": "BASE_PRICE",
+                "taxInfo": [
+                  "5d0e2b11-0000-4000-8000-00000000d201"
+                ],
+                "plu": "1002",
+                "sku": "BURG-01",
+                "calories": 820,
+                "modifierGroupReferences": [
+                  2
+                ]
+              }
+            ]
+          },
+          {
+            "name": "Drinks",
+            "guid": "3c9a1f00-0000-4000-8000-00000000c102",
+            "multiLocationId": "100000000171238102",
+            "menuItems": [
+              {
+                "name": "Lemonade",
+                "guid": "3c9a1f00-0000-4000-8000-00000000c203",
+                "multiLocationId": "100000000171238203",
+                "price": 325,
+                "pricingStrategy": "BASE_PRICE",
+                "taxInfo": [
+                  "5d0e2b11-0000-4000-8000-00000000d201"
+                ],
+                "plu": "2001",
+                "sku": "LEMN-01",
+                "calories": 120
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "modifierGroups": [
+      {
+        "referenceId": 2,
+        "name": "Sides",
+        "guid": "3c9a1f00-0000-4000-8000-00000000c301",
+        "multiLocationId": "100000000171238301",
+        "pricingStrategy": "NONE",
+        "minSelections": 0,
+        "maxSelections": 1,
+        "requiredMode": "OPTIONAL",
+        "isMultiSelect": false,
+        "preModifierGroupReference": 10,
+        "modifierOptionReferences": [
+          6,
+          7
+        ]
+      }
+    ],
+    "modifierOptions": [
+      {
+        "referenceId": 6,
+        "name": "Fries",
+        "guid": "3c9a1f00-0000-4000-8000-00000000c401",
+        "multiLocationId": "100000000171238401",
+        "price": 0,
+        "pricingStrategy": "BASE_PRICE",
+        "isDefault": true
+      },
+      {
+        "referenceId": 7,
+        "name": "Side Salad",
+        "guid": "3c9a1f00-0000-4000-8000-00000000c402",
+        "multiLocationId": "100000000171238402",
+        "price": 150,
+        "pricingStrategy": "BASE_PRICE",
+        "isDefault": false
+      }
+    ],
+    "preModifierGroups": [
+      {
+        "referenceId": 10,
+        "name": "Portion",
+        "guid": "3c9a1f00-0000-4000-8000-00000000c500",
+        "multiLocationId": "100000000171238500",
+        "preModifiers": [
+          {
+            "name": "NO",
+            "guid": "3c9a1f00-0000-4000-8000-00000000c501",
+            "multiLocationId": "100000000171238501",
+            "multiplicationFactor": 0,
+            "displayMode": "PREFIX",
+            "chargeAsExtra": false
+          },
+          {
+            "name": "EXTRA",
+            "guid": "3c9a1f00-0000-4000-8000-00000000c502",
+            "multiLocationId": "100000000171238502",
+            "multiplicationFactor": 2,
+            "displayMode": "PREFIX",
+            "chargeAsExtra": true
+          }
+        ]
+      }
+    ]
+  },
+  "orders": [
+    {
+      "guid": "9a7b6c5d-0000-4000-8000-00000000f001",
+      "externalId": "seed-open-order",
+      "diningOption": "5d0e2b11-0000-4000-8000-00000000d001",
+      "table": "5d0e2b11-0000-4000-8000-00000000d501",
+      "openedDate": 1755786102000,
+      "numberOfGuests": 2,
+      "checks": [
+        {
+          "guid": "9a7b6c5d-0000-4000-8000-00000000f101",
+          "tabName": "Table 1",
+          "selections": [
+            {
+              "guid": "9a7b6c5d-0000-4000-8000-00000000f201",
+              "item": "3c9a1f00-0000-4000-8000-00000000c203",
+              "quantity": 1
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "credit_authorizations": [
+    {
+      "guid": "7c65cc16-0000-4000-8000-00000000e001",
+      "amount": 5000,
+      "cardType": "VISA",
+      "last4Digits": "4242",
+      "cardEntryMode": "PRE_AUTHED"
+    }
+  ],
+  "stock": [
+    {
+      "guid": "3c9a1f00-0000-4000-8000-00000000c201",
+      "status": "IN_STOCK",
+      "versionId": "14707576-0000-4000-8000-00000000a201"
+    },
+    {
+      "guid": "3c9a1f00-0000-4000-8000-00000000c202",
+      "status": "QUANTITY",
+      "quantity": 12,
+      "versionId": "14707576-0000-4000-8000-00000000a202"
+    },
+    {
+      "guid": "3c9a1f00-0000-4000-8000-00000000c203",
+      "status": "QUANTITY",
+      "quantity": 3,
+      "versionId": "14707576-0000-4000-8000-00000000a203"
+    },
+    {
+      "guid": "3c9a1f00-0000-4000-8000-00000000c401",
+      "status": "IN_STOCK",
+      "versionId": "14707576-0000-4000-8000-00000000a401"
+    },
+    {
+      "guid": "3c9a1f00-0000-4000-8000-00000000c402",
+      "status": "IN_STOCK",
+      "versionId": "14707576-0000-4000-8000-00000000a402"
+    }
+  ],
+  "webhook_subscriptions": [
+    {
+      "id": "sub_seed_quickstart",
+      "name": "Quickstart receiver",
+      "notification_url": "https://example.test/webhooks/toast",
+      "event_types": [
+        "order_updated",
+        "in_stock",
+        "out_of_stock",
+        "low_quantity",
+        "menus_updated"
+      ],
+      "signature_key": "unit-seeded-toast-webhook-secret",
+      "enabled": false
+    }
+  ]
+}

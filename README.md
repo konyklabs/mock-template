@@ -9,7 +9,7 @@ touching a vendor sandbox.
 > documentation. Vendor names are used only to identify which public API a
 > module imitates.
 
-Two vendors ship today. **Square (Connect v2)** is complete — OAuth2 (code +
+Three vendors ship today. **Square (Connect v2)** is complete — OAuth2 (code +
 PKCE flows), orders with a real lifecycle and fulfillments, external payments
 that tender those orders, the merchant, locations, catalog and inventory
 counts, a loyalty program, and webhook subscriptions whose deliveries are
@@ -24,10 +24,18 @@ types/default service charge, customers, external-tender payments that lock
 the order, print events, webhooks in Clover's aggregate-payload shape with
 the static `X-Clover-Auth` header and the dashboard verification handshake,
 and a seeded scenario — see [Clover quickstart](#clover-quickstart) and [the
-webhook an order fires](#the-webhook-an-order-fires).
+webhook an order fires](#the-webhook-an-order-fires). **Toast (REST v2/v3)**
+is the consumer-driven slice a restaurant-ordering integration calls: the
+machine-client login with a JWT, the V3 menu and the configuration lists,
+`/prices` and orders whose amounts are computed server-side from the
+restaurant's tax rates (money as decimal dollars, the documented 8.99 → 9.55
+example reproduced), OTHER and pre-authorised CREDIT payments, tips, voids,
+discounts, stock, and webhooks in Toast's envelope with the documented headers,
+the `Toast-Signature` HMAC and the documented five-then-ten-minute retry — see
+[Toast quickstart](#toast-quickstart).
 
-Because two vendors are installed, every command names one: `--vendor square`
-(or `--vendor clover`), or set `VENDORFAKE_VENDOR`. With no selector the
+Because several vendors are installed, every command names one: `--vendor
+square` (or `--vendor clover`, `--vendor toast`), or set `VENDORFAKE_VENDOR`. With no selector the
 command refuses and lists what it found — it never guesses.
 
 ## Install
@@ -365,6 +373,199 @@ the fourth order read. Clover clients usually configure the OAuth host and
 the `/v3` API host separately; the unit serves both on one origin, so point
 both settings at it.
 
+## Toast quickstart
+
+Serve the Toast unit (defaults to the `full` profile):
+
+```sh
+vendorfake serve --vendor toast
+```
+
+The scenario is pre-seeded — restaurant `e6a4a8d2-0000-4000-8000-000000000001`
+("Harvest & Rye — Toast", `America/New_York`, closeout at 4 am), a V3 menu
+whose Tomato Soup is the documented 8.99 pricing example, the 6.25% default
+tax rate, an "External" alternate payment type, two dining options, tables,
+discounts, stock for every item, one open order, a pre-authorised card
+payment, a full-scope bearer `unit-seeded-toast-access-token-full-scopes`
+(and a read-only one) and a disabled webhook subscriber as a template — so
+the first call needs no setup. Every restaurant-scoped path needs the
+documented `Toast-Restaurant-External-ID` header beside the bearer.
+
+### The login
+
+The unit's partner credentials are `unit-toast-client-id` /
+`unit-toast-client-secret`. The answer is the documented document, the token
+a JWT carrying `partner_guid`, and `expiresIn` the documented 19168 seconds;
+there is no refresh — log in again:
+
+```sh
+curl -s -X POST http://localhost:8080/authentication/v1/authentication/login -H 'Content-Type: application/json' -d '{
+  "clientId": "unit-toast-client-id", "clientSecret": "unit-toast-client-secret", "userAccessType": "TOAST_MACHINE_CLIENT"
+}'
+# -> {"@class":".SuccessfulResponse","token":{"tokenType":"Bearer","scope":null,"expiresIn":19168,
+#     "accessToken":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODgxMzU2NjYsImlhdCI6...","idToken":null,"refreshToken":null},"status":"SUCCESS"}
+
+TOKEN=...            # the accessToken above
+R=e6a4a8d2-0000-4000-8000-000000000001
+```
+
+### The menu, priced before it is ordered
+
+```sh
+curl -s http://localhost:8080/menus/v3/menus -H "Authorization: Bearer $TOKEN" -H "Toast-Restaurant-External-ID: $R"
+# -> {"restaurantGuid":"e6a4a8d2-0000-4000-8000-000000000001","lastUpdated":"2025-08-21T14:21:42.000+0000",
+#     "restaurantTimeZone":"America/New_York","menus":[{"name":"Dinner", ... "menuItems":[{"name":"Tomato Soup",
+#     "guid":"3c9a1f00-0000-4000-8000-00000000c201","multiLocationId":"100000000171238879","price":8.99, ...
+#     "modifierGroupReferences":{"2":{"referenceId":2,"name":"Sides", ... "modifierOptionReferences":[6,7]}}, ...
+```
+
+"Before you POST the order, you must retrieve the check prices from the
+/prices endpoint" — and the two endpoints compute the same amounts from the
+same body. Money is decimal dollars; `/prices` persists nothing and answers
+`"guid": null`:
+
+```sh
+BODY='{"entityType":"Order","diningOption":{"guid":"5d0e2b11-0000-4000-8000-00000000d002","entityType":"DiningOption"},
+       "checks":[{"entityType":"Check","selections":[{"entityType":"MenuItemSelection",
+       "item":{"guid":"3c9a1f00-0000-4000-8000-00000000c201","entityType":"MenuItem"},"quantity":1}]}]}'
+
+curl -s -X POST http://localhost:8080/orders/v2/prices -H "Authorization: Bearer $TOKEN" -H "Toast-Restaurant-External-ID: $R" \
+  -H 'Content-Type: application/json' -d "$BODY"
+# -> {"guid":null,"entityType":"Order", ... "checks":[{"guid":null, ... "selections":[{"guid":null, ...
+#     "preDiscountPrice":8.99,"price":8.99,"tax":0.56, ... "appliedTaxes":[{... "rate":0.0625,"taxAmount":0.56,"type":"PERCENT"}], ...}],
+#     ... "amount":8.99,"taxAmount":0.56,"totalAmount":9.55,"payments":[],"paymentStatus":"OPEN", ...}]}
+
+curl -s -X POST http://localhost:8080/orders/v2/orders -H "Authorization: Bearer $TOKEN" -H "Toast-Restaurant-External-ID: $R" \
+  -H 'Content-Type: application/json' -d "$BODY"
+# -> {"guid":"5102953b-57d6-4f51-8611-44bdd4647830","entityType":"Order","externalId":null,
+#     "openedDate":"2026-08-30T19:02:03.533+0000", ... "businessDate":20260830, ...
+#     "checks":[{"guid":"5fb250f9-f62d-4c5b-9186-156dbad338c8", ... "totalAmount":9.55,"paymentStatus":"OPEN", ...}],
+#     "source":"API","approvalStatus":"APPROVED","guestOrderStatus":"RECEIVED","voided":false, ... "displayNumber":"2", ...}
+```
+
+### A payment, and the void
+
+Orders API payments are `OTHER` (naming an alternate payment type) or a
+pre-authorised `CREDIT`. Paying the check marks it `PAID`; a second payment on
+a paid check is refused; an empty amount is the one documented error code:
+
+```sh
+O=5102953b-57d6-4f51-8611-44bdd4647830; C=5fb250f9-f62d-4c5b-9186-156dbad338c8
+curl -s -X POST http://localhost:8080/orders/v2/orders/$O/checks/$C/payments -H "Authorization: Bearer $TOKEN" \
+  -H "Toast-Restaurant-External-ID: $R" -H 'Content-Type: application/json' \
+  -d '[{"type":"OTHER","amount":9.55,"tipAmount":1.00,"otherPayment":{"guid":"5d0e2b11-0000-4000-8000-00000000d101"}}]'
+# -> {"guid":"5102953b-...","paidDate":"2026-08-30T19:02:03.582+0000", ... "checks":[{... "paymentStatus":"PAID",
+#     "payments":[{"guid":"3968e77f-f2d4-49f2-8afa-07c38c198e99","entityType":"OrderPayment","type":"OTHER","amount":9.55,
+#     "tipAmount":1.0,"amountTendered":9.55,"paymentStatus":"CAPTURED","refundStatus":"NONE",
+#     "otherPayment":{"guid":"5d0e2b11-...d101","entityType":"AlternatePaymentType"}, ...}]}]}
+
+curl -s -X POST http://localhost:8080/orders/v2/orders/$O/void -H "Authorization: Bearer $TOKEN" \
+  -H "Toast-Restaurant-External-ID: $R" -H 'Content-Type: application/json' \
+  -d '{"selections":{"voidAll":true},"payments":{"voidAll":true}}'
+# -> {"guid":"5102953b-...","voided":true,"voidDate":"2026-08-30T19:02:03.599+0000","voidBusinessDate":20260830,
+#     "guestOrderStatus":"VOIDED", ... "checks":[{"paymentStatus":"VOIDED", ... "payments":[{... "paymentStatus":"VOIDED",
+#     "voidInfo":{"voidDate":"2026-08-30T19:02:03.599+0000","voidBusinessDate":20260830}}]}]}
+
+# again -> 400 {"status":400,"code":10015,"message":"Once an order has been voided, it can not be updated.", ...}
+```
+
+Every refusal is the documented `ErrorMessage` — `status`, `code`,
+`message`, `requestId` and the documented nulls — with the documented status:
+a missing scope is a **403** (unlike Clover's 401), a malformed guid a 400
+with "The GUID was malformed", a 429 carries `X-Toast-RateLimit-By` /
+`-Remaining` / `-Reset` and `Retry-After`. The `unit_error` sidecar names the
+kind and whether the status is `documented` or `judgment`:
+
+```sh
+curl -si -X POST http://localhost:8080/orders/v2/prices -H 'Authorization: Bearer unit-seeded-toast-access-token-read-only' \
+  -H "Toast-Restaurant-External-ID: $R" -H 'Content-Type: application/json' -d "$BODY" | sed -n '1p;/^{/p'
+# HTTP/1.1 403 Forbidden
+# {"status":403,"code":10010,"message":"The access token is missing the required permission(s): orders:write.",
+#  "messageKey":null,"fieldName":null,"link":null,"requestId":"ea47429c-b794-4c8d-9710-5ac5a15b0ab0",
+#  "developerMessage":null,"errors":[],"canRetry":null,"unit_error":{"missing":["orders:write"], ... "status_provenance":"documented"}}
+```
+
+### The webhooks an order fires
+
+Toast has no subscription API — subscriptions come from the developer portal
+or the integrations team — so the unit ships one disabled template
+(`sub_seed_quickstart`, secret `unit-seeded-toast-webhook-secret`) and two
+ways to add your own: the control plane, or the portal stand-in at
+`POST /__toast/webhooks/subscriptions` (HTTPS only, as documented, unless the
+vendor config's `allow_insecure_callbacks` is set). With a receiver on
+`localhost:19999`, registered through the control plane before the order
+above was created:
+
+```sh
+curl -s -X POST http://localhost:8080/__unit/webhooks/subscriptions -H 'Content-Type: application/json' -d '{
+  "notification_url": "http://localhost:19999/webhooks",
+  "event_types": ["order_updated", "low_quantity", "out_of_stock", "in_stock"], "signature_key": "my-local-secret"
+}'
+```
+
+What the receiver saw for the create — the documented envelope, `details.order`
+the full Order as `GET` returns it, and the documented headers:
+
+```
+Toast-Attempt-Number: 1
+Toast-Event-Type: order_updated
+Toast-Event-Category: order_updated
+Toast-Restaurant-External-ID: e6a4a8d2-0000-4000-8000-000000000001
+Toast-Signature: HJVTAaZGw/qVU42uBitXEjGNtgE5HvvQpiPUxjseOYA=
+Content-Type: application/json
+
+{"timestamp":"2026-08-30T19:02:03.533Z","eventCategory":"order_updated","eventType":"order_updated",
+ "guid":"f2da7247-e9b6-439c-00c8-b764809d7967","details":{"restaurantGuid":"e6a4a8d2-0000-4000-8000-000000000001",
+ "order":{"guid":"5102953b-57d6-4f51-8611-44bdd4647830","entityType":"Order", ...}}}
+```
+
+The signature is the documented `Base64(HMAC-SHA256(secret, body + timestamp))`.
+Toast does not say which timestamp string is appended and sends no timestamp
+header, so the unit appends the envelope's own `timestamp` field, exactly as
+spelled in the body — a JUDGMENT labelled in `toast/signer.py` and at
+`GET /__unit/info`. Verified in five lines against the delivery above:
+
+```python
+import base64, hashlib, hmac, json
+
+body = b'{"timestamp":"2026-08-30T19:02:03.533Z",...}'  # the exact bytes received
+timestamp = json.loads(body)["timestamp"]
+expected = base64.b64encode(hmac.new(b"my-local-secret", body + timestamp.encode(), hashlib.sha256).digest()).decode()
+hmac.compare_digest(expected, "HJVTAaZGw/qVU42uBitXEjGNtgE5HvvQpiPUxjseOYA=")  # True
+```
+
+(`vendorfake.toast.verify_toast_signature(secret, raw_body, signature)` is the
+same check, shipped for copying.) Payments and the void are `order_updated`
+too — "A new order is also considered an update" — and a stock update that
+drops the Lemonade to 2 is a `low_quantity` in the `stock` category. Retries
+follow the documented schedule — five minutes, then ten, then stop — within
+the documented 2-second window, compressed on the shipped profiles so a test
+can watch the cascade. One documented rule is not reproduced yet: Toast
+resends only on a timeout, a 404, a 429 or a 5xx and never on another 4xx,
+while this fake retries on **any** non-2xx until the core grows the seam
+(konyklabs/roadmap#40) — a receiver answering 400 is retried here where Toast
+would stop.
+
+The same six profiles ship for Toast (`--vendor toast --profile <name>`);
+`chaos-demo` rate-limits every third order create, expires the token on the
+fourth order read, duplicates the first `order_updated` and reorders the first
+`out_of_stock`. The surface, by capability:
+
+| Capability | Routes |
+|---|---|
+| `auth` | `POST /authentication/v1/authentication/login` |
+| `orders` | `POST /orders/v2/prices`, `POST /orders/v2/orders`, `GET /orders/v2/orders` (deprecated guid list), `GET /orders/v2/ordersBulk`, `GET /orders/v2/orders/{guid}`, `POST …/{guid}/void`, `PATCH …/{guid}/deliveryInfo`, `POST …/checks/{c}/selections`, `POST …/checks/{c}/appliedDiscounts`, `POST …/checks/{c}/selections/{s}/appliedDiscounts`, `POST /orders/v2/applicableDiscounts` |
+| `payments` | `POST …/checks/{c}/payments`, `PATCH …/checks/{c}/payments/{p}` (tip), `GET /orders/v2/payments?paidBusinessDate`, `GET /orders/v2/payments/{guid}` |
+| `menus` | `GET /menus/v3/menus`, `GET /menus/v3/metadata` |
+| `config` | `GET /config/v2/<resource>[/{guid}]` for diningOptions, alternatePaymentTypes, taxRates, revenueCenters, serviceAreas, tables, restaurantServices, discounts, serviceCharges, menuItems, menuGroups, menus, voidReasons — `lastModified`, `Toast-Next-Page-Token` |
+| `restaurants` | `GET /restaurants/v1/restaurants/{guid}`, `GET /restaurants/v1/groups/{guid}/restaurants` |
+| `partners` | `GET /partners/v1/connectedRestaurants`, `GET /partners/v1/restaurants` |
+| `stock` | `GET /stock/v1/inventory`, `POST /stock/v1/inventory/search`, `PUT /stock/v1/inventory/update` |
+| `webhooks` | the `/__toast/webhooks/subscriptions` stand-in (not a Toast endpoint) |
+
+Two state machines are published at `GET /__unit/machines`: `check`
+(`paymentStatus`) and `order` (`guestOrderStatus`).
+
 ## Profiles
 
 A profile decides which capabilities a unit serves. Ship-with-the-package
@@ -424,7 +625,7 @@ and a behaviour had to be decided, the wire says so: error bodies carry a
 
 ## Status
 
-Pre-release, built in the open. The Square surface above is implemented and
+Pre-release, built in the open. The Square, Clover and Toast surfaces above are implemented and
 tested (`uv run pytest --collect-only -q` prints the current test count);
 nothing is published to a registry yet. Treat interfaces as subject to change
 until v0.1 is tagged.

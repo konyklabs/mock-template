@@ -1,0 +1,30 @@
+{
+  "name": "full",
+  "summary": "Every capability on. The default profile. Seeds the whole scenario: restaurant, partner row, config lists, the V3 menu, stock, an open order, a credit authorisation, two bearers and a pre-registered (disabled) webhook subscriber.",
+  "capabilities": [
+    "auth",
+    "orders",
+    "payments",
+    "menus",
+    "config",
+    "restaurants",
+    "partners",
+    "stock",
+    "webhooks",
+    "chaos",
+    "webhooks.chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "unit-toast-client-id",
+    "client_secret": "unit-toast-client-secret"
+  },
+  "clock": {
+    "mode": "real"
+  },
+  "chaos": {
+    "seed": 20260830,
+    "strict_rules": true,
+    "rules": []
+  }
+}
