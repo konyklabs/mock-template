@@ -16,12 +16,22 @@ THE THREE CATEGORIES, all documented (``model/webhooks.py``):
   ``low_quantity`` when the quantity is at or under the configured threshold
   ("5 or less (currently 5)") and ``in_stock`` (with ``status: QUANTITY`` and
   the ``quantity``) otherwise;
-* a ``menus`` write is ``menus_updated`` with ``{restaurantGuid, publishedDate}``.
+* a ``menus`` write is ``menus_updated`` with ``{restaurantGuid,
+  publishedDate}``; ``publishedDate`` takes the webhook ``...Z`` spelling,
+  like every date this package writes INTO an envelope (the audit's rule:
+  REST dates ``+0000``, webhook dates ``...Z``).
 
 The envelope's ``timestamp`` is the dispatcher's ``created_at`` -- the core
 clock's RFC 3339 millisecond spelling, which is the documented webhook form
 (``...Z``) -- and its ``guid`` is the dispatcher's event id, stable across
-retries, which is what a consumer deduplicates on. ``details.order`` carries
+retries, which is what a consumer deduplicates on. JUDGMENT on that guid's
+shape: it is UUID-grouped lowercase hex but deliberately NOT a version-4
+value (the dispatcher derives it from a digest and claims no version nibble),
+so it satisfies the documented "lowercase UUID" format loosely; a consumer
+must treat it as opaque. Every other date inside a delivery takes the webhook
+``...Z`` spelling too (``publishedDate``) -- EXCEPT the dates inside
+``details.order``, which keep the REST ``+0000`` spelling because that
+document is defined as "the full Order as GET returns it". ``details.order`` carries
 the guest's ``customer`` and the ``deliveryInfo``: the subscription is the
 partner's, and the scoping of those two blocks is documented on the REST GET,
 not on the webhook (JUDGMENT).
@@ -42,7 +52,7 @@ from typing import Any
 
 from vendorfake.core.kernel.types import EventMeta, JournalEntry, MappedEvent, UnitContext
 from vendorfake.toast.entities import COL
-from vendorfake.toast.model.dates import rest_date
+from vendorfake.toast.model.dates import webhook_date
 from vendorfake.toast.model.order import project_order
 from vendorfake.toast.model.webhooks import CATEGORY_TYPES, EnvelopeWire, category_of
 from vendorfake.toast.surface.common import ToastDeps
@@ -123,7 +133,9 @@ class ToastEventMapper:
         published = int(stored.get("lastUpdated", 0)) if stored is not None else int(ctx.clock.now())
 
         def build(meta: EventMeta) -> object:
-            return _envelope(meta, "menus_updated", {"restaurantGuid": entry.id, "publishedDate": rest_date(published)})
+            return _envelope(
+                meta, "menus_updated", {"restaurantGuid": entry.id, "publishedDate": webhook_date(published)}
+            )
 
         return (MappedEvent(type="menus_updated", entity_id=entry.id, build=build),)
 

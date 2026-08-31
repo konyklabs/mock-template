@@ -52,6 +52,7 @@ class MenuIndex:
     modifier_groups: Mapping[int, Mapping[str, Any]]
     tax_rates: Mapping[str, TaxRate]
     discounts: Mapping[str, Mapping[str, Any]]
+    service_charges: Mapping[str, Mapping[str, Any]]
     #: Item or option guid -> stock status, for the OUT_OF_STOCK refusal.
     stock: Mapping[str, str]
 
@@ -71,6 +72,7 @@ class MenuIndex:
             modifier_groups={int(g["referenceId"]): g for g in groups if isinstance(g, Mapping)},
             tax_rates={str(row["id"]): TaxRate.from_entity(row) for row in store.collection(COL.tax_rates).all()},
             discounts={str(row["id"]): row for row in store.collection(COL.discounts).all()},
+            service_charges={str(row["id"]): row for row in store.collection(COL.service_charges).all()},
         )
 
     def default_rates(self) -> list[TaxRate]:
@@ -264,7 +266,10 @@ def build_check(
             "customer": None if request.customer is None else request.customer.model_dump(exclude_none=True) or None,
             "taxExempt": request.taxExempt,
             "displayNumber": display_number,
-            "appliedServiceCharges": list(request.appliedServiceCharges or []),
+            "appliedServiceCharges": [
+                _applied_service_charge(index, charge, f"{field}appliedServiceCharges[{i}].")
+                for i, charge in enumerate(request.appliedServiceCharges or [])
+            ],
             "appliedDiscounts": [],
             "payments": [],
             "tabName": request.tabName,
@@ -274,6 +279,29 @@ def build_check(
     )
     retotal_check(check, index)
     return check
+
+
+def _applied_service_charge(index: MenuIndex, request: Any, field: str) -> dict[str, Any]:
+    """One stored applied service charge: the reference resolved like every
+    other, the caller's amount in cents, the config record's own vocabulary
+    filling what the caller left out. Never computed (``TOAST_NOT_MODELED``);
+    never echoed verbatim (finding 7)."""
+    source = index.service_charges.get(request.serviceCharge.guid)
+    if source is None:
+        raise _not_found("Service charge", request.serviceCharge.guid, f"{field}serviceCharge.guid")
+    return compact(
+        {
+            "guid": request.guid,
+            "entityType": "AppliedServiceCharge",
+            "externalId": request.externalId,
+            "serviceCharge": {"guid": str(source["id"]), "entityType": "ServiceCharge"},
+            "chargeAmount": opt_cents(request.chargeAmount, field=f"{field}chargeAmount"),
+            "chargeType": request.chargeType or source.get("amountType"),
+            "name": request.name or source.get("name"),
+            "gratuity": bool(source.get("gratuity", False)) if request.gratuity is None else request.gratuity,
+            "taxable": bool(source.get("taxable", False)) if request.taxable is None else request.taxable,
+        }
+    )
 
 
 def _line_total(selection: Mapping[str, Any]) -> tuple[int, int]:

@@ -18,8 +18,9 @@ The one documented shape
 ------------------------
 DOCUMENTED (https://doc.toasttab.com/doc/devguide/apiUnderstandingGuidsEntityIdentifiersAndMultilocationIds_V2.html):
 a Toast guid is a lowercase UUID, e.g. ``2071fb81-988b-4d75-b8dc-c5c17cff9706``,
-for restaurants, orders, checks, selections, menu items, webhook events and
-request ids alike. The version-4 layout (the ``4`` and variant nibbles) is this
+for restaurants, orders, checks, selections, menu items and request ids alike.
+(A webhook envelope's ``guid`` is NOT minted here: it is the core dispatcher's
+event id, stable across retries -- see ``events.py``.) The version-4 layout (the ``4`` and variant nibbles) is this
 project's choice for plausibility -- the page shows the format, not the
 version -- and is labelled JUDGMENT for that reason.
 
@@ -85,11 +86,6 @@ class ToastIds(_UuidStream):
     def token_id(self) -> str:
         """The JWT ``jti`` claim and the token record's id (JUDGMENT: Toast
         documents no token identifier at all)."""
-        return self.guid()
-
-    def event(self) -> str:
-        """A webhook envelope's ``guid`` -- documented as the event guid
-        (https://doc.toasttab.com/doc/devguide/apiMessageDataSchema.html)."""
         return self.guid()
 
 

@@ -52,6 +52,8 @@ JUDGMENT, each labelled at its site
   visible to that client at all); voiding twice is 400 (``invalid_transition``);
   ``page`` counts from 0 (audit gap 7); supplying both a date range and a
   business date is 400;
+* **the deprecated ``GET /orders``** answers every matching guid with no
+  paging of any kind: none is documented (audit gap 12), so none is invented;
 * **the 413 check-count limit** is undocumented and not enforced; **415** on
   a non-JSON content type is not enforced, because the core's body reader is
   deliberately content-type general;
@@ -190,7 +192,7 @@ class ToastOrdersSurface:
                 self.list_order_guids,
                 "orders:read",
                 "OrdersGet",
-                "Deprecated: order guids for a date range or business date.",
+                "Deprecated: EVERY matching order guid, unpaged (none is documented; JUDGMENT, audit gap 12).",
             ),
             route(
                 "GET",
@@ -419,6 +421,9 @@ class ToastOrdersSurface:
         return json_([_project(args, row) for row in window])
 
     def list_order_guids(self, args: HandlerArgs) -> ReplyInit:
+        """Every matching guid, unpaged. JUDGMENT (audit gap 12): the
+        deprecated endpoint documents no pagination at all, so none is
+        invented -- a large scenario gets a large array."""
         restaurant = require_restaurant(args)
         return json_([str(row["id"]) for row in _filtered_orders(args, restaurant)])
 
@@ -836,6 +841,7 @@ def _reprice_selection(selection: dict[str, Any], index: MenuIndex) -> None:
             applied["discountAmount"] = discount_amount(max(0, base - taken), source)
         taken += int(applied.get("discountAmount", 0))
     selection["price"] = max(0, base - taken)
+    selection["receiptLinePrice"] = selection["price"]
     rates = [index.tax_rates[g] for g in selection.get("_rates", []) if g in index.tax_rates]
     selection["appliedTaxes"] = taxes_on(selection["price"], rates)
     selection["tax"] = sum(int(t["taxAmount"]) for t in selection["appliedTaxes"])

@@ -152,6 +152,57 @@ def test_f5_the_exemption_survives_a_selection_append_and_a_discount(h: Harness)
     assert all(s["tax"] == 0.0 and s["appliedTaxes"] == [] for s in discounted["selections"])
 
 
+def test_f7_a_service_charge_reference_resolves_like_every_other_and_free_json_is_refused(h: Harness) -> None:
+    """The one place a client could inject free JSON into a projected document
+    (finding 7): a dangling serviceCharge.guid now 404s like every other
+    reference, an unknown key is a 400 naming it, and what is stored is the
+    controlled shape -- config vocabulary plus the caller's chargeAmount."""
+    body = order_body()
+    body["checks"][0]["appliedServiceCharges"] = [{"serviceCharge": {"guid": "5d0e2b11-0000-4000-8000-0000000000ff"}}]
+    before = h.journal_len()
+    dangling = h.post("/orders/v2/orders", body)
+    assert dangling.status == 404, dangling.text
+    assert dangling.json()["unit_error"]["field"] == "checks[0].appliedServiceCharges[0].serviceCharge.guid"
+    body["checks"][0]["appliedServiceCharges"] = [
+        {"serviceCharge": {"guid": c.SERVICE_CHARGE_GRATUITY_GUID}, "junk": "passthrough"}
+    ]
+    injected = h.post("/orders/v2/orders", body)
+    assert injected.status == 400, injected.text
+    assert "junk" in injected.json()["message"]
+    assert h.journal_len() == before
+    body["checks"][0]["appliedServiceCharges"] = [
+        {"serviceCharge": {"guid": c.SERVICE_CHARGE_GRATUITY_GUID}, "chargeAmount": 1.72}
+    ]
+    accepted = h.post("/orders/v2/orders", body)
+    assert accepted.status == 200, accepted.text
+    check = accepted.json()["checks"][0]
+    (charge,) = check["appliedServiceCharges"]
+    assert charge == {
+        "entityType": "AppliedServiceCharge",
+        "serviceCharge": {"guid": c.SERVICE_CHARGE_GRATUITY_GUID, "entityType": "ServiceCharge"},
+        "chargeAmount": 1.72,
+        "chargeType": "PERCENT",
+        "name": "Gratuity",
+        "gratuity": True,
+        "taxable": False,
+    }
+    assert "junk" not in charge
+    # Declared: never computed into the amounts.
+    assert (check["amount"], check["totalAmount"]) == (8.99, 9.55)
+
+
+def test_f8_receipt_line_price_follows_an_item_discount(h: Harness) -> None:
+    order = h.post("/orders/v2/orders", order_body()).json()
+    selection = order["checks"][0]["selections"][0]
+    assert selection["receiptLinePrice"] == selection["price"] == 8.99
+    discounted = h.post(
+        f"/orders/v2/orders/{order['guid']}/checks/{order['checks'][0]['guid']}/selections/{selection['guid']}/appliedDiscounts",
+        [{"discount": {"guid": c.DISCOUNT_SOUP_GUID}, "appliedPromoCode": "SOUP"}],
+    ).json()["checks"][0]["selections"][0]
+    assert discounted["price"] == 0.0
+    assert discounted["receiptLinePrice"] == 0.0  # was 8.99 before finding 8
+
+
 def test_f6_a_dangling_seeded_pre_modifier_is_refused_at_parse_by_path() -> None:
     document: dict[str, Any] = dict(json.loads(c.DEFAULT_SEED_PATH.read_text(encoding="utf-8")))
     broken = copy.deepcopy(document)

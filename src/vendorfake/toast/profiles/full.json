@@ -19,13 +19,6 @@
     "client_id": "unit-toast-client-id",
     "client_secret": "unit-toast-client-secret"
   },
-  "webhooks": {
-    "retry": {
-      "time_scale": 0.000167,
-      "timeout_ms": 2000
-    },
-    "subscribers": []
-  },
   "clock": {
     "mode": "real"
   },

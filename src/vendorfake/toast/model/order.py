@@ -37,6 +37,7 @@ from vendorfake.toast.model.references import RefRequest
 
 __all__ = [
     "AppliedDiscountRequest",
+    "AppliedServiceChargeRequest",
     "CheckRequest",
     "CustomerRequest",
     "DeliveryInfoRequest",
@@ -89,6 +90,33 @@ class DeliveryInfoRequest(BaseModel):
     deliveryState: str | None = None
 
 
+class AppliedServiceChargeRequest(BaseModel):
+    """A service charge a caller puts on a check.
+
+    ``extra="forbid"``, alone among the request models, and deliberately: the
+    stored check echoes these back through every GET and every webhook, so a
+    lax model here would be the one place a client injects free JSON into a
+    projected document (konyklabs/roadmap#39 review, finding 7). The field
+    set is JUDGMENT, assembled from the config API's ServiceCharge vocabulary
+    -- the orders specification lists ``appliedServiceCharges`` and no shape.
+    ``serviceCharge.guid`` must resolve like every other reference;
+    ``chargeAmount`` is caller-stated and never computed
+    (``TOAST_NOT_MODELED``).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    guid: str | None = None
+    entityType: str | None = None
+    externalId: str | None = None
+    serviceCharge: RefRequest
+    chargeAmount: Money = None
+    chargeType: str | None = None
+    name: str | None = None
+    gratuity: bool | None = None
+    taxable: bool | None = None
+
+
 class SelectionRequest(BaseModel):
     """``{item{guid}, quantity}`` is the documented minimum."""
 
@@ -139,7 +167,7 @@ class CheckRequest(BaseModel):
     customer: CustomerRequest | None = None
     tabName: str | None = Field(default=None, max_length=255)
     taxExempt: bool = False
-    appliedServiceCharges: list[dict[str, Any]] | None = None
+    appliedServiceCharges: list[AppliedServiceChargeRequest] | None = None
     payments: list[PaymentRequest] | None = None
 
 
@@ -365,7 +393,11 @@ def project_check(
             "customer": _ref(stored.get("customer")) if guest_pi else None,
             "taxExempt": bool(stored.get("taxExempt", False)),
             "displayNumber": stored.get("displayNumber"),
-            "appliedServiceCharges": list(stored.get("appliedServiceCharges", [])),
+            "appliedServiceCharges": [
+                compact({**dict(charge), "chargeAmount": _money(charge.get("chargeAmount"))})
+                for charge in stored.get("appliedServiceCharges", [])
+                if isinstance(charge, Mapping)
+            ],
             "appliedDiscounts": [
                 project_applied_discount(d) for d in stored.get("appliedDiscounts", []) if isinstance(d, Mapping)
             ],
