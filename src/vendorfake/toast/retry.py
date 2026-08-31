@@ -20,8 +20,9 @@ says Toast resends on a timeout, a 404, a 429 or a 5xx and *not* on any other
 4xx or on a 3xx. The core's dispatcher retries every non-2xx outcome and offers
 a vendor no hook to say otherwise (``core/webhooks/dispatcher.py::_run_attempt``
 decides with ``200 <= status < 300``), so a subscriber answering 400 or 401 is
-retried here where Toast would stop. Recorded rather than papered over; the
-seam it needs is a core change, filed with the report for this build.
+retried here where Toast would stop. Recorded rather than papered over: the
+seam it needs is a core change, tracked as konyklabs/roadmap#40; until it
+lands this fake retries on any non-2xx.
 
 DOCUMENTED (https://doc.toasttab.com/doc/devguide/apiEndpointRequirements.html):
 "updates to be sent to your endpoint more than once" -- at-least-once with no

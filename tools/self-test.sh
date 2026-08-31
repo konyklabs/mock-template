@@ -29,6 +29,7 @@ step() {
 TARGETS=(
   "square=tests.conformance.harness:target"
   "clover=tests.conformance.harness:clover_target"
+  "toast=tests.conformance.harness:toast_target"
 )
 
 step "ruff check"        uv run ruff check .

@@ -367,3 +367,48 @@ def one_transport_target() -> ConformanceTarget:
     ``--conformance-strict``.
     """
     return target(transports=("inprocess",))
+
+
+TOAST_VENDOR = "toast"
+TOAST_PROFILES: tuple[str, ...] = PROFILES
+"""The same six names again, so one matrix shape covers all three vendors."""
+
+TOAST_EXPECTED_SKIPS: dict[str, tuple[str, ...]] = {
+    "C07": ("oauth-only",),
+    "C08": ("no-faults",),
+    "C09": ("oauth-only", "orders-only"),
+    "C12": ("no-faults",),
+    "C16": ("oauth-only", "orders-only"),
+    "C17": ("oauth-only",),
+    "C18": ("oauth-only", "orders-only"),
+    "C21": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
+}
+
+TOAST_INAPPLICABLE: dict[str, str] = {
+    "C19": (
+        "Toast's REST APIs document no idempotency key on any endpoint (the orders API deduplicates on the "
+        "caller's unique externalId instead), so no toast route carries an IdempotencySpec and the replay "
+        "contract can never be asked of this vendor."
+    ),
+}
+
+
+def toast_target(
+    *,
+    profiles: tuple[str, ...] = TOAST_PROFILES,
+    transports: tuple[str, ...] = ("inprocess", "http"),
+    out_of_process: tuple[str, ...] = (OUT_OF_PROCESS_TRANSPORT,),
+) -> ConformanceTarget:
+    """The third vendor. No ``path_params``: Toast scopes a request to its
+    restaurant with the ``Toast-Restaurant-External-ID`` header, which the
+    vendor's ``restaurant``-mode credentials publish together with the bearer,
+    so every probe path stays the probe."""
+    return ConformanceTarget(
+        name=TOAST_VENDOR,
+        open_client=functools.partial(open_client, vendor=TOAST_VENDOR),
+        profiles=profiles,
+        transports=transports,
+        out_of_process=out_of_process,
+        expected_skips=TOAST_EXPECTED_SKIPS,
+        inapplicable=TOAST_INAPPLICABLE,
+    )

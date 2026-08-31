@@ -124,7 +124,7 @@ TOAST_NOT_MODELED: Mapping[str, str] = {
     "retry-only-on-some-statuses": (
         "Toast resends on a timeout, 404, 429 or 5xx and NOT on other 4xx (apiRetrySupport.html); the core "
         "dispatcher retries every non-2xx and offers no vendor hook, so a 400 from a subscriber is retried "
-        "here where Toast would stop. A core seam is needed; recorded in retry.py."
+        "here where Toast would stop until the core seam lands (konyklabs/roadmap#40); recorded in retry.py."
     ),
     "loyalty-and-service-charges-on-orders": (
         "appliedLoyaltyInfo, appliedServiceCharges, appliedPackagingInfo and marketplace facilitator tax "
