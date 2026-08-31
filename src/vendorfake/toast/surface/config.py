@@ -26,7 +26,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from vendorfake.core.kernel.reply import json_
-from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitError, UnitErrorKind
+from vendorfake.core.kernel.types import HandlerArgs, PaginationSpec, ReplyInit, Route, UnitError, UnitErrorKind
 from vendorfake.toast.model.config import (
     CONFIG_RESOURCES,
     MAX_PAGE,
@@ -64,6 +64,18 @@ class ToastConfigSurface:
                     scopes=("config:read",),
                     operation_id=f"Config{resource.entity_type}sGet",
                     summary=f"Every {resource.entity_type}; lastModified filter; Toast-Next-Page-Token paging.",
+                    pagination=PaginationSpec(
+                        style="cursor",
+                        items_path="",
+                        cursor_param="pageToken",
+                        walkable=False,
+                        unwalkable_reason=(
+                            "Toast's config lists answer a bare JSON array with the next page token "
+                            "in the Toast-Next-Page-Token RESPONSE HEADER, and read no page-size "
+                            "parameter (the documented page is a fixed 100) -- the declared walk can "
+                            "express none of the three."
+                        ),
+                    ),
                 )
             )
             routes.append(

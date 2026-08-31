@@ -23,7 +23,7 @@ token is the core's opaque cursor.
 from __future__ import annotations
 
 from vendorfake.core.kernel.reply import json_
-from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route
+from vendorfake.core.kernel.types import HandlerArgs, PaginationSpec, ReplyInit, Route
 from vendorfake.toast.entities import COL
 from vendorfake.toast.model.dates import parse_rest_date
 from vendorfake.toast.model.partners import (
@@ -56,6 +56,21 @@ class ToastPartnersSurface:
                 scopes=("partners:read",),
                 operation_id="PartnersConnectedRestaurantsGet",
                 summary="The restaurants connected to this partner, in the documented page envelope.",
+                pagination=PaginationSpec(
+                    style="cursor",
+                    items_path="results",
+                    limit_param="pageSize",
+                    cursor_param="pageToken",
+                    next_cursor_path="nextPageToken",
+                    id_path="restaurantGuid",
+                    walkable=False,
+                    unwalkable_reason=(
+                        "This unit models exactly one connected restaurant -- the partners row is "
+                        "derived from THE seeded restaurant, and the whole unit's tenancy is scoped "
+                        "to it by header -- so the listing can never hold the two rows a "
+                        "page-boundary walk needs."
+                    ),
+                ),
             ),
             Route(
                 method="GET",
