@@ -26,6 +26,14 @@ WHY NOT ``httpx.ASGITransport``. It exists and it would exercise the FastAPI
 adapter, but it is asynchronous only: ``httpx.Client`` cannot use it, and a
 pytest consumer writes synchronous tests. The ASGI adapter is exercised by
 :func:`vendorfake.testing.served` and :func:`vendorfake.testing.serve_in_thread`.
+
+ONE DIFFERENCE FROM A SOCKET CLIENT: **an in-process call cannot time out.**
+``handle_request`` never reads ``request.extensions["timeout"]`` -- it calls
+``Unit.handle`` synchronously on this thread, so a consumer's ``timeout=`` is
+silently not honoured and a call that blocks (a real-clock
+``POST /__unit/webhooks/drain`` mid-cascade, say) blocks the test until it
+finishes. The served fixtures honour timeouts; this one trades that for
+never needing a socket.
 """
 
 from __future__ import annotations

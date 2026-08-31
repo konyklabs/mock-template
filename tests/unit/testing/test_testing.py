@@ -254,6 +254,29 @@ def test_serve_in_thread_shares_state_with_the_in_process_client() -> None:
         assert fetched.json()["order"]["id"] == order["id"]
 
 
+def test_drain_over_a_thread_server_settles_a_real_retry_cascade() -> None:
+    """The regression the #29 gate caught: serve_in_thread's client carried
+    httpx's 5s default while served()'s said 30s, and a real-clock drain of
+    an exhausting cascade sleeps the scaled retry timers -- about fifteen
+    seconds on the shipped Square profiles. The README's own subscribe ->
+    trigger -> drain pattern then raised ReadTimeout from the fixture. Here
+    the cascade really runs to exhaustion over the thread server: drain()
+    settles it, and the elapsed time is asserted past the old 5s default so
+    a client timeout shorter than the cascade fails this test again."""
+    with unit("square") as square, serve_in_thread(square) as over_http:
+        # Nothing listens on port 1, so every attempt fails at the transport
+        # and the dispatcher walks the whole retry schedule.
+        over_http.subscribe("http://127.0.0.1:1/never", ["order.created"], "k")
+        _create_square_order(square)
+        began = time.monotonic()
+        over_http.drain()
+        elapsed = time.monotonic() - began
+        rows = over_http.deliveries()
+        assert [row["attempt"] for row in rows] == list(range(1, 13))
+        assert rows[-1]["status"] == "exhausted"
+        assert elapsed > 5.0, f"the cascade settled in {elapsed:.1f}s -- it no longer proves the old default fails"
+
+
 def test_the_tripwire_is_wired_so_framework_answered_is_a_measurement() -> None:
     """The regression tests/conformance/harness.py records: a counter wired
     at neither end reports a literal 0 forever, and both contracts on it

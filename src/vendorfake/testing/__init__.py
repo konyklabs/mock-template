@@ -59,6 +59,8 @@ from vendorfake.testing.seeds import CloverSeed, SquareSeed, seed_for
 from vendorfake.testing.transport import UnitTransport
 
 __all__ = [
+    "CLIENT_TIMEOUT_S",
+    "DRAIN_TIMEOUT_S",
     "LOG_LINES",
     "SERVE_COMMAND",
     "CloverSeed",
@@ -82,6 +84,18 @@ in ``client.get("/v2/locations")`` have something to be relative to."""
 
 STARTUP_TIMEOUT_S = 60.0
 SHUTDOWN_TIMEOUT_S = 15.0
+
+CLIENT_TIMEOUT_S = 30.0
+"""The HTTP timeout for every client this module builds over a socket
+(:func:`served` and :func:`serve_in_thread`). One constant so the two cannot
+drift: they briefly did, and the thread-served client's httpx default of 5s
+was shorter than a real-clock :meth:`Driver.drain` legitimately takes."""
+
+DRAIN_TIMEOUT_S = 120.0
+"""How long :meth:`Driver.drain` waits, overriding the client timeout for
+that one call. Sized for the shipped profiles: their retry schedules are
+compressed (``time_scale``), and the longest -- Square's eleven attempts,
+exhausted -- settles in about fifteen seconds of real time."""
 _LISTENING = re.compile(r"listening on http://([^:\s]+):(\d+)")
 
 
@@ -152,9 +166,24 @@ class Driver:
             body["id"] = id
         return self._json(self.client.post("/__unit/webhooks/subscriptions", json=body), expect=(200, 201))
 
-    def drain(self) -> None:
-        """Block until every pending delivery -- retries included -- has settled."""
-        self._json(self.client.post("/__unit/webhooks/drain", json={}))
+    def drain(self, *, timeout_s: float | None = DRAIN_TIMEOUT_S) -> None:
+        """Block until every pending delivery -- retries included -- has settled.
+
+        On a **real** clock (every shipped profile) the unit does not skip
+        ahead: it sleeps the actual retry timers, scaled by the profile's
+        ``time_scale``, so a cascade that retries to exhaustion legitimately
+        takes the sum of the vendor's scaled schedule -- about fifteen
+        seconds for Square's shipped profiles. ``timeout_s`` bounds this
+        one call (``None`` waits forever); the default covers the shipped
+        profiles with room. A custom profile with an *uncompressed* schedule
+        would sleep the documented hours -- drive those with a virtual clock
+        (``VENDORFAKE_CLOCK=virtual`` and :meth:`advance_clock`) instead of
+        draining in real time.
+
+        Against a :func:`unit` client the call cannot time out at all --
+        see :class:`~vendorfake.testing.transport.UnitTransport`.
+        """
+        self._json(self.client.post("/__unit/webhooks/drain", json={}, timeout=timeout_s))
 
     # -- state and faults ----------------------------------------------------
 
@@ -313,7 +342,7 @@ def serve_in_thread(started: StartedUnit, *, host: str = "127.0.0.1", port: int 
 
     with (
         serve_app(create_app(started.unit, tripwire=started.tripwire), host=host, port=port) as base_url,
-        httpx.Client(base_url=base_url) as client,
+        httpx.Client(base_url=base_url, timeout=CLIENT_TIMEOUT_S) as client,
     ):
         yield Driver(
             vendor=started.vendor,
@@ -365,7 +394,7 @@ def served(
     output = _ChildOutput(process)
     try:
         base_url = _wait_for_announcement(process, output, timeout_s)
-        with httpx.Client(base_url=base_url, timeout=30.0) as client:
+        with httpx.Client(base_url=base_url, timeout=CLIENT_TIMEOUT_S) as client:
             health = client.get("/__unit/health").json()
             yield ServedUnit(
                 vendor=str(health["vendor"]),
