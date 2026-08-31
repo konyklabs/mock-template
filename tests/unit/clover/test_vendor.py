@@ -164,6 +164,12 @@ def test_decorate_stamps_only_the_unit_vendor_header() -> None:
     assert res.headers == {"x-unit-vendor": "clover"}
 
 
+def test_opaque_fields_are_deliberately_empty() -> None:
+    """This surface stores no caller free-form documents; the property exists
+    so the digest's opaque rule is a declaration, not an omission."""
+    assert tuple(create_clover_vendor().opaque_fields) == ()
+
+
 def test_hydrate_resolves_the_profiles_vendor_block_and_reseeds_the_ids() -> None:
     vendor = CloverVendor()
     before = vendor.ids.order()

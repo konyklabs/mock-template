@@ -16,6 +16,7 @@ import pytest
 from vendorfake.core.kernel.types import JournalEntry, UnitError, UnitErrorKind
 from vendorfake.core.state.store import (
     DEFAULT_CURSOR_TTL_MS,
+    VOLATILE_PRESENT,
     Entity,
     IdempotencyRecord,
     Store,
@@ -623,6 +624,179 @@ def test_volatile_fields_are_excluded_and_vendors_can_add_more() -> None:
     assert unmarked.entity_digest() == later.entity_digest()
 
 
+def test_a_volatile_field_being_set_moves_the_digest_but_its_value_does_not() -> None:
+    """A wall-clock stamp is often the only record of a transition -- a code
+    is spent exactly when `used_at` is set -- so presence is state and the
+    instant is not."""
+
+    def code_store(used_at: str | None) -> Store:
+        store = make_store()
+        store.mark_volatile("used_at")
+        entity = {"id": "c1", "code": "abc"}
+        if used_at is not None:
+            entity["used_at"] = used_at
+        store.collection("codes").insert(entity)
+        return store
+
+    fresh = code_store(None).entity_digest()
+    spent = code_store("2024-01-01T00:00:00Z").entity_digest()
+    assert spent != fresh
+    assert code_store("2030-06-06T06:06:06Z").entity_digest() == spent
+
+
+def test_a_volatile_field_set_to_none_hashes_as_absent() -> None:
+    """`None` is how a model spells "not yet" before its projection compacts
+    the key away; the two spellings must not digest differently."""
+    explicit = make_store()
+    explicit.mark_volatile("used_at")
+    explicit.collection("codes").insert({"id": "c1", "used_at": None})
+    absent = make_store()
+    absent.mark_volatile("used_at")
+    absent.collection("codes").insert({"id": "c1"})
+    assert explicit.entity_digest() == absent.entity_digest()
+
+
+def test_volatile_names_are_matched_at_any_depth() -> None:
+    """A tender's `created_at` inside `tenders[]`, a fulfillment's `placed_at`
+    inside `fulfillments[].pickup_details`: the same kind of stamp as the
+    entity's own, and covered by the same declaration."""
+
+    def order_store(stamp: str) -> Store:
+        store = make_store()
+        store.mark_volatile("placed_at")
+        store.collection("orders").insert(
+            {
+                "id": "o1",
+                "tenders": [{"id": "t1", "amount": 5, "created_at": stamp}],
+                "fulfillments": [{"uid": "f1", "pickup_details": {"placed_at": stamp, "note": "x"}}],
+                "meta": {"nested": {"updated_at": stamp, "keep": 1}},
+            }
+        )
+        return store
+
+    a = order_store("2024-01-01T00:00:00Z")
+    b = order_store("2030-06-06T06:06:06Z")
+    assert a.entity_digest() == b.entity_digest()
+
+    # The non-volatile neighbours are still hashed: change one and it moves.
+    c = order_store("2024-01-01T00:00:00Z")
+    c.collection("orders").update("o1", lambda d: d["fulfillments"][0]["pickup_details"].__setitem__("note", "y"))
+    d = order_store("2024-01-01T00:00:00Z")
+    d.collection("orders").update("o1", lambda d: None)
+    assert c.entity_digest() != d.entity_digest()
+
+
+def test_a_nested_volatile_field_still_counts_as_present() -> None:
+    def order_store(*, placed: bool) -> Store:
+        store = make_store()
+        store.mark_volatile("placed_at")
+        details = {"placed_at": "2024-01-01T00:00:00Z"} if placed else {}
+        store.collection("orders").insert({"id": "o1", "fulfillments": [{"uid": "f1", "pickup_details": details}]})
+        return store
+
+    assert order_store(placed=True).entity_digest() != order_store(placed=False).entity_digest()
+
+
+def test_a_container_under_a_volatile_name_is_walked_not_collapsed() -> None:
+    """Only a scalar becomes the marker. A dict that merely shares a volatile
+    name keeps its own fields in the digest, so a change inside it moves the
+    digest -- while a volatile scalar inside it is still ignored."""
+
+    def store_with(inner: dict[str, object]) -> Store:
+        store = make_store()
+        store.mark_volatile("expires_at")
+        store.collection("things").insert({"id": "t1", "expires_at": inner})
+        return store
+
+    a = store_with({"policy": "strict", "expires_at": "2024-01-01T00:00:00Z"})
+    b = store_with({"policy": "lax", "expires_at": "2024-01-01T00:00:00Z"})
+    c = store_with({"policy": "strict", "expires_at": "2030-06-06T06:06:06Z"})
+    assert a.entity_digest() != b.entity_digest()
+    assert a.entity_digest() == c.entity_digest()
+
+    listed = make_store()
+    listed.mark_volatile("expires_at")
+    listed.collection("things").insert({"id": "t1", "expires_at": [{"n": 1, "expires_at": "x"}]})
+    expected = {
+        "things": {
+            "t1": {
+                "id": "t1",
+                "version": 1,
+                "created_at": VOLATILE_PRESENT,
+                "updated_at": VOLATILE_PRESENT,
+                "expires_at": [{"n": 1, "expires_at": VOLATILE_PRESENT}],
+            }
+        }
+    }
+    assert listed.entity_digest() == _digest_of_literal(expected)
+
+
+def test_an_opaque_subtree_is_digested_verbatim_and_wins_over_volatile() -> None:
+    """A caller free-form document keeps every value, including ones under
+    volatile names -- they are the caller's keys, not the unit's stamps."""
+
+    def store_with(doc: dict[str, object]) -> Store:
+        store = make_store()
+        store.mark_volatile("used_at")
+        store.mark_opaque("metadata")
+        store.collection("orders").insert({"id": "o1", "used_at": "2024-01-01T00:00:00Z", "metadata": doc})
+        return store
+
+    a = store_with({"created_at": "A", "note": "x"})
+    b = store_with({"created_at": "B", "note": "x"})
+    assert a.entity_digest() != b.entity_digest()
+
+    # Outside the opaque subtree the volatile rule still applies.
+    c = store_with({"created_at": "A", "note": "x"})
+    d = make_store()
+    d.mark_volatile("used_at")
+    d.mark_opaque("metadata")
+    d.collection("orders").insert(
+        {"id": "o1", "used_at": "2030-06-06T06:06:06Z", "metadata": {"created_at": "A", "note": "x"}}
+    )
+    assert c.entity_digest() == d.entity_digest()
+
+    # Opaque wins whatever the shape and wherever the depth, pinned literally.
+    nested = make_store()
+    nested.mark_opaque("metadata")
+    nested.collection("orders").insert({"id": "o1", "lines": [{"metadata": {"updated_at": "keep"}}]})
+    expected = {
+        "orders": {
+            "o1": {
+                "id": "o1",
+                "version": 1,
+                "created_at": VOLATILE_PRESENT,
+                "updated_at": VOLATILE_PRESENT,
+                "lines": [{"metadata": {"updated_at": "keep"}}],
+            }
+        }
+    }
+    assert nested.entity_digest() == _digest_of_literal(expected)
+
+
+def test_the_digest_is_the_canonical_hash_of_the_scrubbed_entities() -> None:
+    """Pinned against the literal so the marker and the scrub shape are part
+    of the contract, not an implementation detail a port may vary."""
+    store = make_store()
+    store.mark_volatile("used_at")
+    store.collection("codes").insert(
+        {"id": "c1", "used_at": "2024-01-01T00:00:00Z", "n": [{"created_at": "x", "v": 1}]}
+    )
+    expected = {
+        "codes": {
+            "c1": {
+                "id": "c1",
+                "version": 1,
+                "created_at": VOLATILE_PRESENT,
+                "updated_at": VOLATILE_PRESENT,
+                "used_at": VOLATILE_PRESENT,
+                "n": [{"created_at": VOLATILE_PRESENT, "v": 1}],
+            }
+        },
+    }
+    assert store.entity_digest() == _digest_of_literal(expected)
+
+
 def test_the_digest_sorts_by_code_point_not_by_locale() -> None:
     """`["Zb", "aA"]` is the fixture because ICU puts "aA" first and code point
     puts "Zb" first, so a locale-collating port produces a different hash."""
@@ -636,7 +810,8 @@ def test_the_digest_sorts_by_code_point_not_by_locale() -> None:
 
     assert store.entity_digest() == mirror.entity_digest()
 
-    expected = {"orders": {"Zb": {"id": "Zb", "version": 1}, "aA": {"id": "aA", "version": 1}}}
+    stamped = {"created_at": VOLATILE_PRESENT, "updated_at": VOLATILE_PRESENT}
+    expected = {"orders": {"Zb": {"id": "Zb", "version": 1, **stamped}, "aA": {"id": "aA", "version": 1, **stamped}}}
     assert store.entity_digest() == _digest_of_literal(expected)
 
 
@@ -650,7 +825,8 @@ def test_collection_names_sort_by_code_point_too() -> None:
     store = make_store()
     store.collection("Zb").insert({"id": "x"})
     store.collection("aA").insert({"id": "y"})
-    expected = {"Zb": {"x": {"id": "x", "version": 1}}, "aA": {"y": {"id": "y", "version": 1}}}
+    stamped = {"created_at": VOLATILE_PRESENT, "updated_at": VOLATILE_PRESENT}
+    expected = {"Zb": {"x": {"id": "x", "version": 1, **stamped}}, "aA": {"y": {"id": "y", "version": 1, **stamped}}}
     assert store.entity_digest() == _digest_of_literal(expected)
 
 

@@ -1,17 +1,12 @@
 """Two units, the same traffic, the same digest -- across every write path.
 
-`Store.entity_digest` is the determinism evidence, and it excludes the
-vendor's `volatile_fields` so two units seeded alike hash alike whatever the
-wall clock said. That claim held for the seed on its own; each write path
-this branch added stamps something from the clock, and each is driven here
-against two units whose clocks are deliberately an hour apart.
-
-KNOWN GAP, konyklabs/roadmap#35: `volatile_fields` names top-level entity
-fields only, so a clock stamp nested inside a list -- a tender's
-`created_at`, a fulfillment's `placed_at` -- cannot be excluded. Those paths
-are marked `xfail(strict=True)` against the issue: the test documents the
-hole and turns red the day the mechanism closes it, so the marks get removed
-rather than forgotten.
+`Store.entity_digest` is the determinism evidence, and it ignores the values
+of the vendor's `volatile_fields` -- at any depth, since konyklabs/roadmap#35
+-- so two units seeded alike hash alike whatever the wall clock said. Each
+write path that stamps something from the clock is driven here against two
+units whose clocks are deliberately an hour apart, including the three whose
+stamps live inside a list (a tender's `created_at`, a fulfillment's
+`placed_at`) and were `xfail` until the digest reached them.
 """
 
 from __future__ import annotations
@@ -33,8 +28,6 @@ from vendorfake.square.seed.constants import (
 )
 
 Traffic = Callable[[Harness], None]
-
-NESTED_STAMP = "konyklabs/roadmap#35: a wall-clock stamp nested in a list is beyond volatile_fields"
 
 
 def order(h: Harness, amount: int = 500, **extra: Any) -> str:
@@ -173,6 +166,52 @@ def order_with_fulfillment(h: Harness) -> None:
     order(h, fulfillments=[{"uid": "f1", "type": "PICKUP", "pickup_details": {"note": "x"}}])
 
 
+SUPPLIED_STAMP = "2026-08-30T10:00:00Z"
+
+
+def order_with_supplied_stamps(h: Harness, stamp: str = SUPPLIED_STAMP) -> str:
+    """A fulfillment whose `placed_at` and `expires_at` the caller sent, then
+    a completion whose `picked_up_at` the caller sent too: three values the
+    unit would otherwise have stamped from its clock."""
+    created = order(
+        h,
+        fulfillments=[{"uid": "f1", "type": "PICKUP", "pickup_details": {"placed_at": stamp, "expires_at": stamp}}],
+    )
+    response = h.api.put(
+        f"/v2/orders/{created}",
+        {
+            "idempotency_key": "det-complete",
+            "order": {
+                "version": 1,
+                "fulfillments": [{"uid": "f1", "state": "COMPLETED", "pickup_details": {"picked_up_at": stamp}}],
+            },
+        },
+        headers=h.auth,
+    )
+    assert response.status == 200, response.text
+    return created
+
+
+def order_with_free_form_documents(h: Harness, marker: str = "A") -> str:
+    """An order whose caller free-form documents carry volatile-named keys:
+    `metadata` (Square documents its keys as arbitrary `[a-zA-Z0-9_-]`) and
+    `pickup_details.curbside_pickup_details`. All of it is caller state."""
+    return order(
+        h,
+        metadata={"created_at": marker, "used_at": marker, "note": "kept"},
+        fulfillments=[
+            {
+                "uid": "f1",
+                "type": "PICKUP",
+                "pickup_details": {
+                    "is_curbside_pickup": True,
+                    "curbside_pickup_details": {"curbside_details": f"bay {marker}", "expires_at": marker},
+                },
+            }
+        ],
+    )
+
+
 def digest_after(traffic: Traffic, *, advance_ms: int) -> str:
     for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
         if advance_ms:
@@ -194,15 +233,11 @@ HOUR_MS = 60 * 60 * 1000
         pytest.param(loyalty_enrol_and_accumulate, id="loyalty-enrol-accumulate"),
         pytest.param(payment_without_order, id="payment-no-order"),
         pytest.param(order_update, id="order-update"),
-        pytest.param(
-            payment_against_order, id="payment-tenders-order", marks=pytest.mark.xfail(strict=True, reason=NESTED_STAMP)
-        ),
-        pytest.param(pay_order_opaque, id="pay-order", marks=pytest.mark.xfail(strict=True, reason=NESTED_STAMP)),
-        pytest.param(
-            order_with_fulfillment,
-            id="order-with-fulfillment",
-            marks=pytest.mark.xfail(strict=True, reason=NESTED_STAMP),
-        ),
+        pytest.param(payment_against_order, id="payment-tenders-order"),
+        pytest.param(pay_order_opaque, id="pay-order"),
+        pytest.param(order_with_fulfillment, id="order-with-fulfillment"),
+        pytest.param(order_with_supplied_stamps, id="order-with-caller-supplied-stamps"),
+        pytest.param(order_with_free_form_documents, id="order-with-free-form-documents"),
     ],
 )
 def test_two_units_driven_alike_an_hour_apart_digest_alike(traffic: Traffic) -> None:
@@ -226,3 +261,185 @@ def test_the_clock_gap_is_real() -> None:
             listed = h.api.post("/v2/catalog/search", {"begin_time": "2026-01-01T00:00:00Z"}, headers=h.auth).json()
             stamps.append(listed["latest_time"])
     assert stamps[1] != stamps[3]
+
+
+# ---------------------------------------------------------------------------
+# A transition a wall-clock stamp marks is still state.
+# ---------------------------------------------------------------------------
+
+
+def test_a_spent_code_and_a_revoked_token_move_the_digest_by_their_mark_alone() -> None:
+    """`used_at` and `revoked_at` are volatile -- their instants stay out of
+    the digest -- but their *presence* is the only record that a code was
+    spent or a token revoked. The measured hole this closes: the digest was
+    byte-identical with the mark present and removed, so a mutant that
+    stopped marking would not have moved it. Each mark is popped from the
+    live map (no version bump, nothing else changes) and the digest must
+    move."""
+    from tests.unit.square.harness import APPLICATION_ID
+    from vendorfake.square.entities import COL
+
+    for h in build_harness("full"):
+        store = h.unit.context.store
+        code = h.code()
+        token = h.token(
+            client_secret=h.client_auth["authorization"].split()[1], grant_type="authorization_code", code=code
+        )
+        assert token.status == 200, token.text
+        spent = store.raw(COL.codes)[code]
+        assert spent.get("used_at")
+        with_mark = store.entity_digest()
+        spent.pop("used_at")
+        assert store.entity_digest() != with_mark
+
+        revoked = h.api.post(
+            "/oauth2/revoke",
+            {
+                "client_id": APPLICATION_ID,
+                "access_token": token.json()["access_token"],
+                "revoke_only_access_token": True,
+            },
+            headers=h.client_auth,
+        )
+        assert revoked.status == 200, revoked.text
+        record = next(
+            e for e in store.raw(COL.tokens).values() if e.get("access_token") == token.json()["access_token"]
+        )
+        assert record.get("revoked_at")
+        with_mark = store.entity_digest()
+        record.pop("revoked_at")
+        assert store.entity_digest() != with_mark
+
+
+# ---------------------------------------------------------------------------
+# A stamp the unit set is volatile; a value the caller sent is state.
+# ---------------------------------------------------------------------------
+
+
+def digest_with_supplied(stamp: str) -> str:
+    for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
+        order_with_supplied_stamps(h, stamp)
+        return str(h.api.get("/__unit/state").json()["digest"])
+    raise AssertionError("harness yielded nothing")
+
+
+def test_two_units_differing_only_in_a_caller_supplied_stamp_digest_differently() -> None:
+    """The reviewer's A/B: same clock, same traffic, and the only difference
+    is the instant the *caller* sent for `placed_at`/`expires_at`/`picked_up_at`.
+    Those names are volatile -- the unit sets them from its clock -- but a
+    value the caller sent is state, mirrored into `supplied_stamps`, so the
+    digests must differ."""
+    assert digest_with_supplied("2026-08-30T10:00:00Z") != digest_with_supplied("2026-08-30T11:00:00Z")
+
+
+def test_the_mirror_is_stored_and_digested_but_never_on_the_wire() -> None:
+    from vendorfake.square.entities import COL
+
+    for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
+        order_id = order_with_supplied_stamps(h)
+        stored = h.unit.context.store.raw(COL.orders)[order_id]["fulfillments"][0]
+        assert stored["supplied_stamps"] == [
+            ["expires_at", SUPPLIED_STAMP],
+            ["picked_up_at", SUPPLIED_STAMP],
+            ["placed_at", SUPPLIED_STAMP],
+        ]
+        wire = h.api.get(f"/v2/orders/{order_id}", headers=h.auth).json()["order"]["fulfillments"][0]
+        assert "supplied_stamps" not in wire
+        assert wire["pickup_details"]["picked_up_at"] == SUPPLIED_STAMP
+        listed = h.api.post("/v2/orders/search", {"location_ids": [SEED_LOCATION_ID]}, headers=h.auth).json()
+        assert all("supplied_stamps" not in f for o in listed["orders"] for f in o.get("fulfillments", []))
+
+        # The mirror is what the digest sees: drop it from the live map and
+        # the digest moves, while the volatile stamp beside it is ignored.
+        with_mirror = h.unit.context.store.entity_digest()
+        stored["pickup_details"]["picked_up_at"] = "1999-01-01T00:00:00Z"
+        assert h.unit.context.store.entity_digest() == with_mirror
+        stored.pop("supplied_stamps")
+        assert h.unit.context.store.entity_digest() != with_mirror
+
+
+def test_a_unit_set_stamp_is_not_mirrored_and_a_cleared_one_leaves_the_mirror() -> None:
+    from vendorfake.square.entities import COL
+
+    for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
+        created = order(h, fulfillments=[{"uid": "f1", "type": "PICKUP", "pickup_details": {"note": "x"}}])
+        stored = h.unit.context.store.raw(COL.orders)[created]["fulfillments"][0]
+        assert "placed_at" in stored["pickup_details"]  # the unit stamped it
+        assert "supplied_stamps" not in stored  # and mirrored nothing
+
+        sent = h.api.put(
+            f"/v2/orders/{created}",
+            {
+                "idempotency_key": "send",
+                "order": {
+                    "version": 1,
+                    "fulfillments": [{"uid": "f1", "pickup_details": {"expires_at": SUPPLIED_STAMP}}],
+                },
+            },
+            headers=h.auth,
+        )
+        assert sent.status == 200, sent.text
+        stored = h.unit.context.store.raw(COL.orders)[created]["fulfillments"][0]
+        assert stored["supplied_stamps"] == [["expires_at", SUPPLIED_STAMP]]
+
+        cleared = h.api.put(
+            f"/v2/orders/{created}",
+            {
+                "idempotency_key": "clear",
+                "order": {"version": 2, "fulfillments": [{"uid": "f1", "pickup_details": {"expires_at": None}}]},
+            },
+            headers=h.auth,
+        )
+        assert cleared.status == 200, cleared.text
+        stored = h.unit.context.store.raw(COL.orders)[created]["fulfillments"][0]
+        assert "supplied_stamps" not in stored
+        assert "expires_at" not in stored["pickup_details"]
+
+
+# ---------------------------------------------------------------------------
+# Caller free-form documents are digested verbatim (opaque subtrees).
+# ---------------------------------------------------------------------------
+
+
+def digest_with_documents(marker: str) -> str:
+    for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
+        order_with_free_form_documents(h, marker)
+        return str(h.api.get("/__unit/state").json()["digest"])
+    raise AssertionError("harness yielded nothing")
+
+
+def test_metadata_values_under_volatile_names_are_state() -> None:
+    """The reviewer's repro: two identically seeded units on the same clock,
+    the same traffic, and the only difference is `metadata: {"created_at":
+    "A"}` vs `"B"`. `metadata` is a caller document -- `created_at` is a
+    legal caller key there -- so the digests must differ."""
+
+    def with_metadata(marker: str) -> str:
+        for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
+            order(h, metadata={"created_at": marker})
+            return str(h.api.get("/__unit/state").json()["digest"])
+        raise AssertionError("harness yielded nothing")
+
+    assert with_metadata("A") != with_metadata("B")
+
+
+def test_curbside_pickup_details_values_under_volatile_names_are_state() -> None:
+    """The same class, one level down inside pickup_details -- a subtree the
+    `supplied_stamps` mirror does not reach, so opacity is what covers it."""
+
+    def with_curbside(marker: str) -> str:
+        for h in build_harness("full", env={"VENDORFAKE_CLOCK": "virtual"}):
+            order(
+                h,
+                fulfillments=[
+                    {
+                        "uid": "f1",
+                        "type": "PICKUP",
+                        "pickup_details": {"curbside_pickup_details": {"expires_at": marker}},
+                    }
+                ],
+            )
+            return str(h.api.get("/__unit/state").json()["digest"])
+        raise AssertionError("harness yielded nothing")
+
+    assert with_curbside("A") != with_curbside("B")

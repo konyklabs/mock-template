@@ -97,7 +97,26 @@ def test_the_retry_defaults_carry_squares_documented_schedule() -> None:
 
 
 def test_volatile_fields_are_the_wall_clock_ones() -> None:
-    assert set(create_square_vendor().volatile_fields) == {
+    """Every stamp the *unit* writes from its clock, including the nine that
+    live inside `fulfillments[].<type>_details` -- and none of the instants
+    only a caller supplies (`pickup_at`, `deliver_at`, `expired_at`,
+    `rejected_at`, ...), which are state."""
+    from vendorfake.square.surface.orders import FULFILLMENT_STAMPS
+
+    fields = set(create_square_vendor().volatile_fields)
+    assert {
+        "placed_at",
+        "accepted_at",
+        "ready_at",
+        "picked_up_at",
+        "canceled_at",
+        "packaged_at",
+        "shipped_at",
+        "failed_at",
+        "delivered_at",
+    } == FULFILLMENT_STAMPS
+    assert fields >= FULFILLMENT_STAMPS
+    assert fields - FULFILLMENT_STAMPS == {
         "expires_at",
         "refresh_token_expires_at",
         "closed_at",
@@ -109,6 +128,16 @@ def test_volatile_fields_are_the_wall_clock_ones() -> None:
         "enrolled_at",
         "mapping_created_at",
     }
+    assert not fields & {"pickup_at", "deliver_at", "courier_pickup_at", "expired_at", "rejected_at"}
+
+
+def test_opaque_fields_are_the_caller_free_form_documents() -> None:
+    """Subtrees the digest must take verbatim because every key inside is the
+    caller's -- Square's metadata allows any `[a-zA-Z0-9_-]` key, so volatile
+    names in there are caller state, not unit stamps."""
+    vendor = create_square_vendor()
+    assert set(vendor.opaque_fields) == {"metadata", "curbside_pickup_details"}
+    assert not set(vendor.opaque_fields) & set(vendor.volatile_fields)
 
 
 def test_magic_triggers_name_fields_a_consumer_can_actually_set() -> None:

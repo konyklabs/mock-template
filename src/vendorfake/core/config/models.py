@@ -46,7 +46,8 @@ field-path error this module would have.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from collections.abc import Mapping
+from typing import Any, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -61,11 +62,31 @@ __all__ = [
     "SubscriberConfig",
     "TransportSection",
     "WebhooksSection",
+    "merged_over",
     "parse_profile_document",
     "unit_error_from_validation",
 ]
 
 _MODEL = ConfigDict(extra="forbid", frozen=True)
+
+ModelT = TypeVar("ModelT", bound=BaseModel)
+
+
+def merged_over(base: ModelT, block: Mapping[str, Any]) -> ModelT:
+    """``base`` with ``block`` laid over it, revalidated as ``base``'s own type.
+
+    The profile wins over the base, which is the precedence every layer in
+    this project uses: defaults under the vendor's own values, those under the
+    profile document, that under the environment. The merge **revalidates
+    rather than patching field by field**, so an unknown key in ``block`` is
+    refused exactly as it would be on a fresh parse (``extra="forbid"``), a
+    value of the wrong shape fails naming its field, and a frozen model is
+    never mutated -- ``model_copy(update=...)`` would do all three wrong.
+
+    Every vendor's ``<Vendor>Config.merged_with`` is this call; it lives here
+    so the idiom is written once and typed once.
+    """
+    return type(base).model_validate({**base.model_dump(), **dict(block)})
 
 
 class RetryPolicy(BaseModel):

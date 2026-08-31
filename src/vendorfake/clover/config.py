@@ -44,6 +44,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from vendorfake.core.config.models import merged_over
+
 __all__ = [
     "DEFAULT_PERMISSIONS",
     "CloverConfig",
@@ -149,13 +151,10 @@ class CloverConfig(BaseModel):
     authorization_code_ttl_ms: int = Field(default=10 * _MINUTE_MS, gt=0)
 
     def merged_with(self, block: Mapping[str, Any]) -> CloverConfig:
-        """This config with ``block`` laid over it.
-
-        The profile wins over the base, the precedence every other layer in
-        this project uses. An unknown key in ``block`` is still refused,
-        because the merge revalidates rather than patching field by field.
-        """
-        return CloverConfig.model_validate({**self.model_dump(), **dict(block)})
+        """This config with ``block`` laid over it: the profile wins, an
+        unknown key is still refused. The idiom is the core's
+        :func:`~vendorfake.core.config.models.merged_over`."""
+        return merged_over(self, block)
 
     @property
     def access_token_ttl(self) -> timedelta:

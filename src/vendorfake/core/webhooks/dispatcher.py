@@ -435,10 +435,10 @@ class WebhookDispatcher:
         """Deliver one event to exactly one subscriber, with no fan-out.
 
         For the routes that name their recipient rather than describing it --
-        TestWebhookSubscription is the one -- where a broadcast would send a
-        subscriber an event nobody asked it for, signed with its own key so it
-        looks genuine, and would leave the caller reading somebody else's
-        status code back.
+        a test-delivery route, a callback-verification handshake -- where a
+        broadcast would send a subscriber an event nobody asked it for, signed
+        with its own key so it looks genuine, and would leave the caller
+        reading somebody else's status code back.
 
         The event type is *not* matched against ``event_types``: the caller
         named this subscription explicitly, and filtering a targeted send would
@@ -471,15 +471,17 @@ class WebhookDispatcher:
         # was request->store too, and safe only because every route reaching it
         # is ``serialized=True``. Both now resolve the store before the lock.
         #
-        # This method is the first delivery entry point called straight from a
-        # route handler, holding neither. Resolving the subscription inside
-        # ``_request_lock`` would establish request->store and close the cycle --
-        # and it is reachable, because the only caller is the one route
-        # declaring ``serialized=False``, which the ASGI threadpool runs
-        # concurrently with other requests by design. Neither acquire has a
-        # timeout, so the deadlock would be permanent and would take the whole
-        # unit down with it: the request holding the pipeline lock is the one
-        # that hangs.
+        # This method is a delivery entry point called straight from a route
+        # handler. Its callers are vendor routes that name their recipient --
+        # a test-delivery route, a callback-verification stand-in -- and each
+        # arrives holding neither lock. Resolving the subscription inside
+        # ``_request_lock`` would establish request->store and close the cycle
+        # -- and it is reachable whenever any such route runs concurrently
+        # with a journal-driven send, which a ``serialized=False`` caller does
+        # by design on the ASGI threadpool. Neither acquire has a timeout, so
+        # the deadlock would be permanent and would take the whole unit down
+        # with it: the request holding the pipeline lock is the one that
+        # hangs.
         #
         # Reading the subscription first is safe. ``subscriptions()`` returns
         # copies, so the value cannot be mutated underneath the send, and a

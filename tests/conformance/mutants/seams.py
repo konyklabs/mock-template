@@ -209,6 +209,10 @@ class VendorOverlay:
     def volatile_fields(self) -> Sequence[str]:
         return self._inner.volatile_fields
 
+    @property
+    def opaque_fields(self) -> Sequence[str]:
+        return self._inner.opaque_fields
+
     # -- lifecycle ---------------------------------------------------------
 
     def hydrate(self, ctx: UnitContext, seed: object) -> None:
@@ -247,6 +251,9 @@ class ErrorShaperOverlay:
 
     def not_found(self, req: UnitRequest, ctx: UnitContext) -> ShapedError:
         return self._inner.not_found(req, ctx) if self._not_found is None else self._not_found
+
+    def describe(self) -> Mapping[str, Mapping[str, Any]]:
+        return self._inner.describe()
 
 
 class AuthAdapterOverlay:

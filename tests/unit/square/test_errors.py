@@ -200,17 +200,25 @@ def test_describe_publishes_every_row_with_its_provenance() -> None:
     assert "note" in described["version_conflict"]
 
 
-def test_exhaustiveness_is_a_raise_and_not_an_assert() -> None:
+def test_exhaustiveness_is_checked_at_import_and_not_by_an_assert() -> None:
     """`python -O` strips assert statements. A table that lost a row under -O
     would answer one kind with a KeyError-turned-500 and the other nineteen
-    normally, which is the worst failure mode this project has."""
+    normally, which is the worst failure mode this project has. The check
+    itself is the core's (`assert_error_table_total`, a raise -- pinned in
+    tests/unit/core/test_kernel_shaping.py); what this module must do is
+    call it, at module level, on its own table."""
     source = Path("src/vendorfake/square/errors.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     assert not [node for node in ast.walk(tree) if isinstance(node, ast.Assert)]
     guards = [
         node
         for node in tree.body
-        if isinstance(node, ast.If) and any(isinstance(stmt, ast.Raise) for stmt in ast.walk(node))
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "assert_error_table_total"
+        and isinstance(node.value.args[0], ast.Name)
+        and node.value.args[0].id == "SQUARE_ERROR_TABLE"
     ]
     assert guards, "the module-level exhaustiveness guard is missing"
 
@@ -230,3 +238,19 @@ def test_the_error_code_enum_rejects_an_invented_code() -> None:
         ErrorCode("NOT_A_SQUARE_CODE")
     with pytest.raises((ValidationError, ValueError)):
         ErrorCategory("NOT_A_CATEGORY")
+
+
+def test_the_control_plane_publishes_each_rows_provenance_from_describe() -> None:
+    """`GET /__unit/errors` carries the table's provenance per row -- the
+    promise the module docstring makes -- and does so with the sidecar off,
+    which is the case in which nothing else on the wire could carry it."""
+    from tests.unit.square.harness import harness
+
+    for h in harness("full", env={"VENDORFAKE_VENDOR_ERROR_SIDECAR": "false"}):
+        rows = {row["kind"]: row for row in h.api.get("/__unit/errors").json()["kinds"]}
+        assert rows["unauthorized"]["provenance"] == "documented"
+        assert rows["not_found"]["provenance"] == "judgment"
+        assert "unit_error" not in rows["not_found"]["body"]
+        assert {row["provenance"] for row in rows.values()} == {"documented", "judgment"}
+        for kind, mapping in SQUARE_ERROR_TABLE.items():
+            assert rows[kind.value]["provenance"] == mapping.provenance, kind

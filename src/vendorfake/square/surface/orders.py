@@ -67,7 +67,26 @@ alongside the reference's single ``line_items[uid].note``; and
 clear that cannot be applied is **silently ignored while the version still
 increments** -- "On a 200 response, Square has incremented the order version,
 even if all requested property changes are ignored and no changes are actually
-made."
+made." One consequence of this unit's determinism is folded into that rule: a
+clear naming the uid a new *unnamed* line in the same request is about to be
+minted under is ignored too, because the tendered-floor probe below cannot
+see that uid and the commit must not disagree with the probe.
+
+Stamps and the digest
+---------------------
+The details stamps are set from the unit's clock, so they are volatile to
+the state digest (``_VOLATILE_FIELDS`` in ``vendor.py`` names exactly
+:data:`FULFILLMENT_STAMPS`): two units driven alike on different clocks must
+digest alike, and the digest's presence marker still catches a stamp that
+stopped being set. A caller may send the same stamps -- ``picked_up_at``
+beside ``state: COMPLETED`` -- and a value the caller sent is state, not
+clock. The rule is therefore: **a stamp the unit set is volatile; a value the
+caller supplied is digested**, and it is kept by mirroring every supplied
+value for a volatile name into the fulfillment's ``supplied_stamps`` -- a
+list of ``[name, value]`` pairs the wire projection never emits, and pairs
+rather than a mapping because a mirror *keyed* by the stamp's name would be
+scrubbed at any depth exactly like the stamp. Clearing the stamp with a null
+clears the mirror too.
 
 The tendered floor
 ------------------
@@ -254,6 +273,18 @@ _TRANSITION_STAMPS: Mapping[tuple[str, str], str] = {
 }
 """Which details stamp a transition sets when the caller did not. JUDGMENT;
 see the module docstring."""
+
+FULFILLMENT_STAMPS: frozenset[str] = frozenset({"placed_at", *_TRANSITION_STAMPS.values()})
+"""Every details stamp this unit can set from its clock: ``placed_at`` on
+creation and each transition stamp above. The vendor declares exactly these
+volatile to the state digest -- see "Stamps and the digest"."""
+
+_SHADOWED_STAMPS: frozenset[str] = FULFILLMENT_STAMPS | {"expires_at"}
+"""Details fields whose *name* the digest treats as volatile: the unit-set
+stamps, plus ``expires_at``, which is volatile at the top level for OAuth
+tokens and is matched at any depth. A caller-supplied value under any of
+these names is mirrored into ``Fulfillment.supplied_stamps`` so the digest
+still sees it."""
 
 _CREATABLE_STATES: tuple[str, ...] = (OrderState.OPEN.value, OrderState.DRAFT.value)
 """CreateOrder accepts these two. The terminal pair cannot be a starting state:
@@ -573,17 +604,21 @@ class OrdersSurface:
         # is minted. Then mint, in order: line uids, fulfillment uids.
         probe = orders.require(order_id)
         taken = {str(line.get("uid", "")) for line in _lines_of(probe)}
-        _apply_line_changes(probe, clears_line_items, _placeholders(patches, taken), request.fields_to_clear)
+        probed = _placeholders(patches, taken)
+        _apply_line_changes(probe, clears_line_items, probed, request.fields_to_clear, fresh=_fresh(patches, probed))
         _assert_tendered_floor(OrderEntity.from_entity(probe), subject)
+        minted: tuple[_LinePatch, ...] | None = None
         if patches is not None:
-            patches = tuple(p if p.uid else replace(p, uid=self._deps.ids.line_item_uid()) for p in patches)
+            minted = tuple(p if p.uid else replace(p, uid=self._deps.ids.line_item_uid()) for p in patches)
+        fresh = _fresh(patches, minted)
+        patches = minted
         if fulfillment_patches is not None:
             fulfillment_patches = tuple(
                 p if p.uid else replace(p, uid=self._deps.ids.fulfillment_uid()) for p in fulfillment_patches
             )
 
         def mutate(draft: Entity) -> None:
-            _apply_line_changes(draft, clears_line_items, patches, request.fields_to_clear)
+            _apply_line_changes(draft, clears_line_items, patches, request.fields_to_clear, fresh=fresh)
             if fulfillment_patches is not None:
                 merged = _merge_fulfillments(_fulfillments_of(draft), fulfillment_patches, now)
                 if merged:
@@ -1014,7 +1049,7 @@ class OrdersSurface:
         the caller mints after everything in the request has passed -- the
         discipline PayOrder keeps for tender ids.
         """
-        checked: list[tuple[str | None, str, str, dict[str, Any]]] = []
+        checked: list[tuple[str | None, str, str, dict[str, Any], tuple[tuple[str, Any], ...] | None]] = []
         seen: set[str] = set()
         for index, item in enumerate(items):
             path = f"order.fulfillments[{index}]"
@@ -1032,11 +1067,14 @@ class OrdersSurface:
             if state != FulfillmentState.PROPOSED.value:
                 _FULFILLMENT_MACHINE.assert_transition(FulfillmentState.PROPOSED.value, state, f"{path}")
             details = _details_assignments(item, kind, f"{path}")[0]
+            supplied = _supplied_stamps(None, details, ())
             details.setdefault("placed_at", now)
             if state != FulfillmentState.PROPOSED.value:
                 _stamp_transition(details, kind, state, now)
-            checked.append((item.uid, kind, state, details))
-        return tuple(_fulfillment(uid or "", kind, state, details) for uid, kind, state, details in checked)
+            checked.append((item.uid, kind, state, details, supplied))
+        return tuple(
+            _fulfillment(uid or "", kind, state, details, supplied) for uid, kind, state, details, supplied in checked
+        )
 
     def _fulfillment_patches(
         self, current: OrderEntity, items: Sequence[FulfillmentRequest]
@@ -1287,19 +1325,41 @@ def _placeholders(patches: tuple[_LinePatch, ...] | None, taken: set[str]) -> tu
     return tuple(out)
 
 
+def _fresh(named: tuple[_LinePatch, ...] | None, assigned: tuple[_LinePatch, ...] | None) -> frozenset[str]:
+    """The uids this request assigned to lines the caller left unnamed --
+    placeholders on the dry run, minted uids on the commit. ``named`` and
+    ``assigned`` are the same patches before and after assignment."""
+    if named is None or assigned is None:
+        return frozenset()
+    return frozenset(after.uid for before, after in zip(named, assigned, strict=True) if not before.uid)
+
+
 def _apply_line_changes(
     draft: Entity,
     clears_line_items: bool,
     patches: tuple[_LinePatch, ...] | None,
     fields_to_clear: Sequence[str],
+    *,
+    fresh: frozenset[str],
 ) -> None:
     """Every change an update makes to ``line_items``, in one place, so the
-    dry run and the real mutator cannot disagree about the result."""
+    dry run and the real mutator cannot disagree about the result.
+
+    ``fresh`` is the set of uids this request itself assigned to unnamed new
+    lines, and a clear naming one of them is ignored. On the dry run those
+    are placeholders no caller can name; on the commit they are minted from
+    a deterministic stream, so a caller *can* name the uid the commit is
+    about to draw -- and the probe, which could not see it, would have passed
+    a floor the commit then broke. Ignoring the clear in both keeps the two
+    agreeing, and is the same "a clear that cannot be applied is silently
+    ignored" rule Square documents: from the caller's side the uid did not
+    exist when the request was written.
+    """
     if clears_line_items:
         draft["line_items"] = []
     elif patches is not None:
         draft["line_items"] = _merge_line_items(_lines_of(draft), patches)
-    _apply_line_fields_to_clear(draft, fields_to_clear)
+    _apply_line_fields_to_clear(draft, fields_to_clear, fresh=fresh)
 
 
 def _assert_tendered_floor(order: OrderEntity, subject: str) -> None:
@@ -1319,12 +1379,15 @@ def _assert_tendered_floor(order: OrderEntity, subject: str) -> None:
         )
 
 
-def _apply_line_fields_to_clear(draft: Entity, paths: Sequence[str]) -> None:
-    """The ``line_items`` half of :func:`_apply_fields_to_clear`."""
+def _apply_line_fields_to_clear(draft: Entity, paths: Sequence[str], *, fresh: frozenset[str] = frozenset()) -> None:
+    """The ``line_items`` half of :func:`_apply_fields_to_clear`. A path
+    naming a uid in ``fresh`` is skipped; see :func:`_apply_line_changes`."""
     for path in paths:
         match = _LINE_ITEM_PATH.match(path)
         if match is not None:
             uid, sub = match.group(1), match.group(2)
+            if uid in fresh:
+                continue
             lines = _lines_of(draft)
             if sub is None:
                 draft["line_items"] = [line for line in lines if line.get("uid") != uid]
@@ -1409,7 +1472,9 @@ def _details_assignments(item: FulfillmentRequest, kind: str, path: str) -> tupl
     return assign, clear
 
 
-def _fulfillment(uid: str, kind: str, state: str, details: dict[str, Any]) -> Fulfillment:
+def _fulfillment(
+    uid: str, kind: str, state: str, details: dict[str, Any], supplied: tuple[tuple[str, Any], ...] | None
+) -> Fulfillment:
     """A fulfillment whose one details object is the one its type carries."""
     return Fulfillment(
         uid=uid,
@@ -1418,7 +1483,23 @@ def _fulfillment(uid: str, kind: str, state: str, details: dict[str, Any]) -> Fu
         pickup_details=details if kind == "PICKUP" else None,
         delivery_details=details if kind == "DELIVERY" else None,
         shipment_details=details if kind == "SHIPMENT" else None,
+        supplied_stamps=supplied,
     )
+
+
+def _supplied_stamps(prior: Any, assign: Mapping[str, Any], clear: Sequence[str]) -> tuple[tuple[str, Any], ...] | None:
+    """The caller-supplied values for volatile stamp names, after this
+    request: the prior mirror (as stored, ``[[name, value], ...]``), plus what
+    the request set, minus what it cleared -- as pairs sorted by name, or
+    ``None`` when nothing is left. Pairs and not a mapping because the digest
+    scrubs a volatile name at any depth; see "Stamps and the digest"."""
+    mirror: dict[str, Any] = {}
+    if isinstance(prior, list | tuple):
+        mirror.update({str(pair[0]): pair[1] for pair in prior if isinstance(pair, list | tuple) and len(pair) == 2})
+    mirror.update({k: v for k, v in assign.items() if k in _SHADOWED_STAMPS})
+    for name in clear:
+        mirror.pop(name, None)
+    return tuple(sorted(mirror.items())) or None
 
 
 def _stamp_transition(details: dict[str, Any], kind: str, state: str, now: str) -> None:
@@ -1456,11 +1537,12 @@ def _merge_fulfillments(
         if prior is None:
             kind = str(patch.assign["type"])
             details = dict(patch.details_assign)
+            supplied = _supplied_stamps(None, details, ())
             details.setdefault("placed_at", now)
             state = str(patch.assign.get("state", FulfillmentState.PROPOSED.value))
             if state != FulfillmentState.PROPOSED.value:
                 _stamp_transition(details, kind, state, now)
-            by_uid[patch.uid] = _fulfillment(patch.uid, kind, state, details).to_entity()
+            by_uid[patch.uid] = _fulfillment(patch.uid, kind, state, details, supplied).to_entity()
             order.append(patch.uid)
             continue
         merged = {**prior, **patch.assign}
@@ -1478,6 +1560,11 @@ def _merge_fulfillments(
             merged[key] = details
         else:
             merged.pop(key, None)
+        supplied = _supplied_stamps(prior.get("supplied_stamps"), patch.details_assign, patch.details_clear)
+        if supplied:
+            merged["supplied_stamps"] = [list(pair) for pair in supplied]
+        else:
+            merged.pop("supplied_stamps", None)
         by_uid[patch.uid] = merged
     return [by_uid[uid] for uid in order]
 

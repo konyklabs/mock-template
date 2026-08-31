@@ -4,11 +4,9 @@ FOR: producing ids that *look* like the ones in Square's own documentation
 examples, from a seeded stream, so that a transcript of a scenario is the same
 on every run and can be diffed between runs.
 
-INVARIANT: **the id stream never consumes the unit's chaos stream.** Both are
-seeded from the unit seed, but this one is salted through
-:func:`~vendorfake.core.rand.rng.salted_seed`, so adding a probability rule to
-a profile does not renumber every generated id -- and a scenario that mints
-ten orders draws the same ten ids whether or not a fault fired.
+The stream itself -- seeding, salting away from the chaos stream, re-seeding
+at hydrate, the draw count -- is :class:`~vendorfake.core.rand.ids.IdStream`;
+this module is only the shapes.
 
 Shapes, from the response examples on developer.squareup.com/reference/square:
 
@@ -37,80 +35,58 @@ then mint *the same ids again*. Re-seeding at hydrate is what makes that true.
 
 from __future__ import annotations
 
-from vendorfake.core.rand.rng import Rng, salted_seed
+from vendorfake.core.rand.ids import HEX, MIXED_ALNUM, UPPER_ALNUM, IdStream
 
 __all__ = ["SquareIds"]
 
-_UPPER_ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-_MIXED = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 #: Square's tokens are base64url-shaped, so the alphabet carries ``-`` and ``_``.
 _TOKEN_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-_HEX = "0123456789abcdef"
 
 
-class SquareIds:
-    """One deterministic id stream for one unit."""
+class SquareIds(IdStream):
+    """Square's shapes over the core's stream."""
 
-    __slots__ = ("_rng",)
-
-    def __init__(self, seed: int = 1) -> None:
-        self._rng = Rng(salted_seed(seed))
-
-    def reseed(self, seed: int) -> None:
-        """Restart the stream from ``seed``, salted as at construction.
-
-        Called at hydrate, so that re-seeding a unit reproduces its ids rather
-        than continuing the stream from wherever the previous scenario left it.
-        """
-        self._rng = Rng(salted_seed(seed))
-
-    @property
-    def draw_count(self) -> int:
-        """Draws taken so far -- how a report shows the stream advanced."""
-        return self._rng.draw_count
-
-    def _pick(self, alphabet: str, length: int) -> str:
-        return "".join(alphabet[self._rng.int(len(alphabet))] for _ in range(length))
+    __slots__ = ()
 
     # -- entities ----------------------------------------------------------
 
     def order(self) -> str:
         """``CAIS`` + 23 mixed-case alphanumerics, 27 characters in all."""
-        return f"CAIS{self._pick(_MIXED, 23)}"
+        return f"CAIS{self._pick(MIXED_ALNUM, 23)}"
 
     def line_item_uid(self) -> str:
-        return self._pick(_MIXED, 22)
+        return self._pick(MIXED_ALNUM, 22)
 
     def fulfillment_uid(self) -> str:
         """The same shape as a line-item uid: 22 mixed-case alphanumerics."""
-        return self._pick(_MIXED, 22)
+        return self._pick(MIXED_ALNUM, 22)
 
     def location(self) -> str:
-        return self._pick(_UPPER_ALNUM, 13)
+        return self._pick(UPPER_ALNUM, 13)
 
     def merchant(self) -> str:
-        return self._pick(_UPPER_ALNUM, 13)
+        return self._pick(UPPER_ALNUM, 13)
 
     def catalog_object(self) -> str:
-        return self._pick(_UPPER_ALNUM, 24)
+        return self._pick(UPPER_ALNUM, 24)
 
     def inventory_change(self) -> str:
         """24 upper-case alphanumerics -- the shape of an InventoryAdjustment
         or InventoryPhysicalCount id in Square's examples. JUDGMENT on the
         shape; the examples show it without stating a rule."""
-        return self._pick(_UPPER_ALNUM, 24)
+        return self._pick(UPPER_ALNUM, 24)
 
     def tender(self) -> str:
-        return self._pick(_MIXED, 27)
+        return self._pick(MIXED_ALNUM, 27)
 
     def payment(self) -> str:
         """29 mixed-case alphanumerics, the shape of the CreatePayment example
         (https://developer.squareup.com/reference/square/payments-api/create-payment)."""
-        return self._pick(_MIXED, 29)
+        return self._pick(MIXED_ALNUM, 29)
 
     def customer(self) -> str:
         """26 upper-case alphanumerics, the shape of Square's customer ids."""
-        return self._pick(_UPPER_ALNUM, 26)
+        return self._pick(UPPER_ALNUM, 26)
 
     def uuid(self) -> str:
         """UUID-shaped, ``8-4-4-4-12`` lowercase hex, from the stream.
@@ -119,7 +95,7 @@ class SquareIds:
         in Square's examples. Drawn from the seeded stream rather than from
         ``uuid4`` so a scenario reproduces its ids.
         """
-        hex32 = self._pick(_HEX, 32)
+        hex32 = self._pick(HEX, 32)
         return f"{hex32[:8]}-{hex32[8:12]}-{hex32[12:16]}-{hex32[16:20]}-{hex32[20:]}"
 
     # -- OAuth -------------------------------------------------------------
@@ -138,13 +114,7 @@ class SquareIds:
 
     def subscription(self) -> str:
         """``wbhk_`` + 32 lowercase hex characters."""
-        return f"wbhk_{self._pick(_HEX, 32)}"
+        return f"wbhk_{self._pick(HEX, 32)}"
 
     def signature_key(self) -> str:
         return self._pick(_TOKEN_CHARS, 22)
-
-    # -- internal ----------------------------------------------------------
-
-    def internal(self, prefix: str) -> str:
-        """``<prefix>_`` + 12 hex characters, for ids Square does not shape."""
-        return f"{prefix}_{self._pick(_HEX, 12)}"

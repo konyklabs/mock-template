@@ -215,41 +215,40 @@ def update_new_line_missing_price_rejected(h: Harness) -> None:
     assert response.status == 400, response.text
 
 
-def create_reserved_uid_rejected(h: Harness) -> None:
-    """A caller-chosen `#...` uid on a line and on a fulfillment, on create:
-    refused naming the field, before any id draw."""
-    for body, field in (
-        (
-            {"line_items": [{"uid": "#mine", "quantity": "1", "base_price_money": {"amount": 1}}]},
-            "order.line_items[0].uid",
-        ),
-        ({"fulfillments": [{"uid": "#mine", "type": "PICKUP"}]}, "order.fulfillments[0].uid"),
-    ):
-        response = h.api.post(
-            "/v2/orders",
-            {"idempotency_key": f"reserved-{field}", "order": {"location_id": SEED_LOCATION_ID, **body}},
-            headers=h.auth,
-        )
-        assert response.status == 400, response.text
-        assert response.json()["errors"][0]["field"] == field
+RESERVED_LINE = {"line_items": [{"uid": "#mine", "quantity": "1", "base_price_money": {"amount": 1}}]}
+RESERVED_FULFILLMENT = {"fulfillments": [{"uid": "#mine", "type": "PICKUP"}]}
 
 
-def update_reserved_uid_rejected(h: Harness) -> None:
-    """The same two, on update against the seeded order."""
-    for body, field in (
-        (
-            {"line_items": [{"uid": "#mine", "quantity": "1", "base_price_money": {"amount": 1}}]},
-            "order.line_items[0].uid",
-        ),
-        ({"fulfillments": [{"uid": "#mine", "type": "PICKUP"}]}, "order.fulfillments[0].uid"),
-    ):
-        response = h.api.put(
-            f"/v2/orders/{SEED_OPEN_ORDER_ID}",
-            {"idempotency_key": f"reserved-{field}", "order": {"version": 1, **body}},
-            headers=h.auth,
-        )
+def reserved_uid_rejected(method: str, body: dict[str, Any], field: str) -> Reject:
+    """A caller-chosen `#...` uid on a line or a fulfillment, on create (POST)
+    or on update (PUT against the seeded order): refused naming the field,
+    before any id draw. One factory, four call sites, so the `#`-prefix
+    guard is exercised on every one of them rather than on whichever a loop
+    happened to reach first."""
+
+    def reject(h: Harness) -> None:
+        if method == "POST":
+            response = h.api.post(
+                "/v2/orders",
+                {"idempotency_key": f"reserved-{field}", "order": {"location_id": SEED_LOCATION_ID, **body}},
+                headers=h.auth,
+            )
+        else:
+            response = h.api.put(
+                f"/v2/orders/{SEED_OPEN_ORDER_ID}",
+                {"idempotency_key": f"reserved-{field}", "order": {"version": 1, **body}},
+                headers=h.auth,
+            )
         assert response.status == 400, response.text
-        assert response.json()["errors"][0]["field"] == field
+        error = response.json()["errors"][0]
+        assert error["field"] == field
+        # The guard's *own* refusal, not the next check's (an unknown uid on
+        # update also 400s naming the same field): the detail and the
+        # sidecar's `supplied` are what only `_require_uid_unreserved` says.
+        assert "may not start with '#'" in error["detail"], error
+        assert response.json()["unit_error"]["supplied"] == "#mine"
+
+    return reject
 
 
 def fulfillment_update_ids(h: Harness) -> list[str]:
@@ -321,6 +320,26 @@ def minted(ids: Ids, *, after: Reject | None) -> list[str]:
         ),
         pytest.param(
             update_line_and_fulfillment_ids, update_new_line_missing_price_rejected, id="update-new-line-missing-price"
+        ),
+        pytest.param(
+            line_and_fulfillment_ids,
+            reserved_uid_rejected("POST", RESERVED_LINE, "order.line_items[0].uid"),
+            id="create-reserved-line-uid",
+        ),
+        pytest.param(
+            line_and_fulfillment_ids,
+            reserved_uid_rejected("POST", RESERVED_FULFILLMENT, "order.fulfillments[0].uid"),
+            id="create-reserved-fulfillment-uid",
+        ),
+        pytest.param(
+            update_line_and_fulfillment_ids,
+            reserved_uid_rejected("PUT", RESERVED_LINE, "order.line_items[0].uid"),
+            id="update-reserved-line-uid",
+        ),
+        pytest.param(
+            update_line_and_fulfillment_ids,
+            reserved_uid_rejected("PUT", RESERVED_FULFILLMENT, "order.fulfillments[0].uid"),
+            id="update-reserved-fulfillment-uid",
         ),
     ],
 )

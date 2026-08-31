@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from vendorfake.core.config.models import ProfileDocument
 from vendorfake.core.kernel.types import (
@@ -69,6 +70,9 @@ class FakeErrors:
 
     def not_found(self, req: UnitRequest, ctx: UnitContext) -> ShapedError:
         return ShapedError(status=404, body={"error": {"code": "no_route", "path": req.path}})
+
+    def describe(self) -> dict[str, dict[str, Any]]:
+        return {kind.value: {"status": status, "provenance": "judgment"} for kind, status in STATUS.items()}
 
 
 @dataclass
@@ -150,6 +154,7 @@ class FakeVendor:
     profile_dir: Path = Path("/nonexistent/profiles")
     base_dir: Path = Path("/nonexistent")
     volatile_fields: tuple[str, ...] = ()
+    opaque_fields: tuple[str, ...] = ()
     signer: object | None = None
     events: object | None = None
     name: str = "acme"

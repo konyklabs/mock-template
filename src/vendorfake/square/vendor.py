@@ -93,7 +93,7 @@ from vendorfake.square.surface.directory import directory_routes
 from vendorfake.square.surface.inventory import inventory_routes
 from vendorfake.square.surface.loyalty import loyalty_routes
 from vendorfake.square.surface.oauth import oauth_routes
-from vendorfake.square.surface.orders import order_routes
+from vendorfake.square.surface.orders import FULFILLMENT_STAMPS, order_routes
 from vendorfake.square.surface.payments import payment_routes
 from vendorfake.square.surface.webhooks import webhook_routes
 
@@ -156,20 +156,53 @@ _VOLATILE_FIELDS: tuple[str, ...] = (
     "calculated_at",
     "enrolled_at",
     "mapping_created_at",
+    # Fulfillment-details stamps, one level down inside `fulfillments[]`:
+    # `placed_at` on creation and every transition stamp, exactly the set
+    # surface/orders.py can write from the clock. The digest matches names at
+    # any depth, so a name here covers `tenders[].created_at` too without
+    # listing it (the core already covers `created_at`).
+    *sorted(FULFILLMENT_STAMPS),
 )
-"""Entity fields excluded from the state digest because they carry wall-clock
-time. Two units seeded identically a second apart, and driven with the same
-traffic, must still agree, and these are the fields that would otherwise make
-them differ.
+"""Entity fields whose values are excluded from the state digest because this
+unit writes them from its clock. Two units seeded identically a second apart,
+and driven with the same traffic, must still agree, and these are the fields
+that would otherwise make them differ.
 
-KNOWN GAP, tracked as konyklabs/roadmap#35 -- **the digest excludes top-level
-fields only.** Three wall-clock stamps live one level down and cannot be
-named here: ``tenders[].created_at`` (PayOrder and every payment capture),
-``fulfillments[].pickup_details.placed_at`` and its transition siblings, and
-``reward_tiers[].created_at`` when a scenario omits it. Two units driven
-through those paths a millisecond apart digest differently, and
-``tests/unit/square/test_digest_determinism.py`` marks each such path
-``xfail`` against the issue rather than pretending the digest covers it."""
+The rule, stated once: **a stamp the unit set is volatile; a value the caller
+sent is state.** Two properties of the core digest (``Store.entity_digest``)
+carry the first half -- a name matches at any depth, so the stamps inside
+``tenders[]``, ``fulfillments[].pickup_details`` and ``reward_tiers[]`` are
+covered, and a set field still hashes as *set*, so a spent authorization code
+(``used_at``) and a fresh one digest differently although the instant itself
+is ignored. The second half is the vendor's: a fulfillment stamp the *caller*
+supplied under one of these names (``picked_up_at`` beside ``state:
+COMPLETED``, ``expires_at`` on pickup details) is mirrored into the
+fulfillment's ``supplied_stamps`` -- ``[name, value]`` pairs, so no volatile
+name appears as a key -- which the digest hashes and the wire never shows -- so two orders that differ only in a caller-sent
+instant digest differently. ``tests/unit/square/test_digest_determinism.py``
+pins both halves.
+
+Not listed on purpose: ``pickup_at``, ``deliver_at``, ``courier_pickup_at``
+and the other *schedule* instants, which only a caller ever sets. They are
+what the consumer asked for, not what the clock said, and stay in the digest
+under their own names. And name-matching stops inside the free-form subtrees
+:data:`_OPAQUE_FIELDS` declares, where every key is the caller's."""
+
+_OPAQUE_FIELDS: tuple[str, ...] = (
+    # "Application-defined data ... keys ... alphanumeric characters,
+    # underscores (_) and hyphens (-)."
+    # https://developer.squareup.com/docs/build-basics/general-considerations/metadata
+    # So `created_at` inside it is a legal caller key sharing a volatile
+    # name; the digest must take it verbatim. Orders and line items both
+    # carry one, stored exactly as sent.
+    "metadata",
+    # `pickup_details.curbside_pickup_details`, a documented free-form-ish
+    # blob this unit stores raw and never stamps.
+    "curbside_pickup_details",
+)
+"""Caller free-form subtrees the state digest takes verbatim, matched at any
+depth and winning over :data:`_VOLATILE_FIELDS`. This unit writes nothing
+inside them, so nothing there is the clock's."""
 
 
 class SquareVendor:
@@ -316,6 +349,10 @@ class SquareVendor:
     @property
     def volatile_fields(self) -> Sequence[str]:
         return _VOLATILE_FIELDS
+
+    @property
+    def opaque_fields(self) -> Sequence[str]:
+        return _OPAQUE_FIELDS
 
     @property
     def profile_dir(self) -> Path:

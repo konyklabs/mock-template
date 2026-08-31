@@ -776,6 +776,18 @@ class ErrorShaper(Protocol):
         """Body for a path that matched no route at all."""
         ...
 
+    def describe(self) -> Mapping[str, Mapping[str, Any]]:
+        """The table as a report publishes it: one row per ``UnitErrorKind``
+        value, each carrying at least ``status`` and ``provenance``
+        (``"documented"`` or ``"judgment"`` -- where the status came from).
+
+        ``GET /__unit/errors`` reads the provenance of every row from here.
+        Without this hook the promise that a consumer can ask a unit which of
+        its statuses the vendor documents was made in two vendors' docstrings
+        and kept by nothing.
+        """
+        ...
+
 
 class AuthAdapter(Protocol):
     """Resolves a presented credential into a principal and its scopes.
@@ -956,8 +968,22 @@ class VendorDefinition(Protocol):
 
     @property
     def volatile_fields(self) -> Sequence[str]:
-        """Entity fields excluded from the state digest because they carry
-        wall-clock time. ``created_at``/``updated_at`` are excluded already."""
+        """Entity field names whose *values* the state digest ignores because
+        the unit writes them from its clock. The name matches at any depth
+        (outside opaque subtrees), and a set field still hashes as "set", so a
+        transition the stamp marks moves the digest while the instant does
+        not. ``created_at``/``updated_at`` are covered already."""
+        ...
+
+    @property
+    def opaque_fields(self) -> Sequence[str]:
+        """Names of caller free-form subtrees the state digest takes verbatim.
+
+        Matched at any depth like a volatile name, and winning over one: the
+        scrub never descends below an opaque key, so a caller's ``created_at``
+        inside Square's ``metadata`` is digested as the state it is rather
+        than blanked as the stamp it is not. Empty for a vendor whose surface
+        stores no caller free-form documents."""
         ...
 
     def hydrate(self, ctx: UnitContext, seed: object) -> None:

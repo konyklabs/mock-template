@@ -4,11 +4,9 @@ FOR: producing ids that *look* like the ones in Clover's own documentation
 examples, from a seeded stream, so that a transcript of a scenario is the same
 on every run and can be diffed between runs.
 
-INVARIANT: **the id stream never consumes the unit's chaos stream.** Both are
-seeded from the unit seed, but this one is salted through
-:func:`~vendorfake.core.rand.rng.salted_seed`, so adding a probability rule to
-a profile does not renumber every generated id -- and a scenario that mints
-ten orders draws the same ten ids whether or not a fault fired.
+The stream itself -- seeding, salting away from the chaos stream, re-seeding
+at hydrate, the draw count -- is :class:`~vendorfake.core.rand.ids.IdStream`;
+this module is only the shapes.
 
 Two shapes, two confidence levels
 ---------------------------------
@@ -36,47 +34,26 @@ ids again*, so the stream restarts from the seed rather than continuing.
 
 from __future__ import annotations
 
-from vendorfake.core.rand.rng import Rng, salted_seed
+from vendorfake.core.rand.ids import HEX, UPPER_ALNUM, IdStream
 
 __all__ = ["CloverIds"]
 
-_UPPER_ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-_HEX = "0123456789abcdef"
 #: RFC 4122 variant nibble: 8, 9, a or b.
 _VARIANT = "89ab"
 
 
-class CloverIds:
-    """One deterministic id stream for one unit."""
+class CloverIds(IdStream):
+    """Clover's shapes over the core's stream."""
 
-    __slots__ = ("_rng",)
-
-    def __init__(self, seed: int = 1) -> None:
-        self._rng = Rng(salted_seed(seed))
-
-    def reseed(self, seed: int) -> None:
-        """Restart the stream from ``seed``, salted as at construction.
-
-        Called at hydrate, so that re-seeding a unit reproduces its ids rather
-        than continuing the stream from wherever the previous scenario left it.
-        """
-        self._rng = Rng(salted_seed(seed))
-
-    @property
-    def draw_count(self) -> int:
-        """Draws taken so far -- how a report shows the stream advanced."""
-        return self._rng.draw_count
-
-    def _pick(self, alphabet: str, length: int) -> str:
-        return "".join(alphabet[self._rng.int(len(alphabet))] for _ in range(length))
+    __slots__ = ()
 
     def _entity(self) -> str:
         """13 uppercase alphanumerics -- the one shape every Clover example uses."""
-        return self._pick(_UPPER_ALNUM, 13)
+        return self._pick(UPPER_ALNUM, 13)
 
     def _uuid(self) -> str:
         """A v4-layout UUID from the stream. See the module docstring; JUDGMENT."""
-        hexes = self._pick(_HEX, 30)
+        hexes = self._pick(HEX, 30)
         variant = _VARIANT[self._rng.int(len(_VARIANT))]
         return f"{hexes[0:8]}-{hexes[8:12]}-4{hexes[12:15]}-{variant}{hexes[15:18]}-{hexes[18:30]}"
 
@@ -130,9 +107,3 @@ class CloverIds:
         "in every message header after the webhook callback URL is validated"
         (https://docs.clover.com/dev/docs/webhooks)."""
         return self._uuid()
-
-    # -- internal ----------------------------------------------------------
-
-    def internal(self, prefix: str) -> str:
-        """``<prefix>_`` + 12 hex characters, for ids Clover does not shape."""
-        return f"{prefix}_{self._pick(_HEX, 12)}"

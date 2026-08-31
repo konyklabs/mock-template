@@ -204,6 +204,26 @@ def test_no_profile_writes_a_colon_path_template() -> None:
         assert not re.search(r'"route": "[A-Z]+ [^"]*:', text), name
 
 
+SEED_DIGEST = "3fafd03a5ffa1120d23b520f7b47fbe58b6f8da1842179ba4f49d7e7f2b12869"
+"""The entity digest of the shipped scenario, pinned as a literal.
+
+Identical on every profile because all six share ``seed/default.seed.json``,
+seeded ids come from the document rather than the id stream, and every
+hydrate-time instant is a volatile field whose value the digest ignores. A
+change to the scenario changes this line on purpose; a change to anything
+else that moves it is the regression this test exists to catch (the same
+claim the conformance C06/C22 contracts make across units and across
+processes). First pinned for konyklabs/roadmap#35, when the digest began
+hashing a volatile field's presence rather than dropping it, so the Square
+side has the same tripwire the Clover side had."""
+
+
+@pytest.mark.parametrize("name", SHIPPED)
+def test_the_seeded_digest_is_pinned_and_identical_on_every_profile(name: str) -> None:
+    for h in build_harness(name):
+        assert h.unit.context.store.entity_digest() == SEED_DIGEST
+
+
 # ---------------------------------------------------------------------------
 # Package data: a profile a consumer cannot read is not shipped.
 # ---------------------------------------------------------------------------

@@ -309,6 +309,32 @@ def test_every_shaped_error_is_a_4xx_or_5xx_with_a_body() -> None:
         assert row["body"], row["kind"]
 
 
+def test_every_row_publishes_the_provenance_describe_reports() -> None:
+    """The promise both vendors' docstrings make: a consumer can ask which
+    statuses the vendor documents. Kept by the plane reading `describe()`,
+    which the fake answers "judgment" for every row."""
+    api, _ = _api()
+    rows = api.get("/__unit/errors").json()["kinds"]
+    assert {row["provenance"] for row in rows} == {"judgment"}
+
+
+def test_a_provenance_that_goes_missing_after_start_is_a_500_that_says_so() -> None:
+    """Unreachable past the startup check, and defended anyway: a 500 naming
+    the kind rather than a 200 carrying `provenance: null`."""
+    api, unit = _api()
+    errors = unit.context.vendor.errors
+    full = errors.describe()
+
+    def short() -> dict[str, Any]:
+        return {kind: row for kind, row in full.items() if kind != "timeout"}
+
+    errors.describe = short  # type: ignore[method-assign]
+    response = api.get("/__unit/errors")
+    assert response.status == 500
+    assert response.json()["error"]["code"] == "internal"
+    assert "no provenance for 'timeout'" in response.json()["error"]["detail"]
+
+
 def test_errors_also_publishes_the_no_route_shape_which_no_kind_covers() -> None:
     """`not_found` on the router path is a different hook from `shape`, and it
     is the one a consumer meets first when they mistype a URL."""

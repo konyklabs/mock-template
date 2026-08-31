@@ -682,6 +682,53 @@ def test_a_reserved_uid_cannot_slip_a_shrink_past_the_tendered_floor(h: Harness)
     assert current["net_amount_due_money"] == {"amount": 400, "currency": "USD"}
 
 
+def test_a_clear_naming_the_uid_this_request_mints_cannot_slip_past_the_floor() -> None:
+    """The gate's last minor: the floor is probed on a dry merge whose new
+    lines carry placeholder uids, and the commit then mints the real ones.
+    Ids are deterministic, so a caller can name the uid the commit *will*
+    mint in `fields_to_clear`: the probe saw a 300 line it could not clear
+    and passed, the commit cleared it, and a 200-tendered order was written
+    at a 0 total. A clear naming a uid this request mints is ignored in both
+    -- the caller could not have known it -- so probe and commit agree."""
+    # The uid the update will mint, learned from an identically seeded unit.
+    for h in build_harness("full"):
+        order = create_order(h, 500)
+        assert pay(h, 200, key="part", order_id=order["id"]).status == 200
+        uid = order["line_items"][0]["uid"]
+        learned = h.api.put(
+            f"/v2/orders/{order['id']}",
+            {
+                "idempotency_key": "swap",
+                "order": {"version": 2, "line_items": [{"quantity": "1", "base_price_money": {"amount": 300}}]},
+                "fields_to_clear": [f"line_items[{uid}]"],
+            },
+            headers=h.auth,
+        )
+        assert learned.status == 200, learned.text
+        assert [line["base_price_money"]["amount"] for line in learned.json()["order"]["line_items"]] == [300]
+        minted = learned.json()["order"]["line_items"][0]["uid"]
+
+    for h in build_harness("full"):
+        order = create_order(h, 500)
+        assert pay(h, 200, key="part", order_id=order["id"]).status == 200
+        uid = order["line_items"][0]["uid"]
+        response = h.api.put(
+            f"/v2/orders/{order['id']}",
+            {
+                "idempotency_key": "swap",
+                "order": {"version": 2, "line_items": [{"quantity": "1", "base_price_money": {"amount": 300}}]},
+                "fields_to_clear": [f"line_items[{uid}]", f"line_items[{minted}]"],
+            },
+            headers=h.auth,
+        )
+        assert response.status == 200, response.text
+        written = response.json()["order"]
+        assert [line["uid"] for line in written["line_items"]] == [minted]
+        assert written["total_money"] == {"amount": 300, "currency": "USD"}
+        assert written["net_amount_due_money"] == {"amount": 100, "currency": "USD"}
+        assert sum(t["amount_money"]["amount"] for t in written["tenders"]) <= written["total_money"]["amount"]
+
+
 def test_pay_order_with_an_empty_list_completes_a_zero_total_order(h: Harness) -> None:
     """ "Orders with a total amount of `0` can be marked as paid by specifying
     an empty array of `payment_ids` in the request." """
