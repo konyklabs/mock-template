@@ -69,15 +69,29 @@ else
 fi
 
 say "the image runs as a non-root user"
-who=$(docker run --rm --entrypoint id "$IMAGE" -u)
-if [ "$who" != "0" ]; then ok "uid $who"; else fail "runs as root"; fi
+# The exit status is checked before the value: a failed `docker run` leaves
+# an empty capture, and an empty string compared against "0" reads as ok.
+if ! who=$(docker run --rm --entrypoint id "$IMAGE" -u); then
+  fail "could not read the image's uid (docker run failed)"
+elif [ "$who" != "0" ]; then
+  ok "uid $who"
+else
+  fail "runs as root"
+fi
 
 for vendor in "${vendors[@]}"; do
   say "serve $vendor and wait for HEALTHCHECK"
   name="vendorfake-verify-$vendor-$$"
   containers+=("$name")
-  docker run -d --name "$name" -e "VENDORFAKE_VENDOR=$vendor" -p "127.0.0.1::8080" "$IMAGE" >/dev/null
+  if ! docker run -d --name "$name" -e "VENDORFAKE_VENDOR=$vendor" -p "127.0.0.1::8080" "$IMAGE" >/dev/null; then
+    fail "docker run failed for $vendor"
+    continue
+  fi
   port=$(docker port "$name" 8080/tcp | head -1 | sed 's/.*://')
+  if [ -z "$port" ]; then
+    fail "no published port for $vendor"
+    continue
+  fi
 
   status="starting"
   for _ in $(seq 1 "$HEALTH_TIMEOUT_S"); do

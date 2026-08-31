@@ -112,6 +112,9 @@ def test_a_receiver_on_loopback_gets_a_signed_delivery_and_a_retry() -> None:
         receiver.respond_with = lambda index: 500 if index == 0 else 200
         square.subscribe(receiver.url, ["order.created"], "receiver-key")
         _create_square_order(square)
+        # The delivery worker runs on its own thread: wait_for is the
+        # consumer's way to meet it, drain settles the bookkeeping after.
+        assert len(receiver.wait_for(2)) == 2
         square.drain()
 
         first, retry = receiver.received
@@ -133,6 +136,50 @@ def test_a_receiver_answers_404_off_its_path_and_records_nothing() -> None:
         assert receiver.received == []
         assert httpx.post(receiver.url, content=b'{"yes": true}').status_code == 200
         assert [delivery.body for delivery in receiver.received] == [b'{"yes": true}']
+        with pytest.raises(AssertionError, match="expected 2 webhook deliveries"):
+            receiver.wait_for(2, timeout_s=0.2)
+
+
+def test_a_receiver_can_bind_all_interfaces_for_a_container_and_still_name_loopback() -> None:
+    with webhook_receiver(host="0.0.0.0") as receiver:
+        # `url` names loopback -- the routable address for a wildcard bind
+        # depends on who is asking (host.docker.internal, ...), so the class
+        # publishes `port` and the recipe rather than guessing.
+        assert receiver.url == f"http://127.0.0.1:{receiver.port}/webhooks"
+        assert httpx.post(receiver.url, content=b"{}").status_code == 200
+        assert len(receiver.received) == 1
+
+
+def test_reset_drops_control_plane_subscribers_and_keeps_seed_and_profile_ones(tmp_path: Any) -> None:
+    """Pins what reset()'s docstring says: the scenario's subscriber and the
+    profile's survive a reset because hydrate re-inserts them; the one a test
+    registered through the control plane is gone and must be re-registered."""
+    from importlib.resources import files
+
+    profile = json.loads((files("vendorfake.clover") / "profiles" / "full.json").read_text())
+    profile["webhooks"]["subscribers"] = [
+        {
+            "id": "wbhk_profile_cfg",
+            "notification_url": "https://example.test/profile",
+            "event_types": ["O:*"],
+            "signature_key": "cfg",
+            "enabled": False,
+        }
+    ]
+    profile_path = tmp_path / "with-subscriber.json"
+    profile_path.write_text(json.dumps(profile))
+
+    with unit("clover", str(profile_path)) as clover:
+
+        def ids() -> set[str]:
+            return {row["id"] for row in clover.client.get("/__unit/webhooks/subscriptions").json()["subscriptions"]}
+
+        seed_id = clover.seed.webhook_subscription_id
+        assert ids() == {seed_id, "wbhk_profile_cfg"}
+        clover.subscribe("http://127.0.0.1:1/mine", ["O:*"], "mine", id="wbhk_mine")
+        assert ids() == {seed_id, "wbhk_profile_cfg", "wbhk_mine"}
+        clover.reset()
+        assert ids() == {seed_id, "wbhk_profile_cfg"}
 
 
 def test_two_units_mint_the_same_ids_unless_reseeded() -> None:
@@ -185,7 +232,27 @@ def test_serve_in_thread_shares_state_with_the_in_process_client() -> None:
         fetched = over_http.client.get(f"/v2/orders/{order['id']}", headers=square.seed.auth)
         assert fetched.status_code == 200
         assert fetched.json()["order"]["id"] == order["id"]
+
+
+def test_the_tripwire_is_wired_so_framework_answered_is_a_measurement() -> None:
+    """The regression tests/conformance/harness.py records: a counter wired
+    at neither end reports a literal 0 forever, and both contracts on it
+    become vacuous. Here the positive half (requests the unit answers leave
+    it at 0) and the negative half (the one request a framework can still
+    answer first -- an exotic verb outside HTTP_METHODS -- moves the number
+    on the wire) prove unit() and serve_in_thread() share a live tripwire."""
+    with unit("square") as square, serve_in_thread(square) as over_http:
+        assert over_http.client.get("/v2/locations", headers=square.seed.auth).status_code == 200
         assert over_http.health()["framework_answered"] == 0
+        assert square.tripwire.count == 0
+
+        answered = over_http.client.request("PROPFIND", "/v2/locations", headers=square.seed.auth)
+        # The consumer still gets a vendor-shaped answer (the handler
+        # dispatches to the unit after recording), and the counter moved.
+        assert answered.status_code != 500
+        assert over_http.health()["framework_answered"] == 1
+        assert square.health()["framework_answered"] == 1  # same tripwire, read in process
+        assert square.tripwire.count == 1
 
 
 def test_repeated_headers_reach_the_unit_identically_through_the_transport_and_the_server() -> None:

@@ -41,7 +41,10 @@ import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from vendorfake.asgi import FrameworkTripwire
 
 import httpx
 
@@ -156,8 +159,16 @@ class Driver:
     # -- state and faults ----------------------------------------------------
 
     def reset(self) -> dict[str, Any]:
-        """Back to the seed scenario. Subscribers registered through the
-        control plane survive; everything a test created does not."""
+        """Back to the seed scenario -- and only the scenario.
+
+        Everything a test created goes, **including subscribers registered
+        through the control plane or the vendor API**: the store is cleared
+        and re-hydrated, and only the seed document's and the profile's
+        subscribers are re-inserted. Call :meth:`subscribe` again after a
+        reset, or subscribe after the reset in the first place -- a
+        subscription hoisted above a per-test reset delivers nothing, and
+        that reads exactly like a broken handler.
+        """
         return self._json(self.client.post("/__unit/state/reset", json={}))
 
     def add_chaos_rule(self, rule: Mapping[str, Any]) -> dict[str, Any]:
@@ -190,6 +201,11 @@ class StartedUnit(Driver):
     control plane does not cover."""
 
     unit: Unit = field(kw_only=True)
+    #: The counter behind ``framework_answered`` in ``/__unit/health``. Wired
+    #: at construction and handed to :func:`serve_in_thread`'s application,
+    #: because a counter wired at neither end reports a literal 0 -- the
+    #: regression tests/conformance/harness.py records as a real incident.
+    tripwire: FrameworkTripwire = field(kw_only=True)
 
 
 @dataclass
@@ -250,12 +266,21 @@ def unit(
     """
     environ: dict[str, str] = {} if seed is None else {"VENDORFAKE_CHAOS_SEED": str(seed)}
     environ.update(env or {})
+    # This import brings the web framework in (FrameworkTripwire lives in
+    # vendorfake.asgi), and it is paid deliberately: `framework_answered` must
+    # be wired at unit construction or `/__unit/health` reports a literal 0
+    # rather than a measurement. No *application* is built until
+    # `serve_in_thread` asks for one.
+    from vendorfake.asgi import FrameworkTripwire
+
+    tripwire = FrameworkTripwire()
     built = create_unit(
         vendor=vendor,
         profile=profile,
         env=environ,
         sink=sink,
         logger=JsonLogger("warn") if logger is None else logger,
+        framework_answered=tripwire.get,
     )
     try:
         with httpx.Client(transport=UnitTransport(built), base_url=IN_PROCESS_BASE_URL) as client:
@@ -266,6 +291,7 @@ def unit(
                 client=client,
                 seed=_seed_of(built),
                 unit=built,
+                tripwire=tripwire,
             )
     finally:
         built.stop()
@@ -276,15 +302,17 @@ def serve_in_thread(started: StartedUnit, *, host: str = "127.0.0.1", port: int 
     """A real server in front of ``started``'s unit, on a background thread.
 
     Yields a second :class:`Driver` onto the *same* unit, so state written
-    through either client is visible through the other. The import is local
-    because this is the only function here that needs the web framework, and
-    :func:`unit` alone should not pay for it.
+    through either client is visible through the other.
+
+    The application is handed the unit's own tripwire, so
+    ``framework_answered`` in ``/__unit/health`` is a measurement here: a
+    request the framework answers instead of the unit moves it.
     """
     from vendorfake.asgi import create_app
     from vendorfake.asgi import serve_in_thread as serve_app
 
     with (
-        serve_app(create_app(started.unit), host=host, port=port) as base_url,
+        serve_app(create_app(started.unit, tripwire=started.tripwire), host=host, port=port) as base_url,
         httpx.Client(base_url=base_url) as client,
     ):
         yield Driver(

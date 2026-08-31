@@ -18,9 +18,9 @@ test of its own (``tests/unit/testing``) that sends the same request through
 this transport and through a real server and compares the echoed bytes. The
 one normalisation with room to differ is repeated headers:
 ``vendorfake.asgi.adapt.request_headers`` joins them with ``", "``, and so
-does :func:`_headers` below. It is mirrored rather than imported because that
-helper takes a Starlette ``Request``, and importing the adapter here would
-make ``unit()`` pay for the web framework.
+does :func:`_headers` below. It is mirrored rather than imported because the
+adapter's helper takes a Starlette ``Request``, which an ``httpx`` transport
+does not have.
 
 WHY NOT ``httpx.ASGITransport``. It exists and it would exercise the FastAPI
 adapter, but it is asynchronous only: ``httpx.Client`` cannot use it, and a
