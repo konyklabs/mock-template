@@ -72,6 +72,7 @@ at all.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -92,6 +93,7 @@ from vendorfake.toast.model.build import (
 )
 from vendorfake.toast.model.common import validate_body, validate_items
 from vendorfake.toast.model.dates import business_date, parse_business_date, parse_rest_date
+from vendorfake.toast.model.money import to_dollars
 from vendorfake.toast.model.order import (
     AppliedDiscountRequest,
     DeliveryInfoRequest,
@@ -102,7 +104,7 @@ from vendorfake.toast.model.order import (
 )
 from vendorfake.toast.model.pricing import discount_amount, taxes_on
 from vendorfake.toast.surface.common import RESTAURANT_AUTH, ToastDeps, int_param, is_guid, now_ms, require_restaurant
-from vendorfake.toast.surface.payments import PaymentBatch, add_payment, payments_for, settle_order
+from vendorfake.toast.surface.payments import PaymentBatch, add_payment, covered_cents, payments_for, settle_order
 
 __all__ = [
     "CAPABILITY",
@@ -528,16 +530,6 @@ class ToastOrdersSurface:
         _assert_not_voided(order)
         check = _check_of(order, args.params["checkGuid"])
         _CHECK_MACHINE.assert_mutable(str(check["paymentStatus"]), f"Check {check['guid']}")
-        if check["paymentStatus"] == CheckPaymentStatus.PAID.value:
-            # Same rule, same reason, as a selection on a PAID check: a
-            # discount would drop totalAmount below what was already paid and
-            # the check's amounts would no longer match its payments
-            # (konyklabs/roadmap#39 review, B2).
-            raise UnitError(
-                UnitErrorKind.INVALID_VALUE,
-                detail=f"Check {check['guid']} is PAID; a discount cannot be applied to a paid check.",
-                field="checkGuid",
-            )
         index = MenuIndex.from_store(ctx.store, restaurant.id)
         wanted_type = "CHECK" if selection_guid is None else "ITEM"
         target = check if selection_guid is None else selection_by_guid(check, selection_guid)
@@ -571,38 +563,65 @@ class ToastOrdersSurface:
                 )
             sources.append((source, request))
         now = now_ms(ctx)
-        applied = [
-            {
-                "guid": self._deps.ids.applied_discount(),
-                "name": source.get("name"),
-                "discountAmount": 0,
-                "discount": {"guid": str(source["id"]), "entityType": "Discount"},
-                "triggers": []
-                if selection_guid is None
-                else [
-                    {
-                        "selection": {"guid": selection_guid, "entityType": "MenuItemSelection"},
-                        "quantity": target.get("quantity"),
-                    }
-                ],
-                "appliedPromoCode": request.appliedPromoCode,
-            }
-            for source, request in sources
-        ]
 
-        def apply(draft: Entity) -> None:
-            draft_check = _check_of(draft, check["guid"])
+        def built(mint: Any) -> list[dict[str, Any]]:
+            return [
+                {
+                    "guid": None if mint is None else mint(),
+                    "name": source.get("name"),
+                    "discountAmount": 0,
+                    "discount": {"guid": str(source["id"]), "entityType": "Discount"},
+                    "triggers": []
+                    if selection_guid is None
+                    else [
+                        {
+                            "selection": {"guid": selection_guid, "entityType": "MenuItemSelection"},
+                            "quantity": target.get("quantity"),
+                        }
+                    ],
+                    "appliedPromoCode": request.appliedPromoCode,
+                }
+                for source, request in sources
+            ]
+
+        def apply_to(draft_check: dict[str, Any], rows: list[dict[str, Any]]) -> None:
             if selection_guid is None:
-                draft_check["appliedDiscounts"] = [*draft_check.get("appliedDiscounts", []), *applied]
+                draft_check["appliedDiscounts"] = [*draft_check.get("appliedDiscounts", []), *rows]
             else:
                 selection = selection_by_guid(draft_check, selection_guid)
                 assert selection is not None
-                selection["appliedDiscounts"] = [*selection.get("appliedDiscounts", []), *applied]
+                selection["appliedDiscounts"] = [*selection.get("appliedDiscounts", []), *rows]
                 _reprice_selection(selection, index)
                 selection["modifiedDate"] = now
             draft_check["modifiedDate"] = now
             retotal_check(draft_check, index)
-            draft["modifiedDate"] = now
+
+        # THE INVARIANT (vendorfake#30 gate, finding 1, superseding the B2
+        # PAID-only guard): a discount may not reduce totalAmount below what
+        # the check's payments already cover -- which subsumes PAID (fully
+        # covered) and a PARTIAL payment alike. Judged on a preview, before an
+        # id is drawn or anything is written, so the refusal leaves no trace.
+        covered = covered_cents(ctx, check)
+        preview = copy.deepcopy(check)
+        apply_to(preview, built(None))
+        new_total = int(preview.get("totalAmount", 0))
+        if new_total < covered:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=(
+                    f"Check {check['guid']} already has {to_dollars(covered)} paid; a discount cannot reduce "
+                    f"its totalAmount to {to_dollars(new_total)}, below what is already paid."
+                ),
+                field="checkGuid",
+                info={"covered_cents": covered, "would_total_cents": new_total},
+            )
+        applied = built(self._deps.ids.applied_discount)
+
+        def apply(draft: Entity) -> None:
+            apply_to(_check_of(draft, check["guid"]), applied)
+            # Re-settle so paymentStatus stays truthful: a discount that
+            # brings the total down TO what is covered makes the check PAID.
+            settle_order(draft, ctx)
 
         op = "CheckDiscountsPost" if selection_guid is None else "SelectionDiscountsPost"
         updated = ctx.store.collection(COL.orders).update(order["id"], apply, meta={"operation_id": op})

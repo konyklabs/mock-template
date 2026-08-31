@@ -75,6 +75,7 @@ __all__ = [
     "PaymentBatch",
     "ToastPaymentsSurface",
     "add_payment",
+    "covered_cents",
     "payment_routes",
     "payments_for",
     "settle_order",
@@ -227,7 +228,10 @@ class ToastPaymentsSurface:
         return json_(project_payment(updated))
 
     def list_payments(self, args: HandlerArgs) -> ReplyInit:
+        from vendorfake.toast.surface.orders import _client_id
+
         restaurant = require_restaurant(args)
+        client = _client_id(args)
         given = {name: args.query(name) for name in ("paidBusinessDate", "refundBusinessDate", "voidBusinessDate")}
         present = [name for name, value in given.items() if value is not None]
         if len(present) != 1:
@@ -248,15 +252,29 @@ class ToastPaymentsSurface:
             return False  # refunds are not modelled; nothing was refunded on any date
 
         rows = args.ctx.store.collection(COL.payments).all()
-        return json_([str(row["id"]) for row in rows if row.get("restaurant_guid") == restaurant.id and matches(row)])
+        return json_(
+            [
+                str(row["id"])
+                for row in rows
+                if row.get("restaurant_guid") == restaurant.id and row.get("client_id") == client and matches(row)
+            ]
+        )
 
     def get_payment(self, args: HandlerArgs) -> ReplyInit:
+        from vendorfake.toast.surface.orders import _client_id
+
         restaurant = require_restaurant(args)
         guid = args.params["guid"]
         if not is_guid(guid):
             raise UnitError(UnitErrorKind.BAD_REQUEST, detail="The GUID was malformed", field="guid")
         stored = args.ctx.store.collection(COL.payments).get(guid)
-        if stored is None or stored.get("restaurant_guid") != restaurant.id:
+        if (
+            stored is None
+            or stored.get("restaurant_guid") != restaurant.id
+            or stored.get("client_id") != _client_id(args)
+        ):
+            # Another client's payment is as absent as none: the same
+            # visibility rule load_order enforces for the order itself.
             raise UnitError(UnitErrorKind.NOT_FOUND, detail=f"Payment {guid} was not found.", field="guid")
         return json_(project_payment(stored))
 
@@ -265,7 +283,7 @@ def payment_routes(deps: ToastDeps) -> tuple[Route, ...]:
     return ToastPaymentsSurface(deps).routes()
 
 
-def _covered_cents(ctx: UnitContext, check: Mapping[str, Any]) -> int:
+def covered_cents(ctx: UnitContext, check: Mapping[str, Any]) -> int:
     """What the store's non-voided payments already put on ``check``."""
     guid = check.get("guid")
     if not isinstance(guid, str):
@@ -320,7 +338,7 @@ def add_payment(
             detail=f"Check {check.get('guid')} is {check.get('paymentStatus')} and takes no further payment.",
             field=f"{field}amount",
         )
-    already_covered = _covered_cents(ctx, check) + batch.covered.get(id(check), 0)
+    already_covered = covered_cents(ctx, check) + batch.covered.get(id(check), 0)
     total = int(check.get("totalAmount", 0))
     if already_covered >= total and total > 0:
         # JUDGMENT: the earlier elements of this very array already cover the
@@ -353,6 +371,10 @@ def add_payment(
     paid_at = now if request.paidDate is None else parse_rest_date(request.paidDate, field=f"{field}paidDate")
     document: dict[str, Any] = {
         "restaurant_guid": restaurant.id,
+        # The documented order visibility rule -- an integration sees only
+        # what it submitted -- holds for the order's payments too; stamped so
+        # the payment reads can enforce it (vendorfake#30 gate, finding 3).
+        "client_id": order.get("client_id"),
         "orderGuid": order.get("id"),
         "checkGuid": check.get("guid"),
         "externalId": request.externalId,

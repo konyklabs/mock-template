@@ -67,7 +67,18 @@ def parse_rest_date(text: str, *, field: str) -> int:
     zone = matched.group("zone")
     zone = "+00:00" if zone == "Z" else (zone if ":" in zone else f"{zone[:3]}:{zone[3:]}")
     millis = (matched.group("ms") or "0").ljust(3, "0")[:3]
-    moment = datetime.fromisoformat(f"{matched.group('date')}T{matched.group('time')}.{millis}000{zone}")
+    try:
+        moment = datetime.fromisoformat(f"{matched.group('date')}T{matched.group('time')}.{millis}000{zone}")
+    except ValueError:
+        # The regex checks the SHAPE only; February 30th, month 13, 25:99:99
+        # and a +99:99 offset all pass it and fail here. The promise is the
+        # same 400 naming the field, never a 500 with a Python message.
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"{field} is not a real instant: the date, time or offset is out of range.",
+            field=field,
+            info={"supplied": text},
+        ) from None
     return math.floor((moment - _EPOCH).total_seconds() * 1000)
 
 

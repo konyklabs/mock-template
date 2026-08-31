@@ -39,6 +39,26 @@ def test_a_parsed_instant_round_trips_through_the_rest_spelling() -> None:
     assert parse_rest_date(rest_date(NOON_15_JAN_2025_UTC_MS + 123), field="x") == NOON_15_JAN_2025_UTC_MS + 123
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "2025-02-30T14:30:00.000Z",  # February 30th: the shape passes, the calendar refuses
+        "2025-13-01T14:30:00.000Z",  # month 13
+        "2025-01-15T25:99:99.000Z",  # an impossible time
+        "2025-01-15T14:30:00.000+9999",  # an out-of-range offset
+    ],
+)
+def test_an_impossible_instant_is_the_same_400_not_a_500(text: str) -> None:
+    """The regex checks the shape only; these pass it and must still be the
+    documented 400 naming the field, never an escaped ValueError
+    (vendorfake#30 gate, finding 2)."""
+    with pytest.raises(UnitError) as caught:
+        parse_rest_date(text, field="startDate")
+    assert caught.value.kind is UnitErrorKind.INVALID_VALUE
+    assert caught.value.field == "startDate"
+    assert "out of range" in str(caught.value)
+
+
 @pytest.mark.parametrize("text", ["", "2025-01-15", "yesterday", "2025-01-15T14:30:00", "1736944200000"])
 def test_a_wrong_spelling_is_a_400_naming_the_field(text: str) -> None:
     with pytest.raises(UnitError) as caught:

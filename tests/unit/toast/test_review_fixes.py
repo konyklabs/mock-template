@@ -101,28 +101,81 @@ def test_f4_the_same_rule_holds_on_create(h: Harness) -> None:
 
 
 def test_b2_a_paid_check_refuses_discounts_at_both_levels(h: Harness) -> None:
-    """A discount on a paid check would drop totalAmount below what was paid
-    (8.99/9.55 paid 9.55 -> 8.65 with payments [9.55]); refused like a
-    selection on a paid check, and the amounts never move."""
+    """The covered invariant on a fully paid check: 9.55 paid, so any
+    reduction is refused at both levels, and the amounts never move."""
     order = h.post("/orders/v2/orders", order_body()).json()
     guid, check = order["guid"], order["checks"][0]["guid"]
     selection = order["checks"][0]["selections"][0]["guid"]
     assert h.post(f"/orders/v2/orders/{guid}/checks/{check}/payments", [dict(OTHER)]).status == 200
     before = h.journal_len()
+    ids = drawn(h)
     check_level = h.post(
         f"/orders/v2/orders/{guid}/checks/{check}/appliedDiscounts", [{"discount": {"guid": c.DISCOUNT_REGULARS_GUID}}]
     )
     assert check_level.status == 400, check_level.text
-    assert "PAID" in check_level.json()["message"] and "discount" in check_level.json()["message"]
+    assert "below what is already paid" in check_level.json()["message"]
+    assert check_level.json()["unit_error"]["covered_cents"] == 955
     selection_level = h.post(
         f"/orders/v2/orders/{guid}/checks/{check}/selections/{selection}/appliedDiscounts",
         [{"discount": {"guid": c.DISCOUNT_SOUP_GUID}, "appliedPromoCode": "SOUP"}],
     )
     assert selection_level.status == 400
-    assert h.journal_len() == before
+    assert h.journal_len() == before and drawn(h) == ids
     after = h.get(f"/orders/v2/orders/{guid}").json()["checks"][0]
     assert after["totalAmount"] == 9.55 and after["appliedDiscounts"] == []
     assert sum(p["amount"] for p in after["payments"]) == after["totalAmount"]
+
+
+def test_b2_the_covered_invariant_holds_on_a_partially_paid_check_too(h: Harness) -> None:
+    """The gate's counter-example (vendorfake#30, finding 1): 5.00 of 9.55
+    paid leaves the check OPEN, which the old PAID-only guard waved through.
+    A discount that keeps totalAmount at or above 5.00 is legal; one that
+    would drop it below is refused at either level, writing nothing."""
+    order = h.post("/orders/v2/orders", order_body()).json()
+    guid, check = order["guid"], order["checks"][0]["guid"]
+    selection = order["checks"][0]["selections"][0]["guid"]
+    partial = h.post(f"/orders/v2/orders/{guid}/checks/{check}/payments", [{**OTHER, "amount": 5.0}]).json()
+    assert partial["checks"][0]["paymentStatus"] == "OPEN"
+    before = h.journal_len()
+    wipeout = h.post(
+        f"/orders/v2/orders/{guid}/checks/{check}/selections/{selection}/appliedDiscounts",
+        [{"discount": {"guid": c.DISCOUNT_SOUP_GUID}, "appliedPromoCode": "SOUP"}],
+    )
+    assert wipeout.status == 400, wipeout.text
+    assert "below what is already paid" in wipeout.json()["message"]
+    assert wipeout.json()["unit_error"] == {
+        "covered_cents": 500,
+        "would_total_cents": 0,
+        "kind": "invalid_value",
+        "status_provenance": "judgment",
+        "field": "checkGuid",
+    }
+    assert h.journal_len() == before
+    # 10% off keeps the total (8.65) above the 5.00 covered: legal, still OPEN.
+    tenner = h.post(
+        f"/orders/v2/orders/{guid}/checks/{check}/appliedDiscounts", [{"discount": {"guid": c.DISCOUNT_REGULARS_GUID}}]
+    )
+    assert tenner.status == 200, tenner.text
+    after = tenner.json()["checks"][0]
+    assert after["totalAmount"] == 8.65 and after["paymentStatus"] == "OPEN"
+
+
+def test_b2_a_discount_that_settles_the_check_exactly_marks_it_paid(h: Harness) -> None:
+    """Pay 8.65 of 9.55, then take 10% off: the new total equals what is
+    covered, so the discount is legal AND the re-settle promotes the check to
+    PAID with paidDate set -- paymentStatus stays truthful."""
+    order = h.post("/orders/v2/orders", order_body()).json()
+    guid, check = order["guid"], order["checks"][0]["guid"]
+    paid = h.post(f"/orders/v2/orders/{guid}/checks/{check}/payments", [{**OTHER, "amount": 8.65}]).json()
+    assert paid["checks"][0]["paymentStatus"] == "OPEN" and "paidDate" not in paid
+    settled = h.post(
+        f"/orders/v2/orders/{guid}/checks/{check}/appliedDiscounts", [{"discount": {"guid": c.DISCOUNT_REGULARS_GUID}}]
+    )
+    assert settled.status == 200, settled.text
+    after = settled.json()
+    assert after["checks"][0]["totalAmount"] == 8.65
+    assert after["checks"][0]["paymentStatus"] == "PAID"
+    assert after["checks"][0]["paidDate"] and after["paidDate"]
 
 
 def test_f5_a_tax_exempt_check_agrees_with_its_selections(h: Harness) -> None:
@@ -223,3 +276,75 @@ def test_f6_a_dangling_seeded_pre_modifier_is_refused_at_parse_by_path() -> None
         parse_seed_document(nested)
     info = getattr(caught.value, "info", None)
     assert info is not None and info["path"] == "orders[0].checks[0].selections[0].modifiers[0].preModifier"
+
+
+def test_g2_an_impossible_date_is_a_400_on_every_route_family(h: Harness) -> None:
+    """February 30th through the wire, one route per family that parses a
+    caller-supplied instant: always the documented 400 naming the field,
+    never an escaped ValueError-500 (vendorfake#30 gate, finding 2)."""
+    bad = "2025-02-30T14:30:00.000Z"
+    probes = [
+        ("orders", h.post("/orders/v2/prices", order_body(openedDate=bad)), "openedDate"),
+        (
+            "ordersBulk",
+            h.get("/orders/v2/ordersBulk", query={"startDate": bad, "endDate": "2025-03-01T00:00:00.000Z"}),
+            "startDate",
+        ),
+        ("config", h.get("/config/v2/taxRates", query={"lastModified": bad}), "lastModified"),
+        (
+            "partners",
+            h.api.get("/partners/v1/restaurants", query={"lastModified": bad}, headers=h.bearer_only),
+            "lastModified",
+        ),
+    ]
+    for family, response, field in probes:
+        assert response.status == 400, (family, response.text)
+        assert response.headers["x-unit-error"] == "invalid_value", family
+        assert response.json()["unit_error"]["field"] == field, family
+        assert "out of range" in response.json()["message"], family
+    order = h.post("/orders/v2/orders", order_body()).json()
+    payment = h.post(
+        f"/orders/v2/orders/{order['guid']}/checks/{order['checks'][0]['guid']}/payments",
+        [{**OTHER, "paidDate": bad}],
+    )
+    assert payment.status == 400 and payment.json()["unit_error"]["field"] == "[0].paidDate"
+
+
+def _second_client(h: Harness) -> dict[str, str]:
+    """A live token for a DIFFERENT client, paired with the restaurant header
+    -- the supported two-client configuration the seed schema allows."""
+    from vendorfake.toast.entities import TokenEntity
+    from vendorfake.toast.seed.constants import SEED_PARTNER_GUID
+    from vendorfake.toast.surface.common import RESTAURANT_HEADER
+
+    entity = TokenEntity(
+        id="tok_client_b",
+        access_token="client-b-token",
+        client_id="someone-else",
+        partner_guid=SEED_PARTNER_GUID,
+        expires_at_ms=2**53,
+        scopes=("orders:read", "orders.payments:write"),
+    )
+    h.unit.context.store.collection("tokens").insert(entity.to_entity(), {"seed": True, "operation_id": "TestSeed"})
+    return {"authorization": "Bearer client-b-token", RESTAURANT_HEADER.lower(): c.SEED_RESTAURANT_GUID}
+
+
+def test_g3_payments_are_scoped_to_the_client_that_submitted_them(h: Harness) -> None:
+    """The documented visibility rule -- an integration sees only what it
+    submitted -- now covers the payment reads too (vendorfake#30 gate,
+    finding 3): client B is refused A's order AND A's payment, by guid and by
+    list, so the card's last four digits never leak across clients."""
+    order = h.post("/orders/v2/orders", order_body()).json()
+    guid, check = order["guid"], order["checks"][0]["guid"]
+    paid = h.post(f"/orders/v2/orders/{guid}/checks/{check}/payments", [dict(OTHER)]).json()
+    payment = paid["checks"][0]["payments"][0]
+    b = _second_client(h)
+    assert h.api.get(f"/orders/v2/orders/{guid}", headers=b).status == 404  # the order rule, unchanged
+    stolen = h.api.get(f"/orders/v2/payments/{payment['guid']}", headers=b)
+    assert stolen.status == 404, stolen.text
+    listed = h.api.get("/orders/v2/payments", query={"paidBusinessDate": str(payment["paidBusinessDate"])}, headers=b)
+    assert listed.status == 200 and listed.json() == []
+    # The submitting client still sees both.
+    assert h.get(f"/orders/v2/payments/{payment['guid']}").status == 200
+    mine = h.get("/orders/v2/payments", query={"paidBusinessDate": str(payment["paidBusinessDate"])})
+    assert mine.json() == [payment["guid"]]
