@@ -27,6 +27,7 @@ from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv
 from vendorfake.conformance.registry import check
 from vendorfake.conformance.types import ConformanceFailure, ConformanceSkip, Requires, require
 from vendorfake.core.capability.gates import CoreCapability
+from vendorfake.core.chaos.rules import BUILTIN_FAULTS
 
 __all__ = [
     "delivery_headers_are_the_vendors_own",
@@ -688,6 +689,10 @@ def _observe_drop(env: CheckEnv) -> str:
     return "drop: one 'dropped' record, nothing delivered"
 
 
+_CORE_WEBHOOK_FAULTS = frozenset(fault.name for fault in BUILTIN_FAULTS if fault.scope == "webhook")
+"""The specification's own delivery-fault vocabulary, so the published list is
+checked against the contract rather than against itself."""
+
 _OBSERVATIONS: dict[str, tuple[Callable[[CheckEnv], str], dict[str, Any]]] = {
     "webhook.duplicate": (_observe_duplicate, {}),
     "webhook.delay": (_observe_delay, {"delay_ms": _DELAY_MS}),
@@ -725,6 +730,20 @@ def every_delivery_fault_has_its_effect(env: CheckEnv) -> str:
     """
     published = [str(fault["name"]) for fault in env.info()["chaos"]["faults"] if fault["scope"] == "webhook"]
     require(published, "GET /__unit/info publishes no webhook-scope fault, so there is nothing to observe.")
+    # The list is cross-checked against the core's own fault catalogue -- the
+    # same shape as C11's core_gates comparison -- because a fault list read
+    # from the unit under test is otherwise a list the unit can shorten:
+    # publish one fault, implement one fault, and "1 delivery faults
+    # observed" reads as a pass. BUILTIN_FAULTS is the specification's
+    # vocabulary, imported exactly as CoreCapability is.
+    missing = sorted(_CORE_WEBHOOK_FAULTS - set(published))
+    require(
+        not missing,
+        f"GET /__unit/info publishes {sorted(published)} as its webhook-scope faults and the core's "
+        f"catalogue (core/chaos/rules.py::BUILTIN_FAULTS) declares {sorted(_CORE_WEBHOOK_FAULTS)}: "
+        f"{missing} are missing. A fault dropped from the published list would silently drop out of "
+        f"this observation too, so under-declaring is a failure, not a smaller contract.",
+    )
     unknown = sorted(set(published) - set(_OBSERVATIONS))
     require(
         not unknown,

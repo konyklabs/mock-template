@@ -1,4 +1,4 @@
-"""Forty-one units, each broken in exactly one way, and the check each must trip.
+"""Forty-two units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -1473,4 +1473,32 @@ the first C24's precondition ("a second DECLARED scope exists") then found
 nothing to compare and reported a SKIP: the check was switched off by the
 defect it hunts. The precondition now asks only for two idempotent routes,
 and declarations that have all collapsed to one string are the finding.
+"""
+
+
+def _under_declare_webhook_faults(document: dict[str, Any]) -> dict[str, Any]:
+    chaos = dict(document["chaos"])
+    faults = [dict(fault) for fault in chaos["faults"]]
+    webhook = [fault["name"] for fault in faults if fault["scope"] == "webhook"]
+    keep = set(webhook[:1])
+    chaos["faults"] = [fault for fault in faults if fault["scope"] != "webhook" or fault["name"] in keep]
+    return {**document, "chaos": chaos}
+
+
+register(
+    Mutant(
+        id="M42",
+        name="webhook-fault-list-under-declares",
+        defect="GET /__unit/info publishes one webhook-scope fault where the core catalogue declares five.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C29"}),
+        control=replace_control_route("GET", "/__unit/info", rewrite_document(_under_declare_webhook_faults)),
+    )
+)
+"""The list C29 walks, shortened at the source (review of konyklabs/roadmap#15).
+
+C29 reads its fault list from the unit under test, so a unit that published
+one fault and implemented one fault produced "1 delivery faults observed" and
+a pass. The list is now cross-checked against BUILTIN_FAULTS -- the same
+shape as C11's core_gates comparison -- so under-declaring is a failure.
 """
