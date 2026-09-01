@@ -158,10 +158,14 @@ describe("toast", () => {
     // the real API: it is not an authentication failure, so logging in again
     // cannot fix it. Send the header. (The exact status and message are the
     // unit's, and are pinned in the unit's own tests, not in an example.)
-    const noHeader = await asPartner.get("/menus/v3/menus");
+    const noHeader = await asPartner.get<{ unit_error: { reason: string } }>("/menus/v3/menus");
     expect(noHeader.status, noHeader.text).not.toBe(401);
     expect(noHeader.status).toBeGreaterThanOrEqual(400);
     expect(noHeader.status).toBeLessThan(500);
+    // Which refusal it is, keyed on the fake's own `unit_error` sidecar rather
+    // than on the sentence in `message`: the sidecar is a stable contract of
+    // this fake, the wording is not Toast's and not promised by anyone.
+    expect(noHeader.body.unit_error.reason).toBe("restaurant_header_missing");
 
     // A missing bearer, though, is the documented 401.
     const named = api(inject("vendorfake").toast, { [toast.restaurantHeader]: restaurant });
@@ -180,8 +184,13 @@ describe("toast", () => {
     const quote = quoted.body.checks[0];
     expect([quote.amount, quote.taxAmount, quote.totalAmount]).toEqual([8.99, 0.56, 9.55]);
     expect(quote.selections[0].appliedTaxes[0].rate).toBe(0.0625);
-    // The bytes, not the parse: a JSON number of dollars. Integer cents (955)
-    // or a string ("9.55") would both survive the assertions above.
+    // A JSON number of dollars, held two ways. `typeof` is the one that does
+    // not care how the server spaces its JSON; the raw-bytes check is the
+    // proof that 9.55 crossed the wire as a number rather than as "9.55", and
+    // it only holds while the serializer stays compact. (`Number.isInteger`
+    // alone would not do it: it is false for a string too, so it catches
+    // integer cents and nothing else.)
+    expect(typeof quote.totalAmount).toBe("number");
     expect(quoted.text).toContain('"totalAmount":9.55');
     expect(Number.isInteger(quote.totalAmount)).toBe(false);
     expect(quote.amount + quote.taxAmount).toBeCloseTo(quote.totalAmount, 10);
@@ -196,10 +205,12 @@ describe("toast", () => {
 
     const types = await asSeed.get<Array<{ guid: string; name: string }>>("/config/v2/alternatePaymentTypes");
     expect(types.status, types.text).toBe(200);
+    const external = types.body.find((t) => t.name === "External");
+    expect(external, "no External alternate payment type is configured").toBeDefined();
     // Payments are a list even when there is one of them.
     const paid = await asSeed.post<Order>(
       `/orders/v2/orders/${created.body.guid}/checks/${check.guid}/payments`,
-      [{ type: "OTHER", amount: check.totalAmount, tipAmount: 0, otherPayment: { guid: types.body[0].guid } }],
+      [{ type: "OTHER", amount: check.totalAmount, tipAmount: 0, otherPayment: { guid: external!.guid } }],
     );
     expect(paid.status, paid.text).toBe(200);
     const [payment] = paid.body.checks[0].payments;
@@ -257,7 +268,7 @@ describe("toast", () => {
       params: { retry_after_seconds: 0 },
     });
     expect(armed.status, armed.text).toBe(200);
-    const first = await asSeed.get<{ status: number; message: string }>("/menus/v3/metadata");
+    const first = await asSeed.get<{ status: number }>("/menus/v3/metadata");
     expect(first.status).toBe(429); // documented, with Retry-After (apiRateLimiting.html)
     expect(first.headers.get("retry-after")).toBe("0"); // the delay armed above; a real 429's is Toast's
     expect(first.body.status).toBe(429);

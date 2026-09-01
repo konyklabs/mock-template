@@ -22,7 +22,10 @@ after. Which way is chosen by the environment:
 
 On a Mac with colima, testcontainers-node does not read Docker contexts, so
 set both `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and
-`TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock`.
+`TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock`. If the reaper
+then fails to start — it cannot always bind that socket, and the error names
+`operation not supported` — add `TESTCONTAINERS_RYUK_DISABLED=true`, and clean
+up any containers it would have reaped yourself.
 
 ## What is here
 

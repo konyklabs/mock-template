@@ -157,6 +157,10 @@ def test_a_bearer_without_the_restaurant_header_is_refused_but_not_as_bad_auth(t
     unscoped = toast.client.get("/menus/v3/menus", headers=seed.bearer_only)
     assert unscoped.status_code != 401, unscoped.text
     assert 400 <= unscoped.status_code < 500, unscoped.text
+    # Which refusal it is, keyed on the fake's own `unit_error` sidecar rather
+    # than on the sentence in `message`: the sidecar is a stable contract of
+    # this fake, the wording is not Toast's and not promised by anyone.
+    assert unscoped.json()["unit_error"]["reason"] == "restaurant_header_missing"
 
     # A missing bearer, though, is the documented 401.
     nameless = toast.client.get("/menus/v3/menus", headers=seed.restaurant_header)
@@ -189,6 +193,7 @@ def test_a_single_payment_is_still_sent_as_an_array(toast: StartedUnit) -> None:
     # and that nothing was written -- not this unit's 400 or its wording.
     refused = toast.client.post(path, headers=seed.auth, json=payment)
     assert 400 <= refused.status_code < 500, refused.text
+    assert refused.json()["unit_error"]["field"] == "body"  # the sidecar again: it is the body's shape
     still_open = toast.client.get(f"/orders/v2/orders/{seed.open_order_guid}", headers=seed.auth).json()
     assert still_open["checks"][0]["payments"] == []
 
@@ -208,8 +213,9 @@ def test_an_order_updated_webhook_is_delivered_and_verifies(toast: StartedUnit, 
 
     # Toast partners register a callback in the partner portal, and the fake's
     # stand-in for it demands HTTPS the way the portal does -- so a loopback
-    # receiver cannot be registered through it, and the control plane stands in
-    # instead, as it does for Clover.
+    # receiver cannot be registered through it at this unit's default
+    # configuration (the refusal names the `allow_insecure_callbacks` switch
+    # that lifts it), and the control plane stands in instead, as for Clover.
     portal = toast.client.post(
         "/__toast/webhooks/subscriptions", json={"url": receiver.url, "eventCategories": ["order_updated"]}
     )

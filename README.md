@@ -53,7 +53,7 @@ pip install "vendorfake @ git+https://github.com/konyklabs/vendorfake"
 # or, in a uv project:
 uv add "vendorfake @ git+https://github.com/konyklabs/vendorfake"
 
-vendorfake vendors            # -> clover, square
+vendorfake vendors            # -> clover, square, toast
 vendorfake serve --vendor square
 ```
 
@@ -162,10 +162,12 @@ Toast scopes a request to its restaurant with the
 `Toast-Restaurant-External-ID` **header** rather than a path segment, so
 there is no `seed.path()`: `seed.auth` carries the bearer and that header
 together, which is what every restaurant-scoped call needs. A bearer on its
-own is a 400, not a 401 — the token is fine, the request just never named a
-restaurant. Event types are `order_updated`, `menus_updated`, `in_stock`,
-`out_of_stock`, `low_quantity`, and deliveries are signed with an HMAC in
-`Toast-Signature`:
+own is refused, but not as bad auth — the token is fine, the request just
+never named a restaurant — so re-authenticating cannot fix it. This unit
+answers 400; Toast documents the 401 for a bad token and not what a *missing*
+header gets, so the status is a JUDGMENT labelled in `toast/auth.py`. Event
+types are `order_updated`, `menus_updated`, `in_stock`, `out_of_stock`,
+`low_quantity`, and deliveries are signed with an HMAC in `Toast-Signature`:
 
 ```python
 from vendorfake.testing import unit, webhook_receiver
@@ -227,17 +229,18 @@ Drive an uncompressed schedule with a virtual clock
 (`VENDORFAKE_CLOCK=virtual` and `advance_clock`) instead of draining.
 
 [`examples/pytest-consumer`](examples/pytest-consumer) is a complete
-standalone project — ten tests against Square and Clover, about a second —
-plus a Testcontainers variant against the image. `uv sync && uv run pytest`
-inside it.
+standalone project — seventeen tests across all three vendors, under two
+seconds — plus a Testcontainers variant against the image. `uv sync && uv run
+pytest` inside it.
 
 ### Vitest
 
 [`examples/vitest-consumer`](examples/vitest-consumer) is the same suite in
-TypeScript, sharing nothing with the fake but HTTP. Its `globalSetup` starts
-the container through testcontainers when `VENDORFAKE_IMAGE` is set, or
-`vendorfake serve` as a child process otherwise, and a webhook receiver the
-tests read raw bytes from. `npm install && npm test`.
+TypeScript — twelve tests, one vendor per file — sharing nothing with the fake
+but HTTP. Its `globalSetup` starts one fake per vendor, as a container through
+testcontainers when `VENDORFAKE_IMAGE` is set and as a `vendorfake serve` child
+process otherwise, and a webhook receiver the tests read raw bytes from.
+`npm install && npm test`.
 
 ### Seeded credentials
 
