@@ -290,6 +290,58 @@ def test_every_installed_vendor_ships_a_conformance_target_and_a_seed() -> None:
             assert "Authorization" in seed.auth, f"{vendor!r}'s seed.auth carries no bearer"
 
 
+def test_no_vendor_lets_a_control_plane_read_consume_or_wander() -> None:
+    """The gap class Toast's error catalogue was an instance of: a *read* on
+    the control plane that is not a pure read.
+
+    Two ways it went wrong at once, and both are checked for every installed
+    vendor rather than for Toast. ``GET /__unit/errors`` shaped all twenty
+    kinds through the live refusal path, so it drew twenty-one ids from the
+    vendor's request-id stream -- a diagnostic GET silently renumbered every
+    id in the caller's remaining scenario. And its 429 row carried
+    ``floor(now/1000)``, so two renderings disagreed across a wall-clock
+    second; that is what failed conformance C10 on CI, where the two bindings
+    are called far enough apart to straddle one.
+
+    The clock half is driven on a *virtual* clock advanced by an hour, which
+    is the same observation a slow runner makes and takes no wall time. Only
+    the catalogue is compared byte for byte: ``/__unit/info`` and
+    ``/__unit/health`` report the clock and the request counters, so moving is
+    what they are for, while a description of a static table has no such
+    excuse.
+    """
+    from vendorfake import available_vendors
+
+    for vendor in available_vendors():
+        with unit(vendor, env={"VENDORFAKE_CLOCK": "virtual"}) as driver:
+            first = driver.client.get("/__unit/errors")
+            driver.advance_clock(3_600_000)
+            second = driver.client.get("/__unit/errors")
+            assert second.content == first.content, (
+                f"{vendor}: GET /__unit/errors answered differently after the clock moved "
+                f"({len(first.content)} vs {len(second.content)} bytes)"
+            )
+
+            # No control-plane read may consume an id, on any vendor: a
+            # diagnostic GET that drew one would renumber everything the
+            # caller mints afterwards.
+            streams = {
+                name: getattr(driver.unit.context.vendor, name)
+                for name in ("ids", "request_ids")
+                if hasattr(driver.unit.context.vendor, name)
+            }
+            reads = [
+                row["path"]
+                for row in driver.client.get("/__unit/routes").json()["routes"]
+                if row["path"].startswith("/__unit/") and row["method"] == "GET"
+            ]
+            before = {name: stream.draw_count for name, stream in streams.items()}
+            for path in reads:
+                driver.client.get(path)
+            after = {name: stream.draw_count for name, stream in streams.items()}
+            assert after == before, f"{vendor}: {len(reads)} control-plane reads drew ids, {before} -> {after}"
+
+
 # ---------------------------------------------------------------------------
 # A URL: in a thread, and in a child process.
 # ---------------------------------------------------------------------------

@@ -772,8 +772,17 @@ class ErrorShaper(Protocol):
         """Turn a core error into the vendor's wire representation."""
         ...
 
-    def not_found(self, req: UnitRequest, ctx: UnitContext) -> ShapedError:
-        """Body for a path that matched no route at all."""
+    def not_found(self, req: UnitRequest, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
+        """Body for a path that matched no route at all.
+
+        ``describing`` is set only by ``GET /__unit/errors``, which renders
+        this body as a *description* rather than as a refusal that happened.
+        A shaper whose envelope carries a per-request field (an id, a
+        timestamp) must substitute a fixed value for it when the flag is set,
+        or that read-only route consumes state and its two bindings cannot
+        agree byte for byte. See ``CATALOGUE_PROBE_INFO_KEY``, which carries
+        the same signal into :meth:`shape`.
+        """
         ...
 
     def describe(self) -> Mapping[str, Mapping[str, Any]]:

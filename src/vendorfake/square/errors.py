@@ -403,12 +403,16 @@ class SquareErrorShaper:
         headers = mechanism_headers(err, retry_after_header=self._retry_after_header)
         return ShapedError(status=mapping.status, body=body, headers=headers)
 
-    def not_found(self, req: UnitRequest, ctx: UnitContext) -> ShapedError:
+    def not_found(self, req: UnitRequest, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
         """The body for a path that matched no route at all.
 
         It names the control route that lists the surface, because the most
         common cause of a 404 against a fake is a profile that does not serve
         the capability the caller assumed.
+
+        ``describing`` is accepted and ignored: Square's envelope carries no
+        per-request id or timestamp, so a described body and a real one are
+        already the same bytes.
         """
         return self.shape(
             UnitError(

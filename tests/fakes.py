@@ -68,7 +68,9 @@ class FakeErrors:
             body={"error": {"code": err.kind.value, "detail": err.detail, "field": err.field, "info": err.info}},
         )
 
-    def not_found(self, req: UnitRequest, ctx: UnitContext) -> ShapedError:
+    def not_found(self, req: UnitRequest, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
+        # `describing` accepted and ignored, as it is by any shaper whose
+        # envelope carries no per-request id or timestamp to freeze.
         return ShapedError(status=404, body={"error": {"code": "no_route", "path": req.path}})
 
     def describe(self) -> dict[str, dict[str, Any]]:

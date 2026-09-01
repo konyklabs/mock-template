@@ -126,6 +126,7 @@ from vendorfake.core.control.schemas import (
     snapshot_as_json,
 )
 from vendorfake.core.kernel.reply import json_
+from vendorfake.core.kernel.shaping import CATALOGUE_PROBE_INFO_KEY
 from vendorfake.core.kernel.types import (
     HandlerArgs,
     MagicTriggerSpec,
@@ -282,7 +283,18 @@ def control_plane_routes(
         described = ctx.vendor.errors.describe()
         shaped: list[dict[str, Any]] = []
         for kind in UnitErrorKind:
-            result = ctx.vendor.errors.shape(UnitError(kind, detail=f"conformance probe for {kind.value}"), ctx)
+            # Marked as a description, not a refusal: this route is a read, and
+            # a read that drew a request id would renumber the caller's
+            # scenario and leave the two bindings disagreeing. See
+            # CATALOGUE_PROBE_INFO_KEY.
+            result = ctx.vendor.errors.shape(
+                UnitError(
+                    kind,
+                    detail=f"conformance probe for {kind.value}",
+                    info={CATALOGUE_PROBE_INFO_KEY: True},
+                ),
+                ctx,
+            )
             provenance = described.get(kind.value, {}).get("provenance")
             if provenance is None:
                 # Unreachable after the unit's startup check of describe();
@@ -302,7 +314,7 @@ def control_plane_routes(
                     "headers": dict(result.headers),
                 }
             )
-        no_route = ctx.vendor.errors.not_found(args.req, ctx)
+        no_route = ctx.vendor.errors.not_found(args.req, ctx, describing=True)
         return json_(
             {
                 "count": len(shaped),

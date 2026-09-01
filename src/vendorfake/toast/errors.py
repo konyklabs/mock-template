@@ -67,6 +67,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from vendorfake.core.kernel.shaping import (
+    CATALOGUE_PROBE_INFO_KEY,
     Provenance,
     assert_error_table_total,
     mechanism_headers,
@@ -85,6 +86,8 @@ from vendorfake.toast.ids import ToastRequestIds
 from vendorfake.toast.model.error import ErrorMessageWire
 
 __all__ = [
+    "CATALOGUE_RATE_LIMIT_RESET",
+    "CATALOGUE_REQUEST_ID",
     "CODE_PAYMENT_AMOUNT_EMPTY",
     "RATE_LIMIT_BY_HEADER",
     "RATE_LIMIT_REMAINING_HEADER",
@@ -102,6 +105,35 @@ CODE_PAYMENT_AMOUNT_EMPTY = 10025
 
 TOAST_CODE_INFO_KEY = "toast_code"
 """``UnitError.info`` key a handler sets to put a specific ``code`` on the wire."""
+
+CATALOGUE_REQUEST_ID = "2ea769e2-0000-4000-8000-000000000000"
+"""The ``requestId`` on a *described* error, never on a real one.
+
+``GET /__unit/errors`` renders all twenty kinds plus the no-route body as a
+description of this table. Drawing a real id for each would have three costs,
+and did: a read-only GET would advance the request-id stream and renumber
+every id in the caller's remaining scenario; two identical GETs would disagree;
+and conformance C10, which compares the HTTP and in-process bindings byte for
+byte on exactly this route, could never pass.
+
+The prefix is the one the vendor's own example body shows
+(apiResponsesAndErrors.html, ``"requestId": "2ea769e2-..."``); the rest is
+zeroed to a nil-UUID tail so that nothing mistakes it for a drawn id. A real
+refusal still calls :meth:`ToastRequestIds.request_id` -- that stream is
+salted apart from the entity guids precisely so a refusal never renumbers a
+scenario, and this constant is the same promise for a description.
+"""
+
+CATALOGUE_RATE_LIMIT_RESET = "0"
+"""``X-Toast-RateLimit-Reset`` on a *described* 429.
+
+The live header is ``floor(now/1000) + retry_after``, so the catalogue also
+moved whenever a GET crossed a wall-clock second -- the same byte-identity
+break as the request id, on the same route, just rarer and therefore worse to
+debug. Zero is not a plausible reset epoch, which is the point: a description
+says the header exists and what shape it has, not when a window that never
+opened would close.
+"""
 
 RATE_LIMIT_BY_HEADER = "X-Toast-RateLimit-By"
 RATE_LIMIT_REMAINING_HEADER = "X-Toast-RateLimit-Remaining"
@@ -238,11 +270,14 @@ class ToastErrorShaper:
         info = dict(err.info or {})
         override = info.get(TOAST_CODE_INFO_KEY)
         code = override if isinstance(override, int) and not isinstance(override, bool) else mapping.code
+        # A described row must consume nothing a real refusal would -- neither
+        # an id from the stream nor the current second. See the two constants.
+        describing = bool(info.get(CATALOGUE_PROBE_INFO_KEY))
         body: dict[str, Any] = ErrorMessageWire(
             status=mapping.status,
             code=code,
             message=err.detail or mapping.message,
-            requestId=self._request_ids.request_id(),
+            requestId=CATALOGUE_REQUEST_ID if describing else self._request_ids.request_id(),
         ).wire()
         if self._sidecar:
             body["unit_error"] = unit_error_sidecar(err, mapping.provenance, field=err.field or None)
@@ -254,12 +289,23 @@ class ToastErrorShaper:
             retry_after = as_int(info.get("retry_after_seconds"), 1)
             headers[RATE_LIMIT_BY_HEADER] = "ENDPOINT"
             headers[RATE_LIMIT_REMAINING_HEADER] = "0"
-            headers[RATE_LIMIT_RESET_HEADER] = str(math.floor(ctx.clock.now() / 1000) + retry_after)
+            headers[RATE_LIMIT_RESET_HEADER] = (
+                CATALOGUE_RATE_LIMIT_RESET if describing else str(math.floor(ctx.clock.now() / 1000) + retry_after)
+            )
         return ShapedError(status=mapping.status, body=body, headers=headers)
 
-    def not_found(self, req: UnitRequest, ctx: UnitContext) -> ShapedError:
+    def not_found(self, req: UnitRequest, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
         """The body for a path that matched no route at all; it names the
-        control route that lists the surface."""
+        control route that lists the surface.
+
+        ``describing`` is the catalogue's, and only the catalogue's: this row
+        is the one body in ``GET /__unit/errors`` that does not come from the
+        table, so without the flag it would keep drawing a real request id
+        while the other twenty stopped.
+        """
+        info: dict[str, Any] = {"path": req.path, "method": req.method, "profile": ctx.config.profile}
+        if describing:
+            info[CATALOGUE_PROBE_INFO_KEY] = True
         return self.shape(
             UnitError(
                 UnitErrorKind.NOT_FOUND,
@@ -267,7 +313,7 @@ class ToastErrorShaper:
                     f"{req.method} {req.path} is not a route on this Toast unit. "
                     "GET /__unit/routes lists the surface this profile serves."
                 ),
-                info={"path": req.path, "method": req.method, "profile": ctx.config.profile},
+                info=info,
             ),
             ctx,
         )

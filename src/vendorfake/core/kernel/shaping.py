@@ -51,12 +51,31 @@ from vendorfake.core.util.json import compact
 from vendorfake.core.util.numbers import as_str
 
 __all__ = [
+    "CATALOGUE_PROBE_INFO_KEY",
     "DEFAULT_RETRY_AFTER",
     "Provenance",
     "assert_error_table_total",
     "mechanism_headers",
     "unit_error_sidecar",
 ]
+
+CATALOGUE_PROBE_INFO_KEY = "__catalogue_probe__"
+"""Set in ``UnitError.info`` when ``GET /__unit/errors`` is *describing* a kind
+rather than refusing a request.
+
+A catalogue row is a description of the table, not a refusal that happened, so
+shaping one must not consume anything a real refusal would -- an id drawn from
+a vendor stream, or the current time. A shaper that does both turns a
+read-only route into one that renumbers the caller's scenario, and makes C10's
+byte-for-byte comparison of the two bindings unsatisfiable: the catalogue then
+depends on how many refusals each binding happened to serve first, and on
+which wall-clock second each was rendered in. One vendor shipped exactly that
+pair, which is why this key exists rather than a convention.
+
+A shaper whose envelope carries no per-request field can ignore this key
+entirely. One that carries such a field substitutes a fixed, obviously
+synthetic value when the key is present, and says so at the site.
+"""
 
 Provenance = Literal["documented", "judgment"]
 """Where a row's HTTP status comes from. A real field, surfaced on the wire."""
