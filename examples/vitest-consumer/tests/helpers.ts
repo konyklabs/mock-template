@@ -111,3 +111,16 @@ export const clover = {
   employeeBaristaId: "EMPLBARISTA01",
   path: (suffix = "") => `/v3/merchants/HRVSTRYE12345${suffix}`,
 };
+
+/**
+ * Toast's are only the two readable strings a partner is issued. Everything
+ * else it needs is a guid, and a guid is the fake's to publish rather than
+ * this suite's to know: the restaurant comes from `/__unit/auth`, the menu and
+ * configuration ids from the menu and the configuration lists.
+ */
+export const toast = {
+  clientId: "unit-toast-client-id",
+  clientSecret: "unit-toast-client-secret",
+  /** Toast scopes by header, not by a path segment; lowercased to index `headers`. */
+  restaurantHeader: "toast-restaurant-external-id",
+};

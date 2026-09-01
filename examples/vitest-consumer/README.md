@@ -31,6 +31,7 @@ set both `DOCKER_HOST=unix://$HOME/.colima/default/docker.sock` and
 | `setup/global.ts` | Starts the fakes, and a webhook receiver in this process (test workers cannot host one a container can reach); deliveries are appended to a JSONL file the tests read, raw bytes intact |
 | `tests/square.test.ts` | Health; OAuth exchange → order → `POST /v2/payments` → COMPLETED; an `order.created` delivery whose HMAC is recomputed with `node:crypto` and compared with `timingSafeEqual`; a deterministic 429 |
 | `tests/clover.test.ts` | Token exchange → atomic order → payment → `locked`/`PAID`; an `O:CREATE` delivery with `X-Clover-Auth`; a transient 401 |
+| `tests/toast.test.ts` | Machine-client login → prices → order → payment, with the money asserted as decimal dollars on the wire (8.99 → 9.55, not 955); a bearer without `Toast-Restaurant-External-ID` as a 400 and no bearer as a 401; an `order_updated` delivery whose `Toast-Signature` is recomputed with `node:crypto`; a deterministic 429 |
 | `tests/helpers.ts` | A `fetch` wrapper and the seeded credentials and ids |
 
 In container mode the receiver is reached from inside the container through
