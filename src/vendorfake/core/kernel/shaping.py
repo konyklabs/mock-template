@@ -87,7 +87,19 @@ def assert_error_table_total(table: Mapping[UnitErrorKind, object] | Mapping[str
 
 def unit_error_sidecar(err: UnitError, provenance: Provenance, **extra: Any) -> dict[str, Any]:
     """The ``unit_error`` document for one error: its ``info``, then the
-    reserved keys, then whatever the vendor adds, ``None`` values dropped."""
+    reserved keys, then whatever the vendor adds, ``None`` values dropped.
+
+    **``UnitError.info`` is a published channel, and this is why.** Every key
+    in it reaches the wire verbatim, deliberately -- a consumer debugging this
+    fake gets the machine-readable reason without parsing prose, and a
+    vendor's own override travels here too. Nothing filters it, so nothing
+    internal may be put in it: a flag the core wants to send a shaper travels
+    as an argument to :meth:`ErrorShaper.shape`, where the type checker sees
+    it and the wire does not. This is a rule rather than a filter on purpose;
+    a reserved-prefix convention would be one more thing to remember at every
+    future call site, and stripping keys here would make ``info`` mean
+    something different depending on where you read it.
+    """
     return compact(
         {
             **dict(err.info or {}),

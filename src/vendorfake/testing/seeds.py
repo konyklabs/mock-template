@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-__all__ = ["CloverSeed", "SquareSeed", "seed_for"]
+__all__ = ["CloverSeed", "SquareSeed", "ToastSeed", "seed_for"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +114,68 @@ class CloverSeed:
         return f"/v3/merchants/{self.merchant_id}{suffix}"
 
 
+@dataclass(frozen=True, slots=True)
+class ToastSeed:
+    """The Toast scenario: one restaurant, a menu with three items, dining
+    options, a seeded open order with one check, two tokens and a webhook
+    subscription. Toast scopes a request with a **header**, not a path
+    segment, so there is no ``path()`` helper -- use :attr:`auth`, which
+    carries the bearer and the ``Toast-Restaurant-External-ID`` header
+    together, the way every restaurant-scoped call needs them."""
+
+    client_id: str
+    client_secret: str
+    partner_guid: str
+    #: Full scopes.
+    access_token: str
+    #: Reads only.
+    read_only_access_token: str
+    restaurant_guid: str
+    restaurant_name: str
+    management_group_guid: str
+    menu_guid: str
+    item_soup_guid: str
+    item_soup_price_cents: int
+    item_burger_guid: str
+    item_lemonade_guid: str
+    modifier_group_sides_guid: str
+    modifier_option_fries_guid: str
+    dining_option_dine_in_guid: str
+    dining_option_take_out_guid: str
+    alt_payment_external_guid: str
+    tax_rate_guid: str
+    open_order_guid: str
+    open_order_check_guid: str
+    webhook_subscription_id: str
+    #: The HMAC secret behind the ``Toast-Signature`` header.
+    webhook_secret: str
+    #: ``Toast-Restaurant-External-ID``, spelled as the vendor spells it.
+    restaurant_header_name: str
+    event_types: tuple[str, ...]
+
+    @property
+    def restaurant_header(self) -> dict[str, str]:
+        """Just the scoping header, for pairing with a token you minted."""
+        return {self.restaurant_header_name: self.restaurant_guid}
+
+    @property
+    def auth(self) -> dict[str, str]:
+        """Bearer plus the restaurant header -- what a restaurant-scoped
+        call sends."""
+        return {"Authorization": f"Bearer {self.access_token}", **self.restaurant_header}
+
+    @property
+    def read_only_auth(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.read_only_access_token}", **self.restaurant_header}
+
+    @property
+    def bearer_only(self) -> dict[str, str]:
+        """The token without the restaurant header, for the endpoints that
+        are not restaurant-scoped (and for asserting the refusal on the
+        ones that are)."""
+        return {"Authorization": f"Bearer {self.access_token}"}
+
+
 def _square(vendor_config: Mapping[str, object]) -> SquareSeed:
     from vendorfake.square.config import SquareConfig
     from vendorfake.square.events import SQUARE_EVENT_TYPES
@@ -182,11 +244,49 @@ def _clover(vendor_config: Mapping[str, object]) -> CloverSeed:
     )
 
 
-def seed_for(vendor: str, vendor_config: Mapping[str, object]) -> SquareSeed | CloverSeed | None:
+def _toast(vendor_config: Mapping[str, object]) -> ToastSeed:
+    from vendorfake.toast.config import ToastConfig
+    from vendorfake.toast.events import TOAST_EVENT_TYPES
+    from vendorfake.toast.seed import constants as c
+    from vendorfake.toast.surface.common import RESTAURANT_HEADER
+
+    config = ToastConfig.model_validate(dict(vendor_config))
+    return ToastSeed(
+        client_id=config.client_id,
+        client_secret=config.client_secret,
+        partner_guid=config.partner_guid,
+        access_token=c.SEED_ACCESS_TOKEN,
+        read_only_access_token=c.SEED_READ_ONLY_ACCESS_TOKEN,
+        restaurant_guid=c.SEED_RESTAURANT_GUID,
+        restaurant_name=c.SEED_RESTAURANT_NAME,
+        management_group_guid=c.SEED_MANAGEMENT_GROUP_GUID,
+        menu_guid=c.MENU_GUID,
+        item_soup_guid=c.ITEM_SOUP_GUID,
+        item_soup_price_cents=c.ITEM_SOUP_PRICE_CENTS,
+        item_burger_guid=c.ITEM_BURGER_GUID,
+        item_lemonade_guid=c.ITEM_LEMONADE_GUID,
+        modifier_group_sides_guid=c.MODIFIER_GROUP_SIDES_GUID,
+        modifier_option_fries_guid=c.MODIFIER_OPTION_FRIES_GUID,
+        dining_option_dine_in_guid=c.DINING_OPTION_DINE_IN_GUID,
+        dining_option_take_out_guid=c.DINING_OPTION_TAKE_OUT_GUID,
+        alt_payment_external_guid=c.ALT_PAYMENT_EXTERNAL_GUID,
+        tax_rate_guid=c.TAX_RATE_DEFAULT_GUID,
+        open_order_guid=c.SEED_ORDER_GUID,
+        open_order_check_guid=c.SEED_ORDER_CHECK_GUID,
+        webhook_subscription_id=c.SEED_WEBHOOK_SUBSCRIPTION_ID,
+        webhook_secret=c.SEED_WEBHOOK_SECRET,
+        restaurant_header_name=RESTAURANT_HEADER,
+        event_types=tuple(TOAST_EVENT_TYPES),
+    )
+
+
+def seed_for(vendor: str, vendor_config: Mapping[str, object]) -> SquareSeed | CloverSeed | ToastSeed | None:
     """The seed object for a built-in vendor, or ``None`` for one this module
     does not describe -- a third-party vendor publishes its own."""
     if vendor == "square":
         return _square(vendor_config)
     if vendor == "clover":
         return _clover(vendor_config)
+    if vendor == "toast":
+        return _toast(vendor_config)
     return None

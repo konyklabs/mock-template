@@ -8,7 +8,10 @@ from tests.unit.toast.conftest import fake_ctx
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind, UnitRequest
 from vendorfake.core.time.clock import Clock
 from vendorfake.toast.errors import (
+    CATALOGUE_RATE_LIMIT_RESET,
+    CATALOGUE_REQUEST_ID,
     CODE_PAYMENT_AMOUNT_EMPTY,
+    RATE_LIMIT_RESET_HEADER,
     TOAST_CODE_INFO_KEY,
     TOAST_ERROR_TABLE,
     ToastErrorShaper,
@@ -167,3 +170,65 @@ def test_describe_publishes_all_twenty_rows_with_codes() -> None:
     assert set(described) == {kind.value for kind in UnitErrorKind}
     assert described["forbidden_scope"]["status"] == 403
     assert described["forbidden_scope"]["code"] == TOAST_ERROR_TABLE[UnitErrorKind.FORBIDDEN_SCOPE].code
+
+
+# ---------------------------------------------------------------------------
+# Describing is not refusing: GET /__unit/errors must consume nothing.
+# ---------------------------------------------------------------------------
+
+
+def test_a_described_error_takes_the_placeholder_id_and_draws_nothing() -> None:
+    """The defect this pins: shaping a catalogue row drew a real request id,
+    so a read-only GET advanced the stream twenty-one times and renumbered
+    every id in the caller's remaining scenario."""
+    ids = ToastRequestIds(1)
+    subject = ToastErrorShaper(request_ids=ids, sidecar=False)  # type: ignore[arg-type]
+    before = ids.draw_count
+    described = subject.shape(UnitError(UnitErrorKind.NOT_FOUND), fake_ctx(), describing=True)
+    assert described.body["requestId"] == CATALOGUE_REQUEST_ID
+    assert ids.draw_count == before, f"describing drew {ids.draw_count - before} times from the request-id stream"
+
+
+def test_a_real_refusal_still_draws_a_fresh_unique_id() -> None:
+    """The half that must NOT change: a refusal that happened is identified."""
+    ids = ToastRequestIds(1)
+    subject = ToastErrorShaper(request_ids=ids, sidecar=False)  # type: ignore[arg-type]
+    drawn = [subject.shape(UnitError(UnitErrorKind.NOT_FOUND), fake_ctx()).body["requestId"] for _ in range(3)]
+    assert len(set(drawn)) == 3
+    assert CATALOGUE_REQUEST_ID not in drawn
+    assert all(UUID.fullmatch(value) for value in drawn)
+    assert ids.draw_count > 0
+
+
+def test_a_described_rate_limit_does_not_carry_the_live_clock() -> None:
+    """The half that actually turned CI red, and the rarer one: the 429 row's
+    ``X-Toast-RateLimit-Reset`` is ``floor(now/1000) + retry_after``, so two
+    renderings of the *same* catalogue disagreed whenever they straddled a
+    wall-clock second -- which a loaded runner does and a laptop does not.
+    Same byte length either way, which is why it read as an id problem."""
+    subject = shaper(sidecar=False)
+    noon = fake_ctx(clock=Clock("virtual", "2026-08-30T12:00:00.000Z"))
+    later = fake_ctx(clock=Clock("virtual", "2027-01-01T00:00:00.000Z"))
+    described = [
+        subject.shape(UnitError(UnitErrorKind.RATE_LIMITED), ctx, describing=True).headers[RATE_LIMIT_RESET_HEADER]
+        for ctx in (noon, later)
+    ]
+    assert described == [CATALOGUE_RATE_LIMIT_RESET, CATALOGUE_RATE_LIMIT_RESET]
+    # A real 429 still reports when its window resets, from the clock it ran on.
+    live = subject.shape(UnitError(UnitErrorKind.RATE_LIMITED), noon).headers[RATE_LIMIT_RESET_HEADER]
+    assert live != CATALOGUE_RATE_LIMIT_RESET
+    assert int(live) == int(noon.clock.now() / 1000) + 1
+
+
+def test_not_found_propagates_describing_to_the_body_it_shapes() -> None:
+    """The no-route row is the one catalogue body that does not come from the
+    table, so it needs the flag passed on or it keeps drawing alone."""
+    ids = ToastRequestIds(1)
+    subject = ToastErrorShaper(request_ids=ids, sidecar=False)  # type: ignore[arg-type]
+    described = subject.not_found(request(), fake_ctx(profile="full"), describing=True)
+    assert described.body["requestId"] == CATALOGUE_REQUEST_ID
+    assert ids.draw_count == 0
+    # Still the useful body, not a stub.
+    assert "/__unit/routes" in described.body["message"]
+    live = subject.not_found(request(), fake_ctx(profile="full"))
+    assert live.body["requestId"] != CATALOGUE_REQUEST_ID

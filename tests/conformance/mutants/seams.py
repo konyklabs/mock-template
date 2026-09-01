@@ -245,12 +245,16 @@ class ErrorShaperOverlay:
         self._overrides = dict(overrides or {})
         self._not_found = not_found
 
-    def shape(self, err: UnitError, ctx: UnitContext) -> ShapedError:
+    def shape(self, err: UnitError, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
         override = self._overrides.get(err.kind)
-        return self._inner.shape(err, ctx) if override is None else override
+        if override is not None:
+            return override
+        return self._inner.shape(err, ctx, describing=describing)
 
-    def not_found(self, req: UnitRequest, ctx: UnitContext) -> ShapedError:
-        return self._inner.not_found(req, ctx) if self._not_found is None else self._not_found
+    def not_found(self, req: UnitRequest, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
+        if self._not_found is not None:
+            return self._not_found
+        return self._inner.not_found(req, ctx, describing=describing)
 
     def describe(self) -> Mapping[str, Mapping[str, Any]]:
         return self._inner.describe()

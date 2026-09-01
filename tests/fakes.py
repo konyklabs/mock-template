@@ -62,13 +62,18 @@ STATUS: Mapping[UnitErrorKind, int] = {
 class FakeErrors:
     """One shaped body per kind, plus a distinguishable no-route body."""
 
-    def shape(self, err: UnitError, ctx: UnitContext) -> ShapedError:
+    def shape(self, err: UnitError, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
+        # `describing` accepted and ignored, as by any shaper with no
+        # per-request field to freeze. Note `info` is echoed verbatim here,
+        # which is what makes this double useful for the leak test.
         return ShapedError(
             status=STATUS[err.kind],
             body={"error": {"code": err.kind.value, "detail": err.detail, "field": err.field, "info": err.info}},
         )
 
-    def not_found(self, req: UnitRequest, ctx: UnitContext) -> ShapedError:
+    def not_found(self, req: UnitRequest, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
+        # `describing` accepted and ignored, as it is by any shaper whose
+        # envelope carries no per-request id or timestamp to freeze.
         return ShapedError(status=404, body={"error": {"code": "no_route", "path": req.path}})
 
     def describe(self) -> dict[str, dict[str, Any]]:

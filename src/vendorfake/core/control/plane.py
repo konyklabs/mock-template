@@ -282,7 +282,16 @@ def control_plane_routes(
         described = ctx.vendor.errors.describe()
         shaped: list[dict[str, Any]] = []
         for kind in UnitErrorKind:
-            result = ctx.vendor.errors.shape(UnitError(kind, detail=f"conformance probe for {kind.value}"), ctx)
+            # `describing=True`: this route is a read, and a read that drew a
+            # request id or read the clock would renumber the caller's
+            # scenario and leave the two bindings disagreeing. The signal is
+            # an argument rather than an `info` key because `info` is
+            # published verbatim in the unit_error sidecar.
+            result = ctx.vendor.errors.shape(
+                UnitError(kind, detail=f"conformance probe for {kind.value}"),
+                ctx,
+                describing=True,
+            )
             provenance = described.get(kind.value, {}).get("provenance")
             if provenance is None:
                 # Unreachable after the unit's startup check of describe();
@@ -302,7 +311,7 @@ def control_plane_routes(
                     "headers": dict(result.headers),
                 }
             )
-        no_route = ctx.vendor.errors.not_found(args.req, ctx)
+        no_route = ctx.vendor.errors.not_found(args.req, ctx, describing=True)
         return json_(
             {
                 "count": len(shaped),

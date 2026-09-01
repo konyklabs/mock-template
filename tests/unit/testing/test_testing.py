@@ -27,6 +27,7 @@ from vendorfake.testing import (
     ServedUnit,
     SquareSeed,
     StartedUnit,
+    ToastSeed,
     serve_in_thread,
     served,
     unit,
@@ -239,6 +240,145 @@ def test_a_driver_refuses_loudly_when_the_control_plane_does() -> None:
         square.advance_clock(1000)  # a real clock cannot be advanced
 
 
+def test_a_toast_unit_answers_seeded_calls_under_the_restaurant_header() -> None:
+    with unit("toast") as toast:
+        assert isinstance(toast.seed, ToastSeed)
+        seed = toast.seed
+        menus = toast.client.get("/menus/v3/menus", headers=seed.auth)
+        assert menus.status_code == 200
+        assert menus.json()["restaurantGuid"] == seed.restaurant_guid
+        order = toast.client.get(f"/orders/v2/orders/{seed.open_order_guid}", headers=seed.auth)
+        assert order.status_code == 200
+        # Toast scopes with the header, not the path: the bearer alone is
+        # refused, which is why the seed pairs them in `auth`.
+        bare = toast.client.get("/menus/v3/menus", headers=seed.bearer_only)
+        assert bare.status_code == 400
+        assert "Toast-Restaurant-External-ID" in bare.json()["message"]
+        with pytest.raises(ValueError, match="'toast' sends none of"):
+            toast.subscribe("http://127.0.0.1:1/x", ["order.created"], "sec")
+        toast.subscribe("http://127.0.0.1:1/x", ["order_updated", "menus_updated"], "sec")
+
+
+def test_every_installed_vendor_ships_a_conformance_target_and_a_seed() -> None:
+    """The gap class this pins: a fourth vendor landing without a shipped
+    target or seed. Toast was that gap once -- it merged while this package
+    still described two vendors -- and the instance is less interesting than
+    the rule. Every name the registry resolves must have a ``<vendor>_target``
+    factory in ``vendorfake.testing.conformance``, and a started unit must
+    carry a seed with a bearer and a non-empty event vocabulary
+    (``subscribe``'s validation runs on the latter).
+
+    Driven through :func:`unit` rather than calling ``seed_for`` directly, so
+    the config keys the seed reads are the ones a real unit publishes: a seed
+    that only builds from a hand-written mapping would pass while the
+    consumer path raised."""
+    from vendorfake import available_vendors
+    from vendorfake.testing import conformance as shipped
+
+    vendors = available_vendors()
+    assert len(vendors) >= 3
+    for vendor in vendors:
+        factory = getattr(shipped, f"{vendor}_target", None)
+        assert factory is not None, f"vendorfake.testing.conformance ships no {vendor}_target"
+        built = factory()
+        assert built.name == vendor
+        assert tuple(built.profiles) == shipped.PROFILES
+        with unit(vendor) as driver:
+            seed = driver.seed
+            assert seed is not None, f"vendorfake.testing.seeds.seed_for knows no {vendor!r}"
+            assert seed.event_types, f"{vendor!r} publishes no event types for subscribe() validation"
+            assert "Authorization" in seed.auth, f"{vendor!r}'s seed.auth carries no bearer"
+
+
+def test_no_vendor_lets_a_control_plane_read_consume_or_wander() -> None:
+    """The gap class Toast's error catalogue was an instance of: a *read* on
+    the control plane that is not a pure read.
+
+    Two ways it went wrong at once, and both are checked for every installed
+    vendor rather than for Toast. ``GET /__unit/errors`` shaped all twenty
+    kinds through the live refusal path, so it drew twenty-one ids from the
+    vendor's request-id stream -- a diagnostic GET silently renumbered every
+    id in the caller's remaining scenario. And its 429 row carried
+    ``floor(now/1000)``, so two renderings disagreed across a wall-clock
+    second; that is what failed conformance C10 on CI, where the two bindings
+    are called far enough apart to straddle one.
+
+    The clock half is driven on a *virtual* clock advanced by an hour, which
+    is the same observation a slow runner makes and takes no wall time. Only
+    the catalogue is compared byte for byte: ``/__unit/info`` and
+    ``/__unit/health`` report the clock and the request counters, so moving is
+    what they are for, while a description of a static table has no such
+    excuse.
+    """
+    from vendorfake import available_vendors
+
+    for vendor in available_vendors():
+        with unit(vendor, env={"VENDORFAKE_CLOCK": "virtual"}) as driver:
+            first = driver.client.get("/__unit/errors")
+            driver.advance_clock(3_600_000)
+            second = driver.client.get("/__unit/errors")
+            assert second.content == first.content, (
+                f"{vendor}: GET /__unit/errors answered differently after the clock moved "
+                f"({len(first.content)} vs {len(second.content)} bytes)"
+            )
+
+            # No control-plane read may consume an id, on any vendor: a
+            # diagnostic GET that drew one would renumber everything the
+            # caller mints afterwards.
+            streams = {
+                name: getattr(driver.unit.context.vendor, name)
+                for name in ("ids", "request_ids")
+                if hasattr(driver.unit.context.vendor, name)
+            }
+            reads = [
+                row["path"]
+                for row in driver.client.get("/__unit/routes").json()["routes"]
+                if row["path"].startswith("/__unit/") and row["method"] == "GET"
+            ]
+            before = {name: stream.draw_count for name, stream in streams.items()}
+            for path in reads:
+                driver.client.get(path)
+            after = {name: stream.draw_count for name, stream in streams.items()}
+            assert after == before, f"{vendor}: {len(reads)} control-plane reads drew ids, {before} -> {after}"
+
+
+def test_no_internal_marker_reaches_a_wire_body_from_any_vendor() -> None:
+    """``UnitError.info`` is published verbatim in the ``unit_error`` sidecar,
+    so nothing internal may be routed through it.
+
+    The regression this pins is one the catalogue fix introduced and the gate
+    on #31 caught: the first version signalled "describe, do not consume" with
+    an ``info`` key, and that key was then rendered into the sidecar of all
+    twenty rows on all three vendors -- an internal control-plane flag on a
+    consumer-visible wire. The signal is an argument to ``shape`` now, and
+    this checks the consequence rather than the spelling: no dunder-prefixed
+    key anywhere in a described body or in a real refusal's sidecar.
+    """
+    from vendorfake import available_vendors
+
+    def dunder_keys(node: Any, trail: str = "") -> list[str]:
+        if isinstance(node, dict):
+            found = [f"{trail}.{k}" for k in node if isinstance(k, str) and k.startswith("__")]
+            for key, value in node.items():
+                found += dunder_keys(value, f"{trail}.{key}")
+            return found
+        if isinstance(node, list):
+            return [hit for i, item in enumerate(node) for hit in dunder_keys(item, f"{trail}[{i}]")]
+        return []
+
+    for vendor in available_vendors():
+        with unit(vendor) as driver:
+            catalogue = driver.client.get("/__unit/errors")
+            assert dunder_keys(catalogue.json()) == [], f"{vendor}: internal key in the error catalogue"
+            # The sidecar has to be ON, or this proves nothing: the leak lived
+            # in `unit_error`, which a profile can switch off.
+            assert "unit_error" in catalogue.json()["kinds"][0]["body"], f"{vendor}: no sidecar to leak into"
+
+            refused = driver.client.get("/definitely/not/a/route/at/all")
+            assert refused.status_code == 404, f"{vendor}: expected a 404, got {refused.status_code}"
+            assert dunder_keys(refused.json()) == [], f"{vendor}: internal key in a real refusal"
+
+
 # ---------------------------------------------------------------------------
 # A URL: in a thread, and in a child process.
 # ---------------------------------------------------------------------------
@@ -252,6 +392,82 @@ def test_serve_in_thread_shares_state_with_the_in_process_client() -> None:
         fetched = over_http.client.get(f"/v2/orders/{order['id']}", headers=square.seed.auth)
         assert fetched.status_code == 200
         assert fetched.json()["order"]["id"] == order["id"]
+
+
+def _slow_retry_square_profile(tmp_path: Any) -> str:
+    """Square's full profile with one unscaled seven-second retry: long
+    enough that a retry is demonstrably *pending* while a test looks, short
+    enough that the unit's own stop() -- which drains for real -- does not
+    hold the suite the way a genuinely uncompressed schedule would."""
+    from importlib.resources import files
+
+    profile = json.loads((files("vendorfake.square") / "profiles" / "full.json").read_text())
+    profile["webhooks"]["retry"]["schedule_ms"] = [7_000]
+    profile["webhooks"]["retry"]["time_scale"] = 1.0
+    path = tmp_path / "slow-retry.json"
+    path.write_text(json.dumps(profile))
+    return str(path)
+
+
+def _await_pending_timers(driver: Driver, *, timeout_s: float = 10.0) -> list[dict[str, Any]]:
+    """Block until the dispatcher has a retry on the clock, and return them.
+
+    A delivery receipt does NOT mean the retry exists yet, which is the race
+    these two tests used to run: ``WebhookReceiver``'s handler appends to
+    ``received`` *before* it computes the status and writes the response, and
+    the timer is only scheduled once that response has crossed back over
+    loopback, been recorded and re-signed on the worker thread. The gap is
+    about a millisecond on an idle machine and unbounded on a loaded one, so
+    the timer is waited for directly rather than inferred.
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        pending = driver.pending_webhook_timers()
+        if pending:
+            return pending
+        time.sleep(0.005)
+    raise AssertionError(
+        f"no webhook retry timer was scheduled within {timeout_s}s; deliveries so far: {driver.deliveries()}"
+    )
+
+
+def test_pending_webhook_timers_sees_a_scheduled_retry(tmp_path: Any) -> None:
+    with unit("square", _slow_retry_square_profile(tmp_path)) as square, webhook_receiver() as receiver:
+        receiver.respond_with = lambda index: 500 if index == 0 else 200
+        square.subscribe(receiver.url, ["order.created"], "k")
+        assert square.pending_webhook_timers() == []
+        _create_square_order(square)
+        (timer,) = _await_pending_timers(square)
+        assert str(timer["label"]).startswith("webhook")
+        assert float(timer["due_in_ms"]) > 5_000
+
+
+def test_drain_raises_instead_of_pretending_an_early_return_settled(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dangerous half of the pass-bounded drain: on an uncompressed
+    schedule the unit's drain returns EARLY with retries still scheduled.
+    Reaching that for real costs ~125s of wall clock (500 passes x 250ms),
+    so the drain POST alone is stubbed to return at once; the state it
+    returns into -- a genuinely pending retry timer on the unit's real
+    clock -- is not stubbed, and the check that raises reads it over the
+    same client every other call uses."""
+    with unit("square", _slow_retry_square_profile(tmp_path)) as square, webhook_receiver() as receiver:
+        receiver.respond_with = lambda index: 500 if index == 0 else 200
+        square.subscribe(receiver.url, ["order.created"], "k")
+        _create_square_order(square)
+        _await_pending_timers(square)
+
+        real_post = square.client.post
+
+        def post_without_the_wait(url: str, **kwargs: Any) -> httpx.Response:
+            if str(url).endswith("/__unit/webhooks/drain"):
+                return httpx.Response(200, json={"deliveries": 1}, request=httpx.Request("POST", url))
+            return real_post(url, **kwargs)
+
+        monkeypatch.setattr(square.client, "post", post_without_the_wait)
+        with pytest.raises(RuntimeError, match=r"pass-bounded .* run the unit on a virtual clock"):
+            square.drain()
 
 
 def test_drain_over_a_thread_server_settles_a_real_retry_cascade() -> None:
