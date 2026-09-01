@@ -1330,10 +1330,14 @@ def _overlapping_pages(routes: Sequence[Route]) -> Sequence[Route]:
             document = dict(reply.json)
             items = list(document.get(spec.items_path) or [])
             if spec.where == "query":
-                continued = args.req.query.get(continued_param)
+                raw = args.req.query.get(continued_param)
             else:
                 body = args.body()
-                continued = body.get(continued_param) if isinstance(body, Mapping) else None
+                raw = body.get(continued_param) if isinstance(body, Mapping) else None
+            # `offset=0` IS page one: an offset walk names every page including
+            # the first, so only a non-zero offset marks a continued page. A
+            # cursor marks one by being present at all.
+            continued = raw not in (None, "", 0, "0") if spec.style == "offset" else bool(raw)
             if continued and last[0] is not None and items:
                 items = [last[0], *items]
             if items:
