@@ -39,28 +39,38 @@ _MUTATING_METHODS = frozenset({"POST", "PUT"})
 _REPLAY_HEADER = "x-unit-idempotent-replay"
 _IGNORED_BODY_HEADER = "x-unit-idempotent-ignored-body"
 _IDEMPOTENCY_CONFLICT = "idempotency_conflict"
-_BEFORE_THE_HANDLER = frozenset(
+_PROOF_THE_LOOKUP_MISSED = frozenset(
     {
-        "not_found",
-        "method_not_allowed",
-        "capability_disabled",
-        "unauthorized",
-        "token_expired",
-        "token_revoked",
-        "forbidden_scope",
-        "rate_limited",
-        "timeout",
-        "unavailable",
+        "bad_request",
+        "missing_field",
+        "invalid_value",
+        "invalid_transition",
+        "version_conflict",
+        "conflict",
+        "invalid_cursor",
     }
 )
-"""Kinds the pipeline can produce BEFORE the idempotency step: the router's
-404 and 405, the capability gate, the auth step, and the pre-auth faults. A
-partner answer in this set proves nothing about scopes -- the request may
-never have reached the key lookup at all -- so C24 refuses it rather than
-counting it as "the second route answered for itself". ``not_found`` is here
-even though a handler can also raise it, because from outside the two are one
-kind: a partner that would 404 its probe entity must publish example_params
-naming a seeded one (Route.example_params)."""
+"""Kinds only the handler -- step 8 of core/kernel/unit.py::_run_pipeline,
+after the step-7 key lookup -- can produce for a probe carrying its key, so a
+partner refusal in this set genuinely proves the lookup missed. Everything
+else proves nothing: the router's 404 and 405, the capability gate, the auth
+step and the pre-auth faults all fire before the lookup, and ``internal`` can
+fire anywhere, a crashed hook included. This used to be a refuse-list of the
+pre-handler kinds; it is an allow-list now so that a kind it has never heard
+of -- every 5xx today, any kind added later -- defaults to "not proof"
+instead of silently becoming proof (konyklabs/roadmap#46). ``missing_field``
+qualifies because every probe carries its key at the published path --
+written along a dotted ``key_path`` the same way step 7's ``dot_get`` reads
+it -- so the step-7 raise for an absent required key cannot be the one
+answering; a partner complaining of a missing field is complaining about some
+other field, from inside the handler. ``bad_request`` qualifies because on a
+vendor route only handlers raise it (request validation -- a probe path's
+placeholder segment failing a handler's guid check is the shipped instance;
+the core's one raise site is an internal control route the router
+short-circuits before the pipeline). ``not_found`` stays out even though a handler can
+raise it too, because from outside it is one kind with the router's: a
+partner that would 404 its probe entity must publish example_params naming a
+seeded one (Route.example_params)."""
 
 _QUERY_A: dict[str, str] = {"conformance": "query-a"}
 _QUERY_B: dict[str, str] = {"conformance": "query-b"}
@@ -138,10 +148,9 @@ def journal_is_append_only(env: CheckEnv) -> str:
     seq_before = int(before["seq"])
 
     route = env.first_example_route(methods=_MUTATING_METHODS)
-    body = dict(route.example_body or {})
-    idem = route.idempotency
-    if idem is not None:
-        body[str(idem["key_path"])] = "conformance-journal-probe"
+    # _keyed writes along a dotted key_path the way step 7 reads it; a flat
+    # write would miss and draw a step-7 missing_field instead of executing.
+    body = dict(route.example_body or {}) if route.idempotency is None else _keyed(route, "conformance-journal-probe")
     created = env.client.call(
         route.method,
         route.example_path,
@@ -402,8 +411,7 @@ def a_replayed_idempotency_key_does_not_run_twice(env: CheckEnv) -> str:
     route = env.first_example_route(methods=_MUTATING_METHODS, idempotent=True)
     spec = dict(route.idempotency or {})
     key_path = str(spec["key_path"])
-    body = dict(route.example_body or {})
-    body[key_path] = "conformance-idempotency-probe"
+    body = _keyed(route, "conformance-idempotency-probe")
     headers = env.authorized(route)
 
     first = env.client.call(route.method, route.example_path, json_body=body, headers=headers)
@@ -613,9 +621,25 @@ def seed_is_deterministic_across_processes(env: CheckEnv) -> str:
 
 
 def _keyed(route: RouteRow, key: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The route's example body (or nothing) carrying ``key`` at its declared path."""
+    """The route's example body (or nothing) carrying ``key`` at its declared path.
+
+    Written ALONG the declared ``key_path``, not as one flat dict key: step 7
+    reads it back with ``dot_get``, which splits on dots, so a vendor
+    declaring ``order.idempotency_key`` must find the key nested. A flat write
+    would make step 7 miss it and raise its own ``missing_field`` -- which the
+    allow-list counts as proof the lookup missed, re-opening the vacuity this
+    check exists to close (konyklabs/roadmap#46 review). Each level along the
+    path is copied before descent so the memoised example body is never
+    mutated.
+    """
     body = dict(route.example_body or {})
-    body[str(dict(route.idempotency or {})["key_path"])] = key
+    node = body
+    steps = str(dict(route.idempotency or {})["key_path"]).split(".")
+    for step in steps[:-1]:
+        prev = node.get(step)
+        node[step] = dict(prev) if isinstance(prev, dict) else {}
+        node = node[step]
+    node[steps[-1]] = key
     if extra:
         body.update(extra)
     return body
@@ -629,7 +653,10 @@ def _keyed(route: RouteRow, key: str, extra: dict[str, Any] | None = None) -> di
         "every other declared scope (no conflict, no replay marker, its own answer) and visible "
         "from every route sharing its scope, in the declared on_mismatch direction; and the "
         "declarations themselves hold -- scopes not all one string, no shared scope spanning "
-        "capabilities, mixing on_mismatch, or verifiable by nothing."
+        "capabilities, mixing on_mismatch, or verifiable by nothing. A partner's answer counts "
+        "only when it proves the lookup missed -- a fresh success, or a post-lookup refusal "
+        "that leaves the journal unmoved; anything else, a 5xx included, is evidence of "
+        "nothing and fails."
     ),
     requires=Requires(two_idempotent_routes=True, credentials=True),
 )
@@ -665,14 +692,32 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
       declaration is exactly where the collapse hid from the paired version
       of this check.
 
-    Two rules from earlier review rounds are kept: a partner answer of
+    Two rules from earlier review rounds are kept, the second inverted and
+    widened by konyklabs/roadmap#46: a partner answer of
     ``idempotency_conflict`` is AFFIRMATIVE evidence the key was found in
     that scope (the mismatch branch only runs on a stored record), and a
-    partner refusal from before the handler -- routing, the capability gate,
-    auth, a pre-auth fault -- proves nothing and fails rather than passing.
+    partner answer counts as "the route answered for itself" only when it
+    proves the request got past the key lookup -- a 2xx, or a kind in
+    :data:`_PROOF_THE_LOOKUP_MISSED`. The journal is read around every probe:
+    neither a post-lookup refusal nor a shared-scope declared-direction
+    answer may append an entry -- a partner that refuses a request and
+    journals it anyway executed what it refused, a pass condition weaker
+    than its description (N-3's shape). The positive direction, "a fresh
+    success journals", is deliberately not asserted: a no-op 2xx is real
+    vendor behaviour (Square's batch-create drops an unchanged count under
+    ignore_unchanged_counts and commits nothing).
     Keys are spent first and probed after, because one route (UpdateOrder)
     pins its example to the seed's entity version and can succeed only once
     per unit; the probes are read-mostly and order-independent.
+
+    The journal brackets are race-free by construction, and the argument is
+    load-bearing: the seq only moves in ``Store.append_journal``, which is
+    called solely from Collection mutations under the store lock; webhook
+    dispatch is a listener invoked from INSIDE that call and keeps its
+    delivery records outside the store, and this check drives one probe at a
+    time on serialized routes. A vendor whose retry machinery wrote entities
+    from a background thread would break the bracket, and should fail loudly
+    here rather than quietly widening it.
     """
     env.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
     routes = env.idempotent_routes()
@@ -742,9 +787,11 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
         for member in groups[scope]:
             if member.key == source.key:
                 continue
+            seq_before = int(env.get_json(f"{CONTROL_PREFIX}journal")["seq"])
             seen = env.client.call(
                 member.method, member.example_path, json_body=_keyed(member, key), headers=env.authorized(member)
             )
+            seq_after = int(env.get_json(f"{CONTROL_PREFIX}journal")["seq"])
             direction = str(dict(member.idempotency or {}).get("on_mismatch", "conflict"))
             visible = (
                 seen.error_kind == _IDEMPOTENCY_CONFLICT
@@ -762,13 +809,22 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
                 )
             else:
                 shares_verified += 1
+                if seq_after != seq_before:
+                    problems.append(
+                        f"{member.key} answered scope {scope!r}'s key in its declared {direction!r} "
+                        f"direction and still moved the journal from seq {seq_before} to {seq_after}. "
+                        f"A conflict executes nothing and a replay is the stored answer returned, so "
+                        f"whichever was declared, the handler must not have run for it."
+                    )
         for other_scope, members in sorted(groups.items()):
             if other_scope == scope:
                 continue
             target = members[index % len(members)]
+            seq_before = int(env.get_json(f"{CONTROL_PREFIX}journal")["seq"])
             answer = env.client.call(
                 target.method, target.example_path, json_body=_keyed(target, key), headers=env.authorized(target)
             )
+            seq_after = int(env.get_json(f"{CONTROL_PREFIX}journal")["seq"])
             isolation_probes += 1
             if answer.error_kind == _IDEMPOTENCY_CONFLICT:
                 problems.append(
@@ -793,13 +849,32 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
                     f"operations receives a body from the wrong endpoint with nothing to notice it by."
                 )
                 continue
-            if answer.error_kind in _BEFORE_THE_HANDLER:
+            if 200 <= answer.status < 300:
+                # A fresh success is the route answering for itself; the leak
+                # clauses above already refused a marker or the stored bytes.
+                # Nothing is asserted of the journal here because a no-op 2xx
+                # is real vendor behaviour (Square's batch-create with
+                # ignore_unchanged_counts drops a matching count and commits
+                # nothing), so "a success journals" does not hold in general.
+                continue
+            if answer.error_kind not in _PROOF_THE_LOOKUP_MISSED:
                 problems.append(
                     f"{target.key} (scope {other_scope!r}) answered {answer.status} with "
-                    f"x-unit-error={answer.error_kind!r}, a refusal the pipeline produces BEFORE the "
-                    f"idempotency step; nothing about key scoping was asked of it. Publish "
-                    f"example_params naming a seeded entity for it, or fix whatever refused the "
-                    f"request upstream of step 7 of core/kernel/unit.py::_run_pipeline."
+                    f"x-unit-error={answer.error_kind!r}, which is not one of the kinds only the "
+                    f"post-lookup handler can produce for a keyed probe -- a routing, capability, "
+                    f"auth or fault refusal fires before step 7 of "
+                    f"core/kernel/unit.py::_run_pipeline, and a 5xx can fire anywhere -- before the "
+                    f"lookup or from a crash inside the handler. Nothing about key scoping was asked "
+                    f"of it. Publish example_params naming a seeded entity for it, fix whatever "
+                    f"refused the request upstream of the lookup, or fix the crash."
+                )
+                continue
+            if seq_after != seq_before:
+                problems.append(
+                    f"{target.key} (scope {other_scope!r}) refused another operation's key with "
+                    f"x-unit-error={answer.error_kind!r} and still moved the journal from seq "
+                    f"{seq_before} to {seq_after}. No refusal commits a mutation: whatever was "
+                    f"journalled ran for a request the route says it refused."
                 )
         again = env.client.call(
             source.method, source.example_path, json_body=_keyed(source, key), headers=env.authorized(source)
@@ -813,9 +888,10 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
     require(not problems, "\n".join(problems))
     return (
         f"{len(spent)} keys spent across {len(groups)} declared scopes; {isolation_probes} "
-        f"cross-scope probes saw no conflict, no marker and none of the stored bytes; "
-        f"{shares_verified} shared-scope alias(es) saw the record in the declared direction; every "
-        f"spent key still replays on its own route"
+        f"cross-scope probes saw no conflict, no marker and none of the stored bytes, each answered "
+        f"past the lookup with the journal holding on every refusal; "
+        f"{shares_verified} shared-scope alias(es) saw the record in the declared direction without "
+        f"journalling; every spent key still replays on its own route"
     )
 
 

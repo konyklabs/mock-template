@@ -1,4 +1,4 @@
-"""Forty-eight units, each broken in exactly one way, and the check each must trip.
+"""Fifty units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -84,6 +84,7 @@ from vendorfake.core.kernel.types import (
 )
 from vendorfake.core.state.machine import MachineDef
 from vendorfake.core.util.json import dump_json
+from vendorfake.core.util.paths import dot_get
 from vendorfake.core.webhooks.dispatcher import WebhookDispatcher
 from vendorfake.core.webhooks.models import DeliveryMetadata
 from vendorfake.square.retry import RETRY_NUMBER_HEADER, RETRY_REASON_HEADER, RETRY_REASONS
@@ -1768,3 +1769,100 @@ tripped on it; a registry special-casing any OTHER name was green, because
 the first. C28 now exercises every singly-toggleable capability, and this
 mutant is the proof it discriminates per name.
 """
+
+
+def _crash_on_a_foreign_scopes_key(routes: Sequence[Route]) -> Sequence[Route]:
+    scopes = tuple(sorted({route.idempotency.scope for route in routes if route.idempotency is not None}))
+
+    def wrap(route: Route) -> Route:
+        spec = route.idempotency
+        if spec is None:
+            return route
+        inner = route.handler
+
+        def handler(args: HandlerArgs) -> ReplyInit | UnitResponse:
+            raw = dot_get(args.body(), spec.key_path)
+            if isinstance(raw, str) and raw:
+                for scope in scopes:
+                    if scope != spec.scope and args.ctx.store.get_idempotent(scope, raw) is not None:
+                        raise RuntimeError(f"audit hook: key {raw!r} already belongs to scope {scope!r}")
+            return inner(args)
+
+        return dataclasses.replace(route, handler=handler)
+
+    return tuple(wrap(route) for route in routes)
+
+
+register(
+    Mutant(
+        id="M49",
+        name="handler-crashes-on-a-foreign-scopes-key",
+        defect="Every idempotent handler consults the store across scopes and crashes on another operation's key, answering the vendor's 500.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C24"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_crash_on_a_foreign_scopes_key),
+    )
+)
+"""The 5xx that satisfied C24 vacuously (konyklabs/roadmap#46).
+
+A cross-scope probe answered by this unit carries no marker, no conflict and
+none of the stored bytes, and ``internal`` sat outside the ten-kind
+refuse-list, so every isolation probe passed on a request whose handler never
+finished -- evidence of nothing. The refusal test is an allow-list of
+post-lookup kinds now, and a 5xx defaults to "not proof". Only the handlers
+of idempotent routes are wrapped because the defect is a property of the
+idempotency machinery, and the crash fires only when the key is found under a
+FOREIGN scope: the unit is otherwise healthy, which is what kept the old C24
+green everywhere else."""
+
+
+def _journal_refused_requests(routes: Sequence[Route]) -> Sequence[Route]:
+    # Per-application counter, not module-global: two units in one interpreter
+    # must not mint different audit ids, or this mutant smuggles in the
+    # process-global-state defect M11 models on top of the one it declares.
+    audit_ids = itertools.count(1)
+
+    def wrap(route: Route) -> Route:
+        if route.idempotency is None:
+            return route
+        inner = route.handler
+
+        def handler(args: HandlerArgs) -> ReplyInit | UnitResponse:
+            try:
+                return inner(args)
+            except UnitError:
+                args.ctx.store.append_journal(
+                    collection="audit_refusals",
+                    entity_id=f"refusal-{next(audit_ids)}",
+                    op="insert",
+                    from_version=None,
+                    to_version=1,
+                    changed=("reason",),
+                )
+                raise
+
+        return dataclasses.replace(route, handler=handler)
+
+    return tuple(wrap(route) for route in routes)
+
+
+register(
+    Mutant(
+        id="M50",
+        name="refusals-journalled-on-idempotent-routes",
+        defect="Every idempotent handler journals the attempt when it refuses a request, so a rejected mutation leaves a committed trace.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C24"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_journal_refused_requests),
+    )
+)
+"""The refusal that journalled, which nothing asserted against (konyklabs/roadmap#46).
+
+C24 accepted a post-lookup refusal as proof the lookup missed -- correctly --
+and never asked whether the refusal committed anything. On this unit a
+cross-scope probe refused with version_conflict or missing_field also appends
+an audit entry, so 'the route answered for itself' and 'the handler did not
+run' were both claimed while the journal quietly moved. C24 now reads the
+journal seq around every probe: fresh executions must move it, refusals and
+declared-direction answers must not. Confined to idempotent routes' handlers
+for the same reason as M49."""
