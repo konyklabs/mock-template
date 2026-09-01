@@ -370,8 +370,12 @@ class SquareErrorShaper:
         self._sidecar = sidecar
         self._retry_after_header = retry_after_header
 
-    def shape(self, err: UnitError, ctx: UnitContext) -> ShapedError:
+    def shape(self, err: UnitError, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
         """One core error, as Square would send it.
+
+        ``describing`` is accepted and ignored: this envelope carries no
+        per-request id or timestamp, so a described body and a real one are
+        already the same bytes.
 
         ``detail`` follows the error's own wording when it has one and the
         table's otherwise, so a handler that explains precisely what was wrong

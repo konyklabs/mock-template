@@ -67,7 +67,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from vendorfake.core.kernel.shaping import (
-    CATALOGUE_PROBE_INFO_KEY,
     Provenance,
     assert_error_table_total,
     mechanism_headers,
@@ -258,21 +257,22 @@ class ToastErrorShaper:
         self._sidecar = sidecar
         self._retry_after_header = retry_after_header
 
-    def shape(self, err: UnitError, ctx: UnitContext) -> ShapedError:
+    def shape(self, err: UnitError, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
         """One core error, as this unit's Toast would send it.
 
         ``message`` follows the error's own wording when it has one and the
         table's otherwise -- there is no conflation to protect here, and a
         handler quoting a documented phrase ("The GUID was malformed") is
         exactly what should reach the wire.
+
+        ``describing`` marks a row of ``GET /__unit/errors``: this is the one
+        vendor here whose envelope carries per-request values, so it is the
+        one that has to substitute them. See the two catalogue constants.
         """
         mapping = TOAST_ERROR_TABLE[err.kind]
         info = dict(err.info or {})
         override = info.get(TOAST_CODE_INFO_KEY)
         code = override if isinstance(override, int) and not isinstance(override, bool) else mapping.code
-        # A described row must consume nothing a real refusal would -- neither
-        # an id from the stream nor the current second. See the two constants.
-        describing = bool(info.get(CATALOGUE_PROBE_INFO_KEY))
         body: dict[str, Any] = ErrorMessageWire(
             status=mapping.status,
             code=code,
@@ -301,11 +301,9 @@ class ToastErrorShaper:
         ``describing`` is the catalogue's, and only the catalogue's: this row
         is the one body in ``GET /__unit/errors`` that does not come from the
         table, so without the flag it would keep drawing a real request id
-        while the other twenty stopped.
+        while the other twenty stopped. It is handed straight to
+        :meth:`shape`; it never enters ``info``, which is published.
         """
-        info: dict[str, Any] = {"path": req.path, "method": req.method, "profile": ctx.config.profile}
-        if describing:
-            info[CATALOGUE_PROBE_INFO_KEY] = True
         return self.shape(
             UnitError(
                 UnitErrorKind.NOT_FOUND,
@@ -313,9 +311,10 @@ class ToastErrorShaper:
                     f"{req.method} {req.path} is not a route on this Toast unit. "
                     "GET /__unit/routes lists the surface this profile serves."
                 ),
-                info=info,
+                info={"path": req.path, "method": req.method, "profile": ctx.config.profile},
             ),
             ctx,
+            describing=describing,
         )
 
     def describe(self) -> dict[str, Any]:

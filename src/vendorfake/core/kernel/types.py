@@ -768,20 +768,37 @@ class Handler(Protocol):
 class ErrorShaper(Protocol):
     """The vendor's single lookup table from core error kind to wire format."""
 
-    def shape(self, err: UnitError, ctx: UnitContext) -> ShapedError:
-        """Turn a core error into the vendor's wire representation."""
+    def shape(self, err: UnitError, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
+        """Turn a core error into the vendor's wire representation.
+
+        ``describing`` is set only by ``GET /__unit/errors``, which renders
+        every kind as a *description of the table* rather than as a refusal
+        that happened. Describing must consume nothing a refusal would: an id
+        drawn from a vendor stream, or the current time. A shaper that
+        consumes either turns a read-only route into one that renumbers the
+        caller's scenario, and makes C10's byte-for-byte comparison of the two
+        bindings unsatisfiable -- the catalogue then depends on how many
+        refusals each binding happened to serve first and on which wall-clock
+        second it was rendered in. One vendor shipped exactly that pair, which
+        is why this is a parameter rather than a convention.
+
+        A shaper whose envelope carries no per-request field ignores it. One
+        that carries such a field substitutes a fixed, obviously synthetic
+        value when the flag is set, and says so at the site.
+
+        It is an argument and **not** a key in ``err.info`` because ``info``
+        is published verbatim in the ``unit_error`` sidecar; see
+        :func:`~vendorfake.core.kernel.shaping.unit_error_sidecar`. An
+        internal flag routed through ``info`` reaches the wire.
+        """
         ...
 
     def not_found(self, req: UnitRequest, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
         """Body for a path that matched no route at all.
 
-        ``describing`` is set only by ``GET /__unit/errors``, which renders
-        this body as a *description* rather than as a refusal that happened.
-        A shaper whose envelope carries a per-request field (an id, a
-        timestamp) must substitute a fixed value for it when the flag is set,
-        or that read-only route consumes state and its two bindings cannot
-        agree byte for byte. See ``CATALOGUE_PROBE_INFO_KEY``, which carries
-        the same signal into :meth:`shape`.
+        ``describing`` means what it means on :meth:`shape`, and is set by the
+        same one caller. This body is the row in ``GET /__unit/errors`` that
+        does not come from the table, so it needs the signal separately.
         """
         ...
 

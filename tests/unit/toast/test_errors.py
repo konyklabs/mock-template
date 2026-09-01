@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 
 from tests.unit.toast.conftest import fake_ctx
-from vendorfake.core.kernel.shaping import CATALOGUE_PROBE_INFO_KEY
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind, UnitRequest
 from vendorfake.core.time.clock import Clock
 from vendorfake.toast.errors import (
@@ -185,7 +184,7 @@ def test_a_described_error_takes_the_placeholder_id_and_draws_nothing() -> None:
     ids = ToastRequestIds(1)
     subject = ToastErrorShaper(request_ids=ids, sidecar=False)  # type: ignore[arg-type]
     before = ids.draw_count
-    described = subject.shape(UnitError(UnitErrorKind.NOT_FOUND, info={CATALOGUE_PROBE_INFO_KEY: True}), fake_ctx())
+    described = subject.shape(UnitError(UnitErrorKind.NOT_FOUND), fake_ctx(), describing=True)
     assert described.body["requestId"] == CATALOGUE_REQUEST_ID
     assert ids.draw_count == before, f"describing drew {ids.draw_count - before} times from the request-id stream"
 
@@ -211,9 +210,7 @@ def test_a_described_rate_limit_does_not_carry_the_live_clock() -> None:
     noon = fake_ctx(clock=Clock("virtual", "2026-08-30T12:00:00.000Z"))
     later = fake_ctx(clock=Clock("virtual", "2027-01-01T00:00:00.000Z"))
     described = [
-        subject.shape(UnitError(UnitErrorKind.RATE_LIMITED, info={CATALOGUE_PROBE_INFO_KEY: True}), ctx).headers[
-            RATE_LIMIT_RESET_HEADER
-        ]
+        subject.shape(UnitError(UnitErrorKind.RATE_LIMITED), ctx, describing=True).headers[RATE_LIMIT_RESET_HEADER]
         for ctx in (noon, later)
     ]
     assert described == [CATALOGUE_RATE_LIMIT_RESET, CATALOGUE_RATE_LIMIT_RESET]

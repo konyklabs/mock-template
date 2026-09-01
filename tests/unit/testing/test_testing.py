@@ -342,6 +342,43 @@ def test_no_vendor_lets_a_control_plane_read_consume_or_wander() -> None:
             assert after == before, f"{vendor}: {len(reads)} control-plane reads drew ids, {before} -> {after}"
 
 
+def test_no_internal_marker_reaches_a_wire_body_from_any_vendor() -> None:
+    """``UnitError.info`` is published verbatim in the ``unit_error`` sidecar,
+    so nothing internal may be routed through it.
+
+    The regression this pins is one the catalogue fix introduced and the gate
+    on #31 caught: the first version signalled "describe, do not consume" with
+    an ``info`` key, and that key was then rendered into the sidecar of all
+    twenty rows on all three vendors -- an internal control-plane flag on a
+    consumer-visible wire. The signal is an argument to ``shape`` now, and
+    this checks the consequence rather than the spelling: no dunder-prefixed
+    key anywhere in a described body or in a real refusal's sidecar.
+    """
+    from vendorfake import available_vendors
+
+    def dunder_keys(node: Any, trail: str = "") -> list[str]:
+        if isinstance(node, dict):
+            found = [f"{trail}.{k}" for k in node if isinstance(k, str) and k.startswith("__")]
+            for key, value in node.items():
+                found += dunder_keys(value, f"{trail}.{key}")
+            return found
+        if isinstance(node, list):
+            return [hit for i, item in enumerate(node) for hit in dunder_keys(item, f"{trail}[{i}]")]
+        return []
+
+    for vendor in available_vendors():
+        with unit(vendor) as driver:
+            catalogue = driver.client.get("/__unit/errors")
+            assert dunder_keys(catalogue.json()) == [], f"{vendor}: internal key in the error catalogue"
+            # The sidecar has to be ON, or this proves nothing: the leak lived
+            # in `unit_error`, which a profile can switch off.
+            assert "unit_error" in catalogue.json()["kinds"][0]["body"], f"{vendor}: no sidecar to leak into"
+
+            refused = driver.client.get("/definitely/not/a/route/at/all")
+            assert refused.status_code == 404, f"{vendor}: expected a 404, got {refused.status_code}"
+            assert dunder_keys(refused.json()) == [], f"{vendor}: internal key in a real refusal"
+
+
 # ---------------------------------------------------------------------------
 # A URL: in a thread, and in a child process.
 # ---------------------------------------------------------------------------

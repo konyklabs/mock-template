@@ -51,31 +51,12 @@ from vendorfake.core.util.json import compact
 from vendorfake.core.util.numbers import as_str
 
 __all__ = [
-    "CATALOGUE_PROBE_INFO_KEY",
     "DEFAULT_RETRY_AFTER",
     "Provenance",
     "assert_error_table_total",
     "mechanism_headers",
     "unit_error_sidecar",
 ]
-
-CATALOGUE_PROBE_INFO_KEY = "__catalogue_probe__"
-"""Set in ``UnitError.info`` when ``GET /__unit/errors`` is *describing* a kind
-rather than refusing a request.
-
-A catalogue row is a description of the table, not a refusal that happened, so
-shaping one must not consume anything a real refusal would -- an id drawn from
-a vendor stream, or the current time. A shaper that does both turns a
-read-only route into one that renumbers the caller's scenario, and makes C10's
-byte-for-byte comparison of the two bindings unsatisfiable: the catalogue then
-depends on how many refusals each binding happened to serve first, and on
-which wall-clock second each was rendered in. One vendor shipped exactly that
-pair, which is why this key exists rather than a convention.
-
-A shaper whose envelope carries no per-request field can ignore this key
-entirely. One that carries such a field substitutes a fixed, obviously
-synthetic value when the key is present, and says so at the site.
-"""
 
 Provenance = Literal["documented", "judgment"]
 """Where a row's HTTP status comes from. A real field, surfaced on the wire."""
@@ -106,7 +87,19 @@ def assert_error_table_total(table: Mapping[UnitErrorKind, object] | Mapping[str
 
 def unit_error_sidecar(err: UnitError, provenance: Provenance, **extra: Any) -> dict[str, Any]:
     """The ``unit_error`` document for one error: its ``info``, then the
-    reserved keys, then whatever the vendor adds, ``None`` values dropped."""
+    reserved keys, then whatever the vendor adds, ``None`` values dropped.
+
+    **``UnitError.info`` is a published channel, and this is why.** Every key
+    in it reaches the wire verbatim, deliberately -- a consumer debugging this
+    fake gets the machine-readable reason without parsing prose, and a
+    vendor's own override travels here too. Nothing filters it, so nothing
+    internal may be put in it: a flag the core wants to send a shaper travels
+    as an argument to :meth:`ErrorShaper.shape`, where the type checker sees
+    it and the wire does not. This is a rule rather than a filter on purpose;
+    a reserved-prefix convention would be one more thing to remember at every
+    future call site, and stripping keys here would make ``info`` mean
+    something different depending on where you read it.
+    """
     return compact(
         {
             **dict(err.info or {}),
