@@ -72,8 +72,9 @@ class ToastConfigSurface:
                         unwalkable_reason=(
                             "Toast's config lists answer a bare JSON array with the next page token "
                             "in the Toast-Next-Page-Token RESPONSE HEADER, and read no page-size "
-                            "parameter (the documented page is a fixed 100) -- the declared walk can "
-                            "express none of the three."
+                            "parameter -- the page is pinned at the documented maximum of 300 "
+                            "(model/config.py::MAX_PAGE) -- so the declared walk can express none "
+                            "of the three."
                         ),
                     ),
                 )

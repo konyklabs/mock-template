@@ -65,10 +65,12 @@ class ToastPartnersSurface:
                     id_path="restaurantGuid",
                     walkable=False,
                     unwalkable_reason=(
-                        "This unit models exactly one connected restaurant -- the partners row is "
-                        "derived from THE seeded restaurant, and the whole unit's tenancy is scoped "
-                        "to it by header -- so the listing can never hold the two rows a "
-                        "page-boundary walk needs."
+                        "The seed document models exactly one restaurant (seed/document.py declares "
+                        "`restaurant` as a single object, not a list) and the partners row is "
+                        "derived from it (seed/hydrate.py::_insert_partner), so this listing cannot "
+                        "hold the two rows a page-boundary walk needs without a second restaurant "
+                        "-- a unit-wide scope decision, weighed on konyklabs/roadmap#47 rather than "
+                        "changed here."
                     ),
                 ),
             ),
