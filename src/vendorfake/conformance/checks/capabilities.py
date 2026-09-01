@@ -306,46 +306,54 @@ def capability_declaration_is_complete(env: CheckEnv) -> str:
 
 
 # ---------------------------------------------------------------------------
-# C28 -- all four verbs of POST /__unit/capabilities do what they say.
+# C28 -- all four verbs of POST /__unit/capabilities, on every capability.
 # ---------------------------------------------------------------------------
 
 
-def _toggleable(env: CheckEnv) -> tuple[str, str, str]:
-    """A capability this check may switch off alone, and one route it owns.
+def _singly_toggleable(env: CheckEnv) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """Every capability this check may switch off alone, each with one owned
+    route -- plus the ones it may not, with the reason, for the evidence line.
 
     Enabled, surface, owning an enabled route, with no enabled dotted child
-    and no enabled capability requiring it -- so switching it off changes
-    exactly one thing and every verb's effect is attributable to that verb.
+    and no enabled capability requiring it: switching such a capability off
+    changes exactly one thing, so every verb's effect is attributable to that
+    verb. The excluded ones are named rather than dropped, because a reader of
+    a green line is owed the list of what was not asked and why.
     """
     rows = env.capabilities()
     enabled = [row for row in rows if row.enabled]
     table = [route for route in env.routes() if not route.internal]
+    eligible: list[tuple[str, str, str]] = []
+    excluded: list[str] = []
     for row in enabled:
         if row.kind != "surface":
             continue
-        if any(other.name.startswith(f"{row.name}.") or row.name in other.requires for other in enabled):
+        blockers = [
+            other.name for other in enabled if other.name.startswith(f"{row.name}.") or row.name in other.requires
+        ]
+        if blockers:
+            excluded.append(f"{row.name} (entangled with enabled {', '.join(sorted(blockers))})")
             continue
         owned = next((route for route in table if route.capability == row.name), None)
-        if owned is not None:
-            return row.name, owned.method, owned.probe_path
-    raise ConformanceSkip(
-        f"profile {env.profile!r} enables no surface capability that can be switched off on its own "
-        f"(one with routes, no enabled dotted child and no enabled dependent)"
-    )
+        if owned is None:
+            excluded.append(f"{row.name} (owns no enabled route)")
+            continue
+        eligible.append((row.name, owned.method, owned.probe_path))
+    return eligible, excluded
 
 
 @check(
     id="C28",
     name="control plane: set, delta, enable and disable each change what the unit does",
     asserts=(
-        "Each of the four verbs of POST /__unit/capabilities has its declared effect, observed both "
-        "in the capability table and at a route the capability owns; and the verbs compose in the "
-        "declared order, set before enable."
+        "On EVERY singly-toggleable capability: each of the four verbs of POST /__unit/capabilities "
+        "has its declared effect, observed both in the capability table and at a route the "
+        "capability owns; and the verbs compose in the declared order, set before enable."
     ),
     requires=Requires(surface_route=True),
 )
 def every_capability_verb_has_its_effect(env: CheckEnv) -> str:
-    """Three verbs nothing exercised, and the one that did.
+    """Three verbs nothing exercised, and the one axis the first fix sampled.
 
     ``POST /__unit/capabilities`` takes ``set``, ``delta``, ``enable`` and
     ``disable``. Every contract that toggled a capability -- C03, C14, C18 --
@@ -353,53 +361,80 @@ def every_capability_verb_has_its_effect(env: CheckEnv) -> str:
     green and a foreign implementation could stub three of four verbs and be
     certified (konyklabs/roadmap#10, N-5; tracked as konyklabs/roadmap#15).
 
+    The first version of this check asked one capability -- the first
+    eligible -- which is the same defect this branch's review named in C17,
+    C24 and C26: sampling where the contract quantifies. The registry is
+    shared, but ``requires`` and dotted children are per-capability data, so a
+    registry special-casing one NAME escapes a one-capability probe entirely.
+    Every singly-toggleable capability is asked now, and a failure names the
+    capability and the verb.
+
     Every step observes two things: what the table says and what a route
     does. A verb that updated the table and not the gate, or the gate and not
     the table, is a verb whose answer cannot be trusted either way.
     """
-    name, method, path = _toggleable(env)
-    original = [row.name for row in env.capabilities() if row.enabled]
-    without = [item for item in original if item != name]
-    steps: list[str] = []
-
-    def observe(verb: str, body: dict[str, Any], expect_on: bool) -> None:
-        answered = env.client.call("POST", f"{CONTROL_PREFIX}capabilities", json_body=body)
-        require(
-            answered.status == 200,
-            f"POST /__unit/capabilities {body} answered {answered.status}: {answered.text[:200]}. "
-            f"Every one of the four verbs is contract; a unit that refuses one has three.",
+    eligible, excluded = _singly_toggleable(env)
+    if not eligible:
+        raise ConformanceSkip(
+            f"profile {env.profile!r} enables no surface capability that can be switched off on its "
+            f"own (one with routes, no enabled dotted child and no enabled dependent): "
+            f"{'; '.join(excluded) or 'nothing is enabled at all'}"
         )
+    original = [row.name for row in env.capabilities() if row.enabled]
+    problems: list[str] = []
+    exercised: list[str] = []
+
+    def observe(name: str, method: str, path: str, verb: str, body: dict[str, Any], expect_on: bool) -> None:
+        answered = env.client.call("POST", f"{CONTROL_PREFIX}capabilities", json_body=body)
+        if answered.status != 200:
+            problems.append(
+                f"{name}: POST /__unit/capabilities {body} answered {answered.status}: "
+                f"{answered.text[:200]}. Every one of the four verbs is contract; a unit that "
+                f"refuses one has three."
+            )
+            return
         reported = {str(row["name"]): bool(row["enabled"]) for row in answered.json()["capabilities"]}
         listed = env.capability_enabled(name)
-        require(
-            reported.get(name) is expect_on and listed is expect_on,
-            f"after {verb} {body}, {name!r} is enabled={reported.get(name)} in the POST's own answer and "
-            f"enabled={listed} at GET /__unit/capabilities, expected {expect_on}. The verb is applied "
-            f"in core/control/plane.py::capabilities_post against the live registry; both views are "
-            f"built from it and cannot disagree with it or with each other.",
-        )
+        if not (reported.get(name) is expect_on and listed is expect_on):
+            problems.append(
+                f"{name}: after {verb} {body}, enabled={reported.get(name)} in the POST's own answer "
+                f"and enabled={listed} at GET /__unit/capabilities, expected {expect_on}. The verb is "
+                f"applied in core/control/plane.py::capabilities_post against the live registry; both "
+                f"views are built from it and cannot disagree with it or with each other. A verb that "
+                f"works for some capabilities and not this one is a registry special-casing a name -- "
+                f"the defect a one-capability probe of this contract could never see."
+            )
+            return
         probe = env.client.call(method, path, json_body={})
         gated = probe.error_kind == _DISABLED
-        require(
-            gated is (not expect_on),
-            f"after {verb} {body}, {method} {path} (owned by {name!r}) answered {probe.status} "
-            f"x-unit-error={probe.error_kind!r}: the gate at step 2 of core/kernel/unit.py::_run_pipeline "
-            f"{'still refuses' if gated else 'no longer refuses'} the route while the table says "
-            f"enabled={expect_on}. A verb that moves the table and not the gate has changed a "
-            f"document, not the unit.",
-        )
-        steps.append(f"{verb} -> {'on' if expect_on else 'off'}")
+        if gated is expect_on:
+            problems.append(
+                f"{name}: after {verb} {body}, {method} {path} answered {probe.status} "
+                f"x-unit-error={probe.error_kind!r}: the gate at step 2 of "
+                f"core/kernel/unit.py::_run_pipeline {'still refuses' if gated else 'no longer refuses'} "
+                f"the route while the table says enabled={expect_on}. A verb that moves the table and "
+                f"not the gate has changed a document, not the unit."
+            )
 
     try:
-        observe("disable", {"disable": [name]}, False)
-        observe("enable", {"enable": [name]}, True)
-        observe("delta", {"delta": f"-{name}"}, False)
-        observe("delta", {"delta": f"+{name}"}, True)
-        observe("set", {"set": without}, False)
-        observe("set", {"set": original}, True)
-        # Order is contract: set replaces, THEN enable adds. Read the other way
-        # round the same body would leave the capability off.
-        observe("set+enable", {"set": without, "enable": [name]}, True)
+        for name, method, path in eligible:
+            without = [item for item in original if item != name]
+            observe(name, method, path, "disable", {"disable": [name]}, False)
+            observe(name, method, path, "enable", {"enable": [name]}, True)
+            observe(name, method, path, "delta", {"delta": f"-{name}"}, False)
+            observe(name, method, path, "delta", {"delta": f"+{name}"}, True)
+            observe(name, method, path, "set", {"set": without}, False)
+            observe(name, method, path, "set", {"set": original}, True)
+            # Order is contract: set replaces, THEN enable adds. Read the other
+            # way round the same body would leave the capability off.
+            observe(name, method, path, "set+enable", {"set": without, "enable": [name]}, True)
+            exercised.append(name)
     finally:
         env.set_capabilities(original)
-    return f"{name!r} via {method} {path}: {', '.join(steps)}; table and gate agreed at every step"
+    require(not problems, "\n".join(problems))
+    tail = f"; not singly toggleable: {'; '.join(excluded)}" if excluded else ""
+    return (
+        f"all four verbs plus the set+enable ordering exercised on {len(exercised)} "
+        f"capabilit{'y' if len(exercised) == 1 else 'ies'} ({', '.join(exercised)}); table and gate "
+        f"agreed at every step{tail}"
+    )

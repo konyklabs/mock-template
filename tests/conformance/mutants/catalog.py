@@ -1,4 +1,4 @@
-"""Forty-seven units, each broken in exactly one way, and the check each must trip.
+"""Forty-eight units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -1728,4 +1728,43 @@ passed. The page-boundary clause (pages >= 2 whenever the listing holds two
 rows at a one-row page size) is what this mutant holds down; a unit that
 honours limit but ignores the cursor is caught instead by the walk budget and
 the partition clauses, which the reviewer confirmed terminate.
+"""
+
+
+_ENABLE_DEAF_TO = "merchant-directory"
+"""The one name M48's registry refuses to enable. Deliberately NOT the first
+eligible capability: the sampled C28 asked only that one, so a defect confined
+to any other name was exactly what it could not see."""
+
+
+def _enable_ignores_one_name(handler: Handler) -> Handler:
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        body = args.body()
+        if not isinstance(body, Mapping) or "enable" not in body:
+            return handler(args)
+        enable = body["enable"]
+        kept = [name for name in enable if name != _ENABLE_DEAF_TO] if isinstance(enable, list) else enable
+        request = dataclasses.replace(args.req, raw_body=dump_json({**body, "enable": kept}))
+        return handler(HandlerArgs(req=request, params=args.params, ctx=args.ctx, route=args.route, auth=args.auth))
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M48",
+        name="enable-verb-deaf-to-one-name",
+        defect="POST /__unit/capabilities honours every verb for every capability, except that `enable` silently drops one name.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C28"}),
+        control=replace_control_route("POST", "/__unit/capabilities", _enable_ignores_one_name),
+    )
+)
+"""M38 confined to one capability (review round 3 of konyklabs/roadmap#15).
+
+M38 makes `enable` a no-op wholesale, so a C28 that asked one capability still
+tripped on it; a registry special-casing any OTHER name was green, because
+`requires` and dotted children are per-capability data and the check sampled
+the first. C28 now exercises every singly-toggleable capability, and this
+mutant is the proof it discriminates per name.
 """
