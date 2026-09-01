@@ -1067,6 +1067,15 @@ def declared_pages_never_overlap_and_lose_nothing(env: CheckEnv) -> str:
                 seen.extend(got)
                 offset += len(got)
 
+        if pages < 2:
+            problems.append(
+                f"{route.key}: {len(whole)} rows at a declared page size of {_WALK_PAGE_SIZE} came "
+                f"back in {pages} page(s), so no page boundary was ever crossed and nothing about "
+                f"pagination was asked. A route that ignores {spec['limit_param']!r} serves "
+                f"everything on page one with no repeat and no loss -- the one shape the other "
+                f"clauses cannot see; with two or more rows and a one-row page, a second page is "
+                f"the least the declaration promises."
+            )
         repeated = sorted({value for value in seen if seen.count(value) > 1})
         if repeated:
             problems.append(
@@ -1102,7 +1111,6 @@ def declared_pages_never_overlap_and_lose_nothing(env: CheckEnv) -> str:
         # in ConformanceTarget.inapplicable, and the inapplicable guard fails
         # the day a walkable list appears and the declaration goes stale.
         raise ConformanceSkip(
-            f"every paginated route this profile declares opts out of the walk"
-            f"{tail or '; none declares one at all'}"
+            f"every paginated route this profile declares opts out of the walk{tail or '; none declares one at all'}"
         )
     return f"walked {len(walked)} route(s) one row per page with no repeat and no loss: {'; '.join(walked)}{tail}"

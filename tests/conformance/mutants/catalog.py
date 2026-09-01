@@ -1,4 +1,4 @@
-"""Forty-six units, each broken in exactly one way, and the check each must trip.
+"""Forty-seven units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -1670,3 +1670,57 @@ M43 collapse every route at once, so a C25 that sampled the example-bearing
 subset still tripped on them; a unit honouring on_mismatch exactly where the
 sample looked was green. C25 now iterates every example-bearing idempotent
 route, and this mutant is the proof it discriminates per route."""
+
+
+def _ignore_the_page_size(routes: Sequence[Route]) -> Sequence[Route]:
+    """Every walkable paginated route serves everything on one page."""
+
+    def wrap(handler: Handler, spec: Any) -> Handler:
+        def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+            req = args.req
+            drop = (spec.limit_param, spec.cursor_param, spec.offset_param)
+            if spec.where == "query":
+                query = {name: value for name, value in req.query.items() if name not in drop}
+                query_all = {name: value for name, value in req.query_all.items() if name not in drop}
+                req = dataclasses.replace(req, query=query, query_all=query_all)
+            else:
+                body = args.body()
+                if isinstance(body, Mapping):
+                    stripped = {name: value for name, value in body.items() if name not in drop}
+                    req = dataclasses.replace(req, raw_body=dump_json(stripped))
+            reply = handler(HandlerArgs(req=req, params=args.params, ctx=args.ctx, route=args.route, auth=args.auth))
+            if isinstance(reply, ReplyInit) and isinstance(reply.json, Mapping):
+                document = dict(reply.json)
+                document.pop(spec.next_cursor_path, None)
+                return dataclasses.replace(reply, json=document)
+            return reply
+
+        return wrapped
+
+    return tuple(
+        route
+        if route.pagination is None or not route.pagination.walkable
+        else dataclasses.replace(route, handler=wrap(route.handler, route.pagination))
+        for route in routes
+    )
+
+
+register(
+    Mutant(
+        id="M47",
+        name="pagination-ignores-the-page-size",
+        defect="Every walkable paginated route ignores limit/cursor/offset and serves every row on one page, emitting no cursor.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C26"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_ignore_the_page_size),
+    )
+)
+"""The reviewer's second probe, verbatim (review round 2 of konyklabs/roadmap#15).
+
+The one escape from C26's other clauses: one page, no repeat, no loss, nothing
+about pagination ever asked -- the walk's own detail line printed '1 pages' and
+passed. The page-boundary clause (pages >= 2 whenever the listing holds two
+rows at a one-row page size) is what this mutant holds down; a unit that
+honours limit but ignores the cursor is caught instead by the walk budget and
+the partition clauses, which the reviewer confirmed terminate.
+"""
