@@ -625,10 +625,11 @@ def _keyed(route: RouteRow, key: str, extra: dict[str, Any] | None = None) -> di
     id="C24",
     name="state: an idempotency key is scoped to its operation",
     asserts=(
-        "A key that succeeded on one route, sent to a route declaring a different idempotency "
-        "scope, is not replayed, not refused as an idempotency conflict, and answers with its own "
-        "bytes -- while the first route still replays the same key. Two or more idempotent "
-        "operations whose declared scopes have all collapsed to one string are themselves a failure."
+        "For EVERY idempotent route that publishes an example, a key spent there is invisible from "
+        "every other declared scope (no conflict, no replay marker, its own answer) and visible "
+        "from every route sharing its scope, in the declared on_mismatch direction; and the "
+        "declarations themselves hold -- scopes not all one string, no shared scope spanning "
+        "capabilities, mixing on_mismatch, or verifiable by nothing."
     ),
     requires=Requires(two_idempotent_routes=True, credentials=True),
 )
@@ -637,138 +638,184 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
 
     Collapsing the store's key from ``f"{scope} {key}"`` to ``key`` made a
     PayOrder sent under a key a CreateOrder had used answer with the
-    CreateOrder body and a 200, and the matrix stayed green (the third
-    adversarial round, konyklabs/roadmap#10, N-3c; tracked as
-    konyklabs/roadmap#15): C19 sends its key to one route and never to a
-    second. A consumer who reuses a key across operations -- which real
-    clients do, because "idempotency key" reads as "request id" -- would be
-    handed another operation's answer with nothing to notice it by.
+    CreateOrder body and a 200, and the matrix stayed green
+    (konyklabs/roadmap#10, N-3c; tracked as konyklabs/roadmap#15): C19 sends
+    its key to one route and never to a second.
 
-    Two rules the review of the first version added, each closing a way the
-    defect escaped:
+    This is a CLASS check, for the same reason C17 is (and after the same
+    mistake was made here first: the initial version selected one route pair,
+    and collapsing every scope except that pair's stayed green -- N-3b's
+    shape, found by review). Every example-bearing idempotent route spends a
+    key; every declared scope is then probed against every spent key it must
+    not see, and every route sharing a spent key's scope is probed for the
+    visibility the shared declaration promises. Declaration rules run first,
+    because behaviour probes over incoherent declarations prove nothing:
 
-    * **A partner answer from the idempotency machinery is a failure, not a
-      pass.** ``idempotency_conflict`` has different bytes and no replay
-      marker, but it is AFFIRMATIVE evidence the key was found in the
-      partner's scope -- the mismatch branch only runs on a stored record.
-      The first version accepted it and certified a collapsed store whose
-      partner happened to be sent a different body.
-    * **The precondition must survive the defect.** Requiring "a second
-      DECLARED scope" let a unit that collapsed its declarations along with
-      its store disarm the check into a skip. So the precondition asks only
-      for two idempotent routes, and the scope comparison happens here:
-      declarations that have all collapsed to one string are a failure --
-      the namespace the field exists for is gone. A *pair* sharing a scope is
-      legitimate (an alias path really shares a replay space, and the partner
-      selection prefers any other scope over it); every operation sharing one
-      is not.
+    * **Not all one string.** N operations declaring a single scope have
+      removed the namespace the field exists for.
+    * **A shared scope stays inside one capability.** A namespace spanning
+      capabilities means switching one capability off half-disables another's
+      replay space; an alias pair -- the legitimate share -- lives where its
+      operation lives.
+    * **A shared scope declares one on_mismatch.** Two routes sharing a
+      namespace but promising different mismatch answers is a promise that
+      depends on which alias the retry happens to hit.
+    * **A shared scope has a drivable member.** A share none of whose routes
+      publishes an example is a share nothing can verify, and an unverifiable
+      declaration is exactly where the collapse hid from the paired version
+      of this check.
+
+    Two rules from earlier review rounds are kept: a partner answer of
+    ``idempotency_conflict`` is AFFIRMATIVE evidence the key was found in
+    that scope (the mismatch branch only runs on a stored record), and a
+    partner refusal from before the handler -- routing, the capability gate,
+    auth, a pre-auth fault -- proves nothing and fails rather than passing.
+    Keys are spent first and probed after, because one route (UpdateOrder)
+    pins its example to the seed's entity version and can succeed only once
+    per unit; the probes are read-mostly and order-independent.
     """
-    # A profile may preload a standing rule on exactly these routes, and a
-    # pre-auth fault from it is indistinguishable from a pre-handler refusal
-    # this contract fails on. Same reason C12, C14, C17 and C18 reset first.
     env.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
-    first_route = next(
-        row
-        for row in env.example_routes(methods=_MUTATING_METHODS, idempotent=True)
-        if env.partner_idempotent_route(row) is not None
-    )
-    second_route = env.partner_idempotent_route(first_route)
-    if second_route is None:  # pragma: no cover - the precondition already refused this
-        raise ConformanceSkip("no partner idempotent route")
-    first_scope = str(dict(first_route.idempotency or {})["scope"])
-    second_scope = str(dict(second_route.idempotency or {})["scope"])
-    require(
-        first_scope != second_scope,
-        f"every enabled idempotent route declares the single scope {first_scope!r} "
-        f"({', '.join(sorted(row.key for row in env.idempotent_routes()))}). The scope is the "
-        f"namespace that keeps one operation's stored answers away from another's; N operations "
-        f"declaring one string have removed it, and every consumer's key now crosses operations by "
-        f"declaration. Declare a scope per operation (a genuine alias pair may share one, provided "
-        f"the rest do not).",
-    )
-    key = "conformance-idempotency-scope-probe"
+    routes = env.idempotent_routes()
+    groups: dict[str, list[RouteRow]] = {}
+    for row in routes:
+        groups.setdefault(str(dict(row.idempotency or {})["scope"]), []).append(row)
 
-    first = env.client.call(
-        first_route.method,
-        first_route.example_path,
-        json_body=_keyed(first_route, key),
-        headers=env.authorized(first_route),
-    )
-    require(
-        200 <= first.status < 300,
-        f"{first_route.key} refused its own published example_body: {first.status} "
-        f"{first.error_kind!r} {first.text[:300]}. Nothing is stored under a key until something "
-        f"has succeeded, so the scope contract cannot be asked.",
-    )
-    seq_after_first = int(env.get_json(f"{CONTROL_PREFIX}journal")["seq"])
-
-    second = env.client.call(
-        second_route.method,
-        second_route.example_path,
-        json_body=_keyed(second_route, key),
-        headers=env.authorized(second_route),
-    )
-    require(
-        second.error_kind != _IDEMPOTENCY_CONFLICT,
-        f"{second_route.key} (scope {second_scope!r}) answered {second.status} "
-        f"{_IDEMPOTENCY_CONFLICT!r} to a key it had never seen -- the key was spent on "
-        f"{first_route.key} (scope {first_scope!r}) with a different body. A conflict is not a "
-        f"refusal of the request; it is the mismatch branch of core/kernel/unit.py::_replay, which "
-        f"only runs on a record FOUND in this route's scope. The store found the first operation's "
-        f"record under the second operation's lookup, which is exactly the collapse this contract "
-        f"exists to catch -- and the different bytes it answers with are the reason a weaker "
-        f"assertion missed it.",
-    )
-    require(
-        second.error_kind not in _BEFORE_THE_HANDLER,
-        f"{second_route.key} (scope {second_scope!r}) answered {second.status} with "
-        f"x-unit-error={second.error_kind!r}, a refusal the pipeline produces BEFORE the "
-        f"idempotency step. Nothing about key scoping was asked: the request never demonstrably "
-        f"reached the lookup, and a partner that cannot get past routing, the capability gate or "
-        f"auth would let this contract pass vacuously. Publish example_params naming a seeded "
-        f"entity for the partner route, or fix whatever refused the request upstream of step 7 "
-        f"of core/kernel/unit.py::_run_pipeline.",
-    )
-    require(
-        _REPLAY_HEADER not in second.headers and _IGNORED_BODY_HEADER not in second.headers,
-        f"{second_route.key} (scope {second_scope!r}) answered {second.status} carrying "
-        f"{_REPLAY_HEADER}={second.headers.get(_REPLAY_HEADER)!r} to a key it had never seen -- the "
-        f"key was spent on {first_route.key} (scope {first_scope!r}). The idempotency table in "
-        f"core/state/store.py is keyed on (scope, key) and the scope is the route's own declaration; "
-        f"a table keyed on the key alone hands one operation another operation's answer.",
-    )
-    require(
-        second.body != first.body,
-        f"{second_route.key} (scope {second_scope!r}) answered the exact bytes {first_route.key} "
-        f"(scope {first_scope!r}) had answered under the same key. That is the first operation's "
-        f"stored response served for the second: a consumer reusing a key across operations "
-        f"receives a body from the wrong endpoint with a 200 attached.",
-    )
-    seq_after_second = int(env.get_json(f"{CONTROL_PREFIX}journal")["seq"])
-    if 200 <= second.status < 300:
-        require(
-            seq_after_second > seq_after_first,
-            f"{second_route.key} answered {second.status} and the journal did not move from seq "
-            f"{seq_after_first}: nothing executed, so the answer was not the route's own.",
+    problems: list[str] = []
+    if len(routes) > 1 and len(groups) == 1:
+        only = next(iter(groups))
+        problems.append(
+            f"every enabled idempotent route declares the single scope {only!r} "
+            f"({', '.join(sorted(row.key for row in routes))}). The scope is the namespace that "
+            f"keeps one operation's stored answers away from another's; N operations declaring one "
+            f"string have removed it."
         )
+    for scope, members in sorted(groups.items()):
+        if len(members) < 2:
+            continue
+        capabilities = sorted({member.capability for member in members})
+        if len(capabilities) > 1:
+            problems.append(
+                f"scope {scope!r} is shared by routes across capabilities {capabilities} "
+                f"({', '.join(sorted(member.key for member in members))}). A replay namespace that "
+                f"spans capabilities is half-disabled whenever a profile switches one of them off; "
+                f"an alias pair shares a scope inside the capability its operation lives in."
+            )
+        directions = sorted({str(dict(member.idempotency or {}).get("on_mismatch", "conflict")) for member in members})
+        if len(directions) > 1:
+            problems.append(
+                f"scope {scope!r} is shared by routes declaring different on_mismatch answers "
+                f"{directions}; which answer a reused key gets would depend on which alias the "
+                f"retry hits."
+            )
+        if not any(member.example_body is not None for member in members):
+            problems.append(
+                f"scope {scope!r} is shared by {len(members)} routes "
+                f"({', '.join(sorted(member.key for member in members))}) and none publishes an "
+                f"example, so nothing can spend a key there and the declared share can never be "
+                f"verified -- which is exactly where a collapsed store hides. Publish example_body "
+                f"(and example_params if the path names an entity) on one of them."
+            )
+    require(not problems, "\n".join(problems))
 
-    again = env.client.call(
-        first_route.method,
-        first_route.example_path,
-        json_body=_keyed(first_route, key),
-        headers=env.authorized(first_route),
-    )
-    require(
-        again.headers.get(_REPLAY_HEADER) and again.body == first.body,
-        f"after the key was sent to {second_route.key}, {first_route.key} no longer replays it "
-        f"({again.status}, {_REPLAY_HEADER}={again.headers.get(_REPLAY_HEADER)!r}). The second "
-        f"operation overwrote or evicted the first's record; scopes must isolate in both directions.",
-    )
-    executed = "executed" if 200 <= second.status < 300 else f"refused as {second.error_kind}"
+    sources = [row for row in env.example_routes(methods=_MUTATING_METHODS, idempotent=True)]
+    require(sources, "no idempotent route publishes an example, so no key can be spent anywhere.")
+
+    spent: list[tuple[RouteRow, str, Any]] = []
+    for index, source in enumerate(sources):
+        key = f"conformance-scope-probe-{index}"
+        first = env.client.call(
+            source.method, source.example_path, json_body=_keyed(source, key), headers=env.authorized(source)
+        )
+        if not 200 <= first.status < 300:
+            problems.append(
+                f"{source.key} refused its own published example_body: {first.status} "
+                f"{first.error_kind!r} {first.text[:200]}. No key can be spent in scope "
+                f"{dict(source.idempotency or {})['scope']!r}, so nothing about it was asked."
+            )
+            continue
+        spent.append((source, key, first))
+
+    isolation_probes = 0
+    shares_verified = 0
+    for index, (source, key, first) in enumerate(spent):
+        scope = str(dict(source.idempotency or {})["scope"])
+        for member in groups[scope]:
+            if member.key == source.key:
+                continue
+            seen = env.client.call(
+                member.method, member.example_path, json_body=_keyed(member, key), headers=env.authorized(member)
+            )
+            direction = str(dict(member.idempotency or {}).get("on_mismatch", "conflict"))
+            visible = (
+                seen.error_kind == _IDEMPOTENCY_CONFLICT
+                if direction == "conflict"
+                else bool(seen.headers.get(_REPLAY_HEADER)) and seen.body == first.body
+            )
+            if not visible:
+                problems.append(
+                    f"{member.key} declares the same scope {scope!r} as {source.key} and answered "
+                    f"{seen.status} x-unit-error={seen.error_kind!r} to that route's key with its own "
+                    f"body -- not the {direction!r} answer a shared namespace promises. Either the "
+                    f"share is declared and not real (two stores behind one declaration) or the "
+                    f"aliases disagree; a consumer retrying on the other path is told nothing was "
+                    f"ever sent."
+                )
+            else:
+                shares_verified += 1
+        for other_scope, members in sorted(groups.items()):
+            if other_scope == scope:
+                continue
+            target = members[index % len(members)]
+            answer = env.client.call(
+                target.method, target.example_path, json_body=_keyed(target, key), headers=env.authorized(target)
+            )
+            isolation_probes += 1
+            if answer.error_kind == _IDEMPOTENCY_CONFLICT:
+                problems.append(
+                    f"{target.key} (scope {other_scope!r}) answered {_IDEMPOTENCY_CONFLICT!r} to a key "
+                    f"it had never seen -- the key was spent on {source.key} (scope {scope!r}) with a "
+                    f"different body. A conflict is the mismatch branch of core/kernel/unit.py::_replay, "
+                    f"which only runs on a record FOUND in this route's scope: the store found the "
+                    f"other operation's record, which is the collapse this contract exists to catch."
+                )
+                continue
+            if _REPLAY_HEADER in answer.headers or _IGNORED_BODY_HEADER in answer.headers:
+                problems.append(
+                    f"{target.key} (scope {other_scope!r}) answered {answer.status} carrying an "
+                    f"idempotent-replay marker for a key spent on {source.key} (scope {scope!r}): one "
+                    f"operation's stored answer served for another."
+                )
+                continue
+            if answer.body == first.body:
+                problems.append(
+                    f"{target.key} (scope {other_scope!r}) answered the exact bytes {source.key} "
+                    f"(scope {scope!r}) stored under the same key: a consumer reusing a key across "
+                    f"operations receives a body from the wrong endpoint with nothing to notice it by."
+                )
+                continue
+            if answer.error_kind in _BEFORE_THE_HANDLER:
+                problems.append(
+                    f"{target.key} (scope {other_scope!r}) answered {answer.status} with "
+                    f"x-unit-error={answer.error_kind!r}, a refusal the pipeline produces BEFORE the "
+                    f"idempotency step; nothing about key scoping was asked of it. Publish "
+                    f"example_params naming a seeded entity for it, or fix whatever refused the "
+                    f"request upstream of step 7 of core/kernel/unit.py::_run_pipeline."
+                )
+        again = env.client.call(
+            source.method, source.example_path, json_body=_keyed(source, key), headers=env.authorized(source)
+        )
+        if not (again.headers.get(_REPLAY_HEADER) and again.body == first.body):
+            problems.append(
+                f"after its key was probed against every other scope, {source.key} no longer replays "
+                f"it ({again.status}, {_REPLAY_HEADER}={again.headers.get(_REPLAY_HEADER)!r}): some "
+                f"probe overwrote or evicted the record, so scopes do not isolate in both directions."
+            )
+    require(not problems, "\n".join(problems))
     return (
-        f"key {key!r}: {first_route.key} [{first_scope}] -> {first.status}; the same key on "
-        f"{second_route.key} [{second_scope}] -> {second.status} ({executed}, no replay marker, "
-        f"different bytes); {first_route.key} still replays it"
+        f"{len(spent)} keys spent across {len(groups)} declared scopes; {isolation_probes} "
+        f"cross-scope probes saw no conflict, no marker and none of the stored bytes; "
+        f"{shares_verified} shared-scope alias(es) saw the record in the declared direction; every "
+        f"spent key still replays on its own route"
     )
 
 

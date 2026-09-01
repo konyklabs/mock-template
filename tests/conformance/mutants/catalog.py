@@ -1,4 +1,4 @@
-"""Forty-three units, each broken in exactly one way, and the check each must trip.
+"""Forty-five units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -1297,6 +1297,12 @@ register(
         defect="A reused key with a different body replays the stored answer on every route, while the route table still promises 'conflict'.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C25"}),
+        also_trips=frozenset({"C24"}),
+        cascade=(
+            "C24 verifies a shared scope's visibility in the DECLARED direction: the orders.create "
+            "alias pair publishes conflict and answers a replay, so the share is real but answers "
+            "the direction the table denies -- a genuine violation of both contracts."
+        ),
         vendor=lambda inner: VendorOverlay(inner, routes=_ignore_on_mismatch),
         control=replace_control_route("GET", "/__unit/routes", rewrite_document(_publish_conflict)),
     )
@@ -1534,6 +1540,11 @@ register(
         defect="A reused key with a different body is refused on every route, while the route table promises 'replay'.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C25"}),
+        also_trips=frozenset({"C24"}),
+        cascade=(
+            "The mirror of M35's cascade: the alias pair publishes replay and answers a conflict, "
+            "so C24's declared-direction visibility clause is violated alongside C25."
+        ),
         vendor=lambda inner: VendorOverlay(inner, routes=_refuse_every_mismatch),
         control=replace_control_route("GET", "/__unit/routes", rewrite_document(_publish_replay)),
     )
@@ -1547,3 +1558,78 @@ with a 409 the document does not admit to. Until UpdateOrder published an
 example (example_body plus example_params), no registered mutant exercised the
 replay branch at all.
 """
+
+
+_LIED_ABOUT_OPERATION = "AccumulateLoyaltyPoints"
+"""The route M44 and M46 break. Chosen because it had no example until the
+review of konyklabs/roadmap#15 forced one: a defect confined to it was exactly
+the defect the example-bearing sample could not see."""
+
+
+def _store_scope_in_anothers_bucket(routes: Sequence[Route]) -> Sequence[Route]:
+    return tuple(
+        route
+        if route.operation_id != _LIED_ABOUT_OPERATION or route.idempotency is None
+        else dataclasses.replace(route, idempotency=dataclasses.replace(route.idempotency, scope="orders.create"))
+        for route in routes
+    )
+
+
+def _publish_the_original_scope(document: dict[str, Any]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for row in document["routes"]:
+        if row.get("operation_id") == _LIED_ABOUT_OPERATION and row.get("idempotency") is not None:
+            rows.append({**row, "idempotency": {**row["idempotency"], "scope": "loyalty.accumulate"}})
+        else:
+            rows.append(row)
+    return {**document, "routes": rows}
+
+
+register(
+    Mutant(
+        id="M44",
+        name="one-route-stores-in-anothers-scope",
+        defect="One route keys its idempotency records in another operation's scope while the table declares its own.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C24"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_store_scope_in_anothers_bucket),
+        control=replace_control_route("GET", "/__unit/routes", rewrite_document(_publish_the_original_scope)),
+    )
+)
+"""The single-route leak the paired C24 could not see (review round 2 of
+konyklabs/roadmap#15). AccumulateLoyaltyPoints stores under orders.create, so
+a key a CreateOrder spent answers a loyalty request with an
+idempotency_conflict -- affirmative proof the record was found in a scope the
+table says it is not in. Only a sweep that probes every declared scope against
+every spent key meets it."""
+
+
+_SPARED_BY_THE_PAIRED_CHECK = frozenset({"orders.create", "orders.update"})
+
+
+def _collapse_all_but_the_pair(routes: Sequence[Route]) -> Sequence[Route]:
+    return tuple(
+        route
+        if route.idempotency is None or route.idempotency.scope in _SPARED_BY_THE_PAIRED_CHECK
+        else dataclasses.replace(route, idempotency=dataclasses.replace(route.idempotency, scope="everything-else"))
+        for route in routes
+    )
+
+
+register(
+    Mutant(
+        id="M45",
+        name="idempotency-scopes-collapsed-except-the-pair",
+        defect="Every idempotent scope except the two the paired check selected collapses, store and declaration together, into one bucket spanning six capabilities.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C24"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_collapse_all_but_the_pair),
+    )
+)
+"""The reviewer's probe, verbatim (review round 2 of konyklabs/roadmap#15).
+
+Under the paired C24 this stayed green: the two spared scopes were the two it
+asked about. It is caught by declaration now -- a shared scope spanning
+capabilities means switching one capability off half-disables another's replay
+namespace -- because with every collapsed route honestly declaring the shared
+scope, the share itself is what is wrong, not its implementation."""
