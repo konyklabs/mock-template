@@ -186,7 +186,9 @@ def test_every_registered_check_has_a_mutant() -> None:
 def test_no_mutant_names_a_check_that_does_not_exist() -> None:
     """A mutant aimed at a deleted contract would silently stop proving anything."""
     named = frozenset(
-        check_id for mutant in MUTANTS for check_id in (mutant.trips | mutant.also_trips | mutant.skips_everywhere)
+        check_id
+        for mutant in MUTANTS
+        for check_id in (mutant.trips | mutant.also_trips | mutant.also_skips | mutant.skips_everywhere)
     )
     stale = sorted(named - _CHECK_IDS)
     assert not stale, f"mutants name {stale}, which no check registers. Registered: {sorted(_CHECK_IDS)}."
