@@ -175,7 +175,7 @@ def build_selection(
         pre_modifier = {"guid": str(pre["guid"]), "entityType": "PreModifier"}
 
     quantity = float(request.quantity)
-    price = quantity_price(unit, quantity * parent_quantity, factor)
+    price = quantity_price(unit, quantity * parent_quantity, factor, field=f"{field}quantity")
     applied = taxes_on(price, rates)
     selection_guid = None if mint is None else mint()
     modifiers = [
