@@ -28,6 +28,12 @@ def clover() -> Iterator[StartedUnit]:
 
 
 @pytest.fixture
+def toast() -> Iterator[StartedUnit]:
+    with unit("toast") as started:
+        yield started
+
+
+@pytest.fixture
 def receiver() -> Iterator[WebhookReceiver]:
     with webhook_receiver() as listening:
         yield listening

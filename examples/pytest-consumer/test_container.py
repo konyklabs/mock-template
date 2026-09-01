@@ -54,9 +54,22 @@ def clover_http() -> Iterator[httpx.Client]:
     yield from _vendor_container("clover")
 
 
+@pytest.fixture(scope="module")
+def toast_http() -> Iterator[httpx.Client]:
+    yield from _vendor_container("toast")
+
+
 SQUARE_AUTH = {"Authorization": "Bearer EAAAl-unit-seeded-access-token-full-scopes"}
 CLOVER_AUTH = {"Authorization": "Bearer unit-seeded-clover-access-token-full-permissions"}
 CLOVER_MERCHANT = "/v3/merchants/HRVSTRYE12345"
+# Toast names the restaurant in a header, so its auth is two entries, not one.
+TOAST_AUTH = {
+    "Authorization": "Bearer unit-seeded-toast-access-token-full-scopes",
+    "Toast-Restaurant-External-ID": "e6a4a8d2-0000-4000-8000-000000000001",
+}
+TOAST_SOUP = "3c9a1f00-0000-4000-8000-00000000c201"
+TOAST_DINE_IN = "5d0e2b11-0000-4000-8000-00000000d001"
+TOAST_EXTERNAL_PAYMENT = "5d0e2b11-0000-4000-8000-00000000d101"
 
 
 def test_square_in_a_container_creates_and_pays_an_order(square_http: httpx.Client) -> None:
@@ -100,3 +113,40 @@ def test_clover_in_a_container_pays_an_atomic_order(clover_http: httpx.Client) -
     assert paid.status_code == 200, paid.text
     fetched = clover_http.get(f"{CLOVER_MERCHANT}/orders/{order['id']}", headers=CLOVER_AUTH).json()
     assert (fetched["state"], fetched["paymentState"]) == ("locked", "PAID")
+
+
+def test_toast_in_a_container_pays_a_check_in_dollars(toast_http: httpx.Client) -> None:
+    assert toast_http.get("/__unit/health").json()["vendor"] == "toast"
+    created = toast_http.post(
+        "/orders/v2/orders",
+        headers=TOAST_AUTH,
+        json={
+            "entityType": "Order",
+            "diningOption": {"guid": TOAST_DINE_IN, "entityType": "DiningOption"},
+            "checks": [
+                {
+                    "entityType": "Check",
+                    "selections": [{"item": {"guid": TOAST_SOUP, "entityType": "MenuItem"}, "quantity": 1}],
+                }
+            ],
+        },
+    )
+    assert created.status_code == 200, created.text
+    order = created.json()
+    check = order["checks"][0]
+    assert check["totalAmount"] == 9.55  # dollars over the socket too, not 955
+    paid = toast_http.post(
+        f"/orders/v2/orders/{order['guid']}/checks/{check['guid']}/payments",
+        headers=TOAST_AUTH,
+        json=[
+            {
+                "type": "OTHER",
+                "amount": check["totalAmount"],
+                "tipAmount": 0,
+                "otherPayment": {"guid": TOAST_EXTERNAL_PAYMENT},
+            }
+        ],
+    )
+    assert paid.status_code == 200, paid.text
+    fetched = toast_http.get(f"/orders/v2/orders/{order['guid']}", headers=TOAST_AUTH).json()
+    assert fetched["checks"][0]["paymentStatus"] == "PAID"
