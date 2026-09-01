@@ -2,11 +2,18 @@
  * What a restaurant-ordering integration does against Toast, over HTTP, from
  * TypeScript. The vendor a JavaScript client is likeliest to get wrong: money
  * is decimal dollars on the wire, and the restaurant is named by a header, so
- * a bearer on its own is a 400 rather than a 401.
+ * a bearer on its own is refused for a reason that is not authentication.
  *
  * Nothing here names a guid. The credentials come from `/__unit/auth` and the
  * ids from the menu and the configuration lists, the way a partner would find
  * them.
+ *
+ * Every assertion below is on something Toast publishes. Where this unit had
+ * to choose -- the status for a missing header, the status an OTHER payment
+ * lands in, which timestamp the signature covers -- the assertion is weakened
+ * to the part a consumer could rely on against the real API, and the comment
+ * says why. Do not strengthen one of those back: `src/vendorfake/toast/`
+ * labels each of them JUDGMENT at its source.
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
@@ -99,7 +106,17 @@ function order() {
   };
 }
 
-/** base64(HMAC-SHA256(secret, rawBody + body.timestamp)) -- Toast's documented scheme. */
+/**
+ * base64(HMAC-SHA256(secret, rawBody + body.timestamp)).
+ *
+ * Toast documents the algorithm and that it covers "the body and timestamp of
+ * the webhook message", but not *which* timestamp string: there is no
+ * timestamp header on a delivery, so the envelope's own `timestamp` field is
+ * the only candidate, and appending it is a reading rather than a quotation
+ * (`toast/signer.py` labels it the loudest judgment in that package). A
+ * handler that disagrees with the real Toast should try the raw body alone
+ * before assuming its HMAC is wrong.
+ */
 function toastSignature(secret: string, rawBody: Buffer): string {
   const timestamp = JSON.parse(rawBody.toString()).timestamp as string;
   return createHmac("sha256", secret).update(Buffer.concat([rawBody, Buffer.from(timestamp)])).digest("base64");
@@ -117,10 +134,12 @@ describe("toast", () => {
     expect(login.body.status).toBe("SUCCESS");
     expect(login.body.token.tokenType).toBe("Bearer");
 
-    const [, payload] = login.body.token.accessToken.split(".");
-    const claims = JSON.parse(Buffer.from(payload, "base64url").toString());
-    expect(claims.exp - claims.iat).toBe(login.body.token.expiresIn);
-    expect(claims.scope.split(" ")).toContain("orders:write");
+    // Toast documents that the token is a JWT and that it carries
+    // `partner_guid`, and nothing else about its claims. Do not decode one to
+    // learn its scopes -- a consumer never holds Toast's signing key and must
+    // not verify a Toast token locally (`toast/jwt.py`). The shape is all
+    // there is to check.
+    expect(login.body.token.accessToken.split(".")).toHaveLength(3);
 
     const asMinted = api(inject("vendorfake").toast, {
       authorization: `Bearer ${login.body.token.accessToken}`,
@@ -131,19 +150,24 @@ describe("toast", () => {
     expect(found.body.guid).toBe(restaurant);
   });
 
-  test("a bearer without the restaurant header is a 400, and no bearer is a 401", async () => {
-    // The token is fine; the request never named a restaurant. A client that
-    // reads every refusal on this route as an expired token re-logs in for
-    // ever and never sends the header it is actually missing.
-    const noHeader = await asPartner.get<{ status: number; message: string }>("/menus/v3/menus");
-    expect(noHeader.status, noHeader.text).toBe(400);
-    expect(noHeader.body.status).toBe(400);
-    expect(noHeader.body.message).toContain("Toast-Restaurant-External-ID");
+  test("a bearer without the restaurant header is refused, but not as bad auth", async () => {
+    // The token is fine; the request never named a restaurant. Toast does not
+    // document what a MISSING header gets -- this unit answers 400 and labels
+    // that choice a judgment (`toast/auth.py`) -- so the assertion here is the
+    // part that changes what a client does, and that a consumer can carry to
+    // the real API: it is not an authentication failure, so logging in again
+    // cannot fix it. Send the header. (The exact status and message are the
+    // unit's, and are pinned in the unit's own tests, not in an example.)
+    const noHeader = await asPartner.get("/menus/v3/menus");
+    expect(noHeader.status, noHeader.text).not.toBe(401);
+    expect(noHeader.status).toBeGreaterThanOrEqual(400);
+    expect(noHeader.status).toBeLessThan(500);
 
+    // A missing bearer, though, is the documented 401.
     const named = api(inject("vendorfake").toast, { [toast.restaurantHeader]: restaurant });
     const noToken = await named.get<{ status: number }>("/menus/v3/menus");
     expect(noToken.status, noToken.text).toBe(401);
-    expect(noToken.body.status).toBe(401);
+    expect(noToken.body.status).toBe(401); // the error envelope repeats it, documented verbatim
 
     expect((await asSeed.get("/menus/v3/menus")).status).toBe(200);
   });
@@ -180,7 +204,8 @@ describe("toast", () => {
     expect(paid.status, paid.text).toBe(200);
     const [payment] = paid.body.checks[0].payments;
     expect(payment.amount).toBe(9.55);
-    expect(payment.paymentStatus).toBe("CAPTURED");
+    // Not the payment's own status: what an OTHER payment lands in is
+    // undocumented (this unit says CAPTURED). What settles the check is.
 
     const fetched = await asSeed.get<Order>(`/orders/v2/orders/${created.body.guid}`);
     expect(fetched.body.checks[0].paymentStatus).toBe("PAID");
@@ -233,8 +258,8 @@ describe("toast", () => {
     });
     expect(armed.status, armed.text).toBe(200);
     const first = await asSeed.get<{ status: number; message: string }>("/menus/v3/metadata");
-    expect(first.status).toBe(429);
-    expect(first.headers.get("retry-after")).toBe("0");
+    expect(first.status).toBe(429); // documented, with Retry-After (apiRateLimiting.html)
+    expect(first.headers.get("retry-after")).toBe("0"); // the delay armed above; a real 429's is Toast's
     expect(first.body.status).toBe(429);
     expect((await asSeed.get("/menus/v3/metadata")).status).toBe(200);
   });

@@ -3,13 +3,21 @@
 Toast asks three things of a client that Square and Clover do not. The
 credentials are a machine-client login rather than an OAuth redirect. The
 restaurant is named by the ``Toast-Restaurant-External-ID`` **header** rather
-than a path segment, so a bearer on its own is a 400 -- the token is fine, the
-request just never named a restaurant. And money is **decimal dollars** on the
-wire, not integer cents: a client that assumed cents everywhere is wrong by a
-factor of a hundred on precisely this vendor.
+than a path segment, so a bearer on its own is refused for a reason that is
+not authentication -- the token is fine, the request just never named a
+restaurant. And money is **decimal dollars** on the wire, not integer cents: a
+client that assumed cents everywhere is wrong by a factor of a hundred on
+precisely this vendor.
 
 ``seed.auth`` carries the bearer and the restaurant header together, which is
 what every restaurant-scoped call sends.
+
+Every assertion below is on something Toast publishes. Where this unit had to
+choose -- the status for a missing header or a mis-shaped body, the status a
+payment lands in, which timestamp the signature covers -- the assertion is
+weakened to the part a consumer could rely on against the real API, and the
+comment says why. Do not strengthen one of those back: ``src/vendorfake/toast/``
+labels each of them JUDGMENT at its source, and this file is copied.
 """
 
 from __future__ import annotations
@@ -60,7 +68,10 @@ def test_machine_client_login_then_an_order_is_quoted_created_and_paid(toast: St
     granted = login.json()
     assert granted["status"] == "SUCCESS"
     assert granted["token"]["tokenType"] == "Bearer"
-    assert granted["token"]["accessToken"].count(".") == 2  # a JWT, not an opaque string
+    # A JWT, not an opaque string -- and that is all to check. A consumer never
+    # holds Toast's signing key and must not verify or decode a Toast token
+    # locally to learn its scopes (`toast/jwt.py`).
+    assert granted["token"]["accessToken"].count(".") == 2
     auth = {"Authorization": f"Bearer {granted['token']['accessToken']}", **seed.restaurant_header}
 
     # What the ticket costs, before anything is written: the documented
@@ -99,7 +110,9 @@ def test_machine_client_login_then_an_order_is_quoted_created_and_paid(toast: St
     assert paid.status_code == 200, paid.text
     (payment,) = paid.json()["checks"][0]["payments"]
     assert payment["amount"] == 9.55
-    assert payment["paymentStatus"] == "CAPTURED"
+    # Not the payment's own status: what an OTHER payment lands in is
+    # undocumented (this unit says CAPTURED, and labels that a judgment --
+    # `toast/surface/payments.py`, audit gap 6). What settles the check is.
 
     # A fresh read sees the consequence: the check is settled.
     fetched = client.get(f"/orders/v2/orders/{order['guid']}", headers=auth).json()
@@ -134,21 +147,21 @@ def test_the_published_menu_prices_items_in_dollars(toast: StartedUnit) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_bearer_without_the_restaurant_header_is_a_400_not_a_401(toast: StartedUnit) -> None:
+def test_a_bearer_without_the_restaurant_header_is_refused_but_not_as_bad_auth(toast: StartedUnit) -> None:
     seed = toast.seed
-    # A good token, no restaurant named. A client that reads this as an
-    # expired token logs in again for ever and never sends the header it is
-    # actually missing.
+    # A good token, no restaurant named. Toast does not document what a MISSING
+    # header gets -- this unit answers 400 and labels the choice a judgment
+    # (`toast/auth.py`) -- so what is asserted here is the part that changes
+    # what a client does: it is not an authentication failure, so logging in
+    # again cannot fix it. Send the header.
     unscoped = toast.client.get("/menus/v3/menus", headers=seed.bearer_only)
-    assert unscoped.status_code == 400, unscoped.text
-    refusal = unscoped.json()
-    assert refusal["message"] == "The Toast-Restaurant-External-ID header is required on this endpoint."
-    assert refusal["status"] == 400  # Toast repeats the status inside the body
+    assert unscoped.status_code != 401, unscoped.text
+    assert 400 <= unscoped.status_code < 500, unscoped.text
 
-    # The other way round is the 401 you expect.
+    # A missing bearer, though, is the documented 401.
     nameless = toast.client.get("/menus/v3/menus", headers=seed.restaurant_header)
     assert nameless.status_code == 401, nameless.text
-    assert nameless.json()["status"] == 401
+    assert nameless.json()["status"] == 401  # the error envelope repeats it, documented verbatim
 
     assert toast.client.get("/menus/v3/menus", headers=seed.auth).status_code == 200
 
@@ -171,9 +184,13 @@ def test_a_single_payment_is_still_sent_as_an_array(toast: StartedUnit) -> None:
     }
 
     # The shape mistake a client makes first: one payment, sent as an object.
+    # "The body is an array of payments" is documented; the status and message
+    # a mis-shaped body gets are not, so what is pinned is that it is refused
+    # and that nothing was written -- not this unit's 400 or its wording.
     refused = toast.client.post(path, headers=seed.auth, json=payment)
-    assert refused.status_code == 400, refused.text
-    assert refused.json()["message"] == "The request body must be a non-empty array of payments."
+    assert 400 <= refused.status_code < 500, refused.text
+    still_open = toast.client.get(f"/orders/v2/orders/{seed.open_order_guid}", headers=seed.auth).json()
+    assert still_open["checks"][0]["payments"] == []
 
     accepted = toast.client.post(path, headers=seed.auth, json=[payment])
     assert accepted.status_code == 200, accepted.text
@@ -207,7 +224,12 @@ def test_an_order_updated_webhook_is_delivered_and_verifies(toast: StartedUnit, 
 
     (delivery,) = receiver.received
     # The check your handler performs, with the helper vendorfake exports:
-    # HMAC-SHA256 over the body and the envelope's own timestamp, base64.
+    # HMAC-SHA256, base64, over "the body and timestamp of the webhook
+    # message". WHICH timestamp is a judgment: a delivery carries no timestamp
+    # header, so the envelope's own field is the only candidate and is what the
+    # helper appends (`toast/signer.py`). A handler that disagrees with the
+    # real Toast should try the raw body alone before assuming its HMAC is
+    # wrong.
     assert verify_toast_signature(secret, delivery.body, delivery.header("toast-signature") or "")
     assert delivery.header("toast-event-type") == "order_updated"
     assert delivery.header("toast-restaurant-external-id") == seed.restaurant_guid
@@ -239,8 +261,8 @@ def test_a_rate_limited_read_carries_retry_after_and_the_retry_succeeds(toast: S
         }
     )
     limited = toast.client.get("/menus/v3/metadata", headers=toast.seed.auth)
-    assert limited.status_code == 429
-    assert limited.headers["retry-after"] == "1"
+    assert limited.status_code == 429  # documented, with Retry-After (apiRateLimiting.html)
+    assert limited.headers["retry-after"] == "1"  # the delay armed above; a real 429's is Toast's
     assert toast.client.get("/menus/v3/metadata", headers=toast.seed.auth).status_code == 200
 
 
@@ -257,6 +279,9 @@ def test_a_transient_401_is_followed_by_a_200(toast: StartedUnit) -> None:
     )
     path = f"/orders/v2/orders/{seed.open_order_guid}"
     first = toast.client.get(path, headers=seed.auth)
+    # 401 for an expired token is documented; the `code` beside it is not.
+    # Toast publishes no catalogue of codes -- 10025 is the only one ever seen
+    # -- so a consumer must branch on the status (`toast/errors.py`).
     assert first.status_code == 401
-    assert first.json()["code"] == 10008  # the documented "token invalid/expired"
+    assert first.json()["status"] == 401
     assert toast.client.get(path, headers=seed.auth).status_code == 200
