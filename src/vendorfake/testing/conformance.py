@@ -11,9 +11,9 @@ import a web framework -- so the targets live here, one layer out, where the
 out-of-process one the shipped ``vendorfake serve`` command in a child.
 
 The repository's own harness (``tests/conformance/harness.py``) reads the
-Clover skip matrix from this module rather than keeping a copy: a matrix that
-lived in two places would let the wheel's target and CI's disagree about what a
-skip means.
+vendors' skip matrices from this module rather than keeping copies: a matrix
+that lived in two places would let the wheel's target and CI's disagree about
+what a skip means.
 """
 
 from __future__ import annotations
@@ -162,8 +162,8 @@ def target(
     expected_skips: Mapping[str, Sequence[str]] | None = None,
     inapplicable: Mapping[str, str] | None = None,
 ) -> ConformanceTarget:
-    """A target for any installed vendor. The two shipped ones are wrapped
-    below with the tenant parameter and skip matrix each needs."""
+    """A target for any installed vendor. Each shipped one is wrapped below
+    with the tenant parameter and skip matrix it needs."""
 
     def opener(profile: str, transport: str) -> AbstractContextManager[ConformanceClient]:
         return open_client(vendor, profile, transport)
