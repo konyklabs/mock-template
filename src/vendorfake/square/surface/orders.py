@@ -391,6 +391,10 @@ class OrdersSurface:
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="orders.create"),
                 operation_id="CreateOrderAtLocation",
                 summary="CreateOrder on its pre-2019 path; the location comes from the URL.",
+                # An empty order: the location is authoritative from the URL,
+                # which is the whole point of this path.
+                example_body={"order": {}},
+                example_params={"location_id": SEED_LOCATION_ID},
             ),
             Route(
                 method="POST",
@@ -462,6 +466,11 @@ class OrdersSurface:
                 auth="bearer",
                 scopes=("ORDERS_WRITE", "PAYMENTS_WRITE"),
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="orders.pay", required=True),
+                # No example_body: a working PayOrder is pinned to the order's
+                # current version and total, which other checks move. The
+                # params still name the seeded order so a scope probe reaches
+                # the handler instead of a 404.
+                example_params={"order_id": SEED_OPEN_ORDER_ID},
                 operation_id="PayOrder",
                 summary="Pay an open order and move it to COMPLETED.",
             ),

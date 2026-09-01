@@ -92,6 +92,7 @@ from vendorfake.square.model.loyalty import (
     project_loyalty_program,
 )
 from vendorfake.square.model.order import order_total
+from vendorfake.square.seed.constants import SEED_LOCATION_ID, SEED_LOYALTY_ACCOUNT_ID, SEED_LOYALTY_PROGRAM_ID
 from vendorfake.square.surface.common import SquareDeps
 
 __all__ = ["CAPABILITY", "LoyaltySurface", "loyalty_routes", "points_for_order"]
@@ -143,6 +144,14 @@ class LoyaltySurface:
                 auth="bearer",
                 scopes=("LOYALTY_WRITE",),
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="loyalty.accounts.create", required=True),
+                # A phone number no seeded account holds: enrolling an already
+                # enrolled number is a 409, so the example must be a NEW buyer.
+                example_body={
+                    "loyalty_account": {
+                        "program_id": SEED_LOYALTY_PROGRAM_ID,
+                        "mapping": {"phone_number": "+14155550111"},
+                    }
+                },
                 operation_id="CreateLoyaltyAccount",
                 summary="Enrol a buyer by E.164 phone number.",
             ),
@@ -154,6 +163,8 @@ class LoyaltySurface:
                 auth="bearer",
                 scopes=("LOYALTY_WRITE",),
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="loyalty.accumulate", required=True),
+                example_body={"location_id": SEED_LOCATION_ID, "accumulate_points": {"points": 5}},
+                example_params={"account_id": SEED_LOYALTY_ACCOUNT_ID},
                 operation_id="AccumulateLoyaltyPoints",
                 summary="Add points for an order (computed from the accrual rule) or a stated amount.",
             ),

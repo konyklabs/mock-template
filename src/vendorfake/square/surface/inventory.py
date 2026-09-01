@@ -86,6 +86,7 @@ from vendorfake.square.model.inventory import (
     parse_quantity,
     project_inventory_count,
 )
+from vendorfake.square.seed.constants import SEED_LOCATION_ID, TEA_MUG_VARIATION_ID
 from vendorfake.square.surface.common import SquareDeps, instant_ms
 
 __all__ = ["CAPABILITY", "COUNTS_DEFAULT_LIMIT", "COUNTS_MAX_LIMIT", "InventorySurface", "inventory_routes"]
@@ -141,6 +142,23 @@ class InventorySurface:
                 auth="bearer",
                 scopes=("INVENTORY_WRITE",),
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="inventory.batch-create", required=True),
+                # One physical count of a seeded variation at the seeded
+                # location; occurred_at is fixed so the example is one request,
+                # not a template.
+                example_body={
+                    "changes": [
+                        {
+                            "type": "PHYSICAL_COUNT",
+                            "physical_count": {
+                                "catalog_object_id": TEA_MUG_VARIATION_ID,
+                                "location_id": SEED_LOCATION_ID,
+                                "state": "IN_STOCK",
+                                "quantity": "9",
+                                "occurred_at": "2026-08-30T12:00:00.000Z",
+                            },
+                        }
+                    ]
+                },
                 operation_id="BatchChangeInventory",
                 summary="Apply physical counts and adjustments to IN_STOCK counts.",
             ),

@@ -163,6 +163,11 @@ class CatalogSurface:
                 auth="bearer",
                 scopes=("ITEMS_WRITE",),
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="catalog.upsert", required=True),
+                # A CREATE, so it is repeatable: "#" marks a temporary id and a
+                # fresh real one is minted per call.
+                example_body={
+                    "object": {"type": "ITEM", "id": "#conformance-item", "item_data": {"name": "Conformance Blend"}}
+                },
                 operation_id="UpsertCatalogObject",
                 summary="Create or update one ITEM (with its variations) or one ITEM_VARIATION.",
             ),

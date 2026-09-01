@@ -1,4 +1,4 @@
-"""Forty-five units, each broken in exactly one way, and the check each must trip.
+"""Forty-six units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -1633,3 +1633,40 @@ asked about. It is caught by declaration now -- a shared scope spanning
 capabilities means switching one capability off half-disables another's replay
 namespace -- because with every collapsed route honestly declaring the shared
 scope, the share itself is what is wrong, not its implementation."""
+
+
+def _flip_one_routes_mismatch(routes: Sequence[Route]) -> Sequence[Route]:
+    return tuple(
+        route
+        if route.operation_id != _LIED_ABOUT_OPERATION or route.idempotency is None
+        else dataclasses.replace(route, idempotency=dataclasses.replace(route.idempotency, on_mismatch="replay"))
+        for route in routes
+    )
+
+
+def _publish_the_original_mismatch(document: dict[str, Any]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for row in document["routes"]:
+        if row.get("operation_id") == _LIED_ABOUT_OPERATION and row.get("idempotency") is not None:
+            rows.append({**row, "idempotency": {**row["idempotency"], "on_mismatch": "conflict"}})
+        else:
+            rows.append(row)
+    return {**document, "routes": rows}
+
+
+register(
+    Mutant(
+        id="M46",
+        name="on-mismatch-ignored-on-one-route",
+        defect="Exactly one route replays a reused key with a different body while the table promises conflict; every other route honours its declaration.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C25"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_flip_one_routes_mismatch),
+        control=replace_control_route("GET", "/__unit/routes", rewrite_document(_publish_the_original_mismatch)),
+    )
+)
+"""M35 confined to one route (review round 2 of konyklabs/roadmap#15). M35 and
+M43 collapse every route at once, so a C25 that sampled the example-bearing
+subset still tripped on them; a unit honouring on_mismatch exactly where the
+sample looked was green. C25 now iterates every example-bearing idempotent
+route, and this mutant is the proof it discriminates per route."""
