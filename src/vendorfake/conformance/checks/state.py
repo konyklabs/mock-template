@@ -1094,5 +1094,15 @@ def declared_pages_never_overlap_and_lose_nothing(env: CheckEnv) -> str:
     require(not problems, "\n".join(problems))
     tail = f"; excused by declaration: {'; '.join(excused)}" if excused else ""
     if not walked:
-        return f"no walkable paginated route on this profile{tail}"
+        # A SKIP, not a pass: every declared route opted out, so the contract
+        # was never asked and a pass would certify a walk that walked nothing
+        # (review round 2 of konyklabs/roadmap#15). Under --strict the skip is
+        # then held against the target's matrix -- a vendor whose every list
+        # is excused declares that, per profile in expected_skips or wholesale
+        # in ConformanceTarget.inapplicable, and the inapplicable guard fails
+        # the day a walkable list appears and the declaration goes stale.
+        raise ConformanceSkip(
+            f"every paginated route this profile declares opts out of the walk"
+            f"{tail or '; none declares one at all'}"
+        )
     return f"walked {len(walked)} route(s) one row per page with no repeat and no loss: {'; '.join(walked)}{tail}"
