@@ -108,6 +108,19 @@ def test_a_mutant_trips_the_checks_it_names_and_no_others(mutant: Mutant) -> Non
     # longer reproduces the defect, the mutant in tests/conformance/mutants/.
     assert not missed, f"{mutant.label} did not trip {missed} (defect: {mutant.defect})\n{format_report(report)}"
 
+    crashed = sorted(
+        result.check_id
+        for result in report.results
+        if result.outcome is Outcome.FAIL and result.detail.startswith("the check raised ")
+    )
+    # A crash is not a finding: a check that raised never asked its question,
+    # so it is evidence of nothing -- for or against this mutant. M01 taught
+    # this the hard way: its cascade blessed a KeyError as an observation.
+    assert not crashed, (
+        f"{mutant.label} made {crashed} CRASH rather than fail. A crashed check named no contract "
+        f"and asked no question; fix the check to fail by name on the state this mutant produces."
+        f"\n{format_report(report)}"
+    )
     collateral = sorted(red - mutant.expected_red)
     # Narrow the mutation, or declare genuine collateral in `also_trips` with a
     # written `cascade` reason.

@@ -127,10 +127,11 @@ register(
         trips=frozenset({"C01"}),
         also_trips=frozenset({"C29"}),
         cascade=(
-            "C29 observes the webhook.delay fault as a timer pending in the clock block before the "
-            "delivery happens; a unit that does not publish its clock cannot show that a delayed "
-            "delivery is on the clock rather than merely late, so the contract is genuinely "
-            "unmet and not merely disturbed."
+            "C29's delay observation needs the clock block: the timer webhook.delay schedules is "
+            "only visible in /__unit/info's pending_timers, so with the block gone C29 fails by "
+            "name -- 'this contract cannot be asked without it' -- before any delivery fault is "
+            "observed. (An earlier wording of this cascade blessed the KeyError the check used to "
+            "raise here; a crash asks nothing, and the meta-suite now refuses one as evidence.)"
         ),
         control=replace_control_route(
             "GET",

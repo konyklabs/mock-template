@@ -610,8 +610,15 @@ def _observe_duplicate(env: CheckEnv) -> str:
 def _observe_delay(env: CheckEnv) -> str:
     event = _emit(env, {"probe": "delay"}, drain=False)
     before = len(_records(env, event))
-    pending = [timer for timer in env.get_json(f"{CONTROL_PREFIX}info")["clock"]["pending_timers"]]
-    due = [float(timer["due_in_ms"]) for timer in pending]
+    clock = env.get_json(f"{CONTROL_PREFIX}info").get("clock") or {}
+    pending = clock.get("pending_timers")
+    require(
+        pending is not None,
+        "GET /__unit/info publishes no clock block, so a delayed delivery cannot be told apart "
+        "from a late one: the timer the webhook.delay fault schedules is only observable there. "
+        "C01 owns the missing key; this contract cannot be asked without it.",
+    )
+    due = [float(timer["due_in_ms"]) for timer in pending or ()]
     require(
         before == 0 and any(value > 0 for value in due),
         f"webhook.delay (delay_ms={_DELAY_MS}) left {before} record(s) for {event!r} and pending "
