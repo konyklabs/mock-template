@@ -65,6 +65,7 @@ CLOVER_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
     "C26": ("oauth-only",),
     "C27": ("no-faults",),
     "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
+    "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
 }
 
 CLOVER_INAPPLICABLE: Mapping[str, str] = {
@@ -93,6 +94,7 @@ TOAST_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
     "C21": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C27": ("no-faults",),
     "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
+    "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
 }
 
 _TOAST_NO_IDEMPOTENCY_KEY = (

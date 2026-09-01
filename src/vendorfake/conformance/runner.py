@@ -78,7 +78,8 @@ REMOTE_TRANSPORT = "http"
 REMOTE_CAVEAT = (
     "a unit reached over --base-url is SHARED, not rebuilt per check. Capabilities and seed state are "
     "restored before every contract, but two 'fresh' units are the same process, so the determinism "
-    "contracts compare a unit with itself; and the contracts that exercise fault injection reset the "
+    "contracts -- C30's read-inertness pair included -- compare a unit with itself and prove less "
+    "here than against real pairs; and the contracts that exercise fault injection reset the "
     "chaos engine, which drops rules the profile configured at startup. Point this at a throwaway "
     "container, never at one another test is using."
 )

@@ -1,4 +1,4 @@
-"""Fifty units, each broken in exactly one way, and the check each must trip.
+"""Fifty-three units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -306,6 +306,12 @@ register(
         defect="hydrate() mints an id from the system entropy, so two units seeded alike hold different state.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C06"}),
+        also_trips=frozenset({"C30"}),
+        cascade=(
+            "C30 compares two same-profile units after identical probes; hydration drawing from "
+            "system entropy desynchronizes the pair before any control read happens, so its digest "
+            "comparison genuinely fails on the same defect C06 names."
+        ),
         vendor=lambda inner: VendorOverlay(inner, hydrate=_hydrate_with_a_random_entity),
     )
 )
@@ -379,6 +385,12 @@ register(
         defect="A handler's status depends on process-global state, so two units given identical traffic diverge.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C08"}),
+        also_trips=frozenset({"C30"}),
+        cascade=(
+            "C30's pair of units shares this interpreter, so the process-global counter genuinely "
+            "makes the two answer identical probes differently -- the same divergence C08 names, "
+            "witnessed by a different comparison."
+        ),
         vendor=lambda inner: VendorOverlay(inner, routes=_add_drifting_route),
     )
 )
@@ -1866,3 +1878,108 @@ run' were both claimed while the journal quietly moved. C24 now reads the
 journal seq around every probe: fresh executions must move it, refusals and
 declared-direction answers must not. Confined to idempotent routes' handlers
 for the same reason as M49."""
+
+
+def _draw_an_order_id_per_read(handler: Handler) -> Handler:
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        args.ctx.vendor.ids.order()  # type: ignore[attr-defined]
+        return handler(args)
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M51",
+        name="catalogue-read-draws-an-order-id",
+        defect="GET /__unit/errors draws one order id from the vendor's deterministic stream on every read.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C30"}),
+        also_trips=frozenset({"C10"}),
+        cascade=(
+            "C10 GETs the catalogue on both bindings and then byte-compares a vendor probe; on a "
+            "both-transports target the two units' draw counts can differ by discovery order, so "
+            "the same consumed stream genuinely desynchronizes C10's comparison. Unreachable on "
+            "this harness (inprocess only) -- declared so a wider matrix does not read it as "
+            "undeclared collateral."
+        ),
+        control=replace_control_route("GET", "/__unit/errors", _draw_an_order_id_per_read),
+    )
+)
+"""Toast's shipped catalogue defect, transplanted to the vendor the harness
+builds (konyklabs/roadmap#42). The real bug drew twenty request ids per
+catalogue GET; Square's refusals embed no drawn value, so this draws from the
+stream Square's answers DO consume -- the id stream that mints order ids. The
+catalogue body is untouched (C31 and C32 stay green, and no byte of any one
+answer is wrong); the whole defect is that a read moved a stream, which only
+a two-unit comparison can see: the read-first unit's next CreateOrder mints a
+different id than an untouched unit's, and the state digests diverge."""
+
+
+def _render_from_the_live_clock(handler: Handler) -> Handler:
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        reply = handler(args)
+        if isinstance(reply, ReplyInit) and isinstance(reply.json, Mapping):
+            stamped = {**reply.json, "rate_limit_reset_epoch": int(args.ctx.clock.now() // 1000)}
+            return dataclasses.replace(reply, json=stamped)
+        return reply
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M52",
+        name="catalogue-renders-the-clock",
+        defect="GET /__unit/errors stamps a rate-limit reset epoch computed from the unit's clock into the document.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C32"}),
+        also_trips=frozenset({"C31"}),
+        cascade=(
+            "C31 is allowed red as armour, not because it can trip here: chaos-demo's virtual "
+            "clock is frozen between two adjacent reads, so the stamped epoch cannot move and C31 "
+            "stays green on this profile every time. The allowance covers the same defect on a "
+            "REAL-clock profile, where two reads straddling a second boundary genuinely differ -- "
+            "the original CI failure's mechanism."
+        ),
+        profiles=("chaos-demo",),
+        control=replace_control_route("GET", "/__unit/errors", _render_from_the_live_clock),
+    )
+)
+"""The half of konyklabs/roadmap#42 that actually failed in CI: toast's 429
+row computed ``floor(now/1000) + retry_after`` from the live clock, so two
+renderings a second apart disagreed and C10 went red on a loaded runner only
+-- "3.13 red, 3.11 green" was timing luck wearing a version number. Judged on
+``chaos-demo`` because that is the one profile with a virtual clock, and C32
+needs to MOVE the clock to make the defect fire deterministically rather than
+once a second."""
+
+
+def _stamp_a_render_counter(handler: Handler) -> Handler:
+    renders = itertools.count(1)
+
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        reply = handler(args)
+        if isinstance(reply, ReplyInit) and isinstance(reply.json, Mapping):
+            return dataclasses.replace(reply, json={**reply.json, "render_count": next(renders)})
+        return reply
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M53",
+        name="catalogue-counts-its-renders",
+        defect="GET /__unit/errors stamps a per-unit render counter into the document, so no two reads agree.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C31"}),
+        control=replace_control_route("GET", "/__unit/errors", _stamp_a_render_counter),
+    )
+)
+"""The smaller lie C30 cannot see (konyklabs/roadmap#42). Nothing vendor-side
+is consumed -- an untouched unit answers every refusal and mutation
+identically -- and the counter is per-unit, so C10's one-read-per-binding
+comparison agrees too. Only reading the catalogue TWICE ON ONE UNIT notices,
+which is C31's whole job, and is the original issue's repro verbatim: two
+identical GETs of /__unit/errors answering different bytes."""

@@ -106,12 +106,12 @@ def test_base_url_discovers_the_profile_and_runs_the_registry(capsys: pytest.Cap
     # The profile was read from the running unit, not passed in.
     assert "== full / http ==" in printed
     assert "SHARED, not rebuilt per check" in printed
-    # Three contracts cannot be asked of a unit somebody else is running, and
+    # Four contracts cannot be asked of a unit somebody else is running, and
     # each for a reason the target honestly declares: C10 compares two
     # bindings and a remote target has one, C22 needs a unit built in another
-    # process and a base URL is one unit, and C21 needs a virtual clock, which
-    # the profile behind this URL does not run.
-    unaskable = ("C10", "C21", "C22")
+    # process and a base URL is one unit, and C21 and C32 need a virtual
+    # clock, which the profile behind this URL does not run.
+    unaskable = ("C10", "C21", "C22", "C32")
     assert f"{len(CHECKS) - len(unaskable)} passed, 0 failed, {len(unaskable)} skipped" in printed, printed
 
 
@@ -144,7 +144,7 @@ def test_base_url_restores_the_shared_unit_between_contracts() -> None:
     finally:
         unit.stop()
     assert before == after
-    assert before, "the full profile must enable something, or this proves nothing"
+    assert before, f"profile 'full' enabled no capabilities (enabled={sorted(before)}), so before==after proves nothing"
 
 
 @pytest.mark.integration
