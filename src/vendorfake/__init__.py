@@ -29,6 +29,6 @@ by convention (``tools/boundary_check.py`` and the import-linter contracts in
 
 from vendorfake.registry import available_vendors, create_unit, resolve_vendor
 
-__version__ = "0.0.0"
+__version__ = "0.1.0"
 
 __all__ = ["__version__", "available_vendors", "create_unit", "resolve_vendor"]
