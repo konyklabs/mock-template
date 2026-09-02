@@ -317,6 +317,63 @@ pytest --pyargs vendorfake.conformance --conformance-target vendorfake.testing.c
 vendorfake-conformance --base-url http://localhost:8080     # a unit already running, e.g. the container
 ```
 
+### Checking the unit against the vendor's own documents
+
+The conformance suite above proves the unit composes with the core. It says
+nothing about whether the unit answers what the *vendor* says it answers.
+That is a second, separate check (D-006), with two halves:
+
+- **Contract.** Every response the Square test suite produces is validated
+  against Square's published OpenAPI document -- the schema for that
+  operation and status -- and a mismatch fails the test that produced it.
+  What ships is a scoped, prose-stripped extract of the document (only the
+  operations the unit models and the schemas they reach) and a pin naming
+  the upstream bytes it was cut from.
+- **Behaviour.** A corpus of documented cases, each carrying the page it was
+  read from, when, and whether the page states the fact (`documented`) or is
+  silent and the unit chose (`judgment`). A schema is a type-and-enum oracle
+  (an empty body passes most of them); the corpus is what asserts presence
+  and value.
+
+Both render as one matrix per route. Run it against the shipped target, or
+point the corpus at a unit you already have running:
+
+```sh
+python -m vendorfake.fidelity report --target tests.fidelity.harness:square_target
+python -m vendorfake.fidelity run --target tests.fidelity.harness:square_target --case orders.create.minimal
+python -m vendorfake.fidelity run --base-url http://localhost:8080 --anchor vendorfake.square.fidelity
+python -m vendorfake.fidelity pin --check --offline --target tests.fidelity.harness:square_target
+pytest --pyargs vendorfake.fidelity --fidelity-target tests.fidelity.harness:square_target
+```
+
+The report's tail, as run on 2026-09-02:
+
+```
+POST /v2/orders                     | spec: operation CreateOrder | validated: 8 | documented: 5 | judgment: 1
+GET /oauth2/authorize               | spec: EXCUSED (The seller-facing authorization page. It is a browser redirect flow ...)
+...
+routes: 35 (33 operation, 2 excused, 0 UNDECLARED)
+cases: 13 passed, 0 failed (documented 12/12, judgment 1/1)
+contract: fidelity: 26 validated, 0 deviated, 0 excused, 11 internal, 0 undeclared, 0 unmatched, 0 skipped non json over 12 routes
+pin: https://raw.githubusercontent.com/square/connect-api-specification/master/api.json version 2.0 sha256 a0d0db22c202 fetched 2026-09-02
+OK
+```
+
+Three words in that output carry the honesty of the whole thing. **EXCUSED**
+is a vendor route the published document does not describe, served anyway,
+with its reason in `square/fidelity/declaration.json`; **UNDECLARED** is a
+route with neither a schema nor a reason, and the report exits non-zero on
+one; **deviated** counts the errors a *declared deviation* absorbed -- a
+place where the vendor's prose and the vendor's spec disagree and the unit
+follows the observed API (Square's `VERSION_MISMATCH`, named on the
+optimistic-concurrency page and absent from the `ErrorCode` enumeration).
+Each deviation names its page.
+
+`pin --check --offline` is what CI runs: the committed extract and pin must
+agree with each other and with the declaration. Whether *upstream* has moved
+is a scheduled question, never a pull request's -- `pin` without `--offline`
+re-fetches, re-cuts and rewrites both files, and the diff is the review.
+
 ## Quickstart
 
 Serve the Square unit (defaults to the `full` profile on port 8080):
