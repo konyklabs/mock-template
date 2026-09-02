@@ -374,6 +374,24 @@ agree with each other and with the declaration. Whether *upstream* has moved
 is a scheduled question, never a pull request's -- `pin` without `--offline`
 re-fetches, re-cuts and rewrites both files, and the diff is the review.
 
+**Toast's extract is fetched, never committed.** Toast's API terms do not
+permit a copy of its specification files in a public repository, so
+`toast/fidelity/` ships `declaration.json` (the seven published files it
+names), `pin.json` (their sha256, size, version and fetch date -- facts, not
+copies) and the corpus, and nothing else. The extract is cut at run time
+from a fresh fetch into `~/.cache/vendorfake/fidelity/` (or
+`$VENDORFAKE_FIDELITY_CACHE`); the wheel check fails if an extract ever
+ships. A cold cache needs the network once:
+
+```sh
+python -m vendorfake.fidelity fetch  --target vendorfake.testing.fidelity:toast_target
+python -m vendorfake.fidelity report --target vendorfake.testing.fidelity:toast_target
+```
+
+If upstream has moved since the pin, `fetch` says so on stderr and the run
+uses the fresh document -- a vendor release never turns a pull request red;
+`pin --check` is what notices it.
+
 ## Quickstart
 
 Serve the Square unit (defaults to the `full` profile on port 8080):
