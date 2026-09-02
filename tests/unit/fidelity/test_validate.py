@@ -88,7 +88,7 @@ EXTRACT: dict[str, Any] = {
                 "type": "object",
                 "required": ["id", "state"],
                 "properties": {
-                    "id": {"type": "string"},
+                    "id": {"type": "string", "readOnly": True},
                     "state": {"type": "string", "enum": ["OPEN", "COMPLETED"]},
                     "version": {"type": "integer"},
                     "closed_at": {"type": "string", "nullable": True},
@@ -281,6 +281,18 @@ def test_null_where_not_nullable_is_a_violation(world: World) -> None:
     # mismatch separately; both are true, both point at the same value.
     assert "/order/note: None for not nullable" in exc.errors
     assert {line.split(":")[0] for line in exc.errors} == {"/order/note"}
+
+
+def test_a_required_read_only_property_is_still_required_on_a_response(world: World) -> None:
+    """The response direction: ``readOnly`` marks a field the server writes and
+    the client never sends, so on a *response* it is exactly the field that must
+    be present. The direction-agnostic validator skips ``required`` for every
+    readOnly property; the read validator does not. This is the keyword the
+    first fixture omitted, and the one that silently disabled ``required`` on
+    seven shipped schemas (adversarial review, konyklabs/roadmap#55)."""
+    body = {"order": {key: value for key, value in GOOD_ORDER["order"].items() if key != "id"}}
+    exc = _violation(world, "/v2/orders/ord_1", body)
+    assert exc.errors == ("/order: 'id' is a required property",)
 
 
 def test_null_where_nullable_passes(world: World) -> None:

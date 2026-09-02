@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import quote
 
-from openapi_schema_validator import OAS30Validator
+from openapi_schema_validator import OAS30ReadValidator
 from referencing import Registry
 from referencing.jsonschema import DRAFT4
 
@@ -225,7 +225,7 @@ class ValidatingClient(InProcessClient):
         # exactly as the unit matched it -- same order, same 404/405 split.
         self._router = Router(unit.routes)
         # Draft-04 is the dialect OAS 3.0 schemas are written in, and the one
-        # ``OAS30Validator`` resolves under; registering the extract as such
+        # ``OAS30ReadValidator`` resolves under; registering the extract as such
         # keeps the two in agreement about what a subschema's ``id`` would mean.
         resource = DRAFT4.create_resource(surface.extract.document)
         self._registry: Registry[Any] = Registry().with_resource(EXTRACT_URI, resource)
@@ -358,7 +358,7 @@ class ValidatingClient(InProcessClient):
             # The root schema is a reference *into* the registered document,
             # so the resolver is rebased onto the extract before it reads the
             # first keyword and every nested ``#/components/...`` resolves there.
-            validator = OAS30Validator({"$ref": f"{EXTRACT_URI}#{pointer}"}, registry=self._registry)
+            validator = OAS30ReadValidator({"$ref": f"{EXTRACT_URI}#{pointer}"}, registry=self._registry)
             self._built += 1
         self._validators[cache_key] = validator
         return validator
