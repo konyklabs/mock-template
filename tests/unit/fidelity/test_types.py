@@ -14,6 +14,7 @@ from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import ReplyInit, Route
 from vendorfake.fidelity.types import (
     Alias,
+    Deviation,
     Excuse,
     Extract,
     FidelityDeclaration,
@@ -24,6 +25,7 @@ from vendorfake.fidelity.types import (
     load_extract,
     route_key,
     template_shape,
+    validate_declaration,
 )
 
 
@@ -69,6 +71,7 @@ DECLARATION = FidelityDeclaration(
     aliases=(Alias(method="GET", path="/v1/things/me", spec_path="/v1/things/{thing_id}", reason="documented"),),
     excused=(Excuse(method="GET", path="/v1/legacy", reason="kept"),),
     error_envelope="200",
+    error_member="errors",
 )
 SURFACE = Surface(DECLARATION, EXTRACT)
 
@@ -138,3 +141,51 @@ def test_loaders_name_the_missing_package() -> None:
         load_declaration("vendorfake.fidelity")
     with pytest.raises(FileNotFoundError, match=r"extract\.json"):
         load_extract("vendorfake.fidelity")
+
+
+# -- deviations and the declaration schema ---------------------------------
+
+
+def test_a_deviation_needs_a_value_and_a_real_pointer_segment() -> None:
+    row = {"pointer": "/errors/*/code", "keyword": "enum", "value": "X", "reason": "r", "url": "https://d/"}
+    assert Deviation.of(row).value == "X"
+    with pytest.raises(ValueError, match="one value"):
+        Deviation.of({**row, "value": None})
+    with pytest.raises(ValueError, match="at least one real segment"):
+        Deviation.of({**row, "pointer": "/*/*"})
+    with pytest.raises(ValueError, match="absolute"):
+        Deviation.of({**row, "pointer": "errors/0/code"})
+
+
+def test_a_deviation_matches_one_keyword_one_value_one_shape_and_its_routes() -> None:
+    dev = Deviation.of(
+        {
+            "pointer": "/errors/*/code",
+            "keyword": "enum",
+            "value": "X",
+            "reason": "r",
+            "url": "https://d/",
+            "routes": ["PUT /a"],
+        }
+    )
+    assert dev.matches(keyword="enum", pointer="/errors/3/code", instance="X", route_key="PUT /a")
+    assert not dev.matches(keyword="enum", pointer="/errors/3/code", instance="X", route_key="GET /b")
+    assert not dev.matches(keyword="enum", pointer="/errors/3/code", instance="Y", route_key="PUT /a")
+    assert not dev.matches(keyword="type", pointer="/errors/3/code", instance="X", route_key="PUT /a")
+    assert not dev.matches(keyword="enum", pointer="/errors/code", instance="X", route_key="PUT /a")
+
+
+def test_the_declaration_schema_refuses_the_widenings_by_typo() -> None:
+    good = {"schema": 1, "sources": [{"kind": "openapi3", "url": "https://x/spec.json"}]}
+    validate_declaration(good, where="t")
+    with pytest.raises(ValueError, match="error_member"):
+        validate_declaration({**good, "error_envelope": "200"}, where="t")
+    with pytest.raises(ValueError, match="value"):
+        validate_declaration(
+            {**good, "deviations": [{"pointer": "/a", "keyword": "enum", "reason": "r", "url": "https://d/"}]},
+            where="t",
+        )
+    with pytest.raises(ValueError, match="Additional properties"):
+        validate_declaration({**good, "excuses": []}, where="t")
+    with pytest.raises(ValueError, match="error_member"):
+        FidelityDeclaration.of("t", {**good, "error_envelope": "200"})

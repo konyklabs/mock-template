@@ -36,6 +36,7 @@ from typing import Any, Protocol
 
 import httpx
 
+from vendorfake.core.kernel.router import Match, Router
 from vendorfake.core.kernel.types import Route
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.transport.inprocess import in_process
@@ -52,7 +53,7 @@ from vendorfake.fidelity.corpus import (
     resolve_pointer,
 )
 from vendorfake.fidelity.report import CaseResult, CorpusReport, StepFailure
-from vendorfake.fidelity.types import FidelityDeclaration, load_declaration, load_extract
+from vendorfake.fidelity.types import FidelityDeclaration, load_declaration, load_extract, route_key
 
 __all__ = [
     "CONTROL_PREFIX",
@@ -270,13 +271,51 @@ def run_corpus(
     @contextmanager
     def opener(profile: str) -> Iterator[CorpusClient]:
         with target.open_unit(profile) as unit:
-            yield factory(unit)
+            yield ObservingClient(factory(unit), Router(unit.routes))
 
     results = tuple(
         run_case(case, opener, profile=_profile(case, target, profile_override), variables=declaration.variables)
         for case in cases
     )
-    return CorpusReport(target=target.name, results=results, validated=validate, ledger=ledger)
+    # A caller that injects its own client is making its own claim about
+    # validation; this report does not repeat it as ours.
+    return CorpusReport(
+        target=target.name, results=results, validated=validate and client_factory is None, ledger=ledger
+    )
+
+
+class ObservingClient:
+    """The client a case runs against, remembering which routes its steps reached.
+
+    The matrix attributes a case's coverage to the routes its requests
+    actually matched, not to the routes the case file says it covers; the
+    declared list is checked against this and a case that names a route no
+    step reached fails. Matching is the kernel's own router over the unit's
+    own table, on the bare path, so it agrees with what the unit did.
+    """
+
+    __slots__ = ("_client", "_router", "observed")
+
+    def __init__(self, client: CorpusClient, router: Router) -> None:
+        self._client = client
+        self._router = router
+        self.observed: list[str] = []
+
+    def call(
+        self,
+        *,
+        method: str,
+        path: str,
+        query: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
+        body: object = None,
+    ) -> CorpusResponse:
+        outcome = self._router.match(method, path.partition("?")[0])
+        if isinstance(outcome, Match) and not outcome.route.internal and not outcome.route.path.startswith("/__"):
+            key = route_key(outcome.route.method, outcome.route.path)
+            if key not in self.observed:
+                self.observed.append(key)
+        return self._client.call(method=method, path=path, query=query, headers=headers, body=body)
 
 
 def _profile(case: Case, target: FidelityTarget, override: str | None) -> str:
@@ -416,11 +455,23 @@ def run_case(
             if failure is not None:
                 break
 
+        observed = tuple(getattr(client, "observed", ()))
+        if failure is None and observed:
+            unreached = [key for key in case.routes if key not in observed]
+            if unreached:
+                failure = StepFailure(
+                    "routes",
+                    "routes",
+                    "every declared route reached by a step",
+                    f"never reached: {', '.join(unreached)}; reached: {', '.join(observed)}",
+                )
+
     return CaseResult(
         id=case.id,
         title=case.title,
         provenance=case.provenance,
         routes=case.routes,
+        observed=observed,
         profile=profile,
         passed=failure is None,
         failure=failure,

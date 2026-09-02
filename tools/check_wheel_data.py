@@ -26,6 +26,7 @@ REPO = Path(__file__).resolve().parent.parent
 REQUIRED = (
     "vendorfake/py.typed",
     "vendorfake/fidelity/corpus.schema.json",
+    "vendorfake/fidelity/declaration.schema.json",
     "vendorfake/square/seed/default.seed.json",
     "vendorfake/square/fidelity/declaration.json",
     "vendorfake/square/fidelity/extract.json",

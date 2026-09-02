@@ -214,7 +214,7 @@ class SeedCatalogObjectReference(BaseModel):
 
     model_config = _SEED
 
-    object_id: str = Field(min_length=1)
+    object_id: str | None = None
     catalog_version: int | None = None
 
 
@@ -224,9 +224,12 @@ class SeedRewardTier(BaseModel):
     https://developer.squareup.com/reference/square/objects/LoyaltyProgramRewardTier
 
     JUDGMENT -- the reference names a PRICING_RULE catalog object this unit
-    does not model (SHRINK), so the id does not resolve through the catalog
-    routes. It is carried because the wire shape requires it: the fidelity
-    validator (D-006) found a tier without one fails ``required``.
+    does not model (SHRINK). The published schema requires the reference and
+    lets it be empty (``object_id`` is nullable, nothing is required inside
+    it), so the seed carries it EMPTY rather than inventing an id a consumer
+    would follow into a 404. Modelling pricing rules is the change that fills
+    it. The fidelity validator (D-006) is what found a tier without the
+    reference fails ``required``.
     """
 
     model_config = _SEED
@@ -234,7 +237,7 @@ class SeedRewardTier(BaseModel):
     id: str = Field(min_length=1)
     points: int = Field(gt=0)
     name: str
-    pricing_rule_reference: SeedCatalogObjectReference
+    pricing_rule_reference: SeedCatalogObjectReference = SeedCatalogObjectReference()
     created_at: str | None = None
 
 

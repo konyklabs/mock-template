@@ -140,6 +140,7 @@ DECLARATION = FidelityDeclaration(
     ),
     excused=(Excuse(method="GET", path="/v2/legacy/ping", reason="kept for a client that still calls it"),),
     error_envelope="200",
+    error_member="errors",
 )
 
 GOOD_ORDER = {
@@ -605,3 +606,39 @@ def test_a_success_nothing_routed_is_a_validator_defect_not_a_vendor_fact(world:
     world.client._router = Router([])
     with pytest.raises(RuntimeError, match="matched no route in the validator"):
         world.client.get("/v2/orders/ord_1")
+
+
+# -- the envelope must still carry the error member -------------------------
+
+
+def test_an_error_status_through_the_envelope_must_carry_the_error_member(world: World) -> None:
+    """Deep-lens finding D1 (konyklabs/roadmap#55): the success schema requires
+    nothing, so a 404 answering a success payload validated. Not any more."""
+    exc = _violation(world, "/v2/orders/ord_1", GOOD_ORDER, status=404)
+    assert exc.errors == (
+        "/errors: status 404 answered through the 200 envelope must carry a non-empty 'errors' "
+        "(the success schema requires nothing)",
+    )
+    exc = _violation(world, "/v2/orders/ord_1", {"errors": []}, status=404)
+    assert exc.errors[0].startswith("/errors: status 404")
+    world.script.body = {"errors": [{"category": "INVALID_REQUEST_ERROR", "code": "NOT_FOUND"}]}
+    world.script.status = 404
+    world.client.get("/v2/orders/ord_1")
+    assert world.ledger.total("validated") == 1
+
+
+def test_a_deviation_scoped_to_routes_does_not_carry_elsewhere() -> None:
+    scoped = replace(BOGUS_STATE_DEVIATION, routes=("POST /v2/orders",))
+    world = _deviating(scoped)
+    exc = _violation(world, "/v2/orders/ord_1", {"order": {**GOOD_ORDER["order"], "state": "BOGUS"}})
+    assert exc.errors[0].startswith("/order/state: 'BOGUS'")
+    assert world.ledger.absorbed() == ()
+
+
+def test_the_ledger_names_which_deviation_absorbed_what() -> None:
+    world = _deviating(BOGUS_STATE_DEVIATION)
+    world.script.body = {"order": {**GOOD_ORDER["order"], "state": "BOGUS"}}
+    world.client.get("/v2/orders/ord_1")
+    world.client.get("/v2/orders/ord_1")
+    assert world.ledger.absorbed() == ((BOGUS_STATE_DEVIATION.label, 2),)
+    assert BOGUS_STATE_DEVIATION.label == "enum /order/state = 'BOGUS'"

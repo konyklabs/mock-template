@@ -42,6 +42,7 @@ DECLARATION: dict[str, Any] = {
     "schema": 1,
     "sources": [{"kind": "openapi3", "url": SOURCE_URL}],
     "error_envelope": "200",
+    "error_member": "errors",
     "excused": [{"method": "GET", "path": "/v2/plain", "reason": "a text route the spec never had"}],
     "variables": {"location_id": "LOC_1"},
 }
@@ -198,7 +199,7 @@ def case(
     steps: Sequence[Mapping[str, Any]],
     *,
     provenance: str = "documented",
-    routes: Sequence[str] = ("POST /v2/orders",),
+    routes: Sequence[str] = (),
     profile: str | None = None,
 ) -> dict[str, Any]:
     doc: dict[str, Any] = {

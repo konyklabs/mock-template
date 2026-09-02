@@ -54,6 +54,8 @@ class LedgerLike(Protocol):
 
     def summary(self) -> str: ...
 
+    def absorbed(self) -> Sequence[tuple[str, int]]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class StepFailure:
@@ -87,6 +89,9 @@ class CaseResult:
     passed: bool
     failure: StepFailure | None = None
     steps_run: int = 0
+    #: The routes the case's requests actually matched, when the run could
+    #: observe them (in-process). Empty over HTTP, where the declared list stands.
+    observed: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,7 +173,7 @@ def format_matrix(
     validated: Mapping[str, int] = {row.key: row.validated for row in ledger.rows()} if ledger is not None else {}
     covered: dict[str, dict[str, list[CaseResult]]] = {}
     for result in corpus_report.results:
-        for key in result.routes:
+        for key in result.observed or result.routes:
             covered.setdefault(key, {}).setdefault(result.provenance, []).append(result)
 
     classified = [c for c in surface.classify_all(routes) if c.kind != "internal"]
@@ -224,6 +229,9 @@ def format_matrix(
         lines.append(f"contract: {ledger.summary()}")
     else:
         lines.append("contract: responses were NOT validated against the schema in this run")
+    if ledger is not None:
+        for label, count in ledger.absorbed():
+            lines.append(f"deviation absorbed {count} error(s): {label}")
     for caveat in corpus_report.caveats:
         lines.append(f"note: {caveat}")
     lines.extend(_pin_lines(surface))

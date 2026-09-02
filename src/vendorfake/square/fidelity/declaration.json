@@ -7,6 +7,7 @@
     }
   ],
   "error_envelope": "200",
+  "error_member": "errors",
   "aliases": [],
   "excused": [
     {
@@ -25,8 +26,14 @@
       "pointer": "/errors/*/code",
       "keyword": "enum",
       "value": "VERSION_MISMATCH",
-      "reason": "Named in prose on the optimistic-concurrency page and quoted from real 400 responses, but absent from the published ErrorCode enumeration. The unit answers what the API answers; see square/errors.py UNPUBLISHED_CODES.",
-      "url": "https://developer.squareup.com/docs/working-with-apis/optimistic-concurrency"
+      "reason": "Named in prose on the optimistic-concurrency page and quoted from real 400 responses, but absent from the published ErrorCode enumeration. The unit answers what the API answers, on the four routes that take a version; see square/errors.py UNPUBLISHED_CODES.",
+      "url": "https://developer.squareup.com/docs/working-with-apis/optimistic-concurrency",
+      "routes": [
+        "PUT /v2/orders/{order_id}",
+        "POST /v2/orders/{order_id}/pay",
+        "POST /v2/catalog/object",
+        "POST /v2/payments/{payment_id}/complete"
+      ]
     }
   ],
   "variables": {

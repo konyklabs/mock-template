@@ -30,6 +30,7 @@ from vendorfake.core.kernel.types import Route
 
 __all__ = [
     "DECLARATION_FILE",
+    "DECLARATION_SCHEMA_FILE",
     "EXTRACT_FILE",
     "PIN_FILE",
     "Alias",
@@ -45,6 +46,7 @@ __all__ = [
     "load_extract",
     "route_key",
     "template_shape",
+    "validate_declaration",
 ]
 
 DECLARATION_FILE = "declaration.json"
@@ -149,25 +151,40 @@ class Deviation:
 
     pointer: str
     keyword: str
+    value: str
     reason: str
     url: str
-    value: str | None = None
+    #: Route keys (the unit's spelling) the deviation applies to; empty means
+    #: every route. A code the vendor names for one flow is excused for that
+    #: flow, not for the whole surface.
+    routes: tuple[str, ...] = ()
 
     @classmethod
     def of(cls, row: Mapping[str, Any]) -> Deviation:
         value = row.get("value")
+        if value is None or str(value) == "":
+            raise ValueError("a deviation must name the one value it excuses")
+        pointer = str(row["pointer"])
+        if not pointer.startswith("/") or all(segment in ("", "*") for segment in pointer.split("/")):
+            raise ValueError(f"deviation pointer {pointer!r} must be absolute and name at least one real segment")
         return cls(
-            pointer=str(row["pointer"]),
+            pointer=pointer,
             keyword=str(row["keyword"]),
+            value=str(value),
             reason=str(row["reason"]),
             url=str(row["url"]),
-            value=None if value is None else str(value),
+            routes=tuple(str(key) for key in row.get("routes", ())),
         )
 
-    def matches(self, *, keyword: str, pointer: str, instance: object) -> bool:
-        if keyword != self.keyword:
+    @property
+    def label(self) -> str:
+        """How the ledger and the report name this row."""
+        return f"{self.keyword} {self.pointer} = {self.value!r}"
+
+    def matches(self, *, keyword: str, pointer: str, instance: object, route_key: str | None = None) -> bool:
+        if keyword != self.keyword or instance != self.value:
             return False
-        if self.value is not None and instance != self.value:
+        if self.routes and (route_key is None or route_key not in self.routes):
             return False
         want = self.pointer.split("/")
         have = pointer.split("/")
@@ -182,7 +199,11 @@ class FidelityDeclaration:
     error bodies when the spec declares none for the error status -- the
     convention of a vendor whose every response schema carries an ``errors[]``
     member and whose document declares only the success status. ``None`` means
-    an undeclared status is a violation.
+    an undeclared status is a violation. ``error_member`` names that member:
+    an error status answered through the envelope must carry it, non-empty,
+    or the envelope would accept a success payload on a 404 (the success
+    schema requires nothing). Declaring the envelope without the member is
+    refused, because that is exactly the hole.
     """
 
     anchor: str
@@ -191,6 +212,7 @@ class FidelityDeclaration:
     excused: tuple[Excuse, ...] = ()
     deviations: tuple[Deviation, ...] = ()
     error_envelope: str | None = None
+    error_member: str | None = None
     #: Values a corpus case may interpolate as ``${vars.<name>}`` -- seeded ids
     #: the vendor's scenario fixes, so a case can name them without a lookup.
     variables: Mapping[str, str] = field(default_factory=dict)
@@ -203,6 +225,12 @@ class FidelityDeclaration:
         if not sources:
             raise ValueError(f"{anchor}/{DECLARATION_FILE}: at least one spec source is required")
         envelope = doc.get("error_envelope")
+        member = doc.get("error_member")
+        if envelope is not None and not member:
+            raise ValueError(
+                f"{anchor}/{DECLARATION_FILE}: error_envelope needs error_member -- the member an error "
+                f"body must carry, or the envelope accepts a success payload on any status"
+            )
         return cls(
             anchor=anchor,
             sources=sources,
@@ -210,6 +238,7 @@ class FidelityDeclaration:
             excused=tuple(Excuse.of(row) for row in doc.get("excused", ())),
             deviations=tuple(Deviation.of(row) for row in doc.get("deviations", ())),
             error_envelope=None if envelope is None else str(envelope),
+            error_member=None if member is None else str(member),
             variables={str(k): str(v) for k, v in dict(doc.get("variables", {})).items()},
         )
 
@@ -365,11 +394,32 @@ def _read_json(anchor: str, name: str) -> Any:
     return json.loads(text)
 
 
+DECLARATION_SCHEMA_FILE = "declaration.schema.json"
+
+
+def validate_declaration(doc: Any, *, where: str) -> None:
+    """The declaration against its shipped JSON Schema. A deviation without
+    a value, an envelope without a member, an unknown key: refused at load,
+    the way corpus cases are, so a widening cannot arrive by typo."""
+    import jsonschema
+
+    schema = json.loads((resources.files("vendorfake.fidelity") / DECLARATION_SCHEMA_FILE).read_text("utf-8"))
+    problems = sorted(
+        f"/{'/'.join(str(p) for p in error.absolute_path)}: {error.message}"
+        for error in jsonschema.Draft202012Validator(schema).iter_errors(doc)
+    )
+    if problems:
+        raise ValueError(f"{where}: " + "; ".join(problems))
+
+
 def load_declaration(anchor: str) -> FidelityDeclaration:
     """Read ``declaration.json`` from the package named by ``anchor``
-    (``"vendorfake.<vendor>.fidelity"`` for a built-in vendor). The package is *named*, never
-    guessed: this module may not import the registry that knows vendors exist."""
-    return FidelityDeclaration.of(anchor, _read_json(anchor, DECLARATION_FILE))
+    (``"vendorfake.<vendor>.fidelity"`` for a built-in vendor). The package is
+    *named*, never guessed: this module may not import the registry that
+    knows vendors exist."""
+    doc = _read_json(anchor, DECLARATION_FILE)
+    validate_declaration(doc, where=f"{anchor}/{DECLARATION_FILE}")
+    return FidelityDeclaration.of(anchor, doc)
 
 
 def load_extract(anchor: str) -> Extract:

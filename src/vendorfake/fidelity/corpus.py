@@ -212,7 +212,7 @@ class Case:
             id=str(doc["id"]),
             title=str(doc["title"]),
             source=Source.of(doc["source"]),
-            routes=tuple(str(r) for r in doc["routes"]),
+            routes=tuple(str(r) for r in doc.get("routes", ())),
             steps=tuple(Step.of(row) for row in doc["steps"]),
             profile=None if profile is None else str(profile),
         )

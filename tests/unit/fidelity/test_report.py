@@ -26,6 +26,9 @@ class _Ledger:
     def summary(self) -> str:
         return "fidelity: 4 validated over 2 routes"
 
+    def absorbed(self) -> Sequence[tuple[str, int]]:
+        return ()
+
 
 def _surface() -> Surface:
     return Surface(FidelityDeclaration.of("synthetic", DECLARATION), Extract(EXTRACT))

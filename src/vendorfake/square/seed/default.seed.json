@@ -140,7 +140,7 @@
     "tax_mode": "BEFORE_TAX",
     "reward_tiers": [
       { "id": "e1b39225-9da5-43d1-a5db-782cdd8ad94f", "points": 10, "name": "10% off entire sale",
-        "pricing_rule_reference": { "object_id": "74C4JSHESNLTB2A7ITO5HO6F", "catalog_version": 1605486402527 },
+        "pricing_rule_reference": {},
         "created_at": "2020-06-10T21:00:00.000Z" }
     ],
     "created_at": "2020-06-10T21:00:00.000Z"

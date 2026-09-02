@@ -109,7 +109,6 @@ def test_a_case_without_a_body_or_profile_is_fine() -> None:
         ({"steps.0.expect.status": ...}, "/steps/0/expect"),
         ({"steps.0.expect.absent": ["order/id"]}, "/steps/0/expect/absent/0"),
         ({"routes": ["post /v2/orders"]}, "/routes/0"),
-        ({"routes": []}, "/routes"),
         ({"steps": []}, "/steps"),
         ({"steps.0.request.method": "FETCH"}, "/steps/0/request/method"),
         ({"steps.0.request.headers": {"a": 1}}, "/steps/0/request/headers/a"),

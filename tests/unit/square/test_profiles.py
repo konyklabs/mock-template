@@ -204,7 +204,7 @@ def test_no_profile_writes_a_colon_path_template() -> None:
         assert not re.search(r'"route": "[A-Z]+ [^"]*:', text), name
 
 
-SEED_DIGEST = "dab1492e6a59840146f5721bb7dfc32013de2b96fc61309563a5578873568714"
+SEED_DIGEST = "60ff7744bce9cbb20ce8a63dcd1d366a819bebaa5b327e7e2131ecef4f15dfa3"
 """The entity digest of the shipped scenario, pinned as a literal.
 
 Identical on every profile because all six share ``seed/default.seed.json``,
@@ -214,7 +214,7 @@ change to the scenario changes this line on purpose; a change to anything
 else that moves it is the regression this test exists to catch (the same
 claim the conformance C06/C22 contracts make across units and across
 processes). Re-pinned for konyklabs/roadmap#55, when the seeded reward tier
-gained the ``pricing_rule_reference`` the published schema requires. First
+gained the (empty) ``pricing_rule_reference`` the published schema requires. First
 pinned for konyklabs/roadmap#35, when the digest began
 hashing a volatile field's presence rather than dropping it, so the Square
 side has the same tripwire the Clover side had."""

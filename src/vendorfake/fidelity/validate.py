@@ -170,10 +170,19 @@ class Ledger:
     *session*, not about whichever fixture happened to be last.
     """
 
-    __slots__ = ("_rows",)
+    __slots__ = ("_absorbed", "_rows")
 
     def __init__(self) -> None:
         self._rows: dict[str, dict[Counter, int]] = {}
+        self._absorbed: dict[str, int] = {}
+
+    def absorb(self, label: str) -> None:
+        """One schema error excused by the deviation ``label`` names."""
+        self._absorbed[label] = self._absorbed.get(label, 0) + 1
+
+    def absorbed(self) -> tuple[tuple[str, int], ...]:
+        """Which deviations carried responses, and how many errors each absorbed."""
+        return tuple(sorted(self._absorbed.items()))
 
     def record(self, key: str, counter: Counter) -> None:
         if counter not in COUNTERS:
@@ -207,7 +216,16 @@ class ValidatingClient(InProcessClient):
     report wants to count it and print it in capitals instead.
     """
 
-    __slots__ = ("_built", "_ledger", "_registry", "_router", "_strict_undeclared", "_surface", "_validators")
+    __slots__ = (
+        "_built",
+        "_ledger",
+        "_registry",
+        "_router",
+        "_strict_undeclared",
+        "_surface",
+        "_validators",
+        "_via_envelope",
+    )
 
     def __init__(
         self,
@@ -232,6 +250,10 @@ class ValidatingClient(InProcessClient):
         # ``None`` is cached too: an operation with no schema for a status is
         # a violation every time, and should cost a lookup, not a search.
         self._validators: dict[tuple[str, int], Any] = {}
+        #: Whether the schema for (operation, status) came through the envelope
+        #: fallback rather than a declared status -- the case the error member
+        #: check exists for.
+        self._via_envelope: dict[tuple[str, int], bool] = {}
         self._built = 0
 
     @property
@@ -332,16 +354,32 @@ class ValidatingClient(InProcessClient):
                 body_excerpt=_excerpt(response),
             )
         errors: list[str] = []
-        deviated = 0
+        absorbed: list[str] = []
+        declaration = self._surface.declaration
         for error in validator.iter_errors(instance):
             pointer = _instance_pointer(error.absolute_path)
-            if any(
-                deviation.matches(keyword=str(error.validator), pointer=pointer, instance=error.instance)
-                for deviation in self._surface.declaration.deviations
-            ):
-                deviated += 1
+            excused_by = next(
+                (
+                    deviation
+                    for deviation in declaration.deviations
+                    if deviation.matches(
+                        keyword=str(error.validator), pointer=pointer, instance=error.instance, route_key=key
+                    )
+                ),
+                None,
+            )
+            if excused_by is not None:
+                absorbed.append(excused_by.label)
                 continue
             errors.append(f"{pointer}: {error.message}")
+        if response.status >= 400 and self._via_envelope.get((operation.key, response.status)):
+            member = declaration.error_member
+            carried = instance.get(member) if isinstance(instance, Mapping) and member else None
+            if not (isinstance(carried, list) and carried):
+                errors.append(
+                    f"/{member}: status {response.status} answered through the {declaration.error_envelope} "
+                    f"envelope must carry a non-empty {member!r} (the success schema requires nothing)"
+                )
         errors.sort()
         if errors:
             raise FidelityViolation(
@@ -352,14 +390,20 @@ class ValidatingClient(InProcessClient):
                 body_excerpt=_excerpt(response),
             )
         self._ledger.record(key, "validated")
-        for _ in range(deviated):
+        for label in absorbed:
             self._ledger.record(key, "deviated")
+            self._ledger.absorb(label)
 
     def _validator_for(self, operation: Operation, status: int) -> Any:
         cache_key = (operation.key, status)
         if cache_key in self._validators:
             return self._validators[cache_key]
-        schema = operation.response_schema(status, error_envelope=self._surface.declaration.error_envelope)
+        envelope = self._surface.declaration.error_envelope
+        schema = operation.response_schema(status, error_envelope=envelope)
+        declared = operation.raw.get("responses", {})
+        self._via_envelope[cache_key] = (
+            schema is not None and str(status) not in declared and "default" not in declared and envelope is not None
+        )
         validator: Any = None
         if schema is not None:
             pointer = _schema_pointer(self._surface.extract.document, operation, schema)
