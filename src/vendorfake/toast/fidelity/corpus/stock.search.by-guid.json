@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "id": "stock.search.by-guid",
+  "title": "POST /stock/v1/inventory/search by guid and by multiLocationId answers MenuItemInventory rows, including IN_STOCK items with a null quantity",
+  "source": {
+    "url": "https://doc.toasttab.com/doc/devguide/apiUsingTheStockApi.html",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "The page: the search body carries guids and/or multiLocationIds; 'Inventory information is returned for all menu items on the list, regardless of their inventory status (QUANTITY, OUT_OF_STOCK, or IN_STOCK)'; each row has guid, itemGuidValidity, status, quantity ('the amount of stock remaining for menu items with an inventory status of QUANTITY, and is null for OUT_OF_STOCK and IN_STOCK'), multiLocationId and versionId ('reserved for future use'); QUANTITY is 'in limited supply (1 or more items left)'. The seed keeps the Lemonade at a QUANTITY and the 8.99 soup IN_STOCK under the multiLocationId the page's example uses, 100000000171238879. The page's example also shows an INVALID row for an unknown guid with status OUT_OF_STOCK and multiLocationId 'null' (a string); the unit answers null there, and the case does not assert that row."
+  },
+  "routes": ["POST /stock/v1/inventory/search"],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "by-guid",
+      "request": {
+        "method": "POST",
+        "path": "/stock/v1/inventory/search",
+        "headers": {"$auth": "restaurant", "content-type": "application/json"},
+        "body": {"guids": ["3c9a1f00-0000-4000-8000-00000000c203"]}
+      },
+      "expect": {
+        "status": 200,
+        "headers": {"content-type": "application/json"},
+        "body": [
+          {
+            "guid": "3c9a1f00-0000-4000-8000-00000000c203",
+            "itemGuidValidity": "VALID",
+            "status": "QUANTITY",
+            "quantity": "${re:[1-9][0-9]*(\\.[0-9]+)?}",
+            "multiLocationId": "${re:[0-9]+}",
+            "versionId": "${any}"
+          }
+        ]
+      }
+    },
+    {
+      "name": "by-multi-location-id",
+      "request": {
+        "method": "POST",
+        "path": "/stock/v1/inventory/search",
+        "headers": {"$auth": "restaurant", "content-type": "application/json"},
+        "body": {"multiLocationIds": ["100000000171238879"]}
+      },
+      "expect": {
+        "status": 200,
+        "headers": {"content-type": "application/json"},
+        "body": [
+          {
+            "guid": "3c9a1f00-0000-4000-8000-00000000c201",
+            "itemGuidValidity": "VALID",
+            "status": "IN_STOCK",
+            "quantity": null,
+            "multiLocationId": "100000000171238879",
+            "versionId": "${any}"
+          }
+        ]
+      }
+    }
+  ]
+}

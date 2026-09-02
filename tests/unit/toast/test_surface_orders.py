@@ -326,7 +326,7 @@ def test_voiding_an_other_paid_order_voids_its_payments_too(h: Harness) -> None:
             }
         ],
     ).json()
-    assert paid["checks"][0]["paymentStatus"] == "PAID"
+    assert paid["checks"][0]["paymentStatus"] == "CLOSED"
     voided = h.post(
         f"/orders/v2/orders/{guid}/void", {"selections": {"voidAll": True}, "payments": {"voidAll": True}}
     ).json()

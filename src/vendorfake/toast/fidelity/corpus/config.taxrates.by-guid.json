@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "id": "config.taxrates.by-guid",
+  "title": "GET /config/v2/taxRates/{guid} answers the one TaxRate the list named, and an unknown guid is a 404",
+  "source": {
+    "url": "https://doc.toasttab.com/toast-api-specifications/toast-config-api.yaml",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "GET /taxRates/{guid} 'Returns a TaxRate object' with the field set documented on the list case (config.taxrates.list). The guid is captured from the list so the case asserts consistency between the two routes rather than a seeded value. The specification declares no 404 on the by-guid operation; the third step's 404 for an unknown guid follows apiResponsesAndErrors.html ('You are attempting to access an unknown resource') and is this unit's choice."
+  },
+  "routes": ["GET /config/v2/taxRates", "GET /config/v2/taxRates/{guid}"],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "list",
+      "request": {"method": "GET", "path": "/config/v2/taxRates", "headers": {"$auth": "restaurant"}},
+      "expect": {"status": 200, "body": [{"guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}", "entityType": "TaxRate"}]},
+      "capture": {"tax_rate_guid": "/0/guid", "tax_rate_name": "/0/name", "tax_rate": "/0/rate"}
+    },
+    {
+      "name": "by-guid",
+      "request": {"method": "GET", "path": "/config/v2/taxRates/${cap.tax_rate_guid}", "headers": {"$auth": "restaurant"}},
+      "expect": {
+        "status": 200,
+        "headers": {"content-type": "application/json"},
+        "body": {
+          "guid": "${cap.tax_rate_guid}",
+          "entityType": "TaxRate",
+          "name": "${cap.tax_rate_name}",
+          "isDefault": true,
+          "rate": "${cap.tax_rate}",
+          "type": "PERCENT",
+          "taxTable": [],
+          "conditionalTaxRates": []
+        }
+      }
+    },
+    {
+      "name": "unknown-guid",
+      "request": {"method": "GET", "path": "/config/v2/taxRates/00000000-0000-4000-8000-0000000000ff", "headers": {"$auth": "restaurant"}},
+      "expect": {
+        "status": 404,
+        "headers": {"content-type": "application/json"},
+        "body": {"status": 404, "code": "${re:[0-9]+}", "message": "${re:.+}", "requestId": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}"},
+        "absent": ["/guid", "/entityType"]
+      }
+    }
+  ]
+}

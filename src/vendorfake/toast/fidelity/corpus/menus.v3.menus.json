@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "id": "menus.v3.menus",
+  "title": "GET /menus/v3/menus answers the Restaurant document: restaurantGuid, lastUpdated, an IANA time zone, the menus tree, and the three referenceId-keyed maps",
+  "source": {
+    "url": "https://doc.toasttab.com/toast-api-specifications/toast-menus-api-v3.yaml",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "The 200 schema is Restaurant: restaurantGuid 'A unique identifier for this restaurant, assigned by the Toast POS system', lastUpdated 'The most recent date and time that this menu's data was published', restaurantTimeZone 'The name of the restaurant's time zone in the IANA time zone database', menus 'An array of Menu objects', and modifierGroupReferences / modifierOptionReferences / preModifierGroupReferences, each 'A map of ... objects'. MenuItem: price 'The price of this menu item', pricingStrategy (BASE_PRICE|MENU_SPECIFIC_PRICE|TIME_SPECIFIC_PRICE|SIZE_PRICE|OPEN_PRICE), taxInfo 'An array of GUIDs for the tax rates that apply', modifierGroupReferences 'An array of referenceIds for ModifierGroup objects'. ModifierGroup: referenceId 'An integer identifier that is used to refer to this modifier group', modifierOptionReferences 'An array of referenceIds for ModifierOption objects', minSelections, maxSelections, requiredMode (REQUIRED|OPTIONAL_FORCE_SHOW|OPTIONAL). The tree's lengths and the item names are the seed's (one Dinner menu, Mains with the 8.99 soup and a burger carrying group 2, Drinks with one item); the dev-guide page apiMenusV3.html answered 403 to every fetch this session, so the specification file is the page cited."
+  },
+  "routes": ["GET /menus/v3/menus"],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "menus",
+      "request": {"method": "GET", "path": "/menus/v3/menus", "headers": {"$auth": "restaurant"}},
+      "expect": {
+        "status": 200,
+        "headers": {"content-type": "application/json"},
+        "body": {
+          "restaurantGuid": "e6a4a8d2-0000-4000-8000-000000000001",
+          "lastUpdated": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+0000}",
+          "restaurantTimeZone": "${re:[A-Za-z_]+/[A-Za-z_]+}",
+          "menus": [
+            {
+              "name": "${re:.+}",
+              "guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}",
+              "multiLocationId": "${re:[0-9]+}",
+              "menuGroups": [
+                {
+                  "name": "${re:.+}",
+                  "guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}",
+                  "multiLocationId": "${re:[0-9]+}",
+                  "menuGroups": [],
+                  "menuItems": [
+                    {
+                      "name": "${re:.+}",
+                      "guid": "3c9a1f00-0000-4000-8000-00000000c201",
+                      "multiLocationId": "${re:[0-9]+}",
+                      "price": 8.99,
+                      "pricingStrategy": "BASE_PRICE",
+                      "taxInfo": ["${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}"],
+                      "modifierGroupReferences": []
+                    },
+                    {
+                      "name": "${re:.+}",
+                      "guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}",
+                      "multiLocationId": "${re:[0-9]+}",
+                      "price": "${re:[0-9]+(\\.[0-9]+)?}",
+                      "pricingStrategy": "${re:BASE_PRICE|MENU_SPECIFIC_PRICE|TIME_SPECIFIC_PRICE|SIZE_PRICE|OPEN_PRICE}",
+                      "modifierGroupReferences": [2]
+                    }
+                  ]
+                },
+                {
+                  "name": "${re:.+}",
+                  "guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}",
+                  "menuGroups": [],
+                  "menuItems": [
+                    {"name": "${re:.+}", "guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}", "price": "${re:[0-9]+(\\.[0-9]+)?}", "modifierGroupReferences": []}
+                  ]
+                }
+              ]
+            }
+          ],
+          "modifierGroupReferences": {
+            "2": {
+              "referenceId": 2,
+              "name": "${re:.+}",
+              "guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}",
+              "minSelections": "${re:[0-9]+}",
+              "maxSelections": "${re:[0-9]+}",
+              "requiredMode": "${re:REQUIRED|OPTIONAL_FORCE_SHOW|OPTIONAL}",
+              "modifierOptionReferences": [6, 7]
+            }
+          },
+          "modifierOptionReferences": {
+            "6": {"referenceId": 6, "name": "${re:.+}", "guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}", "price": "${re:[0-9]+(\\.[0-9]+)?}"},
+            "7": {"referenceId": 7, "name": "${re:.+}", "guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}", "price": "${re:[0-9]+(\\.[0-9]+)?}"}
+          },
+          "preModifierGroupReferences": {
+            "10": {"referenceId": 10, "name": "${re:.+}", "guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}"}
+          }
+        }
+      }
+    }
+  ]
+}

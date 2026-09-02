@@ -41,8 +41,12 @@ def test_check_transitions_and_terminals(check: StateMachine) -> None:
     assert check.can_transition("PAID", "VOIDED")
     assert check.can_transition("PAID", "CLOSED")
     assert not check.can_transition("PAID", "OPEN")
-    assert not check.can_transition("OPEN", "CLOSED")
-    assert check.is_terminal("VOIDED") and check.is_terminal("CLOSED")
+    # OPEN -> CLOSED: an OTHER payment covering the check closes it outright
+    # (documented; konyklabs/roadmap#56), and a closed check is still voidable
+    # through its order, so only VOIDED is terminal.
+    assert check.can_transition("OPEN", "CLOSED")
+    assert check.can_transition("CLOSED", "VOIDED")
+    assert check.is_terminal("VOIDED") and not check.is_terminal("CLOSED")
     assert not check.can_transition("OPEN", "OPEN")  # no self-transitions declared
 
 

@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "id": "orders.prices.documented-example",
+  "title": "POST /prices on one 8.99 item answers the documented amounts: 8.99, tax 0.56, total 9.55, with no guid assigned",
+  "source": {
+    "url": "https://doc.toasttab.com/doc/devguide/apiOrderPrices.html",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "The page: 'The /prices endpoint is the only reliable and supported way to determine the payment amount for a check'; the request is an Order with diningOption.guid and checks[0].selections[0].item.guid, quantity 1; the response example has checks[0].amount 8.99, taxAmount 0.56, totalAmount 9.55, selections[0].price 8.99 and tax 0.56, and guid null because nothing is persisted. The seeded Tomato Soup is priced 8.99 under the default 6.25% rate to reproduce it. The page's example also names itemGroup.guid, which this unit's seed does not require and the case omits."
+  },
+  "routes": ["POST /orders/v2/prices"],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "prices",
+      "request": {
+        "method": "POST",
+        "path": "/orders/v2/prices",
+        "headers": {"$auth": "restaurant"},
+        "body": {
+          "entityType": "Order",
+          "diningOption": {"guid": "5d0e2b11-0000-4000-8000-00000000d002", "entityType": "DiningOption"},
+          "checks": [
+            {
+              "entityType": "Check",
+              "selections": [
+                {"entityType": "MenuItemSelection", "item": {"guid": "3c9a1f00-0000-4000-8000-00000000c201", "entityType": "MenuItem"}, "quantity": 1}
+              ]
+            }
+          ]
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {"content-type": "application/json"},
+        "body": {
+          "guid": null,
+          "entityType": "Order",
+          "checks": [
+            {
+              "guid": null,
+              "entityType": "Check",
+              "selections": [
+                {
+                  "guid": null,
+                  "item": {"guid": "3c9a1f00-0000-4000-8000-00000000c201", "entityType": "MenuItem"},
+                  "price": 8.99,
+                  "tax": 0.56
+                }
+              ],
+              "amount": 8.99,
+              "taxAmount": 0.56,
+              "totalAmount": 9.55
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

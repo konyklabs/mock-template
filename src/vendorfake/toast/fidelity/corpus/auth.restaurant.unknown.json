@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "id": "auth.restaurant.unknown",
+  "title": "A valid bearer with a Toast-Restaurant-External-ID naming no connected restaurant is a 404 ErrorMessage",
+  "source": {
+    "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html",
+    "fetched": "2026-09-02",
+    "provenance": "judgment",
+    "note": "The page documents 404 as 'You are attempting to access an unknown resource' and says nothing about the Toast-Restaurant-External-ID header; the orders specification's 404 on POST /orders/v2/orders ('An entity referenced in the order does not exist, or belongs to a restaurant the authenticated client ...') is the nearest documented analogue and is what the unit follows (toast/auth.py labels the status a judgment; a missing header is a 400 there, also a judgment). The ErrorMessage shape is the page's example."
+  },
+  "routes": ["GET /menus/v3/metadata"],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "unknown-restaurant",
+      "request": {
+        "method": "GET",
+        "path": "/menus/v3/metadata",
+        "headers": {"$auth": "bearer", "toast-restaurant-external-id": "00000000-0000-4000-8000-0000000000ff"}
+      },
+      "expect": {
+        "status": 404,
+        "headers": {"content-type": "application/json"},
+        "body": {
+          "status": 404,
+          "code": "${re:[0-9]+}",
+          "message": "${re:.+}",
+          "requestId": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}",
+          "errors": "${any}"
+        },
+        "absent": ["/restaurantGuid", "/lastUpdated"]
+      }
+    }
+  ]
+}

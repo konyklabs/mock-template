@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "id": "auth.bearer.unrecognized",
+  "title": "A bearer token Toast never issued is the documented 401",
+  "source": {
+    "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "401 Unauthorized: 'The authentication token you submitted is not a recognized Toast API authentication token.' The ErrorMessage shape is the page's example (status, code, message, messageKey, fieldName, link, requestId, developerMessage, errors, canRetry); the message wording for this refusal is not documented and is asserted as any string."
+  },
+  "routes": ["GET /menus/v3/metadata"],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "unknown-token",
+      "request": {
+        "method": "GET",
+        "path": "/menus/v3/metadata",
+        "headers": {"authorization": "Bearer corpus-token-toast-never-issued", "toast-restaurant-external-id": "e6a4a8d2-0000-4000-8000-000000000001"}
+      },
+      "expect": {
+        "status": 401,
+        "headers": {"content-type": "application/json"},
+        "body": {
+          "status": 401,
+          "code": "${re:[0-9]+}",
+          "message": "${re:.+}",
+          "messageKey": "${any}",
+          "fieldName": "${any}",
+          "link": "${any}",
+          "requestId": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}",
+          "developerMessage": "${any}",
+          "errors": "${any}",
+          "canRetry": "${any}"
+        },
+        "absent": ["/restaurantGuid"]
+      }
+    }
+  ]
+}

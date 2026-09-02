@@ -88,7 +88,7 @@ def test_f4_a_payment_already_covered_by_its_array_mates_is_refused_whole(h: Har
     partials = [{**OTHER, "amount": 5.0}, {**OTHER, "amount": 4.55}]
     accepted = h.post(f"/orders/v2/orders/{guid}/checks/{check}/payments", partials)
     assert accepted.status == 200, accepted.text
-    assert accepted.json()["checks"][0]["paymentStatus"] == "PAID"
+    assert accepted.json()["checks"][0]["paymentStatus"] == "CLOSED"
 
 
 def test_f4_the_same_rule_holds_on_create(h: Harness) -> None:
@@ -174,7 +174,7 @@ def test_b2_a_discount_that_settles_the_check_exactly_marks_it_paid(h: Harness) 
     assert settled.status == 200, settled.text
     after = settled.json()
     assert after["checks"][0]["totalAmount"] == 8.65
-    assert after["checks"][0]["paymentStatus"] == "PAID"
+    assert after["checks"][0]["paymentStatus"] == "CLOSED"
     assert after["checks"][0]["paidDate"] and after["paidDate"]
 
 

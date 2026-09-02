@@ -216,10 +216,14 @@ class ToastPaymentsSurface:
 
         def set_tip(draft: Entity) -> None:
             draft["tipAmount"] = tip
+            draft["tip_adjusted"] = True
 
         def touch(draft: Entity) -> None:
             draft["modifiedDate"] = now
             _check_of(draft, check["guid"])["modifiedDate"] = now
+            # The tip is the adjustment PAID waits for; settling again moves
+            # the check to CLOSED when nothing else is outstanding.
+            settle_order(draft, ctx)
 
         updated = ctx.store.collection(COL.payments).update(
             payment_guid, set_tip, meta={"operation_id": "PaymentTipPatch"}
@@ -385,6 +389,10 @@ def add_payment(
         "type": kind,
         "amount": amount,
         "tipAmount": tip,
+        # Internal (never projected): whether the tip has been set by the
+        # caller, at creation or by PATCH. A CREDIT payment's check stays PAID
+        # until it has (the documented meaning of PAID); zero is a tip too.
+        "tip_adjusted": request.tipAmount is not None,
         "amountTendered": amount if tendered is None else tendered,
         "paymentStatus": "CAPTURED",
         "refundStatus": "NONE",
@@ -438,22 +446,37 @@ def add_payment(
 
 def settle_order(draft: Entity, ctx: UnitContext) -> None:
     """Attach every stored payment of this order to its check and move the
-    statuses: a check is PAID when covered; the order's ``paidDate`` is set
-    when every check is PAID. Idempotent, so the create path and the append
-    path share it."""
+    statuses; the order's ``paidDate`` is set when every check is settled.
+    Idempotent, so the create path, the append path and the tip path share it.
+
+    DOCUMENTED, on the Check schema's own value descriptions
+    (toast-orders-api.yaml): ``PAID`` is "a credit card payment was applied,
+    but the tip has not been adjusted"; ``CLOSED`` is "there is no remaining
+    amount due on this check". The payment walkthrough
+    (https://doc.toasttab.com/doc/devguide/apiCreatingAnOrderWithPaymentInformation.html)
+    shows an OTHER payment covering the total answering ``CLOSED``. So a
+    covered check is ``PAID`` only while a CREDIT payment on it still awaits
+    its tip, and ``CLOSED`` otherwise -- found by the fidelity corpus
+    (konyklabs/roadmap#56); the unit answered ``PAID`` for both before."""
     now = now_ms(ctx)
     rows = [row for row in ctx.store.collection(COL.payments).all() if row.get("orderGuid") == draft.get("id")]
     all_paid = True
     for check in draft.get("checks", []):
         mine = [row for row in rows if row.get("checkGuid") == check.get("guid")]
         check["payments"] = [str(row["id"]) for row in mine]
-        covered = sum(int(row.get("amount", 0)) for row in mine if row.get("paymentStatus") != "VOIDED")
+        live = [row for row in mine if row.get("paymentStatus") != "VOIDED"]
+        covered = sum(int(row.get("amount", 0)) for row in live)
+        awaiting_tip = any(row.get("type") == "CREDIT" and not row.get("tip_adjusted") for row in live)
         current = str(check.get("paymentStatus", CheckPaymentStatus.OPEN.value))
+        settled = CheckPaymentStatus.PAID.value if awaiting_tip else CheckPaymentStatus.CLOSED.value
         if current == CheckPaymentStatus.OPEN.value and mine and covered >= int(check.get("totalAmount", 0)):
-            _CHECK_MACHINE.assert_transition(current, CheckPaymentStatus.PAID.value, f"Check {check.get('guid')}")
-            check["paymentStatus"] = CheckPaymentStatus.PAID.value
+            _CHECK_MACHINE.assert_transition(current, settled, f"Check {check.get('guid')}")
+            check["paymentStatus"] = settled
             check["paidDate"] = now
-        if check.get("paymentStatus") != CheckPaymentStatus.PAID.value:
+        elif current == CheckPaymentStatus.PAID.value and not awaiting_tip:
+            _CHECK_MACHINE.assert_transition(current, CheckPaymentStatus.CLOSED.value, f"Check {check.get('guid')}")
+            check["paymentStatus"] = CheckPaymentStatus.CLOSED.value
+        if check.get("paymentStatus") not in (CheckPaymentStatus.PAID.value, CheckPaymentStatus.CLOSED.value):
             all_paid = False
         if mine:
             check["modifiedDate"] = now

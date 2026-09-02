@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "id": "auth.login.machine-client",
+  "title": "Machine-client login answers the documented SuccessfulResponse with a Bearer JWT that then authenticates a restaurant-scoped call",
+  "source": {
+    "url": "https://doc.toasttab.com/doc/devguide/authentication.html",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "The page's request is {clientId, clientSecret, userAccessType: TOAST_MACHINE_CLIENT} and its response {\"@class\": \".SuccessfulResponse\", token: {tokenType Bearer, scope null, expiresIn, accessToken, idToken null, refreshToken null}, status SUCCESS}; expiresIn is 'the number of seconds that the authentication token is valid' (the example shows 19168, which the page presents as an example and not a rule, so the case asserts an integer). accessToken is 'A JSON Web Token (JWT) string' (toast-authentication-api.yaml), asserted as three base64url segments. The second step sends the minted token with Toast-Restaurant-External-ID, the documented pairing for every restaurant-scoped call."
+  },
+  "routes": ["POST /authentication/v1/authentication/login", "GET /menus/v3/metadata"],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "login",
+      "request": {
+        "method": "POST",
+        "path": "/authentication/v1/authentication/login",
+        "headers": {"content-type": "application/json"},
+        "body": {"clientId": "unit-toast-client-id", "clientSecret": "unit-toast-client-secret", "userAccessType": "TOAST_MACHINE_CLIENT"}
+      },
+      "expect": {
+        "status": 200,
+        "headers": {"content-type": "application/json"},
+        "body": {
+          "@class": ".SuccessfulResponse",
+          "token": {
+            "tokenType": "Bearer",
+            "scope": null,
+            "expiresIn": "${re:[0-9]+}",
+            "accessToken": "${re:[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+}",
+            "idToken": null,
+            "refreshToken": null
+          },
+          "status": "SUCCESS"
+        }
+      },
+      "capture": {"access_token": "/token/accessToken"}
+    },
+    {
+      "name": "use-token",
+      "request": {
+        "method": "GET",
+        "path": "/menus/v3/metadata",
+        "headers": {"authorization": "Bearer ${cap.access_token}", "toast-restaurant-external-id": "e6a4a8d2-0000-4000-8000-000000000001"}
+      },
+      "expect": {
+        "status": 200,
+        "headers": {"content-type": "application/json"},
+        "body": {"restaurantGuid": "e6a4a8d2-0000-4000-8000-000000000001", "lastUpdated": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+0000}"}
+      }
+    }
+  ]
+}

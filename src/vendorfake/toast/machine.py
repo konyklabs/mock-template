@@ -17,18 +17,26 @@ DOCUMENTED values: ``OPEN | PAID | CLOSED`` on the Check schema
 (https://doc.toasttab.com/doc/devguide/apiVoidOrder.html) -- a fourth value the
 schema's enum does not list, which is why the machine carries it.
 
-JUDGMENT, every transition:
+The transitions, each labelled:
 
-* ``OPEN -> PAID`` when the payments on the check cover its ``totalAmount``
-  (``surface/orders.py``); Toast documents the values and not the rule.
-* ``OPEN -> VOIDED`` and ``PAID -> VOIDED`` through ``POST /orders/{guid}/void``,
-  which is documented as voiding "the order and its payments"; "Once an order
-  has been voided, it can not be updated", so ``VOIDED`` is terminal.
-* ``PAID -> CLOSED`` when the order's ``guestOrderStatus`` reaches ``CLOSED``.
-  No API route in this package drives it -- closing is a POS-side act -- so
-  the edge is reachable through the control plane's state update only, and is
-  declared so the published lifecycle is the whole one rather than the part
-  the API touches. ``CLOSED`` is terminal.
+* ``OPEN -> CLOSED`` when the payments on the check cover its ``totalAmount``
+  and none of them awaits a tip -- DOCUMENTED: the schema describes ``CLOSED``
+  as "there is no remaining amount due on this check", and the payment
+  walkthrough answers ``CLOSED`` for an OTHER payment covering the total
+  (https://doc.toasttab.com/doc/devguide/apiCreatingAnOrderWithPaymentInformation.html).
+  The fidelity corpus found this (konyklabs/roadmap#56); the unit said
+  ``PAID`` before.
+* ``OPEN -> PAID`` when a CREDIT payment covers the check and its tip has not
+  been adjusted -- DOCUMENTED value description: "a credit card payment was
+  applied, but the tip has not been adjusted".
+* ``PAID -> CLOSED`` when that tip is adjusted (``PATCH .../payments/{guid}``
+  with ``tipAmount``) -- the value descriptions imply it; JUDGMENT that the
+  tip PATCH is the adjusting act.
+* ``OPEN -> VOIDED``, ``PAID -> VOIDED`` and ``CLOSED -> VOIDED`` through
+  ``POST /orders/{guid}/void``, documented as voiding "the order and its
+  payments" -- the void walkthrough voids a check an OTHER payment had closed.
+  "Once an order has been voided, it can not be updated", so ``VOIDED`` is
+  terminal.
 
 Order ``guestOrderStatus`` -- PARTIAL
 -------------------------------------
@@ -95,14 +103,15 @@ CHECK_MACHINE = MachineDef(
     states={
         CheckPaymentStatus.OPEN.value: StateDef(
             summary="Unpaid. Takes selections, discounts and payments.",
-            to=(CheckPaymentStatus.PAID.value, CheckPaymentStatus.VOIDED.value),
+            to=(CheckPaymentStatus.PAID.value, CheckPaymentStatus.CLOSED.value, CheckPaymentStatus.VOIDED.value),
         ),
         CheckPaymentStatus.PAID.value: StateDef(
-            summary="Payments cover totalAmount (JUDGMENT rule). Takes a tip; voidable while its payments are OTHER.",
+            summary="A CREDIT payment covers totalAmount and its tip is not yet adjusted (DOCUMENTED). Takes the tip.",
             to=(CheckPaymentStatus.CLOSED.value, CheckPaymentStatus.VOIDED.value),
         ),
         CheckPaymentStatus.CLOSED.value: StateDef(
-            summary="Closed with its order (POS-side; control plane only here). Terminal.",
+            summary="No remaining amount due (DOCUMENTED). Voidable through the order.",
+            to=(CheckPaymentStatus.VOIDED.value,),
         ),
         CheckPaymentStatus.VOIDED.value: StateDef(
             summary="'Once an order has been voided, it can not be updated.' Terminal.",

@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "id": "orders.get.errors",
+  "title": "GET /orders/v2/orders/{guid}: a malformed guid is the documented 400, an unknown guid the documented 404, both as ErrorMessage",
+  "source": {
+    "url": "https://doc.toasttab.com/toast-api-specifications/toast-orders-api.yaml",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "The operation's responses: 400 'The GUID was malformed.', 404 'The specified order was not found.'; guid is 'The GUID for the order to be returned' and Toast-Restaurant-External-ID 'The identifier of the restaurant where this order was placed'. The specification attaches no schema to either response; the ErrorMessage body shape is the example on apiResponsesAndErrors.html, and the message wording is asserted as any string because a response description is not a body."
+  },
+  "routes": ["GET /orders/v2/orders/{guid}"],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "malformed-guid",
+      "request": {"method": "GET", "path": "/orders/v2/orders/not-a-guid", "headers": {"$auth": "restaurant"}},
+      "expect": {
+        "status": 400,
+        "headers": {"content-type": "application/json"},
+        "body": {"status": 400, "code": "${re:[0-9]+}", "message": "${re:.+}", "requestId": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}", "errors": "${any}"},
+        "absent": ["/checks"]
+      }
+    },
+    {
+      "name": "unknown-guid",
+      "request": {"method": "GET", "path": "/orders/v2/orders/00000000-0000-4000-8000-0000000000ff", "headers": {"$auth": "restaurant"}},
+      "expect": {
+        "status": 404,
+        "headers": {"content-type": "application/json"},
+        "body": {"status": 404, "code": "${re:[0-9]+}", "message": "${re:.+}", "requestId": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}", "errors": "${any}"},
+        "absent": ["/checks"]
+      }
+    }
+  ]
+}
