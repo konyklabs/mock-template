@@ -22,3 +22,6 @@ htmlcov/
 # lockfile is machine-specific; node_modules is never committed anywhere.
 examples/*/uv.lock
 examples/*/node_modules/
+
+# git worktrees of this repository, checked out beside it by parallel sessions
+.wt-*/
