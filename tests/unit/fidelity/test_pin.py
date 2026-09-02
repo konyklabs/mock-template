@@ -19,7 +19,9 @@ from tests.unit.fidelity.test_extract import MODELED, URL, blob, synthetic
 from vendorfake.fidelity.pin import Pin, PinnedSource, fetch, read_pin, refresh, verify, write_pin
 from vendorfake.fidelity.types import EXTRACT_FILE, PIN_FILE, FidelityDeclaration, SpecSource
 
-DECLARATION = FidelityDeclaration(anchor="tests.synthetic", sources=(SpecSource(kind="openapi3", url=URL),))
+DECLARATION = FidelityDeclaration(
+    anchor="tests.synthetic", sources=(SpecSource(kind="openapi3", url=URL),), stubs_accepted=("Missing",)
+)
 
 
 def fetcher_for(document: dict[str, Any]) -> Any:
@@ -185,3 +187,23 @@ def test_verify_names_missing_files(tmp_path: Path) -> None:
     result = verify(tmp_path, DECLARATION)
     assert result.changed
     assert "extract.json, pin.json" in result.diff_summary
+
+
+def test_verify_refuses_a_stub_the_declaration_has_not_accepted(pinned: Path) -> None:
+    """A stubbed schema validates everything it types (deep-lens D4,
+    konyklabs/roadmap#55): a new one is red offline until it is accepted by name."""
+    from vendorfake.fidelity.extract import render_json
+
+    extract = pinned / EXTRACT_FILE
+    doc = json.loads(extract.read_text())
+    assert doc["x-vendorfake"]["stubbed"] == ["Missing"]
+    # An upstream release dangles a second schema; `pin` re-cuts and re-pins.
+    doc["x-vendorfake"]["stubbed"] = ["Missing", "Money"]
+    text = render_json(doc)
+    extract.write_text(text)
+    write_pin(pinned / PIN_FILE, Pin.from_extract(doc, text))
+    result = verify(pinned, DECLARATION)
+    assert result.changed_extract and not result.changed_upstream
+    assert "schema 'Money' is stubbed to {}" in result.diff_summary
+    assert "Missing" not in result.diff_summary
+    assert not verify(pinned, replace(DECLARATION, stubs_accepted=("Missing", "Money"))).changed

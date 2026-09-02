@@ -122,8 +122,12 @@
             "minLength": 1
           },
           "value": {
-            "type": "string",
-            "minLength": 1
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ],
+            "description": "The one instance value excused, in its JSON type."
           },
           "reason": {
             "type": "string",
@@ -148,6 +152,14 @@
       "additionalProperties": {
         "type": "string"
       }
+    },
+    "stubs_accepted": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Schema names the extract may stub to {} because upstream dangles there. Every stub in the extract must be listed, or pin --check --offline fails."
     }
   },
   "dependentRequired": {

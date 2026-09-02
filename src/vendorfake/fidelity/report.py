@@ -257,4 +257,11 @@ def _pin_lines(surface: Surface) -> list[str]:
             f"pin: {row.get('url', '?')} version {row.get('version', '?')} "
             f"sha256 {sha[:12] or '?'} fetched {row.get('fetched', '?')}"
         )
+    stubbed = surface.extract.metadata.get("stubbed")
+    if isinstance(stubbed, list) and stubbed:
+        out.append(
+            "stubbed schemas, validated as {} because upstream dangles there: "
+            + ", ".join(str(name) for name in stubbed)
+            + " (each accepted by name in the declaration)"
+        )
     return out

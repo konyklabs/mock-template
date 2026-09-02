@@ -36,6 +36,10 @@
       ]
     }
   ],
+  "stubs_accepted": [
+    "AppFeeAllocation",
+    "CurrencyExchange"
+  ],
   "variables": {
     "location_id": "18YC4JDH91E1H"
   }

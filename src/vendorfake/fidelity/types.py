@@ -151,7 +151,9 @@ class Deviation:
 
     pointer: str
     keyword: str
-    value: str
+    #: The one instance value excused, kept in its JSON type: a vendor that
+    #: enumerates numeric codes needs ``402`` to mean the number, not the text.
+    value: object
     reason: str
     url: str
     #: Route keys (the unit's spelling) the deviation applies to; empty means
@@ -162,15 +164,15 @@ class Deviation:
     @classmethod
     def of(cls, row: Mapping[str, Any]) -> Deviation:
         value = row.get("value")
-        if value is None or str(value) == "":
-            raise ValueError("a deviation must name the one value it excuses")
+        if value is None or value == "" or isinstance(value, (dict, list)):
+            raise ValueError("a deviation must name the one scalar value it excuses")
         pointer = str(row["pointer"])
         if not pointer.startswith("/") or all(segment in ("", "*") for segment in pointer.split("/")):
             raise ValueError(f"deviation pointer {pointer!r} must be absolute and name at least one real segment")
         return cls(
             pointer=pointer,
             keyword=str(row["keyword"]),
-            value=str(value),
+            value=value,
             reason=str(row["reason"]),
             url=str(row["url"]),
             routes=tuple(str(key) for key in row.get("routes", ())),
@@ -179,10 +181,10 @@ class Deviation:
     @property
     def label(self) -> str:
         """How the ledger and the report name this row."""
-        return f"{self.keyword} {self.pointer} = {self.value!r}"
+        return f"{self.keyword} {self.pointer} = {json.dumps(self.value)}"
 
     def matches(self, *, keyword: str, pointer: str, instance: object, route_key: str | None = None) -> bool:
-        if keyword != self.keyword or instance != self.value:
+        if keyword != self.keyword or instance != self.value or type(instance) is not type(self.value):
             return False
         if self.routes and (route_key is None or route_key not in self.routes):
             return False
@@ -213,6 +215,10 @@ class FidelityDeclaration:
     deviations: tuple[Deviation, ...] = ()
     error_envelope: str | None = None
     error_member: str | None = None
+    #: Schema names the extract may stub to ``{}`` because the upstream
+    #: document dangles there. A stub validates everything it types, so a
+    #: new one is a red offline check until it is listed here, on purpose.
+    stubs_accepted: tuple[str, ...] = ()
     #: Values a corpus case may interpolate as ``${vars.<name>}`` -- seeded ids
     #: the vendor's scenario fixes, so a case can name them without a lookup.
     variables: Mapping[str, str] = field(default_factory=dict)
@@ -239,6 +245,7 @@ class FidelityDeclaration:
             deviations=tuple(Deviation.of(row) for row in doc.get("deviations", ())),
             error_envelope=None if envelope is None else str(envelope),
             error_member=None if member is None else str(member),
+            stubs_accepted=tuple(str(n) for n in doc.get("stubs_accepted", ())),
             variables={str(k): str(v) for k, v in dict(doc.get("variables", {})).items()},
         )
 
@@ -270,12 +277,13 @@ class Operation:
         return route_key(self.method, self.spec_path)
 
     def response_schema(self, status: int, *, error_envelope: str | None = None) -> Mapping[str, Any] | None:
-        """The JSON schema for ``status``: exact, then ``default``, then the
-        envelope status the declaration names. ``None`` when the operation has
+        """The JSON schema for ``status``: exact, then the OAS 3 range key
+        (``4XX``), then ``default``, then the envelope status the declaration
+        names. ``None`` when the operation has
         no JSON schema for that status anywhere -- the caller decides whether
         that is a violation."""
         responses = self.raw.get("responses", {})
-        for candidate in (str(status), "default", error_envelope):
+        for candidate in (str(status), f"{status // 100}XX", "default", error_envelope):
             if candidate is None:
                 continue
             response = responses.get(candidate)

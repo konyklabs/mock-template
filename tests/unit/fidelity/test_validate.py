@@ -641,4 +641,4 @@ def test_the_ledger_names_which_deviation_absorbed_what() -> None:
     world.client.get("/v2/orders/ord_1")
     world.client.get("/v2/orders/ord_1")
     assert world.ledger.absorbed() == ((BOGUS_STATE_DEVIATION.label, 2),)
-    assert BOGUS_STATE_DEVIATION.label == "enum /order/state = 'BOGUS'"
+    assert BOGUS_STATE_DEVIATION.label == 'enum /order/state = "BOGUS"'

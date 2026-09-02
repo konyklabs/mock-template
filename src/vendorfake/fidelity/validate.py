@@ -402,7 +402,9 @@ class ValidatingClient(InProcessClient):
         schema = operation.response_schema(status, error_envelope=envelope)
         declared = operation.raw.get("responses", {})
         self._via_envelope[cache_key] = (
-            schema is not None and str(status) not in declared and "default" not in declared and envelope is not None
+            schema is not None
+            and envelope is not None
+            and not any(k in declared for k in (str(status), f"{status // 100}XX", "default"))
         )
         validator: Any = None
         if schema is not None:

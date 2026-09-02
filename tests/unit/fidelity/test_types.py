@@ -149,7 +149,7 @@ def test_loaders_name_the_missing_package() -> None:
 def test_a_deviation_needs_a_value_and_a_real_pointer_segment() -> None:
     row = {"pointer": "/errors/*/code", "keyword": "enum", "value": "X", "reason": "r", "url": "https://d/"}
     assert Deviation.of(row).value == "X"
-    with pytest.raises(ValueError, match="one value"):
+    with pytest.raises(ValueError, match="one scalar value"):
         Deviation.of({**row, "value": None})
     with pytest.raises(ValueError, match="at least one real segment"):
         Deviation.of({**row, "pointer": "/*/*"})
@@ -189,3 +189,40 @@ def test_the_declaration_schema_refuses_the_widenings_by_typo() -> None:
         validate_declaration({**good, "excuses": []}, where="t")
     with pytest.raises(ValueError, match="error_member"):
         FidelityDeclaration.of("t", {**good, "error_envelope": "200"})
+
+
+def test_a_deviation_value_keeps_its_json_type() -> None:
+    row = {"pointer": "/errors/*/code", "keyword": "enum", "value": 402, "reason": "r", "url": "https://d/"}
+    dev = Deviation.of(row)
+    assert dev.matches(keyword="enum", pointer="/errors/0/code", instance=402)
+    assert not dev.matches(keyword="enum", pointer="/errors/0/code", instance="402")
+    assert not dev.matches(keyword="enum", pointer="/errors/0/code", instance=402.0)
+    assert dev.label == "enum /errors/*/code = 402"
+    with pytest.raises(ValueError, match="scalar"):
+        Deviation.of({**row, "value": [402]})
+
+
+def test_a_range_status_key_is_consulted_before_default_and_envelope() -> None:
+    ranged = Extract(
+        {
+            "openapi": "3.0.0",
+            "info": {"title": "t", "version": "1"},
+            "paths": {
+                "/v1/x": {
+                    "get": {
+                        "responses": {
+                            "200": _json("#/components/schemas/Ok"),
+                            "4XX": _json("#/components/schemas/ClientErr"),
+                            "default": _json("#/components/schemas/Err"),
+                        }
+                    }
+                }
+            },
+            "components": {"schemas": {"Ok": {}, "ClientErr": {}, "Err": {}}},
+        }
+    )
+    op = ranged.operation("GET", "/v1/x")
+    assert op is not None
+    assert op.response_schema(404, error_envelope="200") == {"$ref": "#/components/schemas/ClientErr"}
+    assert op.response_schema(503, error_envelope="200") == {"$ref": "#/components/schemas/Err"}
+    assert op.response_schema(200) == {"$ref": "#/components/schemas/Ok"}

@@ -317,6 +317,14 @@ def verify(anchor_dir: Path, declaration: FidelityDeclaration) -> RefreshResult:
     if embedded.sources != pin.sources:
         changed_extract = True
         lines.append(f"{EXTRACT_FILE}: its x-vendorfake.sources rows disagree with {PIN_FILE}")
+    meta = document.get("x-vendorfake", {})
+    stubbed = tuple(meta.get("stubbed", ())) if isinstance(meta, Mapping) else ()
+    for name in sorted(set(stubbed) - set(declaration.stubs_accepted)):
+        changed_extract = True
+        lines.append(
+            f"{EXTRACT_FILE}: schema {name!r} is stubbed to {{}} (upstream dangles) and not in stubs_accepted -- "
+            f"everything it types is unvalidated until the declaration accepts it"
+        )
     declared = {source.url for source in declaration.sources}
     pinned = {row.url for row in pin.sources}
     for url in sorted(declared - pinned):
