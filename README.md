@@ -262,14 +262,8 @@ values are readable and obviously fake by design.
 Tenants, locations, catalog items, seeded orders, tenders, webhook
 subscribers and event types, per vendor: [docs/seeded-scenario.md](docs/seeded-scenario.md).
 
-Toast's guids are truncated above to their last four characters. They come
-in four families, each with its own fixed prefix and the same
-`-0000-4000-8000-` middle: `e6a4a8d2…` the restaurant and its management
-group, `3c9a1f00…` the menu and everything on it, `5d0e2b11…` restaurant
-configuration (dining options, payment types, tax rates), `9a7b6c5d…`
-orders and checks. So the dine-in dining option in full is
-`5d0e2b11-0000-4000-8000-00000000d001`. Every value is also an attribute on
-the seed object, which is the form to use in a test.
+Toast's guids are truncated to their last four characters in that file; the
+four families they come from, and the full form of each, are explained there.
 
 In Python these are `.seed.*` attributes on a started unit
 (`vendorfake.testing.SquareSeed`, `CloverSeed`, `ToastSeed`). Toast's
