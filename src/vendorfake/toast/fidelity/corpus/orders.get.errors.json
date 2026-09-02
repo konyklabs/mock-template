@@ -6,7 +6,7 @@
     "url": "https://doc.toasttab.com/toast-api-specifications/toast-orders-api.yaml",
     "fetched": "2026-09-02",
     "provenance": "documented",
-    "note": "The operation's responses: 400 'The GUID was malformed.', 404 'The specified order was not found.'; guid is 'The GUID for the order to be returned' and Toast-Restaurant-External-ID 'The identifier of the restaurant where this order was placed'. The specification attaches no schema to either response; the ErrorMessage body shape is the example on apiResponsesAndErrors.html, and the message wording is asserted as any string because a response description is not a body."
+    "note": "The operation's responses: 400 for a guid that isn't well-formed, 404 when no order matches it; guid identifies which order to fetch and Toast-Restaurant-External-ID names the restaurant the order belongs to. The specification attaches no schema to either response; the ErrorMessage body shape is the example on apiResponsesAndErrors.html, and the message wording is asserted as any string because a response description is not a body."
   },
   "routes": ["GET /orders/v2/orders/{guid}"],
   "profile": "full",

@@ -193,9 +193,9 @@ def test_payment_routes_need_the_payments_scope_and_the_restaurant_header(h: Har
 
 
 def test_a_credit_payment_is_paid_until_its_tip_is_adjusted_then_closed(h: Harness) -> None:
-    """The Check schema's own value descriptions: PAID is "a credit card
-    payment was applied, but the tip has not been adjusted"; CLOSED is "there
-    is no remaining amount due". An OTHER payment closes the check outright
+    """The Check schema's own per-value notes: PAID describes a card charge
+    that cleared while its gratuity is still unadjusted; CLOSED describes a
+    check with nothing left owing. An OTHER payment closes the check outright
     (the payment walkthrough's example); a CREDIT one waits for its tip.
     Found by the fidelity corpus, konyklabs/roadmap#56."""
     guid, check_guid = created(h)

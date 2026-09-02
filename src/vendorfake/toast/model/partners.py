@@ -5,7 +5,8 @@ https://doc.toasttab.com/doc/devguide/apiPartnersGettingAccessibleRestaurants.ht
 
 * ``GET /partners/v1/connectedRestaurants?lastModified&pageSize&pageToken``
   answers ``{currentPageNum, results[], totalResultCount, pageSize,
-  currentPageToken, nextPageToken, totalCount, nextPageNum, lastPageNum,
+  currentPageToken, nextPageToken (only when a next page exists), totalCount,
+  nextPageNum, lastPageNum,
   previousPageNum}``; ``pageSize`` default 100, maximum 200;
 * ``GET /partners/v1/restaurants?lastModified`` answers the bare array;
 * a row is ``{restaurantGuid, managementGroupGuid (null if none),

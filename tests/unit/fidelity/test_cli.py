@@ -341,9 +341,10 @@ def test_pin_offline_on_a_non_vendored_anchor_verifies_the_cache_or_notes_there_
         raise AssertionError("offline pin reached refresh")
 
     name, cache, fetcher = not_vendored()
-    assert main(["pin", "--offline", "--target", HERE], refresh=explode) == 0
+    # An empty cache verifies nothing, and says so with exit 1 (adversarial A6).
+    assert main(["pin", "--offline", "--target", HERE], refresh=explode) == 1
     printed = capsys.readouterr().out
-    assert "no cache" in printed and "nothing to verify offline" in printed and "consistent (offline)" in printed
+    assert "no cache" in printed and "cannot be verified offline" in printed and "INCONSISTENT" in printed
     assert main(["fetch", "--target", HERE], fetcher=fetcher) == 0
     capsys.readouterr()
     assert main(["pin", "--offline", "--target", HERE], refresh=explode) == 0

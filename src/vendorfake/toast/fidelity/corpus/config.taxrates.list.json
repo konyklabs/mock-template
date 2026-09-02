@@ -6,7 +6,7 @@
     "url": "https://doc.toasttab.com/toast-api-specifications/toast-config-api.yaml",
     "fetched": "2026-09-02",
     "provenance": "documented",
-    "note": "The operation 'Returns an array of TaxRate objects' (at most 300 per page) and requires Toast-Restaurant-External-ID, 'The Toast POS GUID of the restaurant that the configuration applies to'. TaxRate: guid 'The GUID maintained by the Toast POS', entityType 'The type of object this is', name, isDefault 'True if this tax rate is the default tax rate', rate 'For a percent tax rate, the percentage is expressed as a decimal value. For example, if the tax rate is 6.25%, then rate is 0.0625', type enum PERCENT|FIXED|TABLE|NONE|EXTERNAL, roundingType 'Only applies to PERCENT tax rates', taxTable and conditionalTaxRates arrays. The seed carries exactly the documented 6.25% example as its one, default rate; the list length is the seed's."
+    "note": "The operation hands back the restaurant's list of TaxRate objects (at most 300 per page) and requires Toast-Restaurant-External-ID, which names the POS-side restaurant the request is scoped to. TaxRate: guid is the identifier Toast's POS assigns and keeps, entityType names the object's kind, name, isDefault flags whether this is the restaurant's fallback rate, rate holds a percent rate as its decimal fraction -- a 6.25% rate stores as 0.0625, type enum PERCENT|FIXED|TABLE|NONE|EXTERNAL, roundingType meaningful only for PERCENT rates, taxTable and conditionalTaxRates arrays. The seed carries exactly the documented 6.25% example as its one, default rate; the list length is the seed's."
   },
   "routes": ["GET /config/v2/taxRates"],
   "profile": "full",

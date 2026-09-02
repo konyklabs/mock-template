@@ -348,7 +348,12 @@ def verify(anchor_dir: Path, declaration: FidelityDeclaration, *, cache_dir: Pat
             return RefreshResult(True, True, f"missing under {anchor_dir}: {PIN_FILE} -- run `pin` once")
         if not extract_path.is_file():
             return RefreshResult(
-                False, False, f"no cache at {extract_path}; nothing to verify offline (run `fetch` to populate it)"
+                # Nothing checked is not a pass: the pin's own claims (the
+                # extract digest, the source rows) are only verifiable
+                # against a cut, and CI populates one before this runs.
+                True,
+                False,
+                f"no cache at {extract_path}: the pin cannot be verified offline -- run `vendorfake-fidelity fetch` first",
             )
         for drifted in drift_rows(extract_dir):
             changed_upstream = True

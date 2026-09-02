@@ -225,9 +225,10 @@ def test_verify_of_a_non_vendored_declaration_with_no_cache_passes_with_a_note(t
     )
     assert not (package / EXTRACT_FILE).exists()
     result = verify(package, NOT_VENDORED, cache_dir=tmp_path / "empty")
-    assert not result.changed
-    assert "no cache" in result.diff_summary and "nothing to verify offline" in result.diff_summary
-    assert "run `fetch`" in result.diff_summary
+    # Nothing checked is not a pass (adversarial A6, konyklabs/roadmap#56).
+    assert result.changed
+    assert "no cache" in result.diff_summary and "cannot be verified offline" in result.diff_summary
+    assert "fetch" in result.diff_summary
 
 
 def test_verify_of_a_non_vendored_declaration_reads_the_cache_and_a_drift_note(tmp_path: Path) -> None:

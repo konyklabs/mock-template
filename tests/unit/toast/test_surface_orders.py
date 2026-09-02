@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import re
 from collections.abc import Iterator
 from typing import Any
@@ -452,3 +453,16 @@ def test_the_restaurant_header_and_scopes_are_required_on_every_order_route(h: H
     assert h.api.post("/orders/v2/orders", order_body(), headers=h.read_auth).status == 403
     assert h.api.post("/orders/v2/prices", order_body(), headers=h.read_auth).status == 403  # documented on /prices
     assert h.api.get(f"/orders/v2/orders/{c.SEED_ORDER_GUID}", headers=h.read_auth).status == 200
+
+
+def test_a_check_level_external_id_is_echoed(h: Harness) -> None:
+    """Adversarial A4 (konyklabs/roadmap#56): the null-externalId deviation is
+    unrouted, so only an assertion on the echoed value keeps this honest."""
+    body = copy.deepcopy(order_body())  # order_body shares module-level dicts; do not mutate them
+    body["checks"][0]["externalId"] = "c1"
+    body["externalId"] = "o1"
+    body["checks"][0]["selections"][0]["externalId"] = "s1"
+    order = h.post("/orders/v2/orders", body).json()
+    assert order["externalId"] == "o1"
+    assert order["checks"][0]["externalId"] == "c1"
+    assert order["checks"][0]["selections"][0]["externalId"] == "s1"

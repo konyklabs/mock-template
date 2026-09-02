@@ -20,15 +20,17 @@ schema's enum does not list, which is why the machine carries it.
 The transitions, each labelled:
 
 * ``OPEN -> CLOSED`` when the payments on the check cover its ``totalAmount``
-  and none of them awaits a tip -- DOCUMENTED: the schema describes ``CLOSED``
-  as "there is no remaining amount due on this check", and the payment
-  walkthrough answers ``CLOSED`` for an OTHER payment covering the total
+  and none of them awaits a tip -- DOCUMENTED: the schema's note for
+  ``CLOSED`` describes a check whose balance is fully paid off, and the
+  payment walkthrough answers ``CLOSED`` for an OTHER payment covering the
+  total
   (https://doc.toasttab.com/doc/devguide/apiCreatingAnOrderWithPaymentInformation.html).
   The fidelity corpus found this (konyklabs/roadmap#56); the unit said
   ``PAID`` before.
 * ``OPEN -> PAID`` when a CREDIT payment covers the check and its tip has not
-  been adjusted -- DOCUMENTED value description: "a credit card payment was
-  applied, but the tip has not been adjusted".
+  been adjusted -- DOCUMENTED value description: the note for ``PAID``
+  describes a card charge that cleared while the gratuity is still
+  unadjusted.
 * ``PAID -> CLOSED`` when that tip is adjusted (``PATCH .../payments/{guid}``
   with ``tipAmount``) -- the value descriptions imply it; JUDGMENT that the
   tip PATCH is the adjusting act.

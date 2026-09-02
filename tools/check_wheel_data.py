@@ -109,21 +109,29 @@ def main() -> int:
             return 1
 
         names = set(zipfile.ZipFile(wheels[0]).namelist())
-        missing = [path for path in REQUIRED if path not in names]
-        for path in REQUIRED:
-            print(f"  {'ok  ' if path in names else 'MISS'} {path}")
-        leaked = [path for path in FORBIDDEN if path in names]
-        for path in leaked:
-            print(f"  LEAK {path} -- must never ship; see FORBIDDEN")
-        if leaked:
-            print(f"wheel: {len(leaked)} file(s) that must never ship are in {wheels[0].name}")
-            return 1
-        if missing:
-            print(f"wheel: {len(missing)} data file(s) missing from {wheels[0].name}")
-            print("       the source tree works and the wheel does not; check")
-            print("       [tool.hatch.build.targets.wheel] in pyproject.toml")
-            return 1
-        print(f"wheel: {wheels[0].name} carries all {len(REQUIRED)} data files")
+        return verify(names, wheels[0].name)
+
+
+def verify(
+    names: set[str], wheel_name: str, *, required: tuple[str, ...] = REQUIRED, forbidden: tuple[str, ...] = FORBIDDEN
+) -> int:
+    """The verdict on a wheel's file list: 1 if anything forbidden is in it or
+    anything required is not. Pure, so a test can hand it a name list."""
+    missing = [path for path in required if path not in names]
+    for path in required:
+        print(f"  {'ok  ' if path in names else 'MISS'} {path}")
+    leaked = [path for path in forbidden if path in names]
+    for path in leaked:
+        print(f"  LEAK {path} -- must never ship; see FORBIDDEN")
+    if leaked:
+        print(f"wheel: {len(leaked)} file(s) that must never ship are in {wheel_name}")
+        return 1
+    if missing:
+        print(f"wheel: {len(missing)} data file(s) missing from {wheel_name}")
+        print("       the source tree works and the wheel does not; check")
+        print("       [tool.hatch.build.targets.wheel] in pyproject.toml")
+        return 1
+    print(f"wheel: {wheel_name} carries all {len(required)} data files")
     return 0
 
 

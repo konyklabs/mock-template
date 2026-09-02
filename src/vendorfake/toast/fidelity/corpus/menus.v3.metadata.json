@@ -6,7 +6,7 @@
     "url": "https://doc.toasttab.com/toast-api-specifications/toast-menus-api-v3.yaml",
     "fetched": "2026-09-02",
     "provenance": "documented",
-    "note": "The Metadata schema has restaurantGuid and lastUpdated, the latter 'The most recent date and time that this menu's data was published. Use this value to determine if you need to refresh your menu data' -- the same definition Restaurant.lastUpdated carries, which is why the second step asserts the captured value against the full document. That equality is inferred from the two identical definitions; no sentence states it. apiMenusV3.html answered 403 to every fetch this session."
+    "note": "The Metadata schema has restaurantGuid and lastUpdated, the latter marking the newest publish timestamp of the menu data, meant as the signal callers poll to decide whether to pull a fresh copy -- the same definition Restaurant.lastUpdated carries, which is why the second step asserts the captured value against the full document. That equality is inferred from the two identical definitions; no sentence states it. apiMenusV3.html answered 403 to every fetch this session."
   },
   "routes": ["GET /menus/v3/metadata", "GET /menus/v3/menus"],
   "profile": "full",

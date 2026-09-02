@@ -6,7 +6,7 @@
     "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html",
     "fetched": "2026-09-02",
     "provenance": "judgment",
-    "note": "The page documents 404 as 'You are attempting to access an unknown resource' and says nothing about the Toast-Restaurant-External-ID header; the orders specification's 404 on POST /orders/v2/orders ('An entity referenced in the order does not exist, or belongs to a restaurant the authenticated client ...') is the nearest documented analogue and is what the unit follows (toast/auth.py labels the status a judgment; a missing header is a 400 there, also a judgment). The ErrorMessage shape is the page's example."
+    "note": "The page's general 404 description just says the caller reached a resource that isn't there, and it says nothing about the Toast-Restaurant-External-ID header; the orders specification's 404 on POST /orders/v2/orders, covering a referenced entity that is missing or tied to a different restaurant than the caller can reach, is the nearest documented analogue and is what the unit follows (toast/auth.py labels the status a judgment; a missing header is a 400 there, also a judgment). The ErrorMessage shape is the page's example."
   },
   "routes": ["GET /menus/v3/metadata"],
   "profile": "full",

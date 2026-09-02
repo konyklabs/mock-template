@@ -43,7 +43,8 @@ JUDGMENT, each labelled
 * the same batch is what makes a CREDIT authorisation single-use *within* one
   array: the second element naming the same authorisation guid is the same
   400 the store-level replay gets, never a write that could collide;
-* **the tip PATCH** answers the Payment, and refuses a voided one (400).
+* **the tip PATCH** answers the Order (the specification's declared 200; the
+  payment rides inside it), and refuses a voided one (400).
 """
 
 from __future__ import annotations
@@ -135,7 +136,7 @@ class ToastPaymentsSurface:
                 auth=RESTAURANT_AUTH,
                 scopes=("orders.payments:write",),
                 operation_id="PaymentTipPatch",
-                summary="Set a payment's tipAmount; answers the Payment.",
+                summary="Set a payment's tipAmount; answers the Order.",
             ),
             Route(
                 method="GET",
@@ -455,10 +456,10 @@ def settle_order(draft: Entity, ctx: UnitContext) -> None:
     statuses; the order's ``paidDate`` is set when every check is settled.
     Idempotent, so the create path, the append path and the tip path share it.
 
-    DOCUMENTED, on the Check schema's own value descriptions
-    (toast-orders-api.yaml): ``PAID`` is "a credit card payment was applied,
-    but the tip has not been adjusted"; ``CLOSED`` is "there is no remaining
-    amount due on this check". The payment walkthrough
+    DOCUMENTED, from the Check schema's own per-value notes
+    (toast-orders-api.yaml): a card charge that cleared while its gratuity
+    still awaits adjustment leaves the check ``PAID``; a check with nothing
+    left owing is ``CLOSED``. The payment walkthrough
     (https://doc.toasttab.com/doc/devguide/apiCreatingAnOrderWithPaymentInformation.html)
     shows an OTHER payment covering the total answering ``CLOSED``. So a
     covered check is ``PAID`` only while a CREDIT payment on it still awaits

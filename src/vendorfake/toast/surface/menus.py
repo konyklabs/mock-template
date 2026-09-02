@@ -8,10 +8,10 @@ GetMeta    ``GET /menus/v3/metadata`` -- ``{restaurantGuid, lastUpdated}``
 =========  =====================================================
 
 Both take no query parameters, both require ``Toast-Restaurant-External-ID``,
-and both answer 404 -- "No published data was found for the restaurant" --
-when nothing is published. "Ordering integrations should use menus API V3";
-V2 is deliberately not served (``TOAST_NOT_MODELED``). The documented
-"one request per second per location" limit is not accounted.
+and both 404 with the message this module exposes as ``NO_PUBLISHED_DATA``
+when nothing is published. Ordering integrations are steered toward this V3
+surface; V2 is deliberately not served (``TOAST_NOT_MODELED``). The documented
+per-location throttle -- capped at once a second -- is not accounted.
 """
 
 from __future__ import annotations

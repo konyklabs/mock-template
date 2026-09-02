@@ -6,9 +6,11 @@
     "url": "https://doc.toasttab.com/doc/devguide/apiUsingTheStockApi.html",
     "fetched": "2026-09-02",
     "provenance": "documented",
-    "note": "The page: the search body carries guids and/or multiLocationIds; 'Inventory information is returned for all menu items on the list, regardless of their inventory status (QUANTITY, OUT_OF_STOCK, or IN_STOCK)'; each row has guid, itemGuidValidity, status, quantity ('the amount of stock remaining for menu items with an inventory status of QUANTITY, and is null for OUT_OF_STOCK and IN_STOCK'), multiLocationId and versionId ('reserved for future use'); QUANTITY is 'in limited supply (1 or more items left)'. The seed keeps the Lemonade at a QUANTITY and the 8.99 soup IN_STOCK under the multiLocationId the page's example uses, 100000000171238879. The page's example also shows an INVALID row for an unknown guid with status OUT_OF_STOCK and multiLocationId 'null' (a string); the unit answers null there, and the case does not assert that row."
+    "note": "The guide describes the search body (guids and/or multiLocationIds), says every listed item comes back whatever its status, and defines quantity as the remaining count for QUANTITY items and null for the other two statuses; multiLocationId and versionId are described as reserved. The seed keeps the Lemonade at a QUANTITY and the 8.99 soup IN_STOCK under the multiLocationId the guide's example uses, 100000000171238879. The guide's two INVALID rows answer OUT_OF_STOCK and the literal string null for the identifiers they lack (one echoes the searched guid as versionId); the unit answers that shape since roadmap#56, and this case asserts the valid rows only."
   },
-  "routes": ["POST /stock/v1/inventory/search"],
+  "routes": [
+    "POST /stock/v1/inventory/search"
+  ],
   "profile": "full",
   "steps": [
     {
@@ -16,12 +18,21 @@
       "request": {
         "method": "POST",
         "path": "/stock/v1/inventory/search",
-        "headers": {"$auth": "restaurant", "content-type": "application/json"},
-        "body": {"guids": ["3c9a1f00-0000-4000-8000-00000000c203"]}
+        "headers": {
+          "$auth": "restaurant",
+          "content-type": "application/json"
+        },
+        "body": {
+          "guids": [
+            "3c9a1f00-0000-4000-8000-00000000c203"
+          ]
+        }
       },
       "expect": {
         "status": 200,
-        "headers": {"content-type": "application/json"},
+        "headers": {
+          "content-type": "application/json"
+        },
         "body": [
           {
             "guid": "3c9a1f00-0000-4000-8000-00000000c203",
@@ -39,12 +50,21 @@
       "request": {
         "method": "POST",
         "path": "/stock/v1/inventory/search",
-        "headers": {"$auth": "restaurant", "content-type": "application/json"},
-        "body": {"multiLocationIds": ["100000000171238879"]}
+        "headers": {
+          "$auth": "restaurant",
+          "content-type": "application/json"
+        },
+        "body": {
+          "multiLocationIds": [
+            "100000000171238879"
+          ]
+        }
       },
       "expect": {
         "status": 200,
-        "headers": {"content-type": "application/json"},
+        "headers": {
+          "content-type": "application/json"
+        },
         "body": [
           {
             "guid": "3c9a1f00-0000-4000-8000-00000000c201",
