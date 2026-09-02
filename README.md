@@ -1,42 +1,53 @@
 # vendorfake
 
-High-fidelity **fakes** of third-party vendor APIs — stateful flows, signed
-webhooks, and deterministic fault injection — for testing integrations without
-touching a vendor sandbox.
+High-fidelity **fakes** of third-party vendor APIs for testing an integration
+without a vendor sandbox: real state (orders have a lifecycle, tokens expire,
+refresh tokens rotate), webhooks signed the way the vendor signs them and
+retried on the vendor's schedule, and fault injection that is deterministic,
+so a retry loop is rehearsed the same way every run.
 
 > **Unofficial.** Not affiliated with, endorsed by, or connected to any vendor
 > named here. Every behaviour is derived from publicly published API
 > documentation. Vendor names are used only to identify which public API a
 > module imitates.
 
-Three vendors ship today. **Square (Connect v2)** is complete — OAuth2 (code +
-PKCE flows), orders with a real lifecycle and fulfillments, external payments
-that tender those orders, the merchant, locations, catalog and inventory
-counts, a loyalty program, and webhook subscriptions whose deliveries are
-signed the way Square signs them and retried on Square's documented schedule;
-the full route list is under [The Square surface](#the-square-surface).
-**Clover (REST v3)** ships the
-same shape: OAuth v2 (authorize, token exchange, single-use refresh rotation,
-the documented 401-for-everything auth behaviour), orders and line items with
-client-owned totals, the atomic order/checkout calculators with taxes,
-inventory with modifier groups, the merchant's employees/tenders/order
-types/default service charge, customers, external-tender payments that lock
-the order, print events, webhooks in Clover's aggregate-payload shape with
-the static `X-Clover-Auth` header and the dashboard verification handshake,
-and a seeded scenario — see [Clover quickstart](#clover-quickstart) and [the
-webhook an order fires](#the-webhook-an-order-fires). **Toast (REST v2/v3)**
-is the consumer-driven slice a restaurant-ordering integration calls: the
-machine-client login with a JWT, the V3 menu and the configuration lists,
-`/prices` and orders whose amounts are computed server-side from the
-restaurant's tax rates (money as decimal dollars, the documented 8.99 → 9.55
-example reproduced), OTHER and pre-authorised CREDIT payments, tips, voids,
-discounts, stock, and webhooks in Toast's envelope with the documented headers,
-the `Toast-Signature` HMAC and the documented five-then-ten-minute retry — see
-[Toast quickstart](#toast-quickstart).
+## Start in sixty seconds
 
-Because several vendors are installed, every command names one: `--vendor
-square` (or `--vendor clover`, `--vendor toast`), or set `VENDORFAKE_VENDOR`. With no selector the
-command refuses and lists what it found — it never guesses.
+Python 3.11 or newer. Not on PyPI yet; install from the tag:
+
+```sh
+pip install "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
+vendorfake vendors                       # -> clover, square, toast
+vendorfake serve --vendor square         # http://127.0.0.1:8080
+```
+
+```sh
+curl -s http://127.0.0.1:8080/__unit/health
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"framework_answered":0}
+```
+
+Every command names a vendor (`--vendor square|clover|toast`, or
+`VENDORFAKE_VENDOR`); with none it refuses and lists what it found. From
+here: [install and test against it](#for-consumers), or walk a vendor's
+quickstart below.
+
+## Vendors
+
+| vendor | what the fake covers | walkthrough |
+|---|---|---|
+| **Square** (Connect v2) | OAuth2 with code and PKCE flows; orders with a real lifecycle and fulfillments; external payments; merchant, locations, catalog, inventory counts, a loyalty program; webhook subscriptions signed and retried on Square's documented schedule | [Quickstart](#quickstart), [the route list](#the-square-surface) |
+| **Clover** (REST v3) | OAuth v2 with single-use refresh rotation and the documented 401-for-everything auth; orders and line items with client-owned totals; atomic order and checkout calculators with taxes; inventory with modifier groups; employees, tenders, order types, customers; external-tender payments that lock the order; webhooks in Clover's aggregate shape with the `X-Clover-Auth` header and the verification handshake | [Clover quickstart](#clover-quickstart) |
+| **Toast** (REST v2/v3) | The consumer-driven slice an ordering integration calls: machine-client login with a JWT; the V3 menu and configuration lists; `/prices` and orders priced server-side from the tax rates (decimal dollars, the documented 8.99 → 9.55 case); OTHER and pre-authorised CREDIT payments, tips, voids, discounts, stock; webhooks in Toast's envelope with the `Toast-Signature` HMAC and the five-then-ten-minute retry | [Toast quickstart](#toast-quickstart) |
+
+## Contents
+
+- [For consumers](#for-consumers): install, container, pytest and Vitest
+  fixtures, seeded credentials, rehearsing failures, the conformance suite
+- [Quickstart](#quickstart) (Square), [Clover quickstart](#clover-quickstart),
+  [Toast quickstart](#toast-quickstart)
+- [Profiles](#profiles), [The Square surface](#the-square-surface)
+- [Why this exists](#why-this-exists), [Status](#status), [Design](#design),
+  [Licence](#licence)
 
 ## For consumers
 
@@ -46,22 +57,20 @@ command below was run as written.
 
 ### Install
 
-Not yet on PyPI. Install straight from the repository (Python ≥ 3.11):
+Not yet on PyPI. Install from the repository, pinned to a release tag
+(Python 3.11 or newer):
 
 ```sh
-pip install "vendorfake @ git+https://github.com/konyklabs/vendorfake"
+pip install "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
 # or, in a uv project:
-uv add "vendorfake @ git+https://github.com/konyklabs/vendorfake"
+uv add "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
 
-vendorfake vendors            # -> clover, square
+vendorfake vendors            # -> clover, square, toast
 vendorfake serve --vendor square
 ```
 
-That resolves `main`. `vendorfake.testing`, the container and the examples
-arrive with the change that ships this README, so if the `main` you are
-reading predates it, pin the branch or tag that carries it
-(`...vendorfake@<ref>`). From a checkout, `uv sync && uv run vendorfake serve
---vendor square`. Once v0.1 is out this becomes `pip install vendorfake`.
+Drop the `@v0.1.0` to track `main`. From a checkout: `uv sync && uv run
+vendorfake serve --vendor square`.
 
 ### Run it as a container
 
@@ -247,25 +256,14 @@ values are readable and obviously fake by design.
 | | Square | Clover | Toast |
 |---|---|---|---|
 | App credentials | `sandbox-sq0idb-unit-square-application` / `sandbox-sq0csb-unit-square-secret` | `UNITCLOVERAPP` / `unit-clover-app-secret` | `unit-toast-client-id` / `unit-toast-client-secret` |
-| OAuth shape | authorize redirect (`https://example.test/oauth/callback`) + code exchange | authorize redirect (same URI) + code exchange, single-use refresh | no redirect: machine-client `POST /authentication/v1/authentication/login` |
 | Full-access bearer | `EAAAl-unit-seeded-access-token-full-scopes` | `unit-seeded-clover-access-token-full-permissions` | `unit-seeded-toast-access-token-full-scopes` |
 | Read-only bearer | `EAAAl-unit-seeded-access-token-read-only` | `unit-seeded-clover-access-token-read-only` | `unit-seeded-toast-access-token-read-only` |
-| Tenant, and how requests name it | merchant `MLQW2MYBY81PZ` (implicit in the token) | merchant `HRVSTRYE12345` ("Harvest & Rye") in every `/v3` **path** | restaurant `e6a4a8d2-0000-4000-8000-000000000001` ("Harvest & Rye — Toast") in the `Toast-Restaurant-External-ID` **header** |
-| Location / order type | location `18YC4JDH91E1H` (Grant Park), kiosk `057P5VYJ4A5X1` | order types `KFRPRVCZ73JHM` (dine-in), `ORDTYPETAKE01` | dining options `…d001` (dine-in), `…d002` (take-out) |
-| Catalog | Tea `W62UWFY35CWMYGVWK6TWJDNI` with variations Mug `2TZFAOHWGG7PAK2QEXWYPZSP` (150) and Pot; Cold Brew `BJNQCF2FJ6S6UIDT65ABHLRX` | items `CRAFTBEER0750` (750), `ESPRESSO00300` (300, modifier group `MODGROUPMILK1`: oat `MODIFIEROAT01`, soy `MODIFIERSOY01`), `CROISSANT0450` (450) | menu `…c001`: Soup `…c201` (899), Burger `…c202` (sides modifier group `…c301`), Lemonade `…c203` |
-| Orders | open `CAISENgvlJ6jLWAzERDzjyHVybY`, completed `CAISEM82RcpmcFBM0TfOyiHV3es` | open `SEEDORDER0001` | open `9a7b6c5d-0000-4000-8000-00000000f001` with one check `…f101` |
-| Payment plumbing | `POST /v2/payments` with `source_id: "EXTERNAL"` | tender `TENDEREXTRN01` (external), `TENDERCASH001`; employees `EMPLBARISTA01`, `OWNERHRVST001`; service charge `SVCCHARGE0001` (18%) | alternate payment type `…d101` on `POST …/checks/{c}/payments` |
-| Webhooks | register with the full-access bearer; the `signature_key` comes back | pre-verified subscriber `wbhk_seed_quickstart` (auth code `unit-seeded-clover-webhook-auth-code`), **disabled**; register through `POST /__unit/webhooks/subscriptions` | subscriber `sub_seed_quickstart` (secret `unit-seeded-toast-webhook-secret`, `Toast-Signature` HMAC), **disabled**; register through `POST /__unit/webhooks/subscriptions` |
-| Event types | `order.created`, `order.updated`, `payment.created`, `payment.updated`, `catalog.version.updated`, `inventory.count.updated` (`GET /v2/webhooks/event-types`) | `O:`, `I:`, `C:`, `P:` (orders, inventory items, customers, payments) × `CREATE`, `UPDATE`, `DELETE` — e.g. `O:CREATE`; globs like `O:*` accepted | `order_updated`, `in_stock`, `out_of_stock`, `low_quantity`, `menus_updated` |
 
-Toast's guids are truncated above to their last four characters. They come
-in four families, each with its own fixed prefix and the same
-`-0000-4000-8000-` middle: `e6a4a8d2…` the restaurant and its management
-group, `3c9a1f00…` the menu and everything on it, `5d0e2b11…` restaurant
-configuration (dining options, payment types, tax rates), `9a7b6c5d…`
-orders and checks. So the dine-in dining option in full is
-`5d0e2b11-0000-4000-8000-00000000d001`. Every value is also an attribute on
-the seed object, which is the form to use in a test.
+Tenants, locations, catalog items, seeded orders, tenders, webhook
+subscribers and event types, per vendor: [docs/seeded-scenario.md](docs/seeded-scenario.md).
+
+Toast's guids are truncated to their last four characters in that file; the
+four families they come from, and the full form of each, are explained there.
 
 In Python these are `.seed.*` attributes on a started unit
 (`vendorfake.testing.SquareSeed`, `CloverSeed`, `ToastSeed`). Toast's
@@ -891,10 +889,11 @@ and a behaviour had to be decided, the wire says so: error bodies carry a
 
 ## Status
 
-Pre-release, built in the open. The Square, Clover and Toast surfaces above are implemented and
-tested (`uv run pytest --collect-only -q` prints the current test count);
-nothing is published to a registry yet. Treat interfaces as subject to change
-until v0.1 is tagged.
+v0.1.0 is tagged and built in the open. The Square, Clover and Toast
+surfaces above are implemented and tested (`uv run pytest --collect-only -q`
+prints the current test count). Not yet on PyPI or a container registry:
+install from the tag as shown under [Install](#install), and treat
+interfaces as subject to change before v1.
 
 ## Design
 
