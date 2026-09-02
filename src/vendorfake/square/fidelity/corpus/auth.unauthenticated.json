@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "id": "auth.unauthenticated",
+  "title": "A call with no Authorization header, or an unknown bearer, answers 401 AUTHENTICATION_ERROR / UNAUTHORIZED",
+  "source": {
+    "url": "https://developer.squareup.com/docs/build-basics/handling-errors",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "The status table lists 401 UNAUTHORIZED 'A general authorization error occurred', and the page's example error body is {\"errors\":[{\"category\":\"AUTHENTICATION_ERROR\",\"code\":\"UNAUTHORIZED\",\"detail\":\"This request could not be authorized.\"}]}. ErrorCategory: AUTHENTICATION_ERROR is 'Most commonly, the request had a missing, malformed, or otherwise invalid Authorization header.' detail is 'not intended to be customer facing' and not asserted."
+  },
+  "routes": [
+    "GET /v2/locations"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "no-header",
+      "request": {
+        "method": "GET",
+        "path": "/v2/locations"
+      },
+      "expect": {
+        "status": 401,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "errors": [
+            {
+              "category": "AUTHENTICATION_ERROR",
+              "code": "UNAUTHORIZED"
+            }
+          ]
+        },
+        "absent": [
+          "/locations",
+          "/errors/0/field"
+        ]
+      }
+    },
+    {
+      "name": "unknown-bearer",
+      "request": {
+        "method": "GET",
+        "path": "/v2/locations",
+        "headers": {
+          "authorization": "Bearer EAAA-not-a-token-this-unit-issued"
+        }
+      },
+      "expect": {
+        "status": 401,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "errors": [
+            {
+              "category": "AUTHENTICATION_ERROR",
+              "code": "UNAUTHORIZED"
+            }
+          ]
+        },
+        "absent": [
+          "/locations"
+        ]
+      }
+    }
+  ]
+}

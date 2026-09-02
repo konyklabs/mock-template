@@ -27,3 +27,10 @@ def fake_ctx(
         ),
         vendor=SimpleNamespace(name=vendor_name),
     )
+
+
+def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: Any) -> None:
+    """One line: how many responses the Square suite validated against the spec."""
+    from tests.unit.square.harness import LEDGER
+
+    terminalreporter.write_line(f"square {LEDGER.summary()}")

@@ -1,0 +1,196 @@
+{
+  "schema": 1,
+  "id": "orders.pay.external-payment",
+  "title": "Create an order, record an EXTERNAL payment against it, then PayOrder with that payment: COMPLETED, closed_at set, one tender",
+  "source": {
+    "url": "https://developer.squareup.com/reference/square/orders-api/pay-order",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "PayOrder: payment_ids 'The IDs of the payments to collect. The payment total must match the order total'; order_version 'The version of the order being paid'; the example response has state COMPLETED, closed_at set and tenders. OrderState: COMPLETED 'Completed orders are fully paid. This is a terminal state.' CreatePayment (linked): source_id 'EXTERNAL' for a payment received outside Square with external_details, autocomplete false holds it 'in an approved state', so status APPROVED. The tender's `type` for an external payment and the exact payment status after PayOrder are not stated on this page and are not asserted."
+  },
+  "routes": [
+    "POST /v2/orders",
+    "POST /v2/payments",
+    "POST /v2/orders/{order_id}/pay"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "create",
+      "request": {
+        "method": "POST",
+        "path": "/v2/orders",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "idempotency_key": "corpus-orders-pay-create",
+          "order": {
+            "location_id": "${vars.location_id}",
+            "line_items": [
+              {
+                "name": "Corpus ad hoc",
+                "quantity": "2",
+                "base_price_money": {
+                  "amount": 250,
+                  "currency": "USD"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "order": {
+            "id": "${any}",
+            "state": "OPEN",
+            "version": 1,
+            "total_money": {
+              "amount": 500,
+              "currency": "USD"
+            },
+            "net_amount_due_money": {
+              "amount": 500,
+              "currency": "USD"
+            }
+          }
+        },
+        "absent": [
+          "/order/closed_at"
+        ]
+      },
+      "capture": {
+        "order_id": "/order/id"
+      }
+    },
+    {
+      "name": "payment",
+      "request": {
+        "method": "POST",
+        "path": "/v2/payments",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "idempotency_key": "corpus-orders-pay-payment",
+          "source_id": "EXTERNAL",
+          "amount_money": {
+            "amount": 500,
+            "currency": "USD"
+          },
+          "order_id": "${cap.order_id}",
+          "location_id": "${vars.location_id}",
+          "autocomplete": false,
+          "external_details": {
+            "type": "OTHER",
+            "source": "corpus"
+          }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "payment": {
+            "id": "${any}",
+            "status": "APPROVED",
+            "source_type": "EXTERNAL",
+            "order_id": "${cap.order_id}",
+            "amount_money": {
+              "amount": 500,
+              "currency": "USD"
+            },
+            "location_id": "${vars.location_id}"
+          }
+        }
+      },
+      "capture": {
+        "payment_id": "/payment/id"
+      }
+    },
+    {
+      "name": "pay",
+      "request": {
+        "method": "POST",
+        "path": "/v2/orders/${cap.order_id}/pay",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "idempotency_key": "corpus-orders-pay-pay",
+          "order_version": 1,
+          "payment_ids": [
+            "${cap.payment_id}"
+          ]
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "order": {
+            "id": "${cap.order_id}",
+            "state": "COMPLETED",
+            "version": 2,
+            "closed_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}",
+            "total_money": {
+              "amount": 500,
+              "currency": "USD"
+            },
+            "net_amount_due_money": {
+              "amount": 0,
+              "currency": "USD"
+            },
+            "tenders": [
+              {
+                "id": "${any}",
+                "payment_id": "${cap.payment_id}",
+                "amount_money": {
+                  "amount": 500,
+                  "currency": "USD"
+                },
+                "location_id": "${vars.location_id}"
+              }
+            ]
+          }
+        },
+        "absent": [
+          "/errors"
+        ]
+      }
+    },
+    {
+      "name": "retrieve",
+      "request": {
+        "method": "GET",
+        "path": "/v2/orders/${cap.order_id}",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "order": {
+            "id": "${cap.order_id}",
+            "state": "COMPLETED",
+            "version": 2,
+            "closed_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}"
+          }
+        }
+      }
+    }
+  ]
+}

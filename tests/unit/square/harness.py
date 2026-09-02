@@ -19,7 +19,9 @@ from urllib.parse import parse_qs, urlsplit
 
 from vendorfake import create_unit
 from vendorfake.core.kernel.unit import Unit
-from vendorfake.core.transport.inprocess import InProcessClient, InProcessResponse, in_process
+from vendorfake.core.transport.inprocess import InProcessClient, InProcessResponse
+from vendorfake.fidelity import Surface, load_declaration, load_extract
+from vendorfake.fidelity.validate import Ledger, ValidatingClient
 from vendorfake.square.seed.constants import SEED_ACCESS_TOKEN, SEED_READ_ONLY_ACCESS_TOKEN
 
 APPLICATION_ID = "sandbox-sq0idb-unit-square-application"
@@ -28,6 +30,16 @@ CONFIGURED_REDIRECT_URI = "https://example.test/oauth/callback"
 """The three values ``profiles/oauth-only.json`` and ``profiles/full.json`` set."""
 
 FORM = {"content-type": "application/x-www-form-urlencoded"}
+
+FIDELITY_ANCHOR = "vendorfake.square.fidelity"
+SURFACE = Surface(load_declaration(FIDELITY_ANCHOR), load_extract(FIDELITY_ANCHOR))
+LEDGER = Ledger()
+"""Every response any Square test receives is validated against the vendor's
+published schema for that operation and status (D-006). One surface and one
+ledger for the whole session, so ``conftest.py`` can print what was covered.
+A schema violation fails the test that produced it -- there is no opt-out here;
+a route the spec does not describe is excused, with its reason, in
+``square/fidelity/declaration.json``."""
 
 
 class Silent:
@@ -108,7 +120,7 @@ def harness(profile: str = "oauth-only", **kwargs: Any) -> Iterator[Harness]:
     """Start a unit, yield it, and stop it however the test ends."""
     unit = create_unit(vendor="square", profile=profile, logger=Silent(), **kwargs)
     try:
-        yield Harness(unit=unit, api=in_process(unit))
+        yield Harness(unit=unit, api=ValidatingClient(unit, SURFACE, LEDGER))
     finally:
         unit.stop()
 

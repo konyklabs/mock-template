@@ -26,6 +26,7 @@ from __future__ import annotations
 from vendorfake.fidelity.types import (
     Alias,
     Classified,
+    Deviation,
     Excuse,
     Extract,
     FidelityDeclaration,
@@ -39,6 +40,7 @@ from vendorfake.fidelity.types import (
 __all__ = [
     "Alias",
     "Classified",
+    "Deviation",
     "Excuse",
     "Extract",
     "FidelityDeclaration",

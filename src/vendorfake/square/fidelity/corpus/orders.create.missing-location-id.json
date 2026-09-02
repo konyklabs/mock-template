@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "id": "orders.create.missing-location-id",
+  "title": "CreateOrder without order.location_id answers 400 INVALID_REQUEST_ERROR / MISSING_REQUIRED_PARAMETER naming the field",
+  "source": {
+    "url": "https://developer.squareup.com/docs/build-basics/handling-errors",
+    "fetched": "2026-09-02",
+    "provenance": "judgment",
+    "note": "Documented: the errors envelope and its four fields; `field` is 'The name of the field in the original request (if applicable) that the error pertains to'; INVALID_REQUEST_ERROR is 'The request was invalid. Most commonly, a required parameter was missing' (ErrorCategory); MISSING_REQUIRED_PARAMETER is 'The request is missing a required path, query, or body parameter' (ErrorCode); Order.location_id is marked Required. The page is silent on the HTTP status for MISSING_REQUIRED_PARAMETER (its status table covers only the 401/403 codes and 429) and on the dotted `order.location_id` spelling of `field`; the 400 and the spelling are the conventional reading."
+  },
+  "routes": [
+    "POST /v2/orders"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "create",
+      "request": {
+        "method": "POST",
+        "path": "/v2/orders",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "idempotency_key": "corpus-orders-create-missing-location",
+          "order": {
+            "line_items": [
+              {
+                "name": "Corpus ad hoc",
+                "quantity": "2",
+                "base_price_money": {
+                  "amount": 250,
+                  "currency": "USD"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "expect": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "errors": [
+            {
+              "category": "INVALID_REQUEST_ERROR",
+              "code": "MISSING_REQUIRED_PARAMETER",
+              "field": "order.location_id",
+              "detail": "${any}"
+            }
+          ]
+        },
+        "absent": [
+          "/order"
+        ]
+      }
+    }
+  ]
+}

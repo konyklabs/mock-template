@@ -25,7 +25,11 @@ REPO = Path(__file__).resolve().parent.parent
 #: Every non-Python file the package promises to ship, by wheel-relative path.
 REQUIRED = (
     "vendorfake/py.typed",
+    "vendorfake/fidelity/corpus.schema.json",
     "vendorfake/square/seed/default.seed.json",
+    "vendorfake/square/fidelity/declaration.json",
+    "vendorfake/square/fidelity/extract.json",
+    "vendorfake/square/fidelity/pin.json",
     "vendorfake/square/profiles/full.json",
     "vendorfake/square/profiles/no-chaos.json",
     "vendorfake/square/profiles/no-faults.json",

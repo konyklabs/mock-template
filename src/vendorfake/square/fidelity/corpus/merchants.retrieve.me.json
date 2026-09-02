@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "id": "merchants.retrieve.me",
+  "title": "RetrieveMerchant accepts the documented value `me` and answers the seeded merchant, the same one the literal id answers",
+  "source": {
+    "url": "https://developer.squareup.com/reference/square/merchants-api/retrieve-merchant",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "The merchant_id parameter description: 'If the string \"me\" is supplied as the ID, then retrieve the merchant that is currently accessible to this call.' Step 2 retrieves the same merchant by the literal id captured from step 1. The example response shows id, business_name, country, language_code, currency, status (ACTIVE), main_location_id and created_at. The page does not document the id format, so ids are ${any}; main_location_id equal to the seeded location is this scenario's, not the page's."
+  },
+  "routes": [
+    "GET /v2/merchants/{merchant_id}"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "me",
+      "request": {
+        "method": "GET",
+        "path": "/v2/merchants/me",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "merchant": {
+            "id": "${any}",
+            "business_name": "${any}",
+            "country": "${any}",
+            "language_code": "${any}",
+            "currency": "${any}",
+            "status": "ACTIVE",
+            "main_location_id": "${vars.location_id}",
+            "created_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}"
+          }
+        }
+      },
+      "capture": {
+        "merchant_id": "/merchant/id"
+      }
+    },
+    {
+      "name": "literal",
+      "request": {
+        "method": "GET",
+        "path": "/v2/merchants/${cap.merchant_id}",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "merchant": {
+            "id": "${cap.merchant_id}",
+            "business_name": "${any}",
+            "country": "${any}",
+            "language_code": "${any}",
+            "currency": "${any}",
+            "status": "ACTIVE",
+            "main_location_id": "${vars.location_id}",
+            "created_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}"
+          }
+        }
+      }
+    }
+  ]
+}

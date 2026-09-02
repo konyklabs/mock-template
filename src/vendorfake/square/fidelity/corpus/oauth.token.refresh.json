@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "id": "oauth.token.refresh",
+  "title": "ObtainToken with grant_type refresh_token answers the documented token fields with token_type bearer",
+  "source": {
+    "url": "https://developer.squareup.com/reference/square/oauth-api/obtain-token",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "Response fields: access_token; token_type 'This value is always `bearer`'; expires_at 'in ISO 8601 format' (the example is 2025-04-03T18:31:06Z, the pattern asserted); merchant_id 'The ID of the authorizing merchant'; refresh_token -- in the code flow the same refresh token is returned; short_lived false in the example. The authorization_code grant is not exercised because the code arrives in a redirect Location header, which the case format cannot capture; the refresh grant is the same operation. The page does not document the access_token format."
+  },
+  "routes": [
+    "POST /oauth2/token"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "refresh",
+      "request": {
+        "method": "POST",
+        "path": "/oauth2/token",
+        "body": {
+          "client_id": "sandbox-sq0idb-unit-square-application",
+          "client_secret": "sandbox-sq0csb-unit-square-secret",
+          "grant_type": "refresh_token",
+          "refresh_token": "EQAAl-unit-seeded-refresh-token-full-scopes"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "access_token": "${any}",
+          "token_type": "bearer",
+          "expires_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z}",
+          "merchant_id": "${any}",
+          "refresh_token": "EQAAl-unit-seeded-refresh-token-full-scopes",
+          "short_lived": false
+        },
+        "absent": [
+          "/errors",
+          "/error"
+        ]
+      },
+      "capture": {
+        "access_token": "/access_token"
+      }
+    },
+    {
+      "name": "token-works",
+      "request": {
+        "method": "GET",
+        "path": "/v2/merchants/me",
+        "headers": {
+          "authorization": "Bearer ${cap.access_token}"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "merchant": {
+            "id": "${any}",
+            "status": "ACTIVE"
+          }
+        }
+      }
+    }
+  ]
+}

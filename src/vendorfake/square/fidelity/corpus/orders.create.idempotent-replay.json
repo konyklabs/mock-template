@@ -1,0 +1,152 @@
+{
+  "schema": 1,
+  "id": "orders.create.idempotent-replay",
+  "title": "CreateOrder retried with the same idempotency key and body answers the order created the first time",
+  "source": {
+    "url": "https://developer.squareup.com/reference/square/orders-api/create-order",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "idempotency_key: 'If you are unsure whether a particular order was created successfully, you can try it again with the same idempotency key without worrying about creating duplicate orders.' The REST guide (docs/build-basics/general-considerations/using-rest-api) states the mechanism: 'if you retry the call using the same idempotency key and same request details, the response returns a 200 status code and a response body contains the details of the existing resource.' The page does not say whether the replay carries any marker header, so none is asserted; the search step shows only one order was created."
+  },
+  "routes": [
+    "POST /v2/orders"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "first",
+      "request": {
+        "method": "POST",
+        "path": "/v2/orders",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "idempotency_key": "corpus-orders-create-idempotent-replay",
+          "order": {
+            "location_id": "${vars.location_id}",
+            "line_items": [
+              {
+                "name": "Corpus ad hoc",
+                "quantity": "2",
+                "base_price_money": {
+                  "amount": 250,
+                  "currency": "USD"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "order": {
+            "id": "${any}",
+            "state": "OPEN",
+            "version": 1,
+            "total_money": {
+              "amount": 500,
+              "currency": "USD"
+            }
+          }
+        }
+      },
+      "capture": {
+        "order_id": "/order/id",
+        "created_at": "/order/created_at"
+      }
+    },
+    {
+      "name": "replay",
+      "request": {
+        "method": "POST",
+        "path": "/v2/orders",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "idempotency_key": "corpus-orders-create-idempotent-replay",
+          "order": {
+            "location_id": "${vars.location_id}",
+            "line_items": [
+              {
+                "name": "Corpus ad hoc",
+                "quantity": "2",
+                "base_price_money": {
+                  "amount": 250,
+                  "currency": "USD"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "order": {
+            "id": "${cap.order_id}",
+            "created_at": "${cap.created_at}",
+            "state": "OPEN",
+            "version": 1,
+            "total_money": {
+              "amount": 500,
+              "currency": "USD"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "still-one-order",
+      "request": {
+        "method": "POST",
+        "path": "/v2/orders/search",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "location_ids": [
+            "${vars.location_id}"
+          ],
+          "return_entries": true,
+          "query": {
+            "filter": {
+              "state_filter": {
+                "states": [
+                  "OPEN"
+                ]
+              }
+            },
+            "sort": {
+              "sort_field": "CREATED_AT",
+              "sort_order": "DESC"
+            }
+          },
+          "limit": 1
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "order_entries": [
+            {
+              "order_id": "${cap.order_id}",
+              "location_id": "${vars.location_id}"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

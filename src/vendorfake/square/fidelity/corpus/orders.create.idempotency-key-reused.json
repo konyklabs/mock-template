@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "id": "orders.create.idempotency-key-reused",
+  "title": "CreateOrder retried with the same idempotency key but different details answers 400 IDEMPOTENCY_KEY_REUSED",
+  "source": {
+    "url": "https://developer.squareup.com/docs/build-basics/general-considerations/using-rest-api",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "'If you retry the call using the same idempotency key and change any of the request details, you get a 400 Bad Request status code with an error that looks like the following' -- the page's verbatim example is {\"errors\":[{\"category\":\"INVALID_REQUEST_ERROR\",\"code\":\"IDEMPOTENCY_KEY_REUSED\",\"detail\":\"The idempotency key can only be retried with the same request data.\",\"field\":\"idempotency_key\"}]}. detail is human-readable and not asserted; category, code and field are."
+  },
+  "routes": [
+    "POST /v2/orders"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "first",
+      "request": {
+        "method": "POST",
+        "path": "/v2/orders",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "idempotency_key": "corpus-orders-create-key-reused",
+          "order": {
+            "location_id": "${vars.location_id}",
+            "line_items": [
+              {
+                "name": "Corpus ad hoc",
+                "quantity": "2",
+                "base_price_money": {
+                  "amount": 250,
+                  "currency": "USD"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "order": {
+            "id": "${any}",
+            "state": "OPEN"
+          }
+        }
+      }
+    },
+    {
+      "name": "changed",
+      "request": {
+        "method": "POST",
+        "path": "/v2/orders",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "idempotency_key": "corpus-orders-create-key-reused",
+          "order": {
+            "location_id": "${vars.location_id}",
+            "line_items": [
+              {
+                "name": "Corpus ad hoc",
+                "quantity": "3",
+                "base_price_money": {
+                  "amount": 250,
+                  "currency": "USD"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "expect": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "errors": [
+            {
+              "category": "INVALID_REQUEST_ERROR",
+              "code": "IDEMPOTENCY_KEY_REUSED",
+              "field": "idempotency_key"
+            }
+          ]
+        },
+        "absent": [
+          "/order"
+        ]
+      }
+    }
+  ]
+}

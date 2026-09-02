@@ -1,0 +1,144 @@
+{
+  "schema": 1,
+  "id": "orders.create.minimal",
+  "title": "CreateOrder with one ad hoc line item answers an OPEN order at version 1 with computed totals",
+  "source": {
+    "url": "https://developer.squareup.com/reference/square/orders-api/create-order",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "The example response shows state OPEN, version 1, total_money, net_amounts and per-line gross_sales_money/total_money/variation_total_price_money, and no closed_at. The read-only money fields and their meaning are on the Order and OrderLineItem object pages (linked from this one); 2 x 250 = 500 is arithmetic on those definitions. The page does not show an ad hoc (name + base_price_money, no catalog_object_id) line item explicitly; OrderLineItem documents catalog_object_id as optional."
+  },
+  "routes": [
+    "POST /v2/orders"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "create",
+      "request": {
+        "method": "POST",
+        "path": "/v2/orders",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "idempotency_key": "corpus-orders-create-minimal",
+          "order": {
+            "location_id": "${vars.location_id}",
+            "line_items": [
+              {
+                "name": "Corpus ad hoc",
+                "quantity": "2",
+                "base_price_money": {
+                  "amount": 250,
+                  "currency": "USD"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "order": {
+            "id": "${any}",
+            "location_id": "${vars.location_id}",
+            "state": "OPEN",
+            "version": 1,
+            "created_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}",
+            "updated_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}",
+            "line_items": [
+              {
+                "uid": "${any}",
+                "name": "Corpus ad hoc",
+                "quantity": "2",
+                "base_price_money": {
+                  "amount": 250,
+                  "currency": "USD"
+                },
+                "gross_sales_money": {
+                  "amount": 500,
+                  "currency": "USD"
+                },
+                "total_tax_money": {
+                  "amount": 0,
+                  "currency": "USD"
+                },
+                "total_discount_money": {
+                  "amount": 0,
+                  "currency": "USD"
+                },
+                "total_money": {
+                  "amount": 500,
+                  "currency": "USD"
+                },
+                "variation_total_price_money": {
+                  "amount": 500,
+                  "currency": "USD"
+                }
+              }
+            ],
+            "total_money": {
+              "amount": 500,
+              "currency": "USD"
+            },
+            "total_tax_money": {
+              "amount": 0,
+              "currency": "USD"
+            },
+            "total_discount_money": {
+              "amount": 0,
+              "currency": "USD"
+            },
+            "total_tip_money": {
+              "amount": 0,
+              "currency": "USD"
+            },
+            "total_service_charge_money": {
+              "amount": 0,
+              "currency": "USD"
+            },
+            "net_amounts": {
+              "total_money": {
+                "amount": 500,
+                "currency": "USD"
+              },
+              "tax_money": {
+                "amount": 0,
+                "currency": "USD"
+              },
+              "discount_money": {
+                "amount": 0,
+                "currency": "USD"
+              },
+              "tip_money": {
+                "amount": 0,
+                "currency": "USD"
+              },
+              "service_charge_money": {
+                "amount": 0,
+                "currency": "USD"
+              }
+            },
+            "net_amount_due_money": {
+              "amount": 500,
+              "currency": "USD"
+            }
+          }
+        },
+        "absent": [
+          "/order/closed_at",
+          "/order/tenders",
+          "/errors"
+        ]
+      },
+      "capture": {
+        "order_id": "/order/id"
+      }
+    }
+  ]
+}

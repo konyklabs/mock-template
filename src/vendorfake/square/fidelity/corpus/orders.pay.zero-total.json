@@ -1,0 +1,91 @@
+{
+  "schema": 1,
+  "id": "orders.pay.zero-total",
+  "title": "PayOrder with an empty payment_ids on a zero-total order marks it COMPLETED",
+  "source": {
+    "url": "https://developer.squareup.com/reference/square/orders-api/pay-order",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "payment_ids: for orders totaling $0, submit an empty array to mark the order as paid (the page's own wording under payment_ids). OrderState: COMPLETED is terminal; Order.closed_at 'The timestamp for when the order reached a terminal state'. An order with no line items totalling 0 is this scenario's way to reach a $0 order; the page shows no such request."
+  },
+  "routes": [
+    "POST /v2/orders",
+    "POST /v2/orders/{order_id}/pay"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "create",
+      "request": {
+        "method": "POST",
+        "path": "/v2/orders",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "idempotency_key": "corpus-orders-pay-zero-create",
+          "order": {
+            "location_id": "${vars.location_id}"
+          }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "order": {
+            "id": "${any}",
+            "state": "OPEN",
+            "total_money": {
+              "amount": 0,
+              "currency": "USD"
+            }
+          }
+        }
+      },
+      "capture": {
+        "order_id": "/order/id"
+      }
+    },
+    {
+      "name": "pay",
+      "request": {
+        "method": "POST",
+        "path": "/v2/orders/${cap.order_id}/pay",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "idempotency_key": "corpus-orders-pay-zero-pay",
+          "payment_ids": []
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "order": {
+            "id": "${cap.order_id}",
+            "state": "COMPLETED",
+            "closed_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}",
+            "total_money": {
+              "amount": 0,
+              "currency": "USD"
+            },
+            "net_amount_due_money": {
+              "amount": 0,
+              "currency": "USD"
+            }
+          }
+        },
+        "absent": [
+          "/errors"
+        ]
+      }
+    }
+  ]
+}

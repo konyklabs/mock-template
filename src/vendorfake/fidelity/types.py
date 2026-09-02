@@ -34,6 +34,7 @@ __all__ = [
     "PIN_FILE",
     "Alias",
     "Classified",
+    "Deviation",
     "Excuse",
     "Extract",
     "FidelityDeclaration",
@@ -135,6 +136,45 @@ class Excuse:
 
 
 @dataclass(frozen=True, slots=True)
+class Deviation:
+    """A place where the unit follows the vendor's prose against the vendor's spec.
+
+    Vendors contradict themselves: a code named on a documentation page and
+    quoted from real responses, but absent from the published enumeration.
+    The unit follows the observed API, and this row says so, in the only
+    place it can be audited -- with the page it rests on. A deviation is
+    matched narrowly: one schema keyword, one instance pointer (``*`` matches
+    a single segment), and optionally one value. It never widens beyond that.
+    """
+
+    pointer: str
+    keyword: str
+    reason: str
+    url: str
+    value: str | None = None
+
+    @classmethod
+    def of(cls, row: Mapping[str, Any]) -> Deviation:
+        value = row.get("value")
+        return cls(
+            pointer=str(row["pointer"]),
+            keyword=str(row["keyword"]),
+            reason=str(row["reason"]),
+            url=str(row["url"]),
+            value=None if value is None else str(value),
+        )
+
+    def matches(self, *, keyword: str, pointer: str, instance: object) -> bool:
+        if keyword != self.keyword:
+            return False
+        if self.value is not None and instance != self.value:
+            return False
+        want = self.pointer.split("/")
+        have = pointer.split("/")
+        return len(want) == len(have) and all(w in ("*", h) for w, h in zip(want, have, strict=True))
+
+
+@dataclass(frozen=True, slots=True)
 class FidelityDeclaration:
     """``declaration.json``, read.
 
@@ -149,6 +189,7 @@ class FidelityDeclaration:
     sources: tuple[SpecSource, ...]
     aliases: tuple[Alias, ...] = ()
     excused: tuple[Excuse, ...] = ()
+    deviations: tuple[Deviation, ...] = ()
     error_envelope: str | None = None
     #: Values a corpus case may interpolate as ``${vars.<name>}`` -- seeded ids
     #: the vendor's scenario fixes, so a case can name them without a lookup.
@@ -167,6 +208,7 @@ class FidelityDeclaration:
             sources=sources,
             aliases=tuple(Alias.of(row) for row in doc.get("aliases", ())),
             excused=tuple(Excuse.of(row) for row in doc.get("excused", ())),
+            deviations=tuple(Deviation.of(row) for row in doc.get("deviations", ())),
             error_envelope=None if envelope is None else str(envelope),
             variables={str(k): str(v) for k, v in dict(doc.get("variables", {})).items()},
         )

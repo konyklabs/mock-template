@@ -207,11 +207,26 @@ class SeedOrder(BaseModel):
     tenders: tuple[SeedTender, ...] = ()
 
 
+class SeedCatalogObjectReference(BaseModel):
+    """A ``CatalogObjectReference``: an id and the catalog version it was read at.
+    https://developer.squareup.com/reference/square/objects/CatalogObjectReference
+    """
+
+    model_config = _SEED
+
+    object_id: str = Field(min_length=1)
+    catalog_version: int | None = None
+
+
 class SeedRewardTier(BaseModel):
-    """One ``LoyaltyProgramRewardTier``: ``points`` to earn it and a ``name``.
+    """One ``LoyaltyProgramRewardTier``: ``points`` to earn it, a ``name``, and
+    the ``pricing_rule_reference`` the published schema REQUIRES.
     https://developer.squareup.com/reference/square/objects/LoyaltyProgramRewardTier
-    ``pricing_rule_reference`` is absent: it names a PRICING_RULE catalog
-    object, which this unit does not model (SHRINK).
+
+    JUDGMENT -- the reference names a PRICING_RULE catalog object this unit
+    does not model (SHRINK), so the id does not resolve through the catalog
+    routes. It is carried because the wire shape requires it: the fidelity
+    validator (D-006) found a tier without one fails ``required``.
     """
 
     model_config = _SEED
@@ -219,6 +234,7 @@ class SeedRewardTier(BaseModel):
     id: str = Field(min_length=1)
     points: int = Field(gt=0)
     name: str
+    pricing_rule_reference: SeedCatalogObjectReference
     created_at: str | None = None
 
 
