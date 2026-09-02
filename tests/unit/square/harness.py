@@ -34,12 +34,14 @@ FORM = {"content-type": "application/x-www-form-urlencoded"}
 FIDELITY_ANCHOR = "vendorfake.square.fidelity"
 SURFACE = Surface(load_declaration(FIDELITY_ANCHOR), load_extract(FIDELITY_ANCHOR))
 LEDGER = Ledger()
-"""Every response any Square test receives is validated against the vendor's
-published schema for that operation and status (D-006). One surface and one
-ledger for the whole session, so ``conftest.py`` can print what was covered.
-A schema violation fails the test that produced it -- there is no opt-out here;
-a route the spec does not describe is excused, with its reason, in
-``square/fidelity/declaration.json``."""
+"""Every response a Square test receives through a harness client is validated
+against the vendor's published schema for that operation and status (D-006).
+One surface and one ledger for the whole session, so ``conftest.py`` can print
+what was covered and ``test_fidelity_wiring.py`` can assert it happened. The
+one fixture that builds its own client (``test_transport.py``, which also
+needs the ASGI app) uses the same validating client and the same ledger. A
+schema violation fails the test that produced it; a route the spec does not
+describe is excused, with its reason, in ``square/fidelity/declaration.json``."""
 
 
 class Silent:

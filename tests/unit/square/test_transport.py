@@ -26,11 +26,11 @@ import anyio
 import httpx
 import pytest
 
-from tests.unit.square.harness import Harness, Silent
+from tests.unit.square.harness import LEDGER, SURFACE, Harness, Silent
 from vendorfake import create_unit
 from vendorfake.asgi import FrameworkTripwire, create_app
 from vendorfake.core.transport.filedrop import serve_file_drop
-from vendorfake.core.transport.inprocess import in_process
+from vendorfake.fidelity.validate import ValidatingClient
 from vendorfake.square.config import SQUARE_API_VERSION
 from vendorfake.square.seed.constants import (
     SEED_ACCESS_TOKEN,
@@ -74,7 +74,11 @@ def h() -> Iterator[Bound]:
         framework_answered=tripwire.get,
     )
     try:
-        yield Bound(unit=unit, api=in_process(unit), app=create_app(unit, tripwire=tripwire, logger=Silent()))
+        yield Bound(
+            unit=unit,
+            api=ValidatingClient(unit, SURFACE, LEDGER),
+            app=create_app(unit, tripwire=tripwire, logger=Silent()),
+        )
     finally:
         unit.stop()
 

@@ -16,6 +16,7 @@ import pytest
 from tests.fakes import make_unit, route
 from vendorfake.core.control.plane import control_plane_routes
 from vendorfake.core.kernel.reply import json_, no_content, text
+from vendorfake.core.kernel.router import Router
 from vendorfake.core.kernel.types import ReplyInit
 from vendorfake.core.transport.inprocess import InProcessResponse, in_process
 from vendorfake.fidelity.types import Alias, Deviation, Excuse, Extract, FidelityDeclaration, SpecSource, Surface
@@ -584,3 +585,23 @@ def test_a_deviation_pointer_wildcard_matches_one_segment() -> None:
     assert wide.matches(keyword="enum", pointer="/order/state", instance="BOGUS")
     assert not wide.matches(keyword="enum", pointer="/order/line_items/0/state", instance="BOGUS")
     assert not wide.matches(keyword="enum", pointer="/state", instance="BOGUS")
+
+
+# -- routing agreement -------------------------------------------------------
+
+
+def test_a_query_string_in_the_path_is_matched_the_way_the_kernel_matches_it(world: World) -> None:
+    """``make_request`` splits ``?...`` off before routing; the wrapper must
+    match the same bare path, or a routed 200 would be counted ``unmatched``
+    and returned unvalidated (adversarial review, konyklabs/roadmap#55)."""
+    world.script.body = GOOD_ORDER
+    world.client.get("/v2/orders/ord_1?fields=all")
+    assert world.ledger.row("GET /v2/orders/{order_id}").validated == 1
+    assert world.ledger.total("unmatched") == 0
+
+
+def test_a_success_nothing_routed_is_a_validator_defect_not_a_vendor_fact(world: World) -> None:
+    world.script.body = GOOD_ORDER
+    world.client._router = Router([])
+    with pytest.raises(RuntimeError, match="matched no route in the validator"):
+        world.client.get("/v2/orders/ord_1")

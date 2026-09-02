@@ -275,9 +275,19 @@ class ValidatingClient(InProcessClient):
     # -- classification -----------------------------------------------------
 
     def _check(self, method: str, path: str, response: InProcessResponse) -> None:
-        outcome = self._router.match(method, path)
+        # The kernel splits a query string off the path before routing
+        # (``make_request``); match what it matched, not what the caller typed.
+        bare = path.partition("?")[0]
+        outcome = self._router.match(method, bare)
         if not isinstance(outcome, Match):
-            self._ledger.record(route_key(method, path), "unmatched")
+            if 200 <= response.status < 300:
+                # Nothing routed it and yet the unit answered success: the
+                # wrapper and the kernel disagree about routing, which is a
+                # defect here, never a fact about the vendor.
+                raise RuntimeError(
+                    f"{route_key(method, bare)} answered {response.status} but matched no route in the validator"
+                )
+            self._ledger.record(route_key(method, bare), "unmatched")
             return
         classified = self._surface.classify(outcome.route)
         key = classified.key
