@@ -373,3 +373,18 @@ def test_a_case_note_that_repeats_the_vendor_document_is_a_leak() -> None:
     leak = prose_leaks(copied, [document])
     assert list(leak) == ["corpus/b.json"]
     assert any(window.startswith("the tax rate is expressed as a decimal") for window in leak["corpus/b.json"])
+
+
+def test_a_cache_inside_the_package_is_refused(tmp_path: Path) -> None:
+    """Adversarial A8 (konyklabs/roadmap#56): the cache must never be the
+    package directory, where `git add -A` would sweep the vendor's document in."""
+    from importlib import resources
+
+    from vendorfake.fidelity.cache import cache_path
+
+    package = Path(str(resources.files("vendorfake.fidelity")))
+    with pytest.raises(LookupError, match="must not be inside or above the package"):
+        cache_path("vendorfake.fidelity", cache_dir=package)
+    with pytest.raises(LookupError, match="must not be inside or above the package"):
+        cache_path("vendorfake.fidelity", cache_dir=package.parent.parent)
+    assert cache_path("vendorfake.fidelity", cache_dir=tmp_path) == tmp_path / "vendorfake.fidelity"

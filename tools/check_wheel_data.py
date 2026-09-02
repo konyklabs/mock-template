@@ -14,6 +14,7 @@ This builds the artifact and looks inside it, which is the only way to know.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -86,7 +87,21 @@ REQUIRED = (
 #: Files that must NOT ship: a non-vendored vendor's extract is cut at run time
 #: from a fresh fetch and never committed (konyklabs/roadmap#56). Its presence in
 #: a wheel would mean a copy of the vendor's document went out under our name.
-FORBIDDEN = ("vendorfake/toast/fidelity/extract.json",)
+
+
+def _forbidden_from_declarations() -> tuple[str, ...]:
+    """Every ``vendored: false`` declaration's extract, derived rather than
+    listed, so a second fetch-never-commit vendor is covered the day it is
+    declared."""
+    found: list[str] = []
+    for declaration in sorted((REPO / "src" / "vendorfake").glob("*/fidelity/declaration.json")):
+        with declaration.open(encoding="utf-8") as handle:
+            if json.load(handle).get("vendored", True) is False:
+                found.append(f"vendorfake/{declaration.parent.parent.name}/fidelity/extract.json")
+    return tuple(found)
+
+
+FORBIDDEN = _forbidden_from_declarations()
 
 
 def main() -> int:

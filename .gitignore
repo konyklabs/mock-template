@@ -22,3 +22,8 @@ htmlcov/
 # lockfile is machine-specific; node_modules is never committed anywhere.
 examples/*/uv.lock
 examples/*/node_modules/
+
+# A non-vendored vendor's spec extract is cut at run time into the cache and
+# must never enter the repository (roadmap#56); belt to the wheel check's braces.
+src/vendorfake/toast/fidelity/extract.json
+src/vendorfake/*/fidelity/DRIFT

@@ -31,3 +31,9 @@ def test_the_non_vendored_extract_is_forbidden_by_name() -> None:
 def test_a_missing_required_file_fails_and_a_complete_wheel_passes() -> None:
     assert check_wheel_data.verify(set(check_wheel_data.REQUIRED), "w.whl") == 0
     assert check_wheel_data.verify(set(check_wheel_data.REQUIRED) - {check_wheel_data.REQUIRED[0]}, "w.whl") == 1
+
+
+def test_forbidden_is_derived_from_the_non_vendored_declarations() -> None:
+    """Adversarial A8: a second fetch-never-commit vendor is covered the day
+    its declaration says `vendored: false`, with no list to remember."""
+    assert check_wheel_data.FORBIDDEN == ("vendorfake/toast/fidelity/extract.json",)

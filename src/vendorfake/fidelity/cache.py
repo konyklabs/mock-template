@@ -81,9 +81,27 @@ def cache_root(cache_dir: Path | str | None = None) -> Path:
     return base / "vendorfake" / "fidelity"
 
 
+def _refuse_inside_package(anchor: str, root: Path) -> None:
+    """A cache under the package would put the vendor's document beside the
+    declaration, where `git add -A` could sweep it into a public commit --
+    the one thing the fetch-never-commit rule exists to prevent."""
+    try:
+        package = Path(str(resources.files(anchor))).resolve()
+        resolved = root.resolve()
+    except (ModuleNotFoundError, OSError):
+        return
+    if resolved == package or package in resolved.parents or resolved in package.parents:
+        raise LookupError(
+            f"{anchor}: the fidelity cache ({root}) must not be inside or above the package ({package}); "
+            f"no upstream byte may land in the repository"
+        )
+
+
 def cache_path(anchor: str, cache_dir: Path | str | None = None) -> Path:
     """The directory holding ``extract.json`` (and, on drift, ``DRIFT``) for ``anchor``."""
-    return cache_root(cache_dir) / anchor
+    root = cache_root(cache_dir)
+    _refuse_inside_package(anchor, root)
+    return root / anchor
 
 
 def read_package_pin(anchor: str) -> Pin:
