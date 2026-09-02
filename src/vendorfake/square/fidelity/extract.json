@@ -117,8 +117,16 @@
             "type": "string"
           },
           "country": {
-            "$ref": "#/components/schemas/Country",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Country"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "first_name": {
             "nullable": true,
@@ -169,8 +177,16 @@
             "type": "string"
           },
           "square_product": {
-            "$ref": "#/components/schemas/ApplicationDetailsExternalSquareProduct",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApplicationDetailsExternalSquareProduct"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -198,8 +214,16 @@
             "type": "string"
           },
           "ach_details": {
-            "$ref": "#/components/schemas/ACHDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ACHDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "bank_name": {
             "maxLength": 100,
@@ -394,8 +418,16 @@
       "BusinessHoursPeriod": {
         "properties": {
           "day_of_week": {
-            "$ref": "#/components/schemas/DayOfWeek",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DayOfWeek"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "end_local_time": {
             "nullable": true,
@@ -411,8 +443,16 @@
       "BuyNowPayLaterDetails": {
         "properties": {
           "afterpay_details": {
-            "$ref": "#/components/schemas/AfterpayDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AfterpayDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "brand": {
             "maxLength": 50,
@@ -420,8 +460,16 @@
             "type": "string"
           },
           "clearpay_details": {
-            "$ref": "#/components/schemas/ClearpayDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClearpayDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "errors": {
             "items": {
@@ -450,8 +498,16 @@
       "Card": {
         "properties": {
           "billing_address": {
-            "$ref": "#/components/schemas/Address",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Address"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "bin": {
             "maxLength": 6,
@@ -630,8 +686,16 @@
             "type": "string"
           },
           "device_details": {
-            "$ref": "#/components/schemas/DeviceDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeviceDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "entry_method": {
             "maxLength": 50,
@@ -705,8 +769,16 @@
       "CardSurchargeDetails": {
         "properties": {
           "card_surcharge_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -759,8 +831,16 @@
       "CatalogAvailabilityPeriod": {
         "properties": {
           "day_of_week": {
-            "$ref": "#/components/schemas/DayOfWeek",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DayOfWeek"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "end_local_time": {
             "nullable": true,
@@ -783,8 +863,16 @@
             "type": "array"
           },
           "category_type": {
-            "$ref": "#/components/schemas/CatalogCategoryType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogCategoryType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "channels": {
             "items": {
@@ -794,8 +882,16 @@
             "type": "array"
           },
           "ecom_seo_data": {
-            "$ref": "#/components/schemas/CatalogEcomSeoData",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogEcomSeoData"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "image_ids": {
             "items": {
@@ -818,8 +914,16 @@
             "type": "boolean"
           },
           "parent_category": {
-            "$ref": "#/components/schemas/CatalogObjectCategory",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogObjectCategory"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "path_to_root": {
             "items": {
@@ -852,8 +956,16 @@
             "type": "array"
           },
           "app_visibility": {
-            "$ref": "#/components/schemas/CatalogCustomAttributeDefinitionAppVisibility",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogCustomAttributeDefinitionAppVisibility"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "custom_attribute_usage_count": {
             "readOnly": true,
@@ -877,24 +989,64 @@
             "type": "string"
           },
           "number_config": {
-            "$ref": "#/components/schemas/CatalogCustomAttributeDefinitionNumberConfig",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogCustomAttributeDefinitionNumberConfig"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "selection_config": {
-            "$ref": "#/components/schemas/CatalogCustomAttributeDefinitionSelectionConfig",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogCustomAttributeDefinitionSelectionConfig"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "seller_visibility": {
-            "$ref": "#/components/schemas/CatalogCustomAttributeDefinitionSellerVisibility",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogCustomAttributeDefinitionSellerVisibility"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "source_application": {
-            "$ref": "#/components/schemas/SourceApplication",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceApplication"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "string_config": {
-            "$ref": "#/components/schemas/CatalogCustomAttributeDefinitionStringConfig",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogCustomAttributeDefinitionStringConfig"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "type": {
             "$ref": "#/components/schemas/CatalogCustomAttributeDefinitionType"
@@ -1027,24 +1179,56 @@
       "CatalogDiscount": {
         "properties": {
           "amount_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "discount_type": {
-            "$ref": "#/components/schemas/CatalogDiscountType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogDiscountType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "label_color": {
             "nullable": true,
             "type": "string"
           },
           "maximum_amount_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "modify_tax_basis": {
-            "$ref": "#/components/schemas/CatalogDiscountModifyTaxBasis",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogDiscountModifyTaxBasis"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "name": {
             "maxLength": 255,
@@ -1182,16 +1366,32 @@
             "type": "array"
           },
           "ecom_seo_data": {
-            "$ref": "#/components/schemas/CatalogEcomSeoData",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogEcomSeoData"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "ecom_uri": {
             "nullable": true,
             "type": "string"
           },
           "food_and_beverage_details": {
-            "$ref": "#/components/schemas/CatalogItemFoodAndBeverageDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogItemFoodAndBeverageDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "image_ids": {
             "items": {
@@ -1240,12 +1440,28 @@
             "type": "string"
           },
           "product_type": {
-            "$ref": "#/components/schemas/CatalogItemProductType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogItemProductType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "reporting_category": {
-            "$ref": "#/components/schemas/CatalogObjectCategory",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogObjectCategory"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "skip_modifier_screen": {
             "nullable": true,
@@ -1302,12 +1518,28 @@
             "type": "string"
           },
           "standard_name": {
-            "$ref": "#/components/schemas/CatalogItemFoodAndBeverageDetailsDietaryPreferenceStandardDietaryPreference",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogItemFoodAndBeverageDetailsDietaryPreferenceStandardDietaryPreference"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "type": {
-            "$ref": "#/components/schemas/CatalogItemFoodAndBeverageDetailsDietaryPreferenceType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogItemFoodAndBeverageDetailsDietaryPreferenceType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -1338,12 +1570,28 @@
             "type": "string"
           },
           "standard_name": {
-            "$ref": "#/components/schemas/CatalogItemFoodAndBeverageDetailsIngredientStandardIngredient",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogItemFoodAndBeverageDetailsIngredientStandardIngredient"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "type": {
-            "$ref": "#/components/schemas/CatalogItemFoodAndBeverageDetailsDietaryPreferenceType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogItemFoodAndBeverageDetailsDietaryPreferenceType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -1370,20 +1618,44 @@
       "CatalogItemModifierListInfo": {
         "properties": {
           "allow_quantities": {
-            "$ref": "#/components/schemas/CatalogModifierToggleOverrideType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogModifierToggleOverrideType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "enabled": {
             "nullable": true,
             "type": "boolean"
           },
           "hidden_from_customer_override": {
-            "$ref": "#/components/schemas/CatalogModifierToggleOverrideType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogModifierToggleOverrideType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "is_conversational": {
-            "$ref": "#/components/schemas/CatalogModifierToggleOverrideType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogModifierToggleOverrideType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "max_selected_modifiers": {
             "nullable": true,
@@ -1522,8 +1794,16 @@
             "type": "integer"
           },
           "inventory_alert_type": {
-            "$ref": "#/components/schemas/InventoryAlertType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InventoryAlertType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "item_id": {
             "nullable": true,
@@ -1560,12 +1840,28 @@
             "type": "integer"
           },
           "price_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "pricing_type": {
-            "$ref": "#/components/schemas/CatalogPricingType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogPricingType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "sellable": {
             "nullable": true,
@@ -1585,8 +1881,16 @@
             "type": "boolean"
           },
           "stockable_conversion": {
-            "$ref": "#/components/schemas/CatalogStockConversion",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogStockConversion"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "team_member_ids": {
             "items": {
@@ -1621,8 +1925,16 @@
       "CatalogItemVariationVendorInformation": {
         "properties": {
           "unit_cost_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "vendor_code": {
             "nullable": true,
@@ -1638,8 +1950,16 @@
       "CatalogMeasurementUnit": {
         "properties": {
           "measurement_unit": {
-            "$ref": "#/components/schemas/MeasurementUnit",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasurementUnit"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "precision": {
             "nullable": true,
@@ -1694,8 +2014,16 @@
             "type": "integer"
           },
           "price_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -1741,8 +2069,16 @@
             "type": "integer"
           },
           "modifier_type": {
-            "$ref": "#/components/schemas/CatalogModifierListModifierType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogModifierListModifierType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "modifiers": {
             "items": {
@@ -1761,8 +2097,16 @@
             "type": "integer"
           },
           "selection_type": {
-            "$ref": "#/components/schemas/CatalogModifierListSelectionType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogModifierListSelectionType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "text_required": {
             "nullable": true,
@@ -1788,8 +2132,16 @@
       "CatalogModifierOverride": {
         "properties": {
           "hidden_online_override": {
-            "$ref": "#/components/schemas/CatalogModifierToggleOverrideType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogModifierToggleOverrideType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "modifier_id": {
             "minLength": 1,
@@ -1800,8 +2152,16 @@
             "type": "boolean"
           },
           "on_by_default_override": {
-            "$ref": "#/components/schemas/CatalogModifierToggleOverrideType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogModifierToggleOverrideType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "required": [
@@ -1827,8 +2187,16 @@
             "type": "array"
           },
           "availability_period_data": {
-            "$ref": "#/components/schemas/CatalogAvailabilityPeriod",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogAvailabilityPeriod"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "catalog_v1_ids": {
             "items": {
@@ -1838,12 +2206,28 @@
             "type": "array"
           },
           "category_data": {
-            "$ref": "#/components/schemas/CatalogCategory",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogCategory"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "custom_attribute_definition_data": {
-            "$ref": "#/components/schemas/CatalogCustomAttributeDefinition",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogCustomAttributeDefinition"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "custom_attribute_values": {
             "additionalProperties": {
@@ -1853,48 +2237,120 @@
             "type": "object"
           },
           "discount_data": {
-            "$ref": "#/components/schemas/CatalogDiscount",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogDiscount"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "id": {
             "minLength": 1,
             "type": "string"
           },
           "image_data": {
-            "$ref": "#/components/schemas/CatalogImage",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogImage"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "is_deleted": {
             "nullable": true,
             "type": "boolean"
           },
           "item_data": {
-            "$ref": "#/components/schemas/CatalogItem",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogItem"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "item_option_data": {
-            "$ref": "#/components/schemas/CatalogItemOption",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogItemOption"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "item_option_value_data": {
-            "$ref": "#/components/schemas/CatalogItemOptionValue",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogItemOptionValue"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "item_variation_data": {
-            "$ref": "#/components/schemas/CatalogItemVariation",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogItemVariation"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "measurement_unit_data": {
-            "$ref": "#/components/schemas/CatalogMeasurementUnit",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogMeasurementUnit"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "modifier_data": {
-            "$ref": "#/components/schemas/CatalogModifier",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogModifier"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "modifier_list_data": {
-            "$ref": "#/components/schemas/CatalogModifierList",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogModifierList"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "present_at_all_locations": {
             "nullable": true,
@@ -1908,32 +2364,88 @@
             "type": "array"
           },
           "pricing_rule_data": {
-            "$ref": "#/components/schemas/CatalogPricingRule",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogPricingRule"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "product_set_data": {
-            "$ref": "#/components/schemas/CatalogProductSet",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogProductSet"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "quick_amounts_settings_data": {
-            "$ref": "#/components/schemas/CatalogQuickAmountsSettings",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogQuickAmountsSettings"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "subscription_plan_data": {
-            "$ref": "#/components/schemas/CatalogSubscriptionPlan",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogSubscriptionPlan"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "subscription_plan_variation_data": {
-            "$ref": "#/components/schemas/CatalogSubscriptionPlanVariation",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogSubscriptionPlanVariation"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "tax_data": {
-            "$ref": "#/components/schemas/CatalogTax",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogTax"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "time_period_data": {
-            "$ref": "#/components/schemas/CatalogTimePeriod",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogTimePeriod"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "type": {
             "$ref": "#/components/schemas/CatalogObjectType"
@@ -2026,16 +2538,32 @@
             "type": "string"
           },
           "exclude_strategy": {
-            "$ref": "#/components/schemas/ExcludeStrategy",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExcludeStrategy"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "match_products_id": {
             "nullable": true,
             "type": "string"
           },
           "minimum_order_subtotal_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "name": {
             "nullable": true,
@@ -2119,48 +2647,136 @@
       "CatalogQuery": {
         "properties": {
           "exact_query": {
-            "$ref": "#/components/schemas/CatalogQueryExact",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogQueryExact"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "item_variations_for_item_option_values_query": {
-            "$ref": "#/components/schemas/CatalogQueryItemVariationsForItemOptionValues",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogQueryItemVariationsForItemOptionValues"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "items_for_item_options_query": {
-            "$ref": "#/components/schemas/CatalogQueryItemsForItemOptions",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogQueryItemsForItemOptions"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "items_for_modifier_list_query": {
-            "$ref": "#/components/schemas/CatalogQueryItemsForModifierList",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogQueryItemsForModifierList"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "items_for_tax_query": {
-            "$ref": "#/components/schemas/CatalogQueryItemsForTax",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogQueryItemsForTax"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "modifiers_for_child_list_query": {
-            "$ref": "#/components/schemas/CatalogQueryModifiersForChildList",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogQueryModifiersForChildList"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "prefix_query": {
-            "$ref": "#/components/schemas/CatalogQueryPrefix",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogQueryPrefix"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "range_query": {
-            "$ref": "#/components/schemas/CatalogQueryRange",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogQueryRange"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "set_query": {
-            "$ref": "#/components/schemas/CatalogQuerySet",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogQuerySet"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "sorted_attribute_query": {
-            "$ref": "#/components/schemas/CatalogQuerySortedAttribute",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogQuerySortedAttribute"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "text_query": {
-            "$ref": "#/components/schemas/CatalogQueryText",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogQueryText"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -2316,8 +2932,16 @@
             "type": "string"
           },
           "sort_order": {
-            "$ref": "#/components/schemas/SortOrder",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SortOrder"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "required": [
@@ -2516,16 +3140,32 @@
             "type": "string"
           },
           "calculation_phase": {
-            "$ref": "#/components/schemas/TaxCalculationPhase",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaxCalculationPhase"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "enabled": {
             "nullable": true,
             "type": "boolean"
           },
           "inclusion_type": {
-            "$ref": "#/components/schemas/TaxInclusionType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaxInclusionType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "name": {
             "maxLength": 255,
@@ -3325,8 +3965,16 @@
             "type": "string"
           },
           "cash_app_details": {
-            "$ref": "#/components/schemas/CashAppDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CashAppDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "errors": {
             "items": {
@@ -3336,8 +3984,16 @@
             "type": "array"
           },
           "lightning_details": {
-            "$ref": "#/components/schemas/LightningDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LightningDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "status": {
             "maxLength": 50,
@@ -3350,8 +4006,16 @@
       "ElectronicMoneyDetails": {
         "properties": {
           "felica_details": {
-            "$ref": "#/components/schemas/FelicaDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FelicaDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -3591,8 +4255,16 @@
             "type": "string"
           },
           "source_fee_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "source_id": {
             "maxLength": 255,
@@ -3613,8 +4285,16 @@
       "FelicaDetails": {
         "properties": {
           "felica_brand": {
-            "$ref": "#/components/schemas/FelicaDetailsFelicaBrand",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FelicaDetailsFelicaBrand"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "felica_masked_card_number": {
             "nullable": true,
@@ -3640,8 +4320,16 @@
       "Fulfillment": {
         "properties": {
           "delivery_details": {
-            "$ref": "#/components/schemas/FulfillmentDeliveryDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FulfillmentDeliveryDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "entries": {
             "items": {
@@ -3651,8 +4339,16 @@
             "type": "array"
           },
           "in_store_details": {
-            "$ref": "#/components/schemas/FulfillmentInStoreDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FulfillmentInStoreDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "line_item_application": {
             "$ref": "#/components/schemas/FulfillmentFulfillmentLineItemApplication",
@@ -3666,20 +4362,52 @@
             "type": "object"
           },
           "pickup_details": {
-            "$ref": "#/components/schemas/FulfillmentPickupDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FulfillmentPickupDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "shipment_details": {
-            "$ref": "#/components/schemas/FulfillmentShipmentDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FulfillmentShipmentDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "state": {
-            "$ref": "#/components/schemas/FulfillmentState",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FulfillmentState"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "type": {
-            "$ref": "#/components/schemas/FulfillmentType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FulfillmentType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "uid": {
             "maxLength": 60,
@@ -3774,16 +4502,32 @@
             "type": "string"
           },
           "recipient": {
-            "$ref": "#/components/schemas/FulfillmentRecipient",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FulfillmentRecipient"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "rejected_at": {
             "readOnly": true,
             "type": "string"
           },
           "schedule_type": {
-            "$ref": "#/components/schemas/FulfillmentDeliveryDetailsOrderFulfillmentDeliveryDetailsScheduleType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FulfillmentDeliveryDetailsOrderFulfillmentDeliveryDetailsScheduleType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "square_delivery_id": {
             "maxLength": 50,
@@ -3865,8 +4609,16 @@
             "type": "string"
           },
           "recipient": {
-            "$ref": "#/components/schemas/FulfillmentRecipient",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FulfillmentRecipient"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -3891,8 +4643,16 @@
             "type": "string"
           },
           "curbside_pickup_details": {
-            "$ref": "#/components/schemas/FulfillmentPickupDetailsCurbsidePickupDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FulfillmentPickupDetailsCurbsidePickupDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "expired_at": {
             "readOnly": true,
@@ -3936,16 +4696,32 @@
             "type": "string"
           },
           "recipient": {
-            "$ref": "#/components/schemas/FulfillmentRecipient",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FulfillmentRecipient"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "rejected_at": {
             "readOnly": true,
             "type": "string"
           },
           "schedule_type": {
-            "$ref": "#/components/schemas/FulfillmentPickupDetailsScheduleType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FulfillmentPickupDetailsScheduleType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -3974,8 +4750,16 @@
       "FulfillmentRecipient": {
         "properties": {
           "address": {
-            "$ref": "#/components/schemas/Address",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Address"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "customer_id": {
             "maxLength": 191,
@@ -4042,8 +4826,16 @@
             "type": "string"
           },
           "recipient": {
-            "$ref": "#/components/schemas/FulfillmentRecipient",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FulfillmentRecipient"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "shipped_at": {
             "readOnly": true,
@@ -4161,8 +4953,16 @@
             "type": "string"
           },
           "cost_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "created_at": {
             "maxLength": 34,
@@ -4180,8 +4980,16 @@
             "type": "string"
           },
           "from_state": {
-            "$ref": "#/components/schemas/InventoryState",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InventoryState"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "goods_receipt_id": {
             "maxLength": 100,
@@ -4212,8 +5020,16 @@
             "type": "string"
           },
           "reason_id": {
-            "$ref": "#/components/schemas/InventoryAdjustmentReasonId",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InventoryAdjustmentReasonId"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "reference_id": {
             "maxLength": 255,
@@ -4240,8 +5056,16 @@
             "type": "string"
           },
           "to_state": {
-            "$ref": "#/components/schemas/InventoryState",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InventoryState"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "total_price_money": {
             "$ref": "#/components/schemas/Money",
@@ -4330,8 +5154,16 @@
       "InventoryChange": {
         "properties": {
           "adjustment": {
-            "$ref": "#/components/schemas/InventoryAdjustment",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InventoryAdjustment"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "measurement_unit": {
             "$ref": "#/components/schemas/CatalogMeasurementUnit",
@@ -4342,12 +5174,28 @@
             "type": "string"
           },
           "physical_count": {
-            "$ref": "#/components/schemas/InventoryPhysicalCount",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InventoryPhysicalCount"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "type": {
-            "$ref": "#/components/schemas/InventoryChangeType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InventoryChangeType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -4391,8 +5239,16 @@
             "type": "string"
           },
           "state": {
-            "$ref": "#/components/schemas/InventoryState",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InventoryState"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -4452,8 +5308,16 @@
             "readOnly": true
           },
           "state": {
-            "$ref": "#/components/schemas/InventoryState",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InventoryState"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "team_member_id": {
             "maxLength": 100,
@@ -4493,20 +5357,44 @@
             "type": "integer"
           },
           "inventory_alert_type": {
-            "$ref": "#/components/schemas/InventoryAlertType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InventoryAlertType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "location_id": {
             "nullable": true,
             "type": "string"
           },
           "price_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "pricing_type": {
-            "$ref": "#/components/schemas/CatalogPricingType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogPricingType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "sold_out": {
             "readOnly": true,
@@ -4635,8 +5523,16 @@
       "Location": {
         "properties": {
           "address": {
-            "$ref": "#/components/schemas/Address",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Address"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "business_email": {
             "maxLength": 255,
@@ -4644,8 +5540,16 @@
             "type": "string"
           },
           "business_hours": {
-            "$ref": "#/components/schemas/BusinessHours",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BusinessHours"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "business_name": {
             "maxLength": 255,
@@ -4660,8 +5564,16 @@
             "type": "array"
           },
           "coordinates": {
-            "$ref": "#/components/schemas/Coordinates",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Coordinates"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "country": {
             "$ref": "#/components/schemas/Country",
@@ -4750,8 +5662,16 @@
             "type": "string"
           },
           "status": {
-            "$ref": "#/components/schemas/LocationStatus",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LocationStatus"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "tax_ids": {
             "$ref": "#/components/schemas/TaxIds",
@@ -4769,8 +5689,16 @@
             "type": "string"
           },
           "type": {
-            "$ref": "#/components/schemas/LocationType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LocationType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "website_url": {
             "maxLength": 255,
@@ -4837,8 +5765,16 @@
             "type": "integer"
           },
           "mapping": {
-            "$ref": "#/components/schemas/LoyaltyAccountMapping",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoyaltyAccountMapping"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "program_id": {
             "maxLength": 36,
@@ -5171,8 +6107,16 @@
             "type": "string"
           },
           "expiration_policy": {
-            "$ref": "#/components/schemas/LoyaltyProgramExpirationPolicy",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoyaltyProgramExpirationPolicy"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "id": {
             "maxLength": 36,
@@ -5194,12 +6138,28 @@
             "type": "array"
           },
           "status": {
-            "$ref": "#/components/schemas/LoyaltyProgramStatus",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoyaltyProgramStatus"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "terminology": {
-            "$ref": "#/components/schemas/LoyaltyProgramTerminology",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoyaltyProgramTerminology"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "updated_at": {
             "readOnly": true,
@@ -5214,12 +6174,28 @@
             "$ref": "#/components/schemas/LoyaltyProgramAccrualRuleType"
           },
           "category_data": {
-            "$ref": "#/components/schemas/LoyaltyProgramAccrualRuleCategoryData",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoyaltyProgramAccrualRuleCategoryData"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "item_variation_data": {
-            "$ref": "#/components/schemas/LoyaltyProgramAccrualRuleItemVariationData",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoyaltyProgramAccrualRuleItemVariationData"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "points": {
             "minimum": 1,
@@ -5227,12 +6203,28 @@
             "type": "integer"
           },
           "spend_data": {
-            "$ref": "#/components/schemas/LoyaltyProgramAccrualRuleSpendData",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoyaltyProgramAccrualRuleSpendData"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "visit_data": {
-            "$ref": "#/components/schemas/LoyaltyProgramAccrualRuleVisitData",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LoyaltyProgramAccrualRuleVisitData"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "required": [
@@ -5312,8 +6304,16 @@
       "LoyaltyProgramAccrualRuleVisitData": {
         "properties": {
           "minimum_amount_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "tax_mode": {
             "$ref": "#/components/schemas/LoyaltyProgramAccrualRuleTaxMode"
@@ -5392,36 +6392,100 @@
       "MeasurementUnit": {
         "properties": {
           "area_unit": {
-            "$ref": "#/components/schemas/MeasurementUnitArea",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasurementUnitArea"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "custom_unit": {
-            "$ref": "#/components/schemas/MeasurementUnitCustom",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasurementUnitCustom"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "generic_unit": {
-            "$ref": "#/components/schemas/MeasurementUnitGeneric",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasurementUnitGeneric"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "length_unit": {
-            "$ref": "#/components/schemas/MeasurementUnitLength",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasurementUnitLength"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "time_unit": {
-            "$ref": "#/components/schemas/MeasurementUnitTime",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasurementUnitTime"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "type": {
-            "$ref": "#/components/schemas/MeasurementUnitUnitType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasurementUnitUnitType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "volume_unit": {
-            "$ref": "#/components/schemas/MeasurementUnitVolume",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasurementUnitVolume"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "weight_unit": {
-            "$ref": "#/components/schemas/MeasurementUnitWeight",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasurementUnitWeight"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -5535,8 +6599,16 @@
             "type": "string"
           },
           "currency": {
-            "$ref": "#/components/schemas/Currency",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Currency"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "id": {
             "type": "string"
@@ -5550,8 +6622,16 @@
             "type": "string"
           },
           "status": {
-            "$ref": "#/components/schemas/MerchantStatus",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MerchantStatus"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "required": [
@@ -5573,8 +6653,16 @@
             "type": "string"
           },
           "price_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "sold_out": {
             "readOnly": true,
@@ -5591,8 +6679,16 @@
             "type": "integer"
           },
           "currency": {
-            "$ref": "#/components/schemas/Currency",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Currency"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -5785,8 +6881,16 @@
             "readOnly": true
           },
           "pricing_options": {
-            "$ref": "#/components/schemas/OrderPricingOptions",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderPricingOptions"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "reference_id": {
             "maxLength": 40,
@@ -5830,12 +6934,28 @@
             "type": "array"
           },
           "source": {
-            "$ref": "#/components/schemas/OrderSource",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderSource"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "state": {
-            "$ref": "#/components/schemas/OrderState",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderState"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "taxes": {
             "items": {
@@ -5930,8 +7050,16 @@
             "type": "array"
           },
           "base_price_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "catalog_object_id": {
             "maxLength": 192,
@@ -5948,8 +7076,16 @@
             "readOnly": true
           },
           "item_type": {
-            "$ref": "#/components/schemas/OrderLineItemItemType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLineItemItemType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "metadata": {
             "additionalProperties": {
@@ -5976,8 +7112,16 @@
             "type": "string"
           },
           "pricing_blocklists": {
-            "$ref": "#/components/schemas/OrderLineItemPricingBlocklists",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLineItemPricingBlocklists"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "quantity": {
             "maxLength": 12,
@@ -5985,8 +7129,16 @@
             "type": "string"
           },
           "quantity_unit": {
-            "$ref": "#/components/schemas/OrderQuantityUnit",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderQuantityUnit"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "total_discount_money": {
             "$ref": "#/components/schemas/Money",
@@ -6097,12 +7249,28 @@
       "OrderLineItemDiscount": {
         "properties": {
           "amount_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "applied_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "catalog_object_id": {
             "maxLength": 192,
@@ -6143,12 +7311,28 @@
             "type": "array"
           },
           "scope": {
-            "$ref": "#/components/schemas/OrderLineItemDiscountScope",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLineItemDiscountScope"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "type": {
-            "$ref": "#/components/schemas/OrderLineItemDiscountType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLineItemDiscountType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "uid": {
             "maxLength": 60,
@@ -6187,8 +7371,16 @@
       "OrderLineItemModifier": {
         "properties": {
           "base_price_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "catalog_object_id": {
             "maxLength": 192,
@@ -6322,8 +7514,16 @@
       "OrderLineItemTax": {
         "properties": {
           "applied_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "auto_applied": {
             "readOnly": true,
@@ -6357,12 +7557,28 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/components/schemas/OrderLineItemTaxScope",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLineItemTaxScope"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "type": {
-            "$ref": "#/components/schemas/OrderLineItemTaxType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLineItemTaxType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "uid": {
             "maxLength": 60,
@@ -6391,24 +7607,64 @@
       "OrderMoneyAmounts": {
         "properties": {
           "discount_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "service_charge_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "tax_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "tip_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "total_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -6438,8 +7694,16 @@
             "type": "integer"
           },
           "measurement_unit": {
-            "$ref": "#/components/schemas/MeasurementUnit",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeasurementUnit"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "precision": {
             "nullable": true,
@@ -6451,8 +7715,16 @@
       "OrderReturn": {
         "properties": {
           "return_amounts": {
-            "$ref": "#/components/schemas/OrderMoneyAmounts",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderMoneyAmounts"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "return_discounts": {
             "items": {
@@ -6490,8 +7762,16 @@
             "type": "array"
           },
           "rounding_adjustment": {
-            "$ref": "#/components/schemas/OrderRoundingAdjustment",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderRoundingAdjustment"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "source_order_id": {
             "nullable": true,
@@ -6508,8 +7788,16 @@
       "OrderReturnDiscount": {
         "properties": {
           "amount_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "applied_money": {
             "$ref": "#/components/schemas/Money",
@@ -6536,8 +7824,16 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/components/schemas/OrderLineItemDiscountScope",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLineItemDiscountScope"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "source_discount_uid": {
             "maxLength": 60,
@@ -6545,8 +7841,16 @@
             "type": "string"
           },
           "type": {
-            "$ref": "#/components/schemas/OrderLineItemDiscountType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLineItemDiscountType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "uid": {
             "maxLength": 60,
@@ -6580,8 +7884,16 @@
             "type": "array"
           },
           "base_price_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "catalog_object_id": {
             "maxLength": 192,
@@ -6598,8 +7910,16 @@
             "readOnly": true
           },
           "item_type": {
-            "$ref": "#/components/schemas/OrderLineItemItemType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLineItemItemType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "name": {
             "maxLength": 512,
@@ -6617,8 +7937,16 @@
             "type": "string"
           },
           "quantity_unit": {
-            "$ref": "#/components/schemas/OrderQuantityUnit",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderQuantityUnit"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "return_modifiers": {
             "items": {
@@ -6671,8 +7999,16 @@
       "OrderReturnLineItemModifier": {
         "properties": {
           "base_price_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "catalog_object_id": {
             "maxLength": 192,
@@ -6713,8 +8049,16 @@
       "OrderReturnServiceCharge": {
         "properties": {
           "amount_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "applied_money": {
             "$ref": "#/components/schemas/Money",
@@ -6752,8 +8096,16 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/components/schemas/OrderServiceChargeScope",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderServiceChargeScope"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "source_service_charge_uid": {
             "maxLength": 60,
@@ -6773,8 +8125,16 @@
             "readOnly": true
           },
           "treatment_type": {
-            "$ref": "#/components/schemas/OrderServiceChargeTreatmentType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderServiceChargeTreatmentType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "type": {
             "$ref": "#/components/schemas/OrderServiceChargeType",
@@ -6815,8 +8175,16 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/components/schemas/OrderLineItemTaxScope",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLineItemTaxScope"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "source_tax_uid": {
             "maxLength": 60,
@@ -6824,8 +8192,16 @@
             "type": "string"
           },
           "type": {
-            "$ref": "#/components/schemas/OrderLineItemTaxType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderLineItemTaxType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "uid": {
             "maxLength": 60,
@@ -6879,8 +8255,16 @@
       "OrderRoundingAdjustment": {
         "properties": {
           "amount_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "name": {
             "nullable": true,
@@ -6897,8 +8281,16 @@
       "OrderServiceCharge": {
         "properties": {
           "amount_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "applied_money": {
             "$ref": "#/components/schemas/Money",
@@ -6912,8 +8304,16 @@
             "type": "array"
           },
           "calculation_phase": {
-            "$ref": "#/components/schemas/OrderServiceChargeCalculationPhase",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderServiceChargeCalculationPhase"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "catalog_object_id": {
             "maxLength": 192,
@@ -6943,8 +8343,16 @@
             "type": "string"
           },
           "scope": {
-            "$ref": "#/components/schemas/OrderServiceChargeScope",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderServiceChargeScope"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "taxable": {
             "nullable": true,
@@ -6959,8 +8367,16 @@
             "readOnly": true
           },
           "treatment_type": {
-            "$ref": "#/components/schemas/OrderServiceChargeTreatmentType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OrderServiceChargeTreatmentType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "type": {
             "$ref": "#/components/schemas/OrderServiceChargeType",
@@ -7064,8 +8480,16 @@
       "Payment": {
         "properties": {
           "amount_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "app_fee_allocations": {
             "items": {
@@ -7075,16 +8499,32 @@
             "type": "array"
           },
           "app_fee_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "application_details": {
             "$ref": "#/components/schemas/ApplicationDetails",
             "readOnly": true
           },
           "approved_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "bank_account_details": {
             "$ref": "#/components/schemas/BankAccountPaymentDetails",
@@ -7115,12 +8555,28 @@
             "type": "array"
           },
           "card_details": {
-            "$ref": "#/components/schemas/CardPaymentDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CardPaymentDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "cash_details": {
-            "$ref": "#/components/schemas/CashPaymentDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CashPaymentDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "created_at": {
             "maxLength": 32,
@@ -7149,8 +8605,16 @@
             "readOnly": true
           },
           "electronic_money_details": {
-            "$ref": "#/components/schemas/ElectronicMoneyDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ElectronicMoneyDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "employee_id": {
             "maxLength": 192,
@@ -7258,8 +8722,16 @@
             "type": "string"
           },
           "tip_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "total_money": {
             "$ref": "#/components/schemas/Money",
@@ -7284,8 +8756,16 @@
       "ProcessingFee": {
         "properties": {
           "amount_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "effective_at": {
             "nullable": true,
@@ -7339,8 +8819,16 @@
             "type": "string"
           },
           "processing_fee_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "reason": {
             "maxLength": 192,
@@ -7548,8 +9036,16 @@
             "type": "string"
           },
           "risk_level": {
-            "$ref": "#/components/schemas/RiskEvaluationRiskLevel",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RiskEvaluationRiskLevel"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "required": [
@@ -7703,8 +9199,16 @@
       "SearchOrdersDateTimeFilter": {
         "properties": {
           "closed_at": {
-            "$ref": "#/components/schemas/TimeRange",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TimeRange"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "created_at": {
             "$ref": "#/components/schemas/TimeRange"
@@ -7718,24 +9222,64 @@
       "SearchOrdersFilter": {
         "properties": {
           "customer_filter": {
-            "$ref": "#/components/schemas/SearchOrdersCustomerFilter",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchOrdersCustomerFilter"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "date_time_filter": {
-            "$ref": "#/components/schemas/SearchOrdersDateTimeFilter",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchOrdersDateTimeFilter"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "fulfillment_filter": {
-            "$ref": "#/components/schemas/SearchOrdersFulfillmentFilter",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchOrdersFulfillmentFilter"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "source_filter": {
-            "$ref": "#/components/schemas/SearchOrdersSourceFilter",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchOrdersSourceFilter"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "state_filter": {
-            "$ref": "#/components/schemas/SearchOrdersStateFilter",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchOrdersStateFilter"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -7762,12 +9306,28 @@
       "SearchOrdersQuery": {
         "properties": {
           "filter": {
-            "$ref": "#/components/schemas/SearchOrdersFilter",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchOrdersFilter"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "sort": {
-            "$ref": "#/components/schemas/SearchOrdersSort",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchOrdersSort"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -7827,8 +9387,16 @@
             "$ref": "#/components/schemas/SearchOrdersSortField"
           },
           "sort_order": {
-            "$ref": "#/components/schemas/SortOrder",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SortOrder"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "required": [
@@ -7888,8 +9456,16 @@
             "type": "string"
           },
           "product": {
-            "$ref": "#/components/schemas/Product",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Product"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -7944,12 +9520,28 @@
             "type": "integer"
           },
           "pricing": {
-            "$ref": "#/components/schemas/SubscriptionPricing",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SubscriptionPricing"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "recurring_price_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "uid": {
             "nullable": true,
@@ -7971,12 +9563,28 @@
             "type": "array"
           },
           "price_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "type": {
-            "$ref": "#/components/schemas/SubscriptionPricingType",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SubscriptionPricingType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -8063,24 +9671,64 @@
             "type": "array"
           },
           "amount_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "bank_account_details": {
-            "$ref": "#/components/schemas/TenderBankAccountDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TenderBankAccountDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "buy_now_pay_later_details": {
-            "$ref": "#/components/schemas/TenderBuyNowPayLaterDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TenderBuyNowPayLaterDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "card_details": {
-            "$ref": "#/components/schemas/TenderCardDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TenderCardDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "cash_details": {
-            "$ref": "#/components/schemas/TenderCashDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TenderCashDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "created_at": {
             "maxLength": 32,
@@ -8112,16 +9760,40 @@
             "type": "string"
           },
           "processing_fee_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "square_account_details": {
-            "$ref": "#/components/schemas/TenderSquareAccountDetails",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TenderSquareAccountDetails"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "tip_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "transaction_id": {
             "maxLength": 192,
@@ -8140,8 +9812,16 @@
       "TenderBankAccountDetails": {
         "properties": {
           "status": {
-            "$ref": "#/components/schemas/TenderBankAccountDetailsStatus",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TenderBankAccountDetailsStatus"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -8161,8 +9841,16 @@
             "readOnly": true
           },
           "status": {
-            "$ref": "#/components/schemas/TenderBuyNowPayLaterDetailsStatus",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TenderBuyNowPayLaterDetailsStatus"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -8186,16 +9874,40 @@
       "TenderCardDetails": {
         "properties": {
           "card": {
-            "$ref": "#/components/schemas/Card",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Card"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "entry_method": {
-            "$ref": "#/components/schemas/TenderCardDetailsEntryMethod",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TenderCardDetailsEntryMethod"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "status": {
-            "$ref": "#/components/schemas/TenderCardDetailsStatus",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TenderCardDetailsStatus"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -8222,12 +9934,28 @@
       "TenderCashDetails": {
         "properties": {
           "buyer_tendered_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           },
           "change_back_money": {
-            "$ref": "#/components/schemas/Money",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -8235,8 +9963,16 @@
       "TenderSquareAccountDetails": {
         "properties": {
           "status": {
-            "$ref": "#/components/schemas/TenderSquareAccountDetailsStatus",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TenderSquareAccountDetailsStatus"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -8316,8 +10052,16 @@
             "type": "string"
           },
           "order": {
-            "$ref": "#/components/schemas/Order",
-            "nullable": true
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Order"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
           }
         },
         "type": "object"
@@ -9483,6 +11227,9 @@
       "POST /v2/webhooks/subscriptions/{subscription_id}/test",
       "PUT /v2/orders/{order_id}"
     ],
+    "rewritten": {
+      "nullable_ref": 218
+    },
     "schema": 1,
     "sources": [
       {

@@ -642,3 +642,17 @@ def test_the_ledger_names_which_deviation_absorbed_what() -> None:
     world.client.get("/v2/orders/ord_1")
     assert world.ledger.absorbed() == ((BOGUS_STATE_DEVIATION.label, 2),)
     assert BOGUS_STATE_DEVIATION.label == 'enum /order/state = "BOGUS"'
+
+
+def test_a_null_where_the_spec_pairs_a_reference_with_nullable_passes(world: World) -> None:
+    """The cut form of ``{"$ref": X, "nullable": true}``; the reference's own
+    error surfaces for a wrong shape, not the anyOf's generic one."""
+    schema = world.client.surface.extract.schemas["Order"]["properties"]
+    schema["audit"] = {"anyOf": [{"$ref": "#/components/schemas/LineItem"}, {"enum": [None]}]}  # type: ignore[index]
+    world.script.body = {"order": {**GOOD_ORDER["order"], "audit": None}}
+    world.client.get("/v2/orders/ord_1")
+    assert world.ledger.total("validated") == 1
+    exc = _violation(world, "/v2/orders/ord_1", {"order": {**GOOD_ORDER["order"], "audit": {"quantity": 3}}})
+    assert (
+        exc.errors[0].startswith("/order/audit/quantity: 3 is not of type 'string'") or "/order/audit" in exc.errors[0]
+    )

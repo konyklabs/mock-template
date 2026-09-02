@@ -83,11 +83,13 @@ def render_json(document: Mapping[str, Any]) -> str:
 class _Cut:
     """Working state for one cut: the stripped-key ledger and the schema queue."""
 
-    __slots__ = ("stripped", "stubbed")
+    __slots__ = ("nullable_refs", "stripped", "stubbed")
 
     def __init__(self) -> None:
         self.stripped: set[str] = set()
         self.stubbed: set[str] = set()
+        #: ``{"$ref": X, "nullable": true}`` nodes rewritten; see ``clean_schema``.
+        self.nullable_refs = 0
 
     def drop(self, key: str) -> None:
         self.stripped.add(key)
@@ -110,6 +112,13 @@ class _Cut:
                 out[key] = [self.clean_schema(schema) for schema in value]
             else:
                 out[key] = copy.deepcopy(value)
+        if isinstance(out.get("$ref"), str) and out.get("nullable") is True:
+            # OAS 3.0's ``nullable`` acts within one schema object and a
+            # ``$ref`` sibling is ignored by validators, so a legal null next
+            # to a reference would fail. The equivalent the validator honours:
+            # either the referenced schema, or exactly null.
+            self.nullable_refs += 1
+            return {"anyOf": [{"$ref": out["$ref"]}, {"enum": [None]}]}
         return out
 
 
@@ -387,6 +396,7 @@ def cut_extract(
             "modeled": sorted(kept_keys),
             "missing": sorted(missing),
             "stubbed": sorted(cut.stubbed),
+            "rewritten": {"nullable_ref": cut.nullable_refs},
             "stripped": sorted(cut.stripped),
         },
     }

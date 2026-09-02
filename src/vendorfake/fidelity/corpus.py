@@ -139,7 +139,9 @@ class Request:
     headers: Mapping[str, str] = field(default_factory=dict)
     query: Mapping[str, str] = field(default_factory=dict)
     body: Any = None
-    #: Whether the case gave a body at all. ``null`` is a body; absence is not.
+    #: Whether the case gave a body at all. A literal ``null`` body and an
+    #: absent one are both sent as no body: the clients here cannot send the
+    #: four bytes ``null``, so a case must not claim to.
     has_body: bool = False
 
     @classmethod

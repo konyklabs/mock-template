@@ -263,7 +263,10 @@ def run_corpus(
         ledger = Ledger()
 
         def factory(unit: Unit) -> CorpusClient:
-            return ValidatingClient(unit, surface, ledger)
+            # Lenient on an undeclared route: the case still runs, the ledger
+            # counts it, and the matrix prints it in capitals and exits 1. A
+            # raise mid-case would hide every case after it.
+            return ValidatingClient(unit, surface, ledger, strict_undeclared=False)
 
     else:
         factory = in_process
@@ -395,76 +398,84 @@ def run_case(
     auth_rows: list[Mapping[str, Any]] | None = None
     steps_run = 0
     failure: StepFailure | None = None
-    with opener(profile) as client:
-        for step in case.steps:
-            steps_run += 1
-            try:
-                request = interpolate(
-                    {
-                        "path": step.request.path,
-                        "headers": dict(step.request.headers),
-                        "query": dict(step.request.query),
-                        "body": step.request.body,
-                    },
-                    variables=variables,
-                    captures=captures,
-                    uuid=fresh_uuid,
-                )
-                expected = interpolate(
-                    {"headers": dict(step.expect.headers), "body": step.expect.body},
-                    variables=variables,
-                    captures=captures,
-                    uuid=fresh_uuid,
-                )
-            except InterpolationError as exc:
-                failure = StepFailure(step.name, "request", "a resolvable reference", str(exc))
-                break
+    try:
+        with opener(profile) as client:
+            for step in case.steps:
+                steps_run += 1
+                try:
+                    request = interpolate(
+                        {
+                            "path": step.request.path,
+                            "headers": dict(step.request.headers),
+                            "query": dict(step.request.query),
+                            "body": step.request.body,
+                        },
+                        variables=variables,
+                        captures=captures,
+                        uuid=fresh_uuid,
+                    )
+                    expected = interpolate(
+                        {"headers": dict(step.expect.headers), "body": step.expect.body},
+                        variables=variables,
+                        captures=captures,
+                        uuid=fresh_uuid,
+                    )
+                except InterpolationError as exc:
+                    failure = StepFailure(step.name, "request", "a resolvable reference", str(exc))
+                    break
 
-            headers: dict[str, str] = request["headers"]
-            if AUTH_HEADER_KEY in headers:
-                mode = headers.pop(AUTH_HEADER_KEY)
-                if auth_rows is None:
-                    auth_rows = _auth_rows(client)
-                credential = next((row for row in auth_rows if str(row.get("mode")) == mode), None)
-                if credential is None:
-                    offered = sorted({str(row.get("mode")) for row in auth_rows})
+                headers: dict[str, str] = request["headers"]
+                if AUTH_HEADER_KEY in headers:
+                    mode = headers.pop(AUTH_HEADER_KEY)
+                    if auth_rows is None:
+                        auth_rows = _auth_rows(client)
+                    credential = next((row for row in auth_rows if str(row.get("mode")) == mode), None)
+                    if credential is None:
+                        offered = sorted({str(row.get("mode")) for row in auth_rows})
+                        failure = StepFailure(
+                            step.name,
+                            f"request/headers/{AUTH_HEADER_KEY}",
+                            f"a credential of mode {mode!r}",
+                            f"modes published by GET {CONTROL_PREFIX}auth: {offered}",
+                        )
+                        break
+                    headers = {**{str(k): str(v) for k, v in dict(credential["headers"]).items()}, **headers}
+
+                try:
+                    response = client.call(
+                        method=step.request.method,
+                        path=request["path"],
+                        query=request["query"] or None,
+                        headers=headers or None,
+                        body=request["body"] if step.request.has_body else None,
+                    )
+                except Exception as exc:
                     failure = StepFailure(
-                        step.name,
-                        f"request/headers/{AUTH_HEADER_KEY}",
-                        f"a credential of mode {mode!r}",
-                        f"modes published by GET {CONTROL_PREFIX}auth: {offered}",
+                        step.name, "response", "an answer", f"{type(exc).__name__}", detail=str(exc)[:1200]
                     )
                     break
-                headers = {**{str(k): str(v) for k, v in dict(credential["headers"]).items()}, **headers}
 
-            try:
-                response = client.call(
-                    method=step.request.method,
-                    path=request["path"],
-                    query=request["query"] or None,
-                    headers=headers or None,
-                    body=request["body"] if step.request.has_body else None,
-                )
-            except Exception as exc:
-                failure = StepFailure(
-                    step.name, "response", "an answer", f"{type(exc).__name__}", detail=str(exc)[:1200]
-                )
-                break
+                failure = _check_step(step, expected, response, captures)
+                if failure is not None:
+                    break
 
-            failure = _check_step(step, expected, response, captures)
-            if failure is not None:
-                break
+            observed = tuple(getattr(client, "observed", ()))
+            if failure is None and observed:
+                unreached = [key for key in case.routes if key not in observed]
+                if unreached:
+                    failure = StepFailure(
+                        "routes",
+                        "routes",
+                        "every declared route reached by a step",
+                        f"never reached: {', '.join(unreached)}; reached: {', '.join(observed)}",
+                    )
 
-        observed = tuple(getattr(client, "observed", ()))
-        if failure is None and observed:
-            unreached = [key for key in case.routes if key not in observed]
-            if unreached:
-                failure = StepFailure(
-                    "routes",
-                    "routes",
-                    "every declared route reached by a step",
-                    f"never reached: {', '.join(unreached)}; reached: {', '.join(observed)}",
-                )
+    except RuntimeError as exc:
+        # The unit itself could not be opened, reset or asked for credentials
+        # -- a control-plane failure, not a vendor fact. One failed case with
+        # the reason, and the run goes on to the next.
+        failure = StepFailure("open", "unit", "a unit to run the case against", f"{type(exc).__name__}: {exc}"[:600])
+        observed = ()
 
     return CaseResult(
         id=case.id,

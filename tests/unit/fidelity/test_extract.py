@@ -329,3 +329,19 @@ def test_a_document_that_is_not_openapi3_is_refused() -> None:
 def test_no_sources_is_an_error() -> None:
     with pytest.raises(ValueError, match="at least one"):
         cut_extract([], MODELED, fetched="2026-09-02")
+
+
+def test_a_nullable_reference_is_cut_as_a_choice_the_validator_honours() -> None:
+    """Deep-lens D8 (konyklabs/roadmap#55): ``nullable`` beside ``$ref`` is
+    ignored by the validator, so a legal null failed. The cut rewrites it."""
+    document = synthetic()
+    document["components"]["schemas"]["Widget"]["properties"]["audit"] = {
+        "$ref": "#/components/schemas/Audit",
+        "nullable": True,
+        "description": "prose",
+    }
+    cut = cut_extract([(SOURCE, blob(document))], MODELED, fetched="2026-09-02")
+    assert cut["components"]["schemas"]["Widget"]["properties"]["audit"] == {
+        "anyOf": [{"$ref": "#/components/schemas/Audit"}, {"enum": [None]}]
+    }
+    assert cut["x-vendorfake"]["rewritten"] == {"nullable_ref": 1}

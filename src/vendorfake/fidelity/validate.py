@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import quote
 
+from jsonschema.exceptions import best_match
 from openapi_schema_validator import OAS30ReadValidator
 from referencing import Registry
 from referencing.jsonschema import DRAFT4
@@ -356,7 +357,12 @@ class ValidatingClient(InProcessClient):
         errors: list[str] = []
         absorbed: list[str] = []
         declaration = self._surface.declaration
-        for error in validator.iter_errors(instance):
+        for raw_error in validator.iter_errors(instance):
+            # A nullable reference is cut as ``anyOf: [ref, enum: [null]]``
+            # (see extract.py); the anyOf's own message says only "not valid
+            # under any of the given schemas", so report the branch that came
+            # closest, which is the reference's own error.
+            error = best_match(raw_error.context) if raw_error.context else raw_error
             pointer = _instance_pointer(error.absolute_path)
             excused_by = next(
                 (
