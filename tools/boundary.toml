@@ -35,12 +35,14 @@ allowed_modules = [
 [layers]
 "src/vendorfake/core/" = ["src/vendorfake/core/"]
 "src/vendorfake/conformance/" = ["src/vendorfake/conformance/", "src/vendorfake/core/"]
+"src/vendorfake/fidelity/" = ["src/vendorfake/fidelity/", "src/vendorfake/core/"]
 "src/vendorfake/asgi/" = ["src/vendorfake/asgi/", "src/vendorfake/core/"]
 
 # Third-party packages each layer may import at all.
 [externals]
 "src/vendorfake/core/" = ["httpx", "pydantic"]
 "src/vendorfake/conformance/" = ["httpx"]
+"src/vendorfake/fidelity/" = ["httpx", "jsonschema", "openapi_schema_validator", "referencing"]
 
 # ---------------------------------------------------------------------------
 # No vendor slug may appear as a literal token or string under these prefixes.
@@ -48,7 +50,7 @@ allowed_modules = [
 # vendor.py, never hand-listed, so adding a vendor cannot silently widen this.
 # ---------------------------------------------------------------------------
 [vendor_slugs]
-scan_prefixes = ["src/vendorfake/core/", "src/vendorfake/conformance/"]
+scan_prefixes = ["src/vendorfake/core/", "src/vendorfake/conformance/", "src/vendorfake/fidelity/"]
 
 # ---------------------------------------------------------------------------
 # Named exceptions. Each must say why it exists.

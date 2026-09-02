@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "sources": [
+    {
+      "kind": "openapi3",
+      "url": "https://raw.githubusercontent.com/square/connect-api-specification/master/api.json"
+    }
+  ],
+  "error_envelope": "200",
+  "aliases": [
+    {
+      "method": "GET",
+      "path": "/v2/merchants/me",
+      "spec_path": "/v2/merchants/{merchant_id}",
+      "reason": "The unit serves only the `me` alias; the published operation is RetrieveMerchant with a merchant_id path parameter, for which `me` is a documented alias. FINDING: the real API also accepts the literal id."
+    },
+    {
+      "method": "GET",
+      "path": "/v2/loyalty/programs/main",
+      "spec_path": "/v2/loyalty/programs/{program_id}",
+      "reason": "The unit serves only the `main` alias; the published operation is RetrieveLoyaltyProgram with a program_id path parameter, for which `main` is a documented alias. FINDING: the real API also accepts the literal id."
+    }
+  ],
+  "excused": [
+    {
+      "method": "GET",
+      "path": "/oauth2/authorize",
+      "reason": "The seller-facing authorization page. It is a browser redirect flow documented in prose (OAuth guide), not an operation in the API document."
+    },
+    {
+      "method": "POST",
+      "path": "/v2/locations/{location_id}/orders",
+      "reason": "The pre-2019 CreateOrder path, no longer in the published document. Served for consumers still on it; the body and response are those of POST /v2/orders."
+    }
+  ],
+  "variables": {
+    "location_id": "18YC4JDH91E1H"
+  }
+}

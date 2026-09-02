@@ -1,0 +1,334 @@
+"""The data a vendor declares, and the two documents cut from it.
+
+FOR: one typed reading of ``declaration.json`` and ``extract.json`` so the
+validator, the corpus runner, the report and the pin tool all agree on what a
+route *is* in spec terms -- an operation, an excused route, or an undeclared
+one -- without any of them re-deriving it.
+
+INVARIANT: **a vendor route is never silently unvalidated.** ``Surface.classify``
+returns exactly one of four kinds for every route the unit serves, and the
+only kind that carries no schema and no reason is ``undeclared`` -- which the
+validator raises on and the report prints in capitals. Excusing a route costs
+a sentence in the declaration; that sentence is the audit trail.
+
+The extract is a valid OpenAPI 3.0 document restricted to the operations the
+unit models and the schemas reachable from them, with prose stripped; see
+``extract.py`` for how it is cut and ``pin.py`` for how it is tied to the
+upstream bytes. This module only reads it.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from importlib import resources
+from typing import Any, Literal
+
+from vendorfake.core.kernel.types import Route
+
+__all__ = [
+    "DECLARATION_FILE",
+    "EXTRACT_FILE",
+    "PIN_FILE",
+    "Alias",
+    "Classified",
+    "Excuse",
+    "Extract",
+    "FidelityDeclaration",
+    "Operation",
+    "SpecSource",
+    "Surface",
+    "load_declaration",
+    "load_extract",
+    "route_key",
+    "template_shape",
+]
+
+DECLARATION_FILE = "declaration.json"
+EXTRACT_FILE = "extract.json"
+PIN_FILE = "pin.json"
+CORPUS_DIR = "corpus"
+
+SourceKind = Literal["openapi3", "swagger2", "fragments"]
+"""How an upstream document is fetched and read. Only ``openapi3`` is
+implemented by the first leg (konyklabs/roadmap#55); ``swagger2`` is #56 and
+``fragments`` is #57. Declaring a kind that
+is not implemented is an error at extract time, never a silent skip."""
+
+
+def route_key(method: str, path: str) -> str:
+    """``"GET /v2/orders/{order_id}"`` -- the one spelling of a route this package uses."""
+    return f"{method.upper()} {path}"
+
+
+def template_shape(path: str) -> str:
+    """A path template with every parameter name erased, so ``/v2/orders/{order_id}``
+    and ``/v2/orders/{id}`` compare equal. Parameter *names* differ between a
+    unit and a spec freely; parameter *positions* do not."""
+    return re.sub(r"\{[^}]+\}", "{}", path)
+
+
+@dataclass(frozen=True, slots=True)
+class SpecSource:
+    """One upstream document the extract is cut from."""
+
+    kind: SourceKind
+    url: str
+    #: A prefix the spec omits and the unit's paths carry (Swagger 2 ``basePath``,
+    #: OAS 3 ``servers[0].url`` path). Empty when the spec's paths are the unit's.
+    base_path: str = ""
+
+    @classmethod
+    def of(cls, row: Mapping[str, Any]) -> SpecSource:
+        kind = row["kind"]
+        if kind not in ("openapi3", "swagger2", "fragments"):
+            raise ValueError(f"unknown spec source kind {kind!r}; expected openapi3, swagger2 or fragments")
+        return cls(kind=kind, url=str(row["url"]), base_path=str(row.get("base_path", "")))
+
+
+@dataclass(frozen=True, slots=True)
+class Alias:
+    """A unit route spelled with a literal where the spec has a parameter.
+
+    A unit may serve ``GET /things/me`` as a literal path where the spec has
+    ``/things/{thing_id}`` and documents ``me`` as one accepted value. The
+    alias says which operation the literal is an instance of. It is *also* a fidelity finding -- the real API
+    accepts both spellings -- which is why the reason is mandatory.
+    """
+
+    method: str
+    path: str
+    spec_path: str
+    reason: str
+
+    @classmethod
+    def of(cls, row: Mapping[str, Any]) -> Alias:
+        return cls(
+            method=str(row["method"]).upper(),
+            path=str(row["path"]),
+            spec_path=str(row["spec_path"]),
+            reason=str(row["reason"]),
+        )
+
+    @property
+    def key(self) -> str:
+        return route_key(self.method, self.path)
+
+
+@dataclass(frozen=True, slots=True)
+class Excuse:
+    """A vendor route the spec does not describe, with the reason it is served anyway."""
+
+    method: str
+    path: str
+    reason: str
+
+    @classmethod
+    def of(cls, row: Mapping[str, Any]) -> Excuse:
+        return cls(method=str(row["method"]).upper(), path=str(row["path"]), reason=str(row["reason"]))
+
+    @property
+    def key(self) -> str:
+        return route_key(self.method, self.path)
+
+
+@dataclass(frozen=True, slots=True)
+class FidelityDeclaration:
+    """``declaration.json``, read.
+
+    ``error_envelope`` names the status whose response schema also describes
+    error bodies when the spec declares none for the error status -- the
+    convention of a vendor whose every response schema carries an ``errors[]``
+    member and whose document declares only the success status. ``None`` means
+    an undeclared status is a violation.
+    """
+
+    anchor: str
+    sources: tuple[SpecSource, ...]
+    aliases: tuple[Alias, ...] = ()
+    excused: tuple[Excuse, ...] = ()
+    error_envelope: str | None = None
+    #: Values a corpus case may interpolate as ``${vars.<name>}`` -- seeded ids
+    #: the vendor's scenario fixes, so a case can name them without a lookup.
+    variables: Mapping[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def of(cls, anchor: str, doc: Mapping[str, Any]) -> FidelityDeclaration:
+        if int(doc.get("schema", 0)) != 1:
+            raise ValueError(f'{anchor}/{DECLARATION_FILE}: expected "schema": 1, got {doc.get("schema")!r}')
+        sources = tuple(SpecSource.of(row) for row in doc.get("sources", ()))
+        if not sources:
+            raise ValueError(f"{anchor}/{DECLARATION_FILE}: at least one spec source is required")
+        envelope = doc.get("error_envelope")
+        return cls(
+            anchor=anchor,
+            sources=sources,
+            aliases=tuple(Alias.of(row) for row in doc.get("aliases", ())),
+            excused=tuple(Excuse.of(row) for row in doc.get("excused", ())),
+            error_envelope=None if envelope is None else str(envelope),
+            variables={str(k): str(v) for k, v in dict(doc.get("variables", {})).items()},
+        )
+
+    def alias_for(self, method: str, path: str) -> Alias | None:
+        key = route_key(method, path)
+        for alias in self.aliases:
+            if alias.key == key:
+                return alias
+        return None
+
+    def excuse_for(self, method: str, path: str) -> Excuse | None:
+        key = route_key(method, path)
+        for excuse in self.excused:
+            if excuse.key == key:
+                return excuse
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class Operation:
+    """One ``paths[path][method]`` of the extract, located."""
+
+    method: str
+    spec_path: str
+    raw: Mapping[str, Any]
+
+    @property
+    def key(self) -> str:
+        return route_key(self.method, self.spec_path)
+
+    def response_schema(self, status: int, *, error_envelope: str | None = None) -> Mapping[str, Any] | None:
+        """The JSON schema for ``status``: exact, then ``default``, then the
+        envelope status the declaration names. ``None`` when the operation has
+        no JSON schema for that status anywhere -- the caller decides whether
+        that is a violation."""
+        responses = self.raw.get("responses", {})
+        for candidate in (str(status), "default", error_envelope):
+            if candidate is None:
+                continue
+            response = responses.get(candidate)
+            if not isinstance(response, Mapping):
+                continue
+            content = response.get("content")
+            if not isinstance(content, Mapping):
+                continue
+            for media, body in content.items():
+                if media.split(";")[0].strip().lower() == "application/json" and isinstance(body, Mapping):
+                    schema = body.get("schema")
+                    if isinstance(schema, Mapping):
+                        return schema
+        return None
+
+    def request_schema(self) -> Mapping[str, Any] | None:
+        body = self.raw.get("requestBody")
+        if not isinstance(body, Mapping):
+            return None
+        content = body.get("content", {})
+        for media, spec in content.items():
+            if media.split(";")[0].strip().lower() == "application/json" and isinstance(spec, Mapping):
+                schema = spec.get("schema")
+                if isinstance(schema, Mapping):
+                    return schema
+        return None
+
+
+class Extract:
+    """``extract.json``, read: a scoped OpenAPI 3.0 document plus its own metadata."""
+
+    __slots__ = ("_by_shape", "document")
+
+    def __init__(self, document: Mapping[str, Any]) -> None:
+        if document.get("openapi", "").split(".")[0] != "3":
+            raise ValueError(f"an extract is an OpenAPI 3 document; got openapi={document.get('openapi')!r}")
+        self.document = document
+        self._by_shape: dict[str, dict[str, Operation]] = {}
+        for spec_path, item in dict(document.get("paths", {})).items():
+            if not isinstance(item, Mapping):
+                continue
+            shape = template_shape(spec_path)
+            for method, raw in item.items():
+                if method.lower() in ("get", "put", "post", "delete", "options", "head", "patch", "trace"):
+                    self._by_shape.setdefault(shape, {})[method.upper()] = Operation(method.upper(), spec_path, raw)
+
+    @property
+    def metadata(self) -> Mapping[str, Any]:
+        """The ``x-vendorfake`` block: upstream pins, stubbed refs, stripped keys."""
+        meta = self.document.get("x-vendorfake", {})
+        return meta if isinstance(meta, Mapping) else {}
+
+    @property
+    def schemas(self) -> Mapping[str, Any]:
+        components = self.document.get("components", {})
+        schemas = components.get("schemas", {}) if isinstance(components, Mapping) else {}
+        return schemas if isinstance(schemas, Mapping) else {}
+
+    def operation(self, method: str, spec_path: str) -> Operation | None:
+        """The operation for a *spec-shaped* path: parameter names are ignored."""
+        return self._by_shape.get(template_shape(spec_path), {}).get(method.upper())
+
+    def operations(self) -> tuple[Operation, ...]:
+        return tuple(op for by_method in self._by_shape.values() for op in by_method.values())
+
+
+ClassifiedKind = Literal["operation", "excused", "internal", "undeclared"]
+
+
+@dataclass(frozen=True, slots=True)
+class Classified:
+    """What one unit route is, in the vendor's spec terms."""
+
+    kind: ClassifiedKind
+    route: Route
+    operation: Operation | None = None
+    reason: str | None = None
+    alias: Alias | None = None
+
+    @property
+    def key(self) -> str:
+        return route_key(self.route.method, self.route.path)
+
+
+class Surface:
+    """A declaration and its extract, applied to a unit's route table."""
+
+    __slots__ = ("declaration", "extract")
+
+    def __init__(self, declaration: FidelityDeclaration, extract: Extract) -> None:
+        self.declaration = declaration
+        self.extract = extract
+
+    def classify(self, route: Route) -> Classified:
+        if route.internal or route.path.startswith("/__"):
+            return Classified("internal", route, reason="control plane or vendor stand-in, not a vendor route")
+        alias = self.declaration.alias_for(route.method, route.path)
+        spec_path = alias.spec_path if alias is not None else route.path
+        operation = self.extract.operation(route.method, spec_path)
+        if operation is not None:
+            return Classified("operation", route, operation=operation, alias=alias)
+        excuse = self.declaration.excuse_for(route.method, route.path)
+        if excuse is not None:
+            return Classified("excused", route, reason=excuse.reason)
+        return Classified("undeclared", route)
+
+    def classify_all(self, routes: Sequence[Route]) -> tuple[Classified, ...]:
+        return tuple(self.classify(route) for route in routes)
+
+
+def _read_json(anchor: str, name: str) -> Any:
+    try:
+        text = (resources.files(anchor) / name).read_text(encoding="utf-8")
+    except (FileNotFoundError, ModuleNotFoundError) as exc:
+        raise FileNotFoundError(f"no {name} in package {anchor!r}: {exc}") from exc
+    return json.loads(text)
+
+
+def load_declaration(anchor: str) -> FidelityDeclaration:
+    """Read ``declaration.json`` from the package named by ``anchor``
+    (``"vendorfake.<vendor>.fidelity"`` for a built-in vendor). The package is *named*, never
+    guessed: this module may not import the registry that knows vendors exist."""
+    return FidelityDeclaration.of(anchor, _read_json(anchor, DECLARATION_FILE))
+
+
+def load_extract(anchor: str) -> Extract:
+    return Extract(_read_json(anchor, EXTRACT_FILE))
