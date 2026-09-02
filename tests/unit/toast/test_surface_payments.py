@@ -208,3 +208,17 @@ def test_a_credit_payment_is_paid_until_its_tip_is_adjusted_then_closed(h: Harne
     assert tipped.status == 200 and tipped.json()["checks"][0]["payments"][0]["tipAmount"] == 2.0
     after = h.get(f"/orders/v2/orders/{guid}").json()
     assert after["checks"][0]["paymentStatus"] == "CLOSED"
+
+
+def test_a_closed_check_takes_no_more_selections_or_payments(h: Harness) -> None:
+    """History-lens finding H1 (konyklabs/roadmap#56): CLOSED became reachable
+    through the API, and the selections guard only knew PAID."""
+    guid, check_guid = created(h)
+    assert pay(h, guid, check_guid, OTHER).json()["checks"][0]["paymentStatus"] == "CLOSED"
+    more = h.post(
+        f"/orders/v2/orders/{guid}/checks/{check_guid}/selections",
+        [{"item": {"guid": c.ITEM_SOUP_GUID, "entityType": "MenuItem"}, "quantity": 1}],
+    )
+    assert more.status == 400 and "CLOSED" in more.json()["message"]
+    again = pay(h, guid, check_guid, OTHER)
+    assert again.status == 400 and "CLOSED" in again.json()["message"]

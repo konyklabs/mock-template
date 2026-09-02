@@ -485,10 +485,15 @@ class ToastOrdersSurface:
         _assert_not_voided(order)
         check = _check_of(order, args.params["checkGuid"])
         _CHECK_MACHINE.assert_mutable(str(check["paymentStatus"]), f"Check {check['guid']}")
-        if check["paymentStatus"] == CheckPaymentStatus.PAID.value:
+        if check["paymentStatus"] in (CheckPaymentStatus.PAID.value, CheckPaymentStatus.CLOSED.value):
+            # A settled check takes no more selections: PAID (a CREDIT tip
+            # pending) or CLOSED (nothing due). CLOSED is reachable through
+            # the API since an OTHER cover closes the check (roadmap#56), so
+            # the guard names it too -- the history lens caught the PAID-only
+            # check the machine change had silently widened.
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
-                detail=f"Check {check['guid']} is PAID; a selection cannot be added to a paid check.",
+                detail=f"Check {check['guid']} is {check['paymentStatus']}; a selection cannot be added to a settled check.",
                 field="checkGuid",
             )
         index = MenuIndex.from_store(ctx.store, restaurant.id)
