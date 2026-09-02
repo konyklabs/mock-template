@@ -356,3 +356,20 @@ def test_refresh_of_a_non_vendored_declaration_writes_only_the_pin_under_the_pac
     assert (
         f"wrote {PIN_FILE} beside the declaration and {EXTRACT_FILE} to {cache / 'some.anchor'}" in result.diff_summary
     )
+
+
+# -- the prose rule, mechanically ------------------------------------------
+
+
+def test_a_case_note_that_repeats_the_vendor_document_is_a_leak() -> None:
+    from vendorfake.fidelity.cache import prose_leaks
+
+    document = b"description: The tax rate is expressed as a decimal value, for example 0.0625 for six and a quarter percent.\n"
+    own_words = {"corpus/a.json": '{"note": "the rate 0.0625 is what the page gives for 6.25 percent"}'}
+    copied = {"corpus/b.json": '{"note": "The tax rate is expressed as a decimal value, for example 0.0625 for six"}'}
+    urls = {"corpus/c.json": '{"url": "https://doc.example.test/the/tax/rate/is/expressed/as/a/decimal"}'}
+    assert prose_leaks(own_words, [document]) == {}
+    assert prose_leaks(urls, [document]) == {}
+    leak = prose_leaks(copied, [document])
+    assert list(leak) == ["corpus/b.json"]
+    assert any(window.startswith("the tax rate is expressed as a decimal") for window in leak["corpus/b.json"])

@@ -504,7 +504,7 @@ def test_ledger_totals_are_exact(lenient: World) -> None:
     )
     assert lenient.ledger.total("validated") == 3
     assert lenient.ledger.summary() == (
-        "fidelity: 3 validated, 0 deviated, 1 excused, 1 internal, 1 undeclared, 1 unmatched, 1 skipped non json over 7 routes"
+        "fidelity: 3 validated, 0 deviated, 1 excused, 1 internal, 1 undeclared, 0 undeclared status, 1 unmatched, 1 skipped non json over 7 routes"
     )
 
 
@@ -698,3 +698,47 @@ def test_an_override_validates_against_the_named_component_for_that_route_and_st
     script.status = 201
     with pytest.raises(FidelityViolation, match="no schema for status 201"):
         client.get("/v2/orders/ord_1")
+
+
+# -- statuses the document never declares ----------------------------------
+
+
+def test_an_undeclared_error_status_is_checked_against_the_error_schema_and_counted() -> None:
+    """Deep-lens D2 (konyklabs/roadmap#56): the error-schema fallback must not
+    make an invented status look declared. Shape checked, judgment counted."""
+    script = Script()
+    unit = make_unit([route("GET", "/v2/orders/{order_id}", script.answer)], control_routes=control_plane_routes)
+    ledger = Ledger()
+    extract = {**EXTRACT, "components": {"schemas": {**EXTRACT["components"]["schemas"], "Err": {"type": "object"}}}}
+    declaration = replace(DECLARATION, error_envelope=None, error_member=None, error_schema="Err")
+    client = ValidatingClient(unit, Surface(declaration, Extract(extract)), ledger)
+    script.body = {"message": "no"}
+    script.status = 418
+    client.get("/v2/orders/ord_1")
+    assert ledger.row("GET /v2/orders/{order_id}").validated == 1
+    assert ledger.row("GET /v2/orders/{order_id}").undeclared_status == 1
+    assert "1 undeclared status" in ledger.summary()
+    script.body = ["not", "an", "object"]
+    with pytest.raises(FidelityViolation):
+        client.get("/v2/orders/ord_1")
+
+
+def test_validators_are_cached_per_unit_route_not_per_operation() -> None:
+    """Deep-lens D3: an alias maps two unit routes onto one operation and an
+    override is per route, so the cache must not let the first route's
+    validator answer for the second."""
+    script = Script()
+    unit = make_unit(
+        [route("GET", "/v2/merchants/me", script.answer), route("GET", "/v2/merchants/{merchant_id}", script.answer)],
+        control_routes=control_plane_routes,
+    )
+    ledger = Ledger()
+    override = Override(
+        route="GET /v2/merchants/me", status=200, schema="LineItem", reason="the guide", url="https://example.invalid/"
+    )
+    declaration = replace(DECLARATION, overrides=(override,), error_envelope=None, error_member=None)
+    client = ValidatingClient(unit, Surface(declaration, Extract(EXTRACT)), ledger)
+    script.body = {"merchant": {"id": "m1"}}
+    client.get("/v2/merchants/m1")  # the plain route: the operation's own schema
+    with pytest.raises(FidelityViolation, match="quantity"):
+        client.get("/v2/merchants/me")  # the alias route: the override's LineItem schema, not the cached one

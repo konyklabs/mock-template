@@ -14,6 +14,7 @@ from vendorfake.fidelity.types import Extract, FidelityDeclaration, Surface
 class _Row:
     key: str
     validated: int
+    undeclared_status: int = 0
 
 
 class _Ledger:

@@ -64,13 +64,16 @@ BODY_EXCERPT_CHARS = 400
 """How much of an offending body a violation quotes. Enough to see the shape,
 not enough to drown the pointer list under a paginated listing."""
 
-Counter = Literal["validated", "deviated", "excused", "internal", "undeclared", "unmatched", "skipped_non_json"]
+Counter = Literal[
+    "validated", "deviated", "excused", "internal", "undeclared", "undeclared_status", "unmatched", "skipped_non_json"
+]
 COUNTERS: tuple[Counter, ...] = (
     "validated",
     "deviated",
     "excused",
     "internal",
     "undeclared",
+    "undeclared_status",
     "unmatched",
     "skipped_non_json",
 )
@@ -154,6 +157,10 @@ class LedgerRow:
     excused: int = 0
     internal: int = 0
     undeclared: int = 0
+    #: A 4xx/5xx the document does not declare for the route, validated against
+    #: the vendor's error document by the declaration's ``error_schema``. The
+    #: shape was checked; that the status exists there is the unit's judgment.
+    undeclared_status: int = 0
     unmatched: int = 0
     skipped_non_json: int = 0
 
@@ -224,6 +231,7 @@ class ValidatingClient(InProcessClient):
         "_router",
         "_strict_undeclared",
         "_surface",
+        "_undeclared_status",
         "_validators",
         "_via_envelope",
     )
@@ -250,11 +258,16 @@ class ValidatingClient(InProcessClient):
         self._registry: Registry[Any] = Registry().with_resource(EXTRACT_URI, resource)
         # ``None`` is cached too: an operation with no schema for a status is
         # a violation every time, and should cost a lookup, not a search.
+        #: Keyed by the UNIT route and status, not the spec operation: an alias
+        #: maps two unit routes onto one operation and an override is per route.
         self._validators: dict[tuple[str, int], Any] = {}
         #: Whether the schema for (operation, status) came through the envelope
         #: fallback rather than a declared status -- the case the error member
         #: check exists for.
         self._via_envelope: dict[tuple[str, int], bool] = {}
+        #: (route, status) pairs the document never declares, answered through
+        #: ``error_schema``: counted, listed by the report, never silent.
+        self._undeclared_status: set[tuple[str, int]] = set()
         self._built = 0
 
     @property
@@ -378,7 +391,7 @@ class ValidatingClient(InProcessClient):
                 absorbed.append(excused_by.label)
                 continue
             errors.append(f"{pointer}: {error.message}")
-        if response.status >= 400 and self._via_envelope.get((operation.key, response.status)):
+        if response.status >= 400 and self._via_envelope.get((key, response.status)):
             member = declaration.error_member
             carried = instance.get(member) if isinstance(instance, Mapping) and member else None
             if not (isinstance(carried, list) and carried):
@@ -396,12 +409,14 @@ class ValidatingClient(InProcessClient):
                 body_excerpt=_excerpt(response),
             )
         self._ledger.record(key, "validated")
+        if (key, response.status) in self._undeclared_status:
+            self._ledger.record(key, "undeclared_status")
         for label in absorbed:
             self._ledger.record(key, "deviated")
             self._ledger.absorb(label)
 
     def _validator_for(self, key: str, operation: Operation, status: int) -> Any:
-        cache_key = (operation.key, status)
+        cache_key = (key, status)
         if cache_key in self._validators:
             return self._validators[cache_key]
         envelope = self._surface.declaration.error_envelope
@@ -425,6 +440,9 @@ class ValidatingClient(InProcessClient):
             pointer = f"/components/schemas/{override.schema}"
             schema = self._surface.extract.schemas[override.schema]
         elif schema is None and status >= 400 and error_schema is not None:
+            declared = operation.raw.get("responses", {})
+            if not any(k in declared for k in (str(status), f"{status // 100}XX")):
+                self._undeclared_status.add(cache_key)
             # The document declares the status without a body (or not at
             # all) and the declaration names the vendor's error document:
             # validate against that. Kept as a root of the extract for this.

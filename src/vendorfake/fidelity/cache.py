@@ -22,11 +22,13 @@ drift, on purpose, in the one place a failure is actionable.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as _dt
 import json
 import os
+import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -36,18 +38,20 @@ import httpx
 
 from vendorfake.fidelity.extract import cut_extract, render_json, sha256_hex
 from vendorfake.fidelity.pin import Fetcher, Pin, fetch
-from vendorfake.fidelity.types import EXTRACT_FILE, PIN_FILE, Extract, FidelityDeclaration
+from vendorfake.fidelity.types import CORPUS_DIR, DECLARATION_FILE, EXTRACT_FILE, PIN_FILE, Extract, FidelityDeclaration
 
 __all__ = [
     "CACHE_ENV_VAR",
     "DRIFT_FILE",
     "CacheResult",
     "DriftRow",
+    "ProseLeak",
     "cache_path",
     "cache_root",
     "cached_extract",
     "drift_rows",
     "populate",
+    "prose_leaks",
     "read_package_pin",
 ]
 
@@ -177,6 +181,59 @@ def _write_atomic(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+class ProseLeak(LookupError):
+    """Repository text repeats the vendor's document: an eight-word window of
+    a corpus case or the declaration also occurs in a fetched source file.
+
+    The fetch-never-commit rule is about bytes, and a sentence copied out of
+    a ``description`` into a case note is bytes. This is the mechanical half
+    of the rule, run where the fresh bytes are at hand and nowhere else.
+    """
+
+
+_WINDOW = 8
+
+
+def _prose_words(text: str) -> list[str]:
+    """Words, lower-cased and stripped of punctuation, with URLs removed first:
+    a citation of the vendor's page is not a copy of the vendor's prose."""
+    return re.sub(r"[^a-z0-9 ]", " ", re.sub(r"https?://\S+", " ", text).lower()).split()
+
+
+def prose_leaks(texts: Mapping[str, str], documents: Sequence[bytes]) -> dict[str, list[str]]:
+    """Which of ``texts`` (name -> content) share an eight-word window with any
+    of ``documents``. URLs are not prose and are ignored."""
+    corpus = " " + " ".join(" ".join(_prose_words(blob.decode("utf-8", "replace"))) for blob in documents) + " "
+    leaks: dict[str, list[str]] = {}
+    for name, text in texts.items():
+        words = _prose_words(text)
+        found = sorted(
+            {
+                window
+                for i in range(len(words) - _WINDOW + 1)
+                if (window := " ".join(words[i : i + _WINDOW])) and f" {window} " in corpus and "http" not in window
+            }
+        )
+        if found:
+            leaks[name] = found
+    return leaks
+
+
+def _package_prose(anchor: str) -> dict[str, str]:
+    """Every text file shipped beside the declaration: the declaration and the corpus."""
+    root = resources.files(anchor)
+    out: dict[str, str] = {}
+    for name in (DECLARATION_FILE,):
+        with contextlib.suppress(FileNotFoundError, OSError):
+            out[name] = (root / name).read_text(encoding="utf-8")
+    corpus = root / CORPUS_DIR
+    if corpus.is_dir():
+        for entry in sorted(corpus.iterdir(), key=lambda e: e.name):
+            if entry.name.endswith(".json"):
+                out[f"{CORPUS_DIR}/{entry.name}"] = entry.read_text(encoding="utf-8")
+    return out
+
+
 def populate(
     anchor: str,
     declaration: FidelityDeclaration,
@@ -218,6 +275,13 @@ def populate(
                 f"{anchor}: cannot fetch {source.url} ({exc}) and there is no cached extract at "
                 f"{path / EXTRACT_FILE}; connect once, or set {CACHE_ENV_VAR} to a directory holding one"
             ) from exc
+
+    leaks = prose_leaks(_package_prose(anchor), [blob for _, blob in blobs])
+
+    if leaks:
+        detail = "; ".join(f"{name}: {len(windows)} window(s), e.g. {windows[0]!r}" for name, windows in leaks.items())
+
+        raise ProseLeak(f"{anchor}: repository text repeats the vendor's document -- {detail}")
 
     document = cut_extract(
         blobs,

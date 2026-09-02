@@ -46,6 +46,9 @@ class LedgerRow(Protocol):
     @property
     def validated(self) -> int: ...
 
+    @property
+    def undeclared_status(self) -> int: ...
+
 
 class LedgerLike(Protocol):
     """What the report needs of ``vendorfake.fidelity.validate.Ledger``."""
@@ -232,6 +235,16 @@ def format_matrix(
     if ledger is not None:
         for label, count in ledger.absorbed():
             lines.append(f"deviation absorbed {count} error(s): {label}")
+        for row in ledger.rows():
+            if row.undeclared_status:
+                lines.append(
+                    f"undeclared status: {row.key} answered {row.undeclared_status} response(s) with a status the "
+                    f"document does not declare for it (shape checked against error_schema; the status is the unit's judgment)"
+                )
+    for override in surface.declaration.overrides:
+        lines.append(
+            f"override: {override.route} {override.status} validated against {override.schema} -- {override.url}"
+        )
     for caveat in corpus_report.caveats:
         lines.append(f"note: {caveat}")
     lines.extend(_pin_lines(surface))
