@@ -389,8 +389,11 @@ python -m vendorfake.fidelity report --target vendorfake.testing.fidelity:toast_
 ```
 
 If upstream has moved since the pin, `fetch` says so on stderr and the run
-uses the fresh document -- a vendor release never turns a pull request red;
-`pin --check` is what notices it.
+uses the fresh document. While the pinned cut is cached (CI caches it keyed
+on the pin), a vendor release changes nothing; after the cache is evicted the
+suite validates against the fresh document and may go red for a reason that
+is Toast's, not yours -- `fetch`'s `UPSTREAM MOVED` line is the tell, and
+`pin` is the answer. That is the price of never committing the document.
 
 ## Quickstart
 

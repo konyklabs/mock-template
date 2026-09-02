@@ -68,11 +68,13 @@ def project_stock(stored: Mapping[str, Any]) -> dict[str, Any]:
 
 def invalid_stock_row(guid: str | None, multi_location_id: str | None) -> dict[str, Any]:
     """DOCUMENTED (apiUsingTheStockApi.html, the search walkthrough's two
-    INVALID rows): an unknown guid answers ``status: OUT_OF_STOCK``, ``quantity``
-    null, and -- as the guide literally shows -- the STRING ``"null"`` for the
-    identifiers it does not have (``multiLocationId: "null"``, ``versionId``
-    and ``guid: "null"``), never a JSON null: the schema types them as plain
-    strings. Found by the fidelity validator (konyklabs/roadmap#56)."""
+    INVALID rows): an unknown identifier answers ``status: OUT_OF_STOCK`` and
+    ``quantity`` null, and -- as the guide literally shows -- the STRING
+    ``"null"`` for what the row lacks, never a JSON null (the schema types
+    them as plain strings). Its first row, searched by guid, echoes that guid
+    as ``versionId`` and answers ``multiLocationId: "null"``; its second,
+    searched by multiLocationId, answers ``guid: "null"`` and
+    ``versionId: "null"``. Found by the fidelity validator (roadmap#56)."""
     return {
         "guid": guid if guid is not None else "null",
         "itemGuidValidity": "INVALID",

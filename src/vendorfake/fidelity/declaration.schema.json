@@ -112,7 +112,6 @@
         "required": [
           "pointer",
           "keyword",
-          "value",
           "reason",
           "url"
         ],
@@ -148,8 +147,35 @@
               "type": "string",
               "pattern": "^[A-Z]+ /"
             }
+          },
+          "pattern": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A regular expression every excused instance must fully match; exactly one of value and pattern."
           }
-        }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "value"
+            ],
+            "not": {
+              "required": [
+                "pattern"
+              ]
+            }
+          },
+          {
+            "required": [
+              "pattern"
+            ],
+            "not": {
+              "required": [
+                "value"
+              ]
+            }
+          }
+        ]
       }
     },
     "variables": {

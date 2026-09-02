@@ -40,6 +40,10 @@ jobs:
         with:
           path: ~/.cache/vendorfake/fidelity
           key: fidelity-${{ runner.os }}-${{ hashFiles('src/vendorfake/*/fidelity/pin.json') }}
+          # A re-pin or a new branch still restores the latest cut rather than
+          # fetching cold; the pin decides what is validated, not the network.
+          restore-keys: |
+            fidelity-${{ runner.os }}-
 
       - name: Self-test
         run: bash tools/self-test.sh

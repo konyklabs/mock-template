@@ -24,6 +24,7 @@ import base64
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 from vendorfake.toast.model.dates import rest_date
 
 __all__ = ["DEFAULT_PAGE_SIZE", "MAX_PAGE_SIZE", "page_envelope", "project_connected_restaurant"]
@@ -52,6 +53,32 @@ def project_connected_restaurant(entity: Mapping[str, Any], scopes: Sequence[str
     }
 
 
+def page_token(page_number: int, page_size: int) -> str:
+    """The guide's token: base64 of ``p=<page>,s:<size>`` (``cD0xLHM6MTAw`` is
+    its documented first page at size 100). JUDGMENT that this is the format
+    rather than an example of one; it is the only shape the guide shows."""
+    return base64.b64encode(f"p={page_number},s:{page_size}".encode()).decode()
+
+
+def parse_page_token(token: str, *, page_size: int) -> int:
+    """The page a token names, or ``invalid_cursor`` when it is not one of ours
+    or was minted for a different page size."""
+    try:
+        decoded = base64.b64decode(token.encode(), validate=True).decode()
+        page_part, size_part = decoded.split(",", 1)
+        page_number = int(page_part.removeprefix("p="))
+        size = int(size_part.removeprefix("s:"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise UnitError(
+            UnitErrorKind.INVALID_CURSOR, detail="pageToken is not a token this API issued.", field="pageToken"
+        ) from exc
+    if page_number < 1 or size != page_size:
+        raise UnitError(
+            UnitErrorKind.INVALID_CURSOR, detail="pageToken was issued for a different pageSize.", field="pageToken"
+        )
+    return page_number
+
+
 def page_envelope(
     results: list[dict[str, Any]],
     *,
@@ -63,11 +90,7 @@ def page_envelope(
 ) -> dict[str, Any]:
     last_page = max(1, -(-total // page_size))
     if current_token is None:
-        # JUDGMENT: the guide's documented first page carries
-        # ``currentPageToken: "cD0xLHM6MTAw"``, which is base64 of ``p=1,s:100``;
-        # the unit answers the same shape for a page nobody named by token,
-        # so the field is always the string the specification types.
-        current_token = base64.b64encode(f"p={page_number},s:{page_size}".encode()).decode()
+        current_token = page_token(page_number, page_size)
     return {
         "currentPageNum": page_number,
         "results": results,

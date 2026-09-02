@@ -32,6 +32,8 @@ from vendorfake.toast.model.partners import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
     page_envelope,
+    page_token,
+    parse_page_token,
     project_connected_restaurant,
 )
 from vendorfake.toast.surface.common import BEARER_AUTH, ToastDeps, int_param
@@ -88,31 +90,24 @@ class ToastPartnersSurface:
         )
         rows = self._rows(args)
         token = args.query("pageToken")
-        page = args.ctx.store.collection(COL.partners).paginate(
-            rows,
-            limit=page_size,
-            cursor=token,
-            fingerprint={
-                "resource": "connectedRestaurants",
-                "pageSize": page_size,
-                "lastModified": args.query("lastModified"),
-            },
-            max_limit=MAX_PAGE_SIZE,
-            default_limit=DEFAULT_PAGE_SIZE,
-        )
-        # The page number is derived from how many rows precede this page; the
-        # core's cursor carries the offset but does not expose it, so it is
-        # recomputed from the first row's position.
-        first_index = rows.index(page.items[0]) if page.items else len(rows)
+        # JUDGMENT on the format, DOCUMENTED on the shape: the guide's page
+        # tokens are base64 of ``p=<page>,s:<size>`` (``cD0xLHM6MTAw`` on its
+        # first page). The unit mints and accepts exactly that, so the token
+        # it answers is one a consumer can send back -- a deep-lens finding on
+        # roadmap#56 caught the earlier null/opaque-cursor mismatch.
+        page_number = 1 if token is None else parse_page_token(token, page_size=page_size)
+        start = (page_number - 1) * page_size
+        items = rows[start : start + page_size]
+        has_more = start + page_size < len(rows)
         return json_(
             _omit_none(
                 page_envelope(
-                    page.items,
+                    items,
                     total=len(rows),
                     page_size=page_size,
-                    page_number=first_index // page_size + 1,
-                    current_token=token,
-                    next_token=page.cursor,
+                    page_number=page_number,
+                    current_token=page_token(page_number, page_size),
+                    next_token=page_token(page_number + 1, page_size) if has_more else None,
                 )
             )
         )

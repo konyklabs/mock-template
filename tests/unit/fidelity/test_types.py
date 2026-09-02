@@ -151,7 +151,7 @@ def test_loaders_name_the_missing_package() -> None:
 def test_a_deviation_needs_a_value_and_a_real_pointer_segment() -> None:
     row = {"pointer": "/errors/*/code", "keyword": "enum", "value": "X", "reason": "r", "url": "https://d/"}
     assert Deviation.of(row).value == "X"
-    with pytest.raises(ValueError, match="one scalar value"):
+    with pytest.raises(ValueError, match="exactly one"):
         Deviation.of({k: v for k, v in row.items() if k != "value"})
     # null is a value a vendor's examples answer where its schema says string.
     assert (
@@ -189,7 +189,7 @@ def test_the_declaration_schema_refuses_the_widenings_by_typo() -> None:
     validate_declaration(good, where="t")
     with pytest.raises(ValueError, match="error_member"):
         validate_declaration({**good, "error_envelope": "200"}, where="t")
-    with pytest.raises(ValueError, match="value"):
+    with pytest.raises(ValueError, match="not valid under any"):
         validate_declaration(
             {**good, "deviations": [{"pointer": "/a", "keyword": "enum", "reason": "r", "url": "https://d/"}]},
             where="t",
@@ -254,3 +254,26 @@ def test_an_override_is_one_route_one_status_one_component() -> None:
             },
             where="t",
         )
+
+
+def test_a_deviation_may_name_a_pattern_instead_of_a_value_and_glob_a_segment() -> None:
+    row = {
+        "pointer": "/**/*Date",
+        "keyword": "format",
+        "pattern": r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+0000",
+        "reason": "the vendor's documented timestamp format",
+        "url": "https://d/",
+    }
+    dev = Deviation.of(row)
+    assert dev.matches(keyword="format", pointer="/checks/0/openedDate", instance="2026-09-02T13:45:17.000+0000")
+    assert dev.matches(keyword="format", pointer="/modifiedDate", instance="2026-09-02T13:45:17.001+0000")
+    assert not dev.matches(keyword="format", pointer="/checks/0/openedDate", instance="2026-09-02T13:45:17Z")
+    assert not dev.matches(keyword="format", pointer="/checks/0/dateOpened", instance="2026-09-02T13:45:17.000+0000")
+    assert not dev.matches(keyword="type", pointer="/openedDate", instance="2026-09-02T13:45:17.000+0000")
+    assert dev.label.startswith("format /**/*Date ~ /")
+    with pytest.raises(ValueError, match="exactly one"):
+        Deviation.of({**row, "value": "x"})
+    with pytest.raises(ValueError, match="exactly one"):
+        Deviation.of({k: v for k, v in row.items() if k != "pattern"})
+    with pytest.raises(ValueError, match="regular expression"):
+        Deviation.of({**row, "pattern": "("})

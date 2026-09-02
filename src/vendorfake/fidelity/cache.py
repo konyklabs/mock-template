@@ -28,6 +28,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib import resources
@@ -137,6 +138,8 @@ class CacheResult:
     #: not digest to the pin's ``extract_sha256``: the cutter or the modeled
     #: list moved, not the upstream. ``pin`` is the fix; the cut is used anyway.
     extract_differs: bool = False
+    #: Nothing was fetched: the network was unreachable and a cache existed.
+    offline: bool = False
 
     @property
     def extract_path(self) -> Path:
@@ -144,6 +147,11 @@ class CacheResult:
 
     @property
     def summary(self) -> str:
+        if self.offline:
+            return (
+                f"fidelity cache: OFFLINE -- nothing fetched; using the cached extract at {self.extract_path}, "
+                f"which does not match {PIN_FILE}"
+            )
         if self.hit:
             return f"fidelity cache: hit {self.extract_path} (matches {PIN_FILE})"
         if self.drift:
@@ -176,9 +184,18 @@ def _modeled(anchor: str, pin: Pin) -> list[tuple[str, str]]:
 
 
 def _write_atomic(path: Path, text: str) -> None:
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    """Write through a uniquely named temporary file in the same directory, so
+    two processes cutting the same anchor at once cannot tear each other's
+    bytes; the last ``os.replace`` wins whole."""
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp_name)
+        raise
 
 
 class ProseLeak(LookupError):
@@ -270,7 +287,7 @@ def populate(
                     f"which does not match {PIN_FILE} -- re-run `vendorfake-fidelity fetch` when online",
                     file=out,
                 )
-                return CacheResult(anchor, path, json.loads(cached), hit=False, extract_differs=True)
+                return CacheResult(anchor, path, json.loads(cached), hit=False, extract_differs=True, offline=True)
             raise LookupError(
                 f"{anchor}: cannot fetch {source.url} ({exc}) and there is no cached extract at "
                 f"{path / EXTRACT_FILE}; connect once, or set {CACHE_ENV_VAR} to a directory holding one"

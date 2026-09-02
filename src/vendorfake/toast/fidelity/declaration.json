@@ -78,77 +78,77 @@
       "pointer": "/status",
       "keyword": "type",
       "value": 400,
-      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number. The unit answers the number.",
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 400 among the statuses it describes.",
       "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
     },
     {
       "pointer": "/status",
       "keyword": "type",
       "value": 401,
-      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number. The unit answers the number.",
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 401 among the statuses it describes.",
       "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
     },
     {
       "pointer": "/status",
       "keyword": "type",
       "value": 403,
-      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number. The unit answers the number.",
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 403 among the statuses it describes.",
       "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
     },
     {
       "pointer": "/status",
       "keyword": "type",
       "value": 404,
-      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number. The unit answers the number.",
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 404 among the statuses it describes.",
       "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
     },
     {
       "pointer": "/status",
       "keyword": "type",
       "value": 405,
-      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number. The unit answers the number.",
+      "reason": "ErrorMessage.status is typed string in the authentication specification. The responses-and-errors guide's documented error shows the numeric type on its 400 example; 405 is not on that page, so this row extends the documented type to a status the unit emits (JUDGMENT by consistency, labelled in toast/errors.py).",
       "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
     },
     {
       "pointer": "/status",
       "keyword": "type",
       "value": 409,
-      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number. The unit answers the number.",
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 409 among the statuses it describes.",
       "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
     },
     {
       "pointer": "/status",
       "keyword": "type",
       "value": 429,
-      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number. The unit answers the number.",
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 429 among the statuses it describes.",
       "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
     },
     {
       "pointer": "/status",
       "keyword": "type",
       "value": 500,
-      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number. The unit answers the number.",
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 500 among the statuses it describes.",
       "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
     },
     {
       "pointer": "/status",
       "keyword": "type",
       "value": 501,
-      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number. The unit answers the number.",
+      "reason": "ErrorMessage.status is typed string in the authentication specification. The responses-and-errors guide's documented error shows the numeric type on its 400 example; 501 is not on that page, so this row extends the documented type to a status the unit emits (JUDGMENT by consistency, labelled in toast/errors.py).",
       "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
     },
     {
       "pointer": "/status",
       "keyword": "type",
       "value": 503,
-      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number. The unit answers the number.",
+      "reason": "ErrorMessage.status is typed string in the authentication specification. The responses-and-errors guide's documented error shows the numeric type on its 400 example; 503 is not on that page, so this row extends the documented type to a status the unit emits (JUDGMENT by consistency, labelled in toast/errors.py).",
       "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
     },
     {
       "pointer": "/status",
       "keyword": "type",
       "value": 504,
-      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number. The unit answers the number.",
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 504 among the statuses it describes.",
       "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
     },
     {
@@ -223,6 +223,33 @@
       ],
       "reason": "PaginatedResponse.previousPageNum is typed integer in the partners specification; the partners guide's documented page answers null when there is no such page.",
       "url": "https://doc.toasttab.com/doc/devguide/apiPartnersGettingAccessibleRestaurants.html"
+    },
+    {
+      "pointer": "/**/*Date",
+      "keyword": "format",
+      "pattern": "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+0000",
+      "reason": "Toast's timestamps are yyyy-MM-dd'T'HH:mm:ss.SSS+0000 -- the +0000 offset without a colon fails RFC 3339's date-time, which is what the schema's format keyword checks. The payment walkthrough's documented request and response carry twelve such timestamps.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiCreatingAnOrderWithPaymentInformation.html"
+    },
+    {
+      "pointer": "/*/guid",
+      "keyword": "format",
+      "value": "null",
+      "routes": [
+        "POST /stock/v1/inventory/search"
+      ],
+      "reason": "MenuItemInventory.guid is format uuid in the stock specification; the stock guide's documented INVALID rows answer the literal string null there.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiUsingTheStockApi.html"
+    },
+    {
+      "pointer": "/*/versionId",
+      "keyword": "format",
+      "value": "null",
+      "routes": [
+        "POST /stock/v1/inventory/search"
+      ],
+      "reason": "MenuItemInventory.versionId is format uuid in the stock specification; the stock guide's documented INVALID rows answer the literal string null there.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiUsingTheStockApi.html"
     }
   ],
   "overrides": [

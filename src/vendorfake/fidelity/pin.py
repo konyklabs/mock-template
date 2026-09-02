@@ -322,7 +322,9 @@ def verify(anchor_dir: Path, declaration: FidelityDeclaration, *, cache_dir: Pat
     No network. This is what a pull-request run asks -- the extract on disk
     is the one the pin describes, and the pin describes the sources the
     declaration names -- and nothing more. Whether *upstream* has moved is a
-    scheduled question (D-006: drift is a filed issue, never a red PR), and a
+    scheduled question (D-006: drift is a filed issue, not a red PR -- for a
+    vendored extract; a non-vendored one validates against the cached cut and,
+    once that is evicted, the fresh document), and a
     check that fetched here would make every vendor release fail every open
     pull request at once.
 

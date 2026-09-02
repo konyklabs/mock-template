@@ -19,6 +19,7 @@ upstream bytes. This module only reads it.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -161,10 +162,15 @@ class Deviation:
     #: The one instance value excused, kept in its JSON type: a vendor that
     #: enumerates numeric codes needs ``402`` to mean the number, not the text;
     #: ``null`` is the value a vendor's examples answer where its schema says
-    #: a string.
+    #: a string. Exactly one of ``value`` and ``pattern`` is given.
     value: object
     reason: str
     url: str
+    #: Instead of one value, a regular expression every excused instance must
+    #: fully match -- for a documented *format* the schema's own ``format``
+    #: keyword rejects (a vendor's ``+0000`` timestamps). Still one keyword,
+    #: one pointer shape, and a shape the instance must fit, never "anything".
+    pattern: str | None = None
     #: Route keys (the unit's spelling) the deviation applies to; empty means
     #: every route. A code the vendor names for one flow is excused for that
     #: flow, not for the whole surface.
@@ -172,11 +178,17 @@ class Deviation:
 
     @classmethod
     def of(cls, row: Mapping[str, Any]) -> Deviation:
-        if "value" not in row:
+        has_value, pattern = "value" in row, row.get("pattern")
+        if has_value == (pattern is not None):
+            raise ValueError("a deviation names exactly one of `value` (a scalar) and `pattern` (a regular expression)")
+        value = row.get("value")
+        if has_value and (value == "" or isinstance(value, (dict, list))):
             raise ValueError("a deviation must name the one scalar value it excuses")
-        value = row["value"]
-        if value == "" or isinstance(value, (dict, list)):
-            raise ValueError("a deviation must name the one scalar value it excuses")
+        if pattern is not None:
+            try:
+                re.compile(str(pattern))
+            except re.error as exc:
+                raise ValueError(f"deviation pattern {pattern!r} is not a regular expression: {exc}") from exc
         pointer = str(row["pointer"])
         if not pointer.startswith("/") or all(segment in ("", "*", "**") for segment in pointer.split("/")):
             raise ValueError(f"deviation pointer {pointer!r} must be absolute and name at least one real segment")
@@ -187,15 +199,23 @@ class Deviation:
             reason=str(row["reason"]),
             url=str(row["url"]),
             routes=tuple(str(key) for key in row.get("routes", ())),
+            pattern=None if pattern is None else str(pattern),
         )
 
     @property
     def label(self) -> str:
         """How the ledger and the report name this row."""
+        if self.pattern is not None:
+            return f"{self.keyword} {self.pointer} ~ /{self.pattern}/"
         return f"{self.keyword} {self.pointer} = {json.dumps(self.value)}"
 
     def matches(self, *, keyword: str, pointer: str, instance: object, route_key: str | None = None) -> bool:
-        if keyword != self.keyword or instance != self.value or type(instance) is not type(self.value):
+        if keyword != self.keyword:
+            return False
+        if self.pattern is not None:
+            if not isinstance(instance, str) or re.fullmatch(self.pattern, instance) is None:
+                return False
+        elif instance != self.value or type(instance) is not type(self.value):
             return False
         if self.routes and (route_key is None or route_key not in self.routes):
             return False
@@ -203,14 +223,15 @@ class Deviation:
 
 
 def _pointer_matches(want: Sequence[str], have: Sequence[str]) -> bool:
-    """``*`` matches one segment; ``**`` matches any number, including none --
-    for a field the vendor's examples answer the same way at every depth."""
+    """``*`` matches one segment, ``**`` any number including none, and a
+    segment may carry a shell glob (``*Date``) -- for a field the vendor's
+    examples answer the same way at every depth, or a family of them."""
     if not want:
         return not have
     head, rest = want[0], want[1:]
     if head == "**":
         return any(_pointer_matches(rest, have[i:]) for i in range(len(have) + 1))
-    if not have or head not in ("*", have[0]):
+    if not have or not (head == "*" or fnmatch.fnmatchcase(have[0], head)):
         return False
     return _pointer_matches(rest, have[1:])
 

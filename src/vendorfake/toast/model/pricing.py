@@ -104,7 +104,9 @@ def taxes_on(cents: int, rates: Sequence[TaxRate], *, owner: str = "") -> list[d
     rate, taxAmount, type}``. ``owner`` is the selection the tax applies to."""
     return [
         {
-            "guid": str(uuid.uuid5(APPLIED_TAX_NAMESPACE, f"{owner}:{rate.guid}")),
+            # Unsaved (``/prices``): no owner, no guid -- the documented priced
+            # order carries null for every guid, this one included.
+            "guid": str(uuid.uuid5(APPLIED_TAX_NAMESPACE, f"{owner}:{rate.guid}")) if owner else None,
             "entityType": "AppliedTaxRate",
             "taxRate": {"guid": rate.guid, "entityType": "TaxRate"},
             "name": rate.name,

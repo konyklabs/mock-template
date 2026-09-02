@@ -109,7 +109,10 @@ def harness(profile: str = "full", **kwargs: Any) -> Iterator[Harness]:
     try:
         yield Harness(
             unit=unit,
-            api=ValidatingClient(unit, SURFACE, LEDGER),
+            # Lenient on an undeclared route: the extract is cut from TODAY's
+            # documents, so a route Toast renames must not redden every test --
+            # the report step prints it in capitals and fails there instead.
+            api=ValidatingClient(unit, SURFACE, LEDGER, strict_undeclared=False),
             auth={"authorization": f"Bearer {SEED_ACCESS_TOKEN}", RESTAURANT_HEADER.lower(): RESTAURANT},
         )
     finally:

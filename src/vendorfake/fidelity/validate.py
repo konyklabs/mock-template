@@ -36,7 +36,7 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from jsonschema.exceptions import best_match
-from openapi_schema_validator import OAS30ReadValidator
+from openapi_schema_validator import OAS30ReadValidator, oas30_format_checker
 from referencing import Registry
 from referencing.jsonschema import DRAFT4
 
@@ -458,7 +458,9 @@ class ValidatingClient(InProcessClient):
             # The root schema is a reference *into* the registered document,
             # so the resolver is rebased onto the extract before it reads the
             # first keyword and every nested ``#/components/...`` resolves there.
-            validator = OAS30ReadValidator({"$ref": f"{EXTRACT_URI}#{pointer}"}, registry=self._registry)
+            validator = OAS30ReadValidator(
+                {"$ref": f"{EXTRACT_URI}#{pointer}"}, registry=self._registry, format_checker=oas30_format_checker
+            )
             self._built += 1
         self._validators[cache_key] = validator
         return validator
