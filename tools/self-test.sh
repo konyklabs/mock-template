@@ -59,6 +59,24 @@ for entry in "${TARGETS[@]}"; do
       --conformance-target "$TARGET" --conformance-strict
 done
 
+# Fidelity to the vendor (D-006): the committed extract and pin agree with
+# each other and the declaration (offline -- whether UPSTREAM moved is the
+# scheduled drift job's question, never a pull request's), and the documented
+# corpus passes with every response schema-validated.
+# Only vendors with a fidelity declaration are listed; a vendor without one
+# is reported by `fidelity report` as undeclared rather than skipped here.
+FIDELITY_TARGETS=(
+  "square=tests.fidelity.harness:square_target"
+)
+for entry in "${FIDELITY_TARGETS[@]}"; do
+  vendor="${entry%%=*}"
+  TARGET="${entry#*=}"
+  step "fidelity pin ($vendor)" \
+    uv run python -m vendorfake.fidelity pin --check --offline --target "$TARGET"
+  step "fidelity report ($vendor)" \
+    uv run python -m vendorfake.fidelity report --target "$TARGET"
+done
+
 printf '\n\033[1m== summary ==\033[0m\n'
 failed=0
 for i in "${!names[@]}"; do

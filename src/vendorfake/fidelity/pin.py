@@ -42,6 +42,7 @@ __all__ = [
     "fetch",
     "read_pin",
     "refresh",
+    "verify",
     "write_pin",
 ]
 
@@ -283,3 +284,51 @@ def _extract_diff(old: Mapping[str, Any], new: Mapping[str, Any], old_text: str,
             removed += 1
     out.append(f"{EXTRACT_FILE}: changed (+{added} -{removed} lines)")
     return out
+
+
+def verify(anchor_dir: Path, declaration: FidelityDeclaration) -> RefreshResult:
+    """The offline half of ``refresh``: is what is committed self-consistent?
+
+    No network. This is what a pull-request run asks -- the extract on disk
+    is the one the pin describes, and the pin describes the sources the
+    declaration names -- and nothing more. Whether *upstream* has moved is a
+    scheduled question (D-006: drift is a filed issue, never a red PR), and a
+    check that fetched here would make every vendor release fail every open
+    pull request at once.
+    """
+    lines: list[str] = []
+    changed_extract = False
+    changed_upstream = False
+    extract_path = anchor_dir / EXTRACT_FILE
+    pin_path = anchor_dir / PIN_FILE
+    if not extract_path.is_file() or not pin_path.is_file():
+        missing = [name for name, path in ((EXTRACT_FILE, extract_path), (PIN_FILE, pin_path)) if not path.is_file()]
+        return RefreshResult(True, True, f"missing under {anchor_dir}: {', '.join(missing)} -- run `pin` once")
+    pin = read_pin(pin_path)
+    text = extract_path.read_text(encoding="utf-8")
+    actual = sha256_hex(text.encode("utf-8"))
+    if actual != pin.extract_sha256:
+        changed_extract = True
+        lines.append(
+            f"{EXTRACT_FILE}: sha256 {actual[:12]} does not match {PIN_FILE}'s {pin.extract_sha256[:12]} (edited by hand?)"
+        )
+    document = json.loads(text)
+    embedded = Pin.from_extract(document, text)
+    if embedded.sources != pin.sources:
+        changed_extract = True
+        lines.append(f"{EXTRACT_FILE}: its x-vendorfake.sources rows disagree with {PIN_FILE}")
+    declared = {source.url for source in declaration.sources}
+    pinned = {row.url for row in pin.sources}
+    for url in sorted(declared - pinned):
+        changed_upstream = True
+        lines.append(f"declared source not pinned: {url}")
+    for url in sorted(pinned - declared):
+        changed_upstream = True
+        lines.append(f"pinned source no longer declared: {url}")
+    if not lines:
+        for row in pin.sources:
+            lines.append(
+                f"upstream {row.url}: pinned sha256 {row.sha256[:12]}, fetched {row.fetched} (offline; not re-fetched)"
+            )
+        lines.append(f"{EXTRACT_FILE}: matches {PIN_FILE}")
+    return RefreshResult(changed_upstream, changed_extract, "\n".join(lines))

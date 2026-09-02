@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tests.unit.fidelity.test_extract import MODELED, URL, blob, synthetic
-from vendorfake.fidelity.pin import Pin, PinnedSource, fetch, read_pin, refresh, write_pin
+from vendorfake.fidelity.pin import Pin, PinnedSource, fetch, read_pin, refresh, verify, write_pin
 from vendorfake.fidelity.types import EXTRACT_FILE, PIN_FILE, FidelityDeclaration, SpecSource
 
 DECLARATION = FidelityDeclaration(anchor="tests.synthetic", sources=(SpecSource(kind="openapi3", url=URL),))
@@ -152,3 +153,35 @@ def test_check_on_an_empty_directory_writes_nothing(tmp_path: Path) -> None:
     assert result.changed is True
     assert not (tmp_path / EXTRACT_FILE).exists()
     assert not (tmp_path / PIN_FILE).exists()
+
+
+# -- verify: the offline half ----------------------------------------------
+
+
+def test_verify_is_clean_after_a_refresh_and_never_fetches(pinned: Path) -> None:
+    result = verify(pinned, DECLARATION)
+    assert not result.changed
+    assert "offline; not re-fetched" in result.diff_summary
+    assert "matches pin.json" in result.diff_summary
+
+
+def test_verify_reports_a_hand_edited_extract(pinned: Path) -> None:
+    extract = pinned / EXTRACT_FILE
+    extract.write_text(extract.read_text().replace('"openapi": "3.0.0"', '"openapi": "3.0.1"'))
+    result = verify(pinned, DECLARATION)
+    assert result.changed_extract and not result.changed_upstream
+    assert "edited by hand?" in result.diff_summary
+
+
+def test_verify_reports_a_source_the_declaration_and_pin_disagree_on(pinned: Path) -> None:
+    other = replace(DECLARATION, sources=(SpecSource(kind="openapi3", url="https://example.test/other.json"),))
+    result = verify(pinned, other)
+    assert result.changed_upstream and not result.changed_extract
+    assert "declared source not pinned: https://example.test/other.json" in result.diff_summary
+    assert f"pinned source no longer declared: {URL}" in result.diff_summary
+
+
+def test_verify_names_missing_files(tmp_path: Path) -> None:
+    result = verify(tmp_path, DECLARATION)
+    assert result.changed
+    assert "extract.json, pin.json" in result.diff_summary
