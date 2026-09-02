@@ -66,7 +66,7 @@ done
 # Only vendors with a fidelity declaration are listed; a vendor without one
 # is reported by `fidelity report` as undeclared rather than skipped here.
 FIDELITY_TARGETS=(
-  "square=tests.fidelity.harness:square_target"
+  "square=vendorfake.testing.fidelity:square_target"
 )
 for entry in "${FIDELITY_TARGETS[@]}"; do
   vendor="${entry%%=*}"
