@@ -32,11 +32,33 @@ TARGETS=(
   "toast=tests.conformance.harness:toast_target"
 )
 
+# Fidelity to the vendor (D-006), the targets. Only vendors with a fidelity
+# declaration are listed; a vendor without one is reported by `fidelity
+# report` as undeclared rather than skipped here. A vendor whose terms keep
+# its specification out of the repository (`vendored: false`,
+# konyklabs/roadmap#56) is ALSO listed in FIDELITY_FETCH_TARGETS: its extract
+# is cut at run time into ~/.cache/vendorfake/fidelity, and `fetch` below
+# populates that cache before pytest so the first thing to hit the network is
+# a named step and never a unit test.
+FIDELITY_TARGETS=(
+  "square=vendorfake.testing.fidelity:square_target"
+  "toast=vendorfake.testing.fidelity:toast_target"
+)
+FIDELITY_FETCH_TARGETS=(
+  "toast=vendorfake.testing.fidelity:toast_target"
+)
+
 step "ruff check"        uv run ruff check .
 step "ruff format"       uv run ruff format --check .
 step "mypy --strict"     uv run mypy
 step "import-linter"     uv run lint-imports
 step "boundary check"    uv run python tools/boundary_check.py -v
+for entry in "${FIDELITY_FETCH_TARGETS[@]}"; do
+  vendor="${entry%%=*}"
+  TARGET="${entry#*=}"
+  step "fidelity fetch ($vendor)" \
+    uv run python -m vendorfake.fidelity fetch --target "$TARGET"
+done
 step "pytest"            uv run pytest
 step "wheel data"        uv run python tools/check_wheel_data.py
 
@@ -59,15 +81,11 @@ for entry in "${TARGETS[@]}"; do
       --conformance-target "$TARGET" --conformance-strict
 done
 
-# Fidelity to the vendor (D-006): the committed extract and pin agree with
-# each other and the declaration (offline -- whether UPSTREAM moved is the
-# scheduled drift job's question, never a pull request's), and the documented
-# corpus passes with every response schema-validated.
-# Only vendors with a fidelity declaration are listed; a vendor without one
-# is reported by `fidelity report` as undeclared rather than skipped here.
-FIDELITY_TARGETS=(
-  "square=vendorfake.testing.fidelity:square_target"
-)
+# Fidelity to the vendor (D-006): the extract (committed, or cached by the
+# `fetch` step above) and the pin agree with each other and the declaration
+# (offline -- whether UPSTREAM moved is the scheduled drift job's question,
+# never a pull request's), and the documented corpus passes with every
+# response schema-validated.
 for entry in "${FIDELITY_TARGETS[@]}"; do
   vendor="${entry%%=*}"
   TARGET="${entry#*=}"

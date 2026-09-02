@@ -6,7 +6,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from tests.unit.toast.harness import Harness, Silent, harness
+from tests.unit.toast.harness import LEDGER, SURFACE, Harness, Silent, harness
+from vendorfake.fidelity.validate import ValidatingClient
 from vendorfake.toast.seed import constants as c
 from vendorfake.toast.surface.webhooks import STAND_IN
 
@@ -46,7 +47,6 @@ def test_https_is_required_unless_the_switch_lifts_it() -> None:
         assert refused.status == 400 and refused.json()["unit_error"]["field"] == "url"
         assert "apiEndpointRequirements" in refused.json()["message"]
     from vendorfake import create_unit
-    from vendorfake.core.transport.inprocess import in_process
     from vendorfake.toast.vendor import create_toast_vendor
 
     unit = create_unit(
@@ -54,7 +54,9 @@ def test_https_is_required_unless_the_switch_lifts_it() -> None:
     )
     try:
         assert (
-            in_process(unit).post("/__toast/webhooks/subscriptions", {"url": "http://localhost:19999/hooks"}).status
+            ValidatingClient(unit, SURFACE, LEDGER)
+            .post("/__toast/webhooks/subscriptions", {"url": "http://localhost:19999/hooks"})
+            .status
             == 201
         )
     finally:

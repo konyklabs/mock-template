@@ -86,6 +86,13 @@ def project_config_entity(resource: ConfigResource, entity: Mapping[str, Any]) -
     for key, value in entity.items():
         if key in _INTERNAL_KEYS or key in ("externalId", "entityType"):
             continue
+        if value is None:
+            # JUDGMENT: an optional field the entity has no value for is
+            # omitted, not answered null -- the configuration specification
+            # types these as plain strings, numbers and enums with no
+            # nullable, and marks the few it does mean to be null with
+            # x-nullable. Found by the fidelity validator (roadmap#56).
+            continue
         if key in resource.money_keys and isinstance(value, int) and not isinstance(value, bool):
             out[key] = to_dollars(value)
         else:

@@ -176,8 +176,8 @@ def build_selection(
 
     quantity = float(request.quantity)
     price = quantity_price(unit, quantity * parent_quantity, factor)
-    applied = taxes_on(price, rates)
     selection_guid = None if mint is None else mint()
+    applied = taxes_on(price, rates, owner=selection_guid or "")
     modifiers = [
         build_selection(
             index,

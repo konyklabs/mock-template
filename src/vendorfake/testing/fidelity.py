@@ -24,10 +24,12 @@ from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.fidelity.runner import FidelityTarget
 from vendorfake.registry import create_unit
 
-__all__ = ["square_target"]
+__all__ = ["square_target", "toast_target"]
 
 _SQUARE = "square"
 _SQUARE_ANCHOR = "vendorfake.square.fidelity"
+_TOAST = "toast"
+_TOAST_ANCHOR = "vendorfake.toast.fidelity"
 _DEFAULT_PROFILE = "full"
 
 
@@ -52,5 +54,18 @@ def square_target() -> FidelityTarget:
         name=_SQUARE,
         anchor=_SQUARE_ANCHOR,
         open_unit=_opener(_SQUARE, _DEFAULT_PROFILE),
+        default_profile=_DEFAULT_PROFILE,
+    )
+
+
+def toast_target() -> FidelityTarget:
+    """The first non-vendored vendor: its extract is fetched, never committed
+    (konyklabs/roadmap#56), so the first use on a cold cache needs the network
+    -- ``vendorfake-fidelity fetch --target vendorfake.testing.fidelity:toast_target``
+    is the step that pays for it once."""
+    return FidelityTarget(
+        name=_TOAST,
+        anchor=_TOAST_ANCHOR,
+        open_unit=_opener(_TOAST, _DEFAULT_PROFILE),
         default_profile=_DEFAULT_PROFILE,
     )

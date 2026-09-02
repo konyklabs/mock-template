@@ -29,6 +29,18 @@ jobs:
       - name: Sync
         run: uv sync --frozen --python ${{ matrix.python-version }}
 
+      # A vendor whose terms keep its specification out of the repository
+      # (`vendored: false`, konyklabs/roadmap#56) has its extract cut at run
+      # time into this directory. Keyed on the pins: while a pin is unchanged,
+      # the cut it describes is restored and validated against, so an upstream
+      # release cannot turn a pull request red before someone re-pins -- the
+      # nearest thing to "pinned" without a committed copy.
+      - name: Fidelity cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vendorfake/fidelity
+          key: fidelity-${{ runner.os }}-${{ hashFiles('src/vendorfake/*/fidelity/pin.json') }}
+
       - name: Self-test
         run: bash tools/self-test.sh
 

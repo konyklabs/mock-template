@@ -52,13 +52,16 @@ def test_search_returns_in_stock_rows_and_marks_unknown_guids_invalid(h: Harness
     assert unknown == {
         "guid": "3c9a1f00-0000-4000-8000-00000000c2ff",
         "itemGuidValidity": "INVALID",
-        "status": None,
+        # The guide's own INVALID rows: OUT_OF_STOCK, and the STRING "null"
+        # for the identifiers the row does not have.
+        "status": "OUT_OF_STOCK",
         "quantity": None,
-        "multiLocationId": None,
-        "versionId": None,
+        "multiLocationId": "null",
+        "versionId": "3c9a1f00-0000-4000-8000-00000000c2ff",
     }
     assert by_multi == soup
     assert unknown_multi["itemGuidValidity"] == "INVALID" and unknown_multi["multiLocationId"] == "1"
+    assert unknown_multi["guid"] == "null" and unknown_multi["status"] == "OUT_OF_STOCK"
 
 
 def test_update_follows_the_documented_quantity_rules_and_journals_per_item(h: Harness) -> None:

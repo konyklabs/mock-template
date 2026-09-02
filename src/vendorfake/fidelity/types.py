@@ -40,6 +40,7 @@ __all__ = [
     "Extract",
     "FidelityDeclaration",
     "Operation",
+    "Override",
     "SpecSource",
     "Surface",
     "load_declaration",
@@ -158,7 +159,9 @@ class Deviation:
     pointer: str
     keyword: str
     #: The one instance value excused, kept in its JSON type: a vendor that
-    #: enumerates numeric codes needs ``402`` to mean the number, not the text.
+    #: enumerates numeric codes needs ``402`` to mean the number, not the text;
+    #: ``null`` is the value a vendor's examples answer where its schema says
+    #: a string.
     value: object
     reason: str
     url: str
@@ -169,11 +172,13 @@ class Deviation:
 
     @classmethod
     def of(cls, row: Mapping[str, Any]) -> Deviation:
-        value = row.get("value")
-        if value is None or value == "" or isinstance(value, (dict, list)):
+        if "value" not in row:
+            raise ValueError("a deviation must name the one scalar value it excuses")
+        value = row["value"]
+        if value == "" or isinstance(value, (dict, list)):
             raise ValueError("a deviation must name the one scalar value it excuses")
         pointer = str(row["pointer"])
-        if not pointer.startswith("/") or all(segment in ("", "*") for segment in pointer.split("/")):
+        if not pointer.startswith("/") or all(segment in ("", "*", "**") for segment in pointer.split("/")):
             raise ValueError(f"deviation pointer {pointer!r} must be absolute and name at least one real segment")
         return cls(
             pointer=pointer,
@@ -194,9 +199,47 @@ class Deviation:
             return False
         if self.routes and (route_key is None or route_key not in self.routes):
             return False
-        want = self.pointer.split("/")
-        have = pointer.split("/")
-        return len(want) == len(have) and all(w in ("*", h) for w, h in zip(want, have, strict=True))
+        return _pointer_matches(self.pointer.split("/"), pointer.split("/"))
+
+
+def _pointer_matches(want: Sequence[str], have: Sequence[str]) -> bool:
+    """``*`` matches one segment; ``**`` matches any number, including none --
+    for a field the vendor's examples answer the same way at every depth."""
+    if not want:
+        return not have
+    head, rest = want[0], want[1:]
+    if head == "**":
+        return any(_pointer_matches(rest, have[i:]) for i in range(len(have) + 1))
+    if not have or head not in ("*", have[0]):
+        return False
+    return _pointer_matches(rest, have[1:])
+
+
+@dataclass(frozen=True, slots=True)
+class Override:
+    """A route whose documented response shape is not the one its spec declares.
+
+    The narrowest tool after a deviation: one route, one status, validated
+    against a named component schema of the extract instead of the declared
+    one, because the vendor's own guide documents that shape. The reason and
+    the page are mandatory; the report lists every override.
+    """
+
+    route: str
+    status: int
+    schema: str
+    reason: str
+    url: str
+
+    @classmethod
+    def of(cls, row: Mapping[str, Any]) -> Override:
+        return cls(
+            route=str(row["route"]),
+            status=int(row["status"]),
+            schema=str(row["schema"]),
+            reason=str(row["reason"]),
+            url=str(row["url"]),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +262,7 @@ class FidelityDeclaration:
     aliases: tuple[Alias, ...] = ()
     excused: tuple[Excuse, ...] = ()
     deviations: tuple[Deviation, ...] = ()
+    overrides: tuple[Override, ...] = ()
     error_envelope: str | None = None
     error_member: str | None = None
     #: Schema names the extract may stub to ``{}`` because the upstream
@@ -263,6 +307,7 @@ class FidelityDeclaration:
             aliases=tuple(Alias.of(row) for row in doc.get("aliases", ())),
             excused=tuple(Excuse.of(row) for row in doc.get("excused", ())),
             deviations=tuple(Deviation.of(row) for row in doc.get("deviations", ())),
+            overrides=tuple(Override.of(row) for row in doc.get("overrides", ())),
             error_envelope=None if envelope is None else str(envelope),
             error_member=None if member is None else str(member),
             stubs_accepted=tuple(str(n) for n in doc.get("stubs_accepted", ())),
@@ -277,6 +322,12 @@ class FidelityDeclaration:
         for alias in self.aliases:
             if alias.key == key:
                 return alias
+        return None
+
+    def override_for(self, route_key_: str, status: int) -> Override | None:
+        for override in self.overrides:
+            if override.route == route_key_ and override.status == status:
+                return override
         return None
 
     def excuse_for(self, method: str, path: str) -> Excuse | None:

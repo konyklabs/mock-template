@@ -158,12 +158,15 @@ def test_payments_can_ride_along_on_create(h: Harness) -> None:
     assert h.journal_len() == before + 3
 
 
-def test_the_tip_patch_takes_tip_amount_only_and_answers_the_payment(h: Harness) -> None:
+def test_the_tip_patch_takes_tip_amount_only_and_answers_the_order(h: Harness) -> None:
+    """The orders specification declares the tip PATCH's 200 as the Order
+    (the unit answered the payment until the fidelity validator found it)."""
     guid, check_guid = created(h)
     payment = pay(h, guid, check_guid, OTHER).json()["checks"][0]["payments"][0]
     response = h.patch(f"/orders/v2/orders/{guid}/checks/{check_guid}/payments/{payment['guid']}", {"tipAmount": 15})
     assert response.status == 200, response.text
-    assert response.json()["guid"] == payment["guid"] and response.json()["tipAmount"] == 15.0
+    answered = response.json()["checks"][0]["payments"][0]
+    assert response.json()["guid"] == guid and answered["guid"] == payment["guid"] and answered["tipAmount"] == 15.0
     assert h.get(f"/orders/v2/orders/{guid}").json()["checks"][0]["payments"][0]["tipAmount"] == 15.0
     missing = h.patch(f"/orders/v2/orders/{guid}/checks/{check_guid}/payments/{payment['guid']}", {})
     assert missing.status == 400 and missing.json()["unit_error"]["field"] == "tipAmount"
@@ -202,6 +205,6 @@ def test_a_credit_payment_is_paid_until_its_tip_is_adjusted_then_closed(h: Harne
     tipped = h.patch(
         f"/orders/v2/orders/{guid}/checks/{check_guid}/payments/{c.CREDIT_AUTHORIZATION_GUID}", {"tipAmount": 2.0}
     )
-    assert tipped.status == 200 and tipped.json()["tipAmount"] == 2.0
+    assert tipped.status == 200 and tipped.json()["checks"][0]["payments"][0]["tipAmount"] == 2.0
     after = h.get(f"/orders/v2/orders/{guid}").json()
     assert after["checks"][0]["paymentStatus"] == "CLOSED"

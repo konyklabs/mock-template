@@ -1,0 +1,108 @@
+{
+  "extract_sha256": "7eeea937818b05b8fd8e60763ff401c084c190c340e1a23448f737c4c84d164f",
+  "modeled": [
+    "GET /config/v2/alternatePaymentTypes",
+    "GET /config/v2/alternatePaymentTypes/{guid}",
+    "GET /config/v2/diningOptions",
+    "GET /config/v2/diningOptions/{guid}",
+    "GET /config/v2/discounts",
+    "GET /config/v2/discounts/{guid}",
+    "GET /config/v2/menuGroups",
+    "GET /config/v2/menuGroups/{guid}",
+    "GET /config/v2/menuItems",
+    "GET /config/v2/menuItems/{guid}",
+    "GET /config/v2/menus",
+    "GET /config/v2/menus/{guid}",
+    "GET /config/v2/restaurantServices",
+    "GET /config/v2/restaurantServices/{guid}",
+    "GET /config/v2/revenueCenters",
+    "GET /config/v2/revenueCenters/{guid}",
+    "GET /config/v2/serviceAreas",
+    "GET /config/v2/serviceAreas/{guid}",
+    "GET /config/v2/serviceCharges",
+    "GET /config/v2/serviceCharges/{guid}",
+    "GET /config/v2/tables",
+    "GET /config/v2/tables/{guid}",
+    "GET /config/v2/taxRates",
+    "GET /config/v2/taxRates/{guid}",
+    "GET /config/v2/voidReasons",
+    "GET /config/v2/voidReasons/{guid}",
+    "GET /menus/v3/menus",
+    "GET /menus/v3/metadata",
+    "GET /orders/v2/orders",
+    "GET /orders/v2/orders/{guid}",
+    "GET /orders/v2/ordersBulk",
+    "GET /orders/v2/payments",
+    "GET /orders/v2/payments/{guid}",
+    "GET /partners/v1/connectedRestaurants",
+    "GET /partners/v1/restaurants",
+    "GET /restaurants/v1/groups/{managementGroupGUID}/restaurants",
+    "GET /restaurants/v1/restaurants/{restaurantGUID}",
+    "GET /stock/v1/inventory",
+    "PATCH /orders/v2/orders/{guid}/checks/{checkGuid}/payments/{paymentGuid}",
+    "PATCH /orders/v2/orders/{guid}/deliveryInfo",
+    "POST /authentication/v1/authentication/login",
+    "POST /orders/v2/applicableDiscounts",
+    "POST /orders/v2/orders",
+    "POST /orders/v2/orders/{guid}/checks/{checkGuid}/appliedDiscounts",
+    "POST /orders/v2/orders/{guid}/checks/{checkGuid}/payments",
+    "POST /orders/v2/orders/{guid}/checks/{checkGuid}/selections",
+    "POST /orders/v2/orders/{guid}/checks/{checkGuid}/selections/{selectionGuid}/appliedDiscounts",
+    "POST /orders/v2/orders/{guid}/void",
+    "POST /orders/v2/prices",
+    "POST /stock/v1/inventory/search",
+    "PUT /stock/v1/inventory/update"
+  ],
+  "schema": 1,
+  "sources": [
+    {
+      "bytes": 6633,
+      "fetched": "2026-09-02",
+      "sha256": "9ed82f2cf419391823b6ddc787bb8da1c0098e988516ab6bfdbfdd9d9841a958",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-authentication-api.yaml",
+      "version": "1.0.0"
+    },
+    {
+      "bytes": 139343,
+      "fetched": "2026-09-02",
+      "sha256": "bbe43be505f41e2570cf367802c4ce16c4956d6ce69a76b36838d0c97bc5f2e8",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-config-api.yaml",
+      "version": "2.5.0"
+    },
+    {
+      "bytes": 125364,
+      "fetched": "2026-09-02",
+      "sha256": "698ed1484acf9781414e39e40d7ada51be67ef7abec6bc02e1c61c266ac463e8",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-menus-api-v3.yaml",
+      "version": "3.4.1"
+    },
+    {
+      "bytes": 139328,
+      "fetched": "2026-09-02",
+      "sha256": "5532bedffe039e7374ed3578f4fb0fd612c27f8c5af62ae8232cab1d96261812",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-orders-api.yaml",
+      "version": "2.9.5"
+    },
+    {
+      "bytes": 18828,
+      "fetched": "2026-09-02",
+      "sha256": "43fd35493763b9ec3933ab2f0907ea50b0c8e311fb8093cb5f3e0197a07268d2",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-partners-api.yaml",
+      "version": "1.0.2"
+    },
+    {
+      "bytes": 24028,
+      "fetched": "2026-09-02",
+      "sha256": "cc0e007deac01ad602abb030522a777580bfa350e3891cac5fc452bb3e599d05",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-restaurants-api.yaml",
+      "version": "1.0.0"
+    },
+    {
+      "bytes": 13265,
+      "fetched": "2026-09-02",
+      "sha256": "fc85052d201940a1faae8c383cb97335542b3d8604e63cba8263d6ffc7cb335b",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-stock-api.yaml",
+      "version": "1.0.0"
+    }
+  ]
+}

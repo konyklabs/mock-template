@@ -229,7 +229,13 @@ class ToastPaymentsSurface:
             payment_guid, set_tip, meta={"operation_id": "PaymentTipPatch"}
         )
         ctx.store.collection(COL.orders).update(order["id"], touch, meta={"operation_id": "PaymentTipPatch"})
-        return json_(project_payment(updated))
+        del updated  # the payment rides inside the order the specification answers
+        from vendorfake.toast.surface.orders import _project
+
+        # DOCUMENTED: the orders specification declares the tip PATCH's 200
+        # as the Order, not the payment. The unit answered the payment until
+        # the fidelity validator found it (konyklabs/roadmap#56).
+        return json_(_project(args, load_order(args, restaurant, args.params["guid"])))
 
     def list_payments(self, args: HandlerArgs) -> ReplyInit:
         from vendorfake.toast.surface.orders import _client_id

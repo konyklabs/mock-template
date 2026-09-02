@@ -152,7 +152,14 @@ def test_a_deviation_needs_a_value_and_a_real_pointer_segment() -> None:
     row = {"pointer": "/errors/*/code", "keyword": "enum", "value": "X", "reason": "r", "url": "https://d/"}
     assert Deviation.of(row).value == "X"
     with pytest.raises(ValueError, match="one scalar value"):
-        Deviation.of({**row, "value": None})
+        Deviation.of({k: v for k, v in row.items() if k != "value"})
+    # null is a value a vendor's examples answer where its schema says string.
+    assert (
+        Deviation.of({**row, "value": None}).matches(keyword="type", pointer="/errors/0/code", instance=None) is False
+    )
+    assert Deviation.of({**row, "keyword": "type", "value": None}).matches(
+        keyword="type", pointer="/errors/0/code", instance=None
+    )
     with pytest.raises(ValueError, match="at least one real segment"):
         Deviation.of({**row, "pointer": "/*/*"})
     with pytest.raises(ValueError, match="absolute"):
@@ -228,3 +235,22 @@ def test_a_range_status_key_is_consulted_before_default_and_envelope() -> None:
     assert op.response_schema(404, error_envelope="200") == {"$ref": "#/components/schemas/ClientErr"}
     assert op.response_schema(503, error_envelope="200") == {"$ref": "#/components/schemas/Err"}
     assert op.response_schema(200) == {"$ref": "#/components/schemas/Ok"}
+
+
+def test_an_override_is_one_route_one_status_one_component() -> None:
+    row = {"route": "GET /v1/things", "status": 200, "schema": "Thing", "reason": "r", "url": "https://d/"}
+    declaration = FidelityDeclaration.of(
+        "t", {"schema": 1, "sources": [{"kind": "openapi3", "url": "https://x/s.json"}], "overrides": [row]}
+    )
+    assert declaration.override_for("GET /v1/things", 200) is not None
+    assert declaration.override_for("GET /v1/things", 404) is None
+    assert declaration.override_for("POST /v1/things", 200) is None
+    with pytest.raises(ValueError, match="overrides"):
+        validate_declaration(
+            {
+                "schema": 1,
+                "sources": [{"kind": "openapi3", "url": "https://x/s.json"}],
+                "overrides": [{**row, "status": "200"}],
+            },
+            where="t",
+        )

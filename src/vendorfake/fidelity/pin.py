@@ -31,7 +31,7 @@ from typing import Any
 import httpx
 
 from vendorfake.fidelity.extract import cut_extract, render_json, sha256_hex
-from vendorfake.fidelity.types import EXTRACT_FILE, PIN_FILE, FidelityDeclaration, SpecSource
+from vendorfake.fidelity.types import EXTRACT_FILE, PIN_FILE, FidelityDeclaration, SpecSource, route_key
 
 __all__ = [
     "PIN_SCHEMA",
@@ -90,6 +90,11 @@ class Pin:
 
     sources: tuple[PinnedSource, ...]
     extract_sha256: str
+    #: The ``METHOD /path`` keys the extract was scoped to -- the *input* of
+    #: :func:`cut_extract`, kept so a non-vendored vendor's cut can be
+    #: reproduced at run time from the pin alone (konyklabs/roadmap#56). A
+    #: vendored pin leaves it empty: the committed extract already says.
+    modeled: tuple[str, ...] = ()
 
     @classmethod
     def of(cls, doc: Mapping[str, Any]) -> Pin:
@@ -98,24 +103,31 @@ class Pin:
         return cls(
             sources=tuple(PinnedSource.of(row) for row in doc.get("sources", ())),
             extract_sha256=str(doc["extract_sha256"]),
+            modeled=tuple(str(key) for key in doc.get("modeled", ())),
         )
 
     @classmethod
-    def from_extract(cls, document: Mapping[str, Any], extract_text: str) -> Pin:
+    def from_extract(
+        cls, document: Mapping[str, Any], extract_text: str, *, modeled: Sequence[tuple[str, str]] = ()
+    ) -> Pin:
         """The pin for an extract as :func:`~vendorfake.fidelity.extract.render_json` rendered it."""
         meta = document.get("x-vendorfake", {})
         rows = meta.get("sources", ()) if isinstance(meta, Mapping) else ()
         return cls(
             sources=tuple(PinnedSource.of(row) for row in rows),
             extract_sha256=sha256_hex(extract_text.encode("utf-8")),
+            modeled=tuple(route_key(method, spec_path) for method, spec_path in modeled),
         )
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        doc: dict[str, Any] = {
             "schema": PIN_SCHEMA,
             "sources": [row.to_json() for row in self.sources],
             "extract_sha256": self.extract_sha256,
         }
+        if self.modeled:
+            doc["modeled"] = list(self.modeled)
+        return doc
 
     def source(self, url: str) -> PinnedSource | None:
         for row in self.sources:
@@ -162,6 +174,7 @@ def refresh(
     fetcher: Fetcher | None = None,
     check: bool = False,
     fetched: str,
+    cache_dir: Path | str | None = None,
 ) -> RefreshResult:
     """Fetch every declared source, cut the extract, compare with what is
     committed under ``anchor_dir`` and -- unless ``check`` -- write the new
@@ -171,14 +184,25 @@ def refresh(
     vendor, ``importlib.resources.files(anchor)``). ``modeled`` is the
     ``(METHOD, spec_path)`` list with aliases applied, as :func:`cut_extract`
     takes it. ``fetched`` is today's ISO date, applied per the second invariant.
+
+    A non-vendored declaration (``vendored: false``) writes ``pin.json`` beside
+    the declaration as always, but the extract goes to the cache directory
+    (``cache_dir``, else the resolution in :mod:`vendorfake.fidelity.cache`)
+    and never under the package; the pin then also carries ``modeled`` so the
+    cut can be reproduced from the pin alone.
     """
-    extract_path = anchor_dir / EXTRACT_FILE
+    from vendorfake.fidelity.cache import DRIFT_FILE, cache_path
+
+    extract_dir = anchor_dir if declaration.vendored else cache_path(declaration.anchor, cache_dir)
+    extract_path = extract_dir / EXTRACT_FILE
     pin_path = anchor_dir / PIN_FILE
     old_pin = read_pin(pin_path) if pin_path.exists() else None
     old_text = extract_path.read_text(encoding="utf-8") if extract_path.exists() else None
 
     blobs = [(source, fetch(source, fetcher=fetcher)) for source in declaration.sources]
-    document = cut_extract(blobs, modeled, fetched=fetched)
+    document = cut_extract(
+        blobs, modeled, fetched=fetched, extension_map=declaration.extension_map, error_schema=declaration.error_schema
+    )
 
     lines: list[str] = []
     changed_upstream = False
@@ -206,7 +230,7 @@ def refresh(
                 lines.append(f"upstream {pinned.url}: no longer declared")
 
     new_text = render_json(document)
-    new_pin = Pin.from_extract(document, new_text)
+    new_pin = Pin.from_extract(document, new_text, modeled=() if declaration.vendored else modeled)
 
     # "The extract changed" means what the validator sees changed -- operations
     # and schemas -- not that the embedded source row moved with the upstream.
@@ -228,9 +252,15 @@ def refresh(
         lines.append(f"{PIN_FILE}: rows differ from what the committed {EXTRACT_FILE} says (edited by hand?)")
 
     if not check and (changed_upstream or changed_extract):
+        extract_dir.mkdir(parents=True, exist_ok=True)
         extract_path.write_text(new_text, encoding="utf-8")
         write_pin(pin_path, new_pin)
-        lines.append(f"wrote {extract_path.name} and {pin_path.name}")
+        if declaration.vendored:
+            lines.append(f"wrote {extract_path.name} and {pin_path.name}")
+        else:
+            # The pin now describes these bytes; a DRIFT note from an earlier run-time cut is settled.
+            (extract_dir / DRIFT_FILE).unlink(missing_ok=True)
+            lines.append(f"wrote {pin_path.name} beside the declaration and {extract_path.name} to {extract_dir}")
     elif check:
         lines.append("check mode: nothing written")
 
@@ -286,7 +316,7 @@ def _extract_diff(old: Mapping[str, Any], new: Mapping[str, Any], old_text: str,
     return out
 
 
-def verify(anchor_dir: Path, declaration: FidelityDeclaration) -> RefreshResult:
+def verify(anchor_dir: Path, declaration: FidelityDeclaration, *, cache_dir: Path | str | None = None) -> RefreshResult:
     """The offline half of ``refresh``: is what is committed self-consistent?
 
     No network. This is what a pull-request run asks -- the extract on disk
@@ -295,12 +325,32 @@ def verify(anchor_dir: Path, declaration: FidelityDeclaration) -> RefreshResult:
     scheduled question (D-006: drift is a filed issue, never a red PR), and a
     check that fetched here would make every vendor release fail every open
     pull request at once.
+
+    For a non-vendored declaration the extract on disk is the cached one, and
+    an empty cache is a pass with a note: offline cannot fetch, and the design
+    accepts that. A cache cut from moved upstream (a ``DRIFT`` file beside it)
+    is reported as upstream change, since the pin does not describe it.
     """
+    from vendorfake.fidelity.cache import DRIFT_FILE, cache_path, drift_rows
+
     lines: list[str] = []
     changed_extract = False
     changed_upstream = False
-    extract_path = anchor_dir / EXTRACT_FILE
     pin_path = anchor_dir / PIN_FILE
+    if declaration.vendored:
+        extract_path = anchor_dir / EXTRACT_FILE
+    else:
+        extract_dir = cache_path(declaration.anchor, cache_dir)
+        extract_path = extract_dir / EXTRACT_FILE
+        if not pin_path.is_file():
+            return RefreshResult(True, True, f"missing under {anchor_dir}: {PIN_FILE} -- run `pin` once")
+        if not extract_path.is_file():
+            return RefreshResult(
+                False, False, f"no cache at {extract_path}; nothing to verify offline (run `fetch` to populate it)"
+            )
+        for drifted in drift_rows(extract_dir):
+            changed_upstream = True
+            lines.append(f"{DRIFT_FILE} in {extract_dir}: {drifted.line}")
     if not extract_path.is_file() or not pin_path.is_file():
         missing = [name for name, path in ((EXTRACT_FILE, extract_path), (PIN_FILE, pin_path)) if not path.is_file()]
         return RefreshResult(True, True, f"missing under {anchor_dir}: {', '.join(missing)} -- run `pin` once")
@@ -338,5 +388,6 @@ def verify(anchor_dir: Path, declaration: FidelityDeclaration) -> RefreshResult:
             lines.append(
                 f"upstream {row.url}: pinned sha256 {row.sha256[:12]}, fetched {row.fetched} (offline; not re-fetched)"
             )
-        lines.append(f"{EXTRACT_FILE}: matches {PIN_FILE}")
+        where = "" if declaration.vendored else f" (cached at {extract_path})"
+        lines.append(f"{EXTRACT_FILE}: matches {PIN_FILE}{where}")
     return RefreshResult(changed_upstream, changed_extract, "\n".join(lines))

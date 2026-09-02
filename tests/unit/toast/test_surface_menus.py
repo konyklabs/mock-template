@@ -56,7 +56,7 @@ def test_prices_are_decimal_dollars_and_the_documented_item_is_8_99(h: Harness) 
     assert body["modifierOptionReferences"]["6"]["price"] == 0.0
     pre = {p["name"]: p for p in body["preModifierGroupReferences"]["10"]["preModifiers"]}
     assert pre["EXTRA"]["multiplicationFactor"] == 2 and pre["EXTRA"]["chargeAsExtra"] is True
-    assert pre["NO"]["fixedPrice"] is None
+    assert "fixedPrice" not in pre["NO"]  # omitted, not null: the specification types it, unmarked nullable
 
 
 def test_metadata_is_the_two_documented_fields(h: Harness) -> None:

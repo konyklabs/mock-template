@@ -50,19 +50,22 @@ def test_connected_restaurants_is_the_documented_page_envelope(h: Harness) -> No
     response = h.api.get("/partners/v1/connectedRestaurants", headers=h.bearer_only)
     assert response.status == 200, response.text
     body = response.json()
+    # One page: no next token (omitted, JUDGMENT), nextPageNum and
+    # previousPageNum null as the guide documents, currentPageToken a string
+    # in the guide's own format.
     assert list(body) == [
         "currentPageNum",
         "results",
         "totalResultCount",
         "pageSize",
         "currentPageToken",
-        "nextPageToken",
         "totalCount",
         "nextPageNum",
         "lastPageNum",
         "previousPageNum",
     ]
-    assert body["pageSize"] == 100 and body["currentPageNum"] == 1 and body["nextPageToken"] is None
+    assert body["currentPageToken"] == "cD0xLHM6MTAw"
+    assert body["pageSize"] == 100 and body["currentPageNum"] == 1 and "nextPageToken" not in body
     (row,) = body["results"]
     assert list(row) == [
         "restaurantGuid",
@@ -100,7 +103,7 @@ def test_connected_restaurants_pages_and_filters(h: Harness) -> None:
         query={"pageSize": "2", "pageToken": first["nextPageToken"]},
         headers=h.bearer_only,
     ).json()
-    assert second["currentPageNum"] == 2 and second["previousPageNum"] == 1 and second["nextPageToken"] is None
+    assert second["currentPageNum"] == 2 and second["previousPageNum"] == 1 and "nextPageToken" not in second
     assert {r["restaurantGuid"] for r in first["results"]} | {r["restaurantGuid"] for r in second["results"]} == {
         c.SEED_RESTAURANT_GUID,
         "extra-0",

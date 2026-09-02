@@ -129,9 +129,10 @@
             "type": [
               "string",
               "number",
-              "boolean"
+              "boolean",
+              "null"
             ],
-            "description": "The one instance value excused, in its JSON type."
+            "description": "The one instance value excused, in its JSON type; null is a value."
           },
           "reason": {
             "type": "string",
@@ -181,6 +182,43 @@
       },
       "propertyNames": {
         "pattern": "^x-"
+      }
+    },
+    "overrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "route",
+          "status",
+          "schema",
+          "reason",
+          "url"
+        ],
+        "properties": {
+          "route": {
+            "type": "string",
+            "pattern": "^[A-Z]+ /"
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          },
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
       }
     }
   },

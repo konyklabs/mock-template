@@ -345,7 +345,7 @@ class ValidatingClient(InProcessClient):
                 errors=(f"(root): body is not JSON ({exc})",),
                 body_excerpt=_excerpt(response),
             ) from None
-        validator = self._validator_for(operation, response.status)
+        validator = self._validator_for(key, operation, response.status)
         if validator is None:
             raise FidelityViolation(
                 key,
@@ -400,12 +400,13 @@ class ValidatingClient(InProcessClient):
             self._ledger.record(key, "deviated")
             self._ledger.absorb(label)
 
-    def _validator_for(self, operation: Operation, status: int) -> Any:
+    def _validator_for(self, key: str, operation: Operation, status: int) -> Any:
         cache_key = (operation.key, status)
         if cache_key in self._validators:
             return self._validators[cache_key]
         envelope = self._surface.declaration.error_envelope
         schema = operation.response_schema(status, error_envelope=envelope)
+        override = self._surface.declaration.override_for(key, status)
         declared = operation.raw.get("responses", {})
         self._via_envelope[cache_key] = (
             schema is not None
@@ -413,10 +414,29 @@ class ValidatingClient(InProcessClient):
             and not any(k in declared for k in (str(status), f"{status // 100}XX", "default"))
         )
         validator: Any = None
-        if schema is not None:
+        error_schema = self._surface.declaration.error_schema
+        pointer: str | None = None
+        if override is not None:
+            # The vendor's guide documents a shape its spec does not declare
+            # for this one route and status; validate against the named
+            # component instead. The report lists every override.
+            if override.schema not in self._surface.extract.schemas:
+                raise RuntimeError(f"override for {key}: schema {override.schema!r} is not in the extract")
+            pointer = f"/components/schemas/{override.schema}"
+            schema = self._surface.extract.schemas[override.schema]
+        elif schema is None and status >= 400 and error_schema is not None:
+            # The document declares the status without a body (or not at
+            # all) and the declaration names the vendor's error document:
+            # validate against that. Kept as a root of the extract for this.
+            if error_schema not in self._surface.extract.schemas:
+                raise RuntimeError(f"error_schema {error_schema!r} is not in the extract's components.schemas")
+            pointer = f"/components/schemas/{error_schema}"
+            schema = self._surface.extract.schemas[error_schema]
+        elif schema is not None:
             pointer = _schema_pointer(self._surface.extract.document, operation, schema)
             if pointer is None:
                 raise RuntimeError(f"{operation.key}: the schema for status {status} is not in the extract document")
+        if pointer is not None:
             # The root schema is a reference *into* the registered document,
             # so the resolver is rebased onto the extract before it reads the
             # first keyword and every nested ``#/components/...`` resolves there.

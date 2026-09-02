@@ -1,10 +1,12 @@
-"""``vendorfake-fidelity {pin,run,report}`` -- the fidelity tools, with no test runner in the picture.
+"""``vendorfake-fidelity {pin,fetch,run,report}`` -- the fidelity tools, with no test runner in the picture.
 
 FOR: an exit code. ``pin --check`` is what CI runs to know the extract still
-matches the upstream document it was cut from; ``run`` is the corpus as a
-list of pass/fail lines; ``report`` is the one matrix that joins the contract
-leg to the behaviour leg, and it is the page a vendor's fidelity claim is
-made on.
+matches the upstream document it was cut from; ``fetch`` populates the local
+cache for a vendor whose extract is never committed (konyklabs/roadmap#56), so
+the first thing to hit the network is a named step and not a unit test;
+``run`` is the corpus as a list of pass/fail lines; ``report`` is the one
+matrix that joins the contract leg to the behaviour leg, and it is the page a
+vendor's fidelity claim is made on.
 
 WHY THE TARGET IS NAMED AND NEVER GUESSED: the layer rule of
 ``tools/boundary_check.py``. This package may not import a vendor or the
@@ -13,7 +15,10 @@ registry, so every subcommand takes ``--target module:attribute`` (or reads
 
 EXIT CODES. ``0`` clean; ``1`` a finding -- a changed pin under ``--check``, a
 failed case, an UNDECLARED route; ``2`` a usage error -- no target, an
-unresolvable one, an unknown case id, an unreachable base URL.
+unresolvable one, an unknown case id, an unreachable base URL, a ``fetch``
+with no pin or no network and no cache. A moved upstream under ``fetch`` is
+``0`` with an ``UPSTREAM MOVED`` line on stderr: a vendor release never fails
+a test run, and ``pin --check`` is what fails on it.
 """
 
 from __future__ import annotations
@@ -26,7 +31,9 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
+from vendorfake.fidelity.cache import populate
 from vendorfake.fidelity.corpus import Case, load_corpus
+from vendorfake.fidelity.pin import Fetcher
 from vendorfake.fidelity.report import format_cases, format_matrix
 from vendorfake.fidelity.runner import (
     TARGET_ENV_VAR,
@@ -68,6 +75,12 @@ def _parser() -> argparse.ArgumentParser:
         help="implies --check; no fetch -- only that the committed extract and pin agree with each other and the declaration",
     )
 
+    fetch = sub.add_parser(
+        "fetch",
+        help="for a vendor whose extract is never committed: fetch, cut and cache it (no-op when the cache matches the pin)",
+    )
+    with_target(fetch)
+
     run = sub.add_parser("run", help="run the corpus, one fresh unit per case")
     with_target(run)
     run.add_argument("--base-url", dest="base_url", metavar="URL", help="run against a unit already listening there")
@@ -89,6 +102,7 @@ def main(
     *,
     refresh: RefreshFn | None = None,
     client_factory: ClientFactory | None = None,
+    fetcher: Fetcher | None = None,
 ) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
@@ -106,6 +120,8 @@ def main(
         if args.offline:
             return _pin_offline(target)
         return _pin(target, check=bool(args.check), refresh=refresh)
+    if args.command == "fetch":
+        return _fetch(target, fetcher=fetcher)
     try:
         cases = _select(load_corpus(target.anchor), args.case_ids if args.command == "run" else None)
     except (LookupError, ValueError) as exc:
@@ -193,6 +209,19 @@ def _pin_offline(target: FidelityTarget) -> int:
         else "pin: INCONSISTENT -- run `vendorfake-fidelity pin` and review the diff"
     )
     return 1 if result.changed else 0
+
+
+def _fetch(target: FidelityTarget, *, fetcher: Fetcher | None) -> int:
+    declaration: FidelityDeclaration = load_declaration(target.anchor)
+    if declaration.vendored:
+        print(f"fetch: {target.anchor} is vendored; its extract is committed and there is nothing to cache")
+        return 0
+    try:
+        result = populate(target.anchor, declaration, fetcher=fetcher)
+    except (LookupError, ValueError) as exc:
+        return _fail(f"fetch: {exc}")
+    print(result.summary)
+    return 0
 
 
 def _report(

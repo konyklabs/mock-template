@@ -1,4 +1,4 @@
-"""``vendorfake-fidelity`` -- argparse, the three subcommands, the exit codes. No network."""
+"""``vendorfake-fidelity`` -- argparse, the four subcommands, the exit codes. No network."""
 
 from __future__ import annotations
 
@@ -44,12 +44,12 @@ WRONG = dict(CREATE, expect={"status": 200, "body": {"order": {"state": "COMPLET
 # ---------------------------------------------------------------------------
 
 
-def test_help_lists_the_three_subcommands(capsys: pytest.CaptureFixture[str]) -> None:
+def test_help_lists_the_four_subcommands(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as raised:
         main(["--help"])
     assert raised.value.code == 0
     printed = capsys.readouterr().out
-    assert "{pin,run,report}" in printed
+    assert "{pin,fetch,run,report}" in printed
 
 
 def test_no_target_is_refused_rather_than_guessed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -244,3 +244,133 @@ def test_pin_offline_never_fetches_and_exits_on_inconsistency(
     extract.write_text(text + "\n")
     assert main(["pin", "--offline", "--target", HERE], refresh=explode) == 1
     assert "INCONSISTENT" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# fetch, and pin on a vendor whose extract is never committed (konyklabs/roadmap#56).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def not_vendored(anchor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """A non-vendored anchor with its pin written the way ``pin`` writes it,
+    the cache root in ``tmp_path`` through the environment, and the
+    synthetic document behind an injected fetcher. Returns ``(name, cache_root, fetcher)``."""
+    from tests.unit.fidelity.test_cache import counting_fetcher, pin_for
+    from tests.unit.fidelity.test_extract import URL, synthetic
+    from vendorfake.fidelity.cache import CACHE_ENV_VAR
+    from vendorfake.fidelity.pin import write_pin
+
+    def make(*, pin: bool = True, document: dict[str, Any] | None = None) -> tuple[str, Path, Any]:
+        declaration = {
+            "schema": 1,
+            "vendored": False,
+            "sources": [{"kind": "openapi3", "url": URL}],
+            "stubs_accepted": ["Missing"],
+        }
+        name = anchor([], declaration=declaration, extract=None)
+        if pin:
+            write_pin(tmp_path / name / "pin.json", pin_for(synthetic()))
+        monkeypatch.setenv(CACHE_ENV_VAR, str(tmp_path / "cache"))
+        return name, tmp_path / "cache", counting_fetcher(document or synthetic())
+
+    return make
+
+
+def test_fetch_populates_the_cache_and_exits_zero(
+    not_vendored: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    name, cache, fetcher = not_vendored()
+    assert main(["fetch", "--target", HERE], fetcher=fetcher) == 0
+    out, err = capsys.readouterr()
+    assert f"fidelity cache: fetched and cut into {cache / name / 'extract.json'} (matches pin.json)" in out
+    assert err == ""
+    assert (cache / name / "extract.json").is_file()
+    assert not (tmp_path / name / "extract.json").exists()
+    # The second run is a hit and fetches nothing.
+    assert main(["fetch", "--target", HERE], fetcher=fetcher) == 0
+    assert "fidelity cache: hit" in capsys.readouterr().out
+    assert len(fetcher.calls) == 1
+
+
+def test_fetch_on_a_moved_upstream_exits_zero_with_the_loud_line(
+    not_vendored: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tests.unit.fidelity.test_extract import synthetic
+
+    moved = synthetic()
+    moved["info"]["version"] = "9.9.9"
+    name, cache, fetcher = not_vendored(document=moved)
+    assert main(["fetch", "--target", HERE], fetcher=fetcher) == 0
+    out, err = capsys.readouterr()
+    assert err.startswith("UPSTREAM MOVED: https://example.test/spec.json pinned ")
+    assert "-- the pin is stale; tests run against the fresh document" in err
+    assert "UPSTREAM MOVED (1 source(s))" in out
+    assert (cache / name / "DRIFT").is_file()
+
+
+def test_fetch_without_a_pin_is_a_usage_error(not_vendored: Any, capsys: pytest.CaptureFixture[str]) -> None:
+    _, cache, fetcher = not_vendored(pin=False)
+    assert main(["fetch", "--target", HERE], fetcher=fetcher) == 2
+    assert "run `vendorfake-fidelity pin --target" in capsys.readouterr().err
+    assert fetcher.calls == [] and not cache.exists()
+
+
+def test_fetch_with_no_network_and_no_cache_is_a_usage_error(
+    not_vendored: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tests.unit.fidelity.test_cache import counting_fetcher
+
+    not_vendored()
+    offline = counting_fetcher(None, error=ConnectionError("unreachable"))
+    assert main(["fetch", "--target", HERE], fetcher=offline) == 2
+    err = capsys.readouterr().err
+    assert "fetch:" in err and "cannot fetch https://example.test/spec.json (unreachable)" in err
+
+
+def test_fetch_on_a_vendored_anchor_is_a_no_op(anchor: Any, capsys: pytest.CaptureFixture[str]) -> None:
+    anchor([])
+    assert main(["fetch", "--target", HERE]) == 0
+    assert "is vendored; its extract is committed and there is nothing to cache" in capsys.readouterr().out
+
+
+def test_pin_offline_on_a_non_vendored_anchor_verifies_the_cache_or_notes_there_is_none(
+    not_vendored: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def explode(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("offline pin reached refresh")
+
+    name, cache, fetcher = not_vendored()
+    assert main(["pin", "--offline", "--target", HERE], refresh=explode) == 0
+    printed = capsys.readouterr().out
+    assert "no cache" in printed and "nothing to verify offline" in printed and "consistent (offline)" in printed
+    assert main(["fetch", "--target", HERE], fetcher=fetcher) == 0
+    capsys.readouterr()
+    assert main(["pin", "--offline", "--target", HERE], refresh=explode) == 0
+    printed = capsys.readouterr().out
+    assert f"extract.json: matches pin.json (cached at {cache / name / 'extract.json'})" in printed
+
+
+def test_pin_on_a_non_vendored_anchor_writes_the_extract_to_the_cache_not_the_package(
+    not_vendored: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The real ``refresh``, through the CLI: the package gains nothing but a rewritten pin."""
+    from vendorfake.fidelity import pin as pin_module
+
+    name, cache, fetcher = not_vendored(pin=False)
+    real = pin_module.refresh
+
+    def refresh(*args: Any, **kwargs: Any) -> Any:
+        return real(*args, fetcher=fetcher, **kwargs)
+
+    def listing() -> list[str]:
+        return sorted(p.name for p in (tmp_path / name).iterdir() if p.name != "__pycache__")
+
+    before = listing()
+    assert main(["pin", "--target", HERE], refresh=refresh) == 0
+    printed = capsys.readouterr().out
+    assert "pin: written" in printed and f"extract.json to {cache / name}" in printed
+    assert listing() == sorted([*before, "pin.json"])
+    assert (cache / name / "extract.json").is_file()
+    assert main(["pin", "--target", HERE, "--check"], refresh=refresh) == 0
+    assert "pin: up to date" in capsys.readouterr().out

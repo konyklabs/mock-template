@@ -30,3 +30,10 @@ def fake_ctx(
         vendor=SimpleNamespace(name=vendor_name),
         clock=clock if clock is not None else Clock("virtual", "2026-08-30T12:00:00.000Z"),
     )
+
+
+def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: Any) -> None:
+    """One line: how many responses the Toast suite validated against the spec."""
+    from tests.unit.toast.harness import LEDGER
+
+    terminalreporter.write_line(f"toast {LEDGER.summary()}")

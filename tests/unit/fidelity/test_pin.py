@@ -92,7 +92,7 @@ def test_first_refresh_writes_both_files_and_the_pin_digests_the_extract(tmp_pat
         ),
     )
     extract = json.loads((tmp_path / EXTRACT_FILE).read_text())
-    assert extract["x-vendorfake"]["sources"] == [pin.sources[0].to_json()]
+    assert extract["x-vendorfake"]["sources"] == [{**pin.sources[0].to_json(), "label": "spec"}]
 
 
 def test_unchanged_upstream_on_a_later_day_is_byte_identical_and_keeps_the_pinned_date(pinned: Path) -> None:
@@ -207,3 +207,95 @@ def test_verify_refuses_a_stub_the_declaration_has_not_accepted(pinned: Path) ->
     assert "schema 'Money' is stubbed to {}" in result.diff_summary
     assert "Missing" not in result.diff_summary
     assert not verify(pinned, replace(DECLARATION, stubs_accepted=("Missing", "Money"))).changed
+
+
+# -- verify: the non-vendored form (konyklabs/roadmap#56) ---------------------
+
+
+NOT_VENDORED = replace(DECLARATION, vendored=False)
+
+
+def test_verify_of_a_non_vendored_declaration_with_no_cache_passes_with_a_note(tmp_path: Path) -> None:
+    """Offline cannot fetch, and the design accepts that: an empty cache is
+    not an inconsistency, it is nothing to verify."""
+    package = tmp_path / "pkg"
+    package.mkdir()
+    refresh(
+        package, NOT_VENDORED, MODELED, fetcher=fetcher_for(synthetic()), fetched="2026-09-02", cache_dir=tmp_path / "c"
+    )
+    assert not (package / EXTRACT_FILE).exists()
+    result = verify(package, NOT_VENDORED, cache_dir=tmp_path / "empty")
+    assert not result.changed
+    assert "no cache" in result.diff_summary and "nothing to verify offline" in result.diff_summary
+    assert "run `fetch`" in result.diff_summary
+
+
+def test_verify_of_a_non_vendored_declaration_reads_the_cache_and_a_drift_note(tmp_path: Path) -> None:
+    from vendorfake.fidelity.cache import DRIFT_FILE, cache_path
+
+    package = tmp_path / "pkg"
+    package.mkdir()
+    cache = tmp_path / "c"
+    refresh(package, NOT_VENDORED, MODELED, fetcher=fetcher_for(synthetic()), fetched="2026-09-02", cache_dir=cache)
+    result = verify(package, NOT_VENDORED, cache_dir=cache)
+    assert not result.changed
+    assert (
+        f"matches {PIN_FILE} (cached at {cache_path(NOT_VENDORED.anchor, cache) / EXTRACT_FILE})" in result.diff_summary
+    )
+    # A cache cut at run time from moved upstream carries a DRIFT note: the pin does not describe it.
+    (cache_path(NOT_VENDORED.anchor, cache) / DRIFT_FILE).write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "rows": [{"url": URL, "pinned_sha256": "ab" * 32, "fetched_sha256": "cd" * 32, "fetched_bytes": 3}],
+            }
+        )
+    )
+    result = verify(package, NOT_VENDORED, cache_dir=cache)
+    assert result.changed_upstream
+    assert f"UPSTREAM MOVED: {URL} pinned {'ab' * 6} fetched {'cd' * 6}" in result.diff_summary
+
+
+def test_verify_of_a_non_vendored_declaration_needs_the_pin_only(tmp_path: Path) -> None:
+    result = verify(tmp_path, NOT_VENDORED, cache_dir=tmp_path / "c")
+    assert result.changed
+    assert f"missing under {tmp_path}: {PIN_FILE} -- run `pin` once" == result.diff_summary
+
+
+def test_a_vendored_pin_carries_no_modeled_list_and_a_non_vendored_one_does(pinned: Path, tmp_path: Path) -> None:
+    """Square's committed pin must stay byte-identical: ``modeled`` is written only where the cache needs it."""
+    assert "modeled" not in json.loads((pinned / PIN_FILE).read_text())
+    assert read_pin(pinned / PIN_FILE).modeled == ()
+    package = tmp_path / "nv"
+    package.mkdir()
+    refresh(
+        package, NOT_VENDORED, MODELED, fetcher=fetcher_for(synthetic()), fetched="2026-09-02", cache_dir=tmp_path / "c"
+    )
+    assert read_pin(package / PIN_FILE).modeled == tuple(f"{m} {p}" for m, p in MODELED)
+    # A second refresh on an unchanged upstream is byte-identical, modeled included.
+    before = (package / PIN_FILE).read_bytes()
+    result = refresh(
+        package, NOT_VENDORED, MODELED, fetcher=fetcher_for(synthetic()), fetched="2026-12-25", cache_dir=tmp_path / "c"
+    )
+    assert not result.changed and (package / PIN_FILE).read_bytes() == before
+
+
+def test_refresh_hands_the_declarations_extension_map_and_error_schema_to_the_cut(tmp_path: Path) -> None:
+    """``Unreachable`` is referenced by no modeled operation; it lands in the
+    extract only because the declaration names it as the error schema. The
+    mapped extension shows the map went through as well."""
+    document = synthetic()
+    document["components"]["schemas"]["Money"]["properties"]["currency"]["x-nullable"] = True
+    declaration = replace(DECLARATION, error_schema="Unreachable", extension_map={"x-nullable": "nullable"})
+    refresh(tmp_path, declaration, MODELED, fetcher=fetcher_for(document), fetched="2026-09-02")
+    extract = json.loads((tmp_path / EXTRACT_FILE).read_text())
+    assert "Unreachable" in extract["components"]["schemas"]
+    assert extract["components"]["schemas"]["Money"]["properties"]["currency"] == {"type": "string", "nullable": True}
+    assert extract["x-vendorfake"]["rewritten"]["extensions"] == {"x-nullable": 1}
+
+
+def test_refresh_refuses_a_declared_error_schema_the_upstream_lacks(tmp_path: Path) -> None:
+    declaration = replace(DECLARATION, error_schema="NoSuchSchema")
+    with pytest.raises(ValueError, match="NoSuchSchema"):
+        refresh(tmp_path, declaration, MODELED, fetcher=fetcher_for(synthetic()), fetched="2026-09-02")
+    assert not (tmp_path / EXTRACT_FILE).exists()

@@ -19,7 +19,16 @@ from vendorfake.core.kernel.reply import json_, no_content, text
 from vendorfake.core.kernel.router import Router
 from vendorfake.core.kernel.types import ReplyInit
 from vendorfake.core.transport.inprocess import InProcessResponse, in_process
-from vendorfake.fidelity.types import Alias, Deviation, Excuse, Extract, FidelityDeclaration, SpecSource, Surface
+from vendorfake.fidelity.types import (
+    Alias,
+    Deviation,
+    Excuse,
+    Extract,
+    FidelityDeclaration,
+    Override,
+    SpecSource,
+    Surface,
+)
 from vendorfake.fidelity.validate import (
     FidelityViolation,
     Ledger,
@@ -656,3 +665,36 @@ def test_a_null_where_the_spec_pairs_a_reference_with_nullable_passes(world: Wor
     assert (
         exc.errors[0].startswith("/order/audit/quantity: 3 is not of type 'string'") or "/order/audit" in exc.errors[0]
     )
+
+
+# -- overrides ---------------------------------------------------------------
+
+
+def test_an_override_validates_against_the_named_component_for_that_route_and_status() -> None:
+    """The vendor's guide documents a shape its spec does not declare for one
+    route; the declaration names the component to use instead."""
+    script = Script()
+    unit = make_unit([route("GET", "/v2/orders/{order_id}", script.answer)], control_routes=control_plane_routes)
+    ledger = Ledger()
+    override = Override(
+        route="GET /v2/orders/{order_id}",
+        status=200,
+        schema="LineItem",
+        reason="the guide documents a bare line item here",
+        url="https://example.invalid/guide",
+    )
+    # No envelope here, so a status the override does not name has no schema.
+    declaration = replace(DECLARATION, overrides=(override,), error_envelope=None, error_member=None)
+    client = ValidatingClient(unit, Surface(declaration, Extract(EXTRACT)), ledger)
+    script.body = {"quantity": "2"}  # a LineItem, not an order
+    client.get("/v2/orders/ord_1")
+    assert ledger.total("validated") == 1
+    script.body = {"quantity": 2}
+    with pytest.raises(FidelityViolation) as caught:
+        client.get("/v2/orders/ord_1")
+    assert caught.value.errors == ("/quantity: 2 is not of type 'string'",)
+    # Another status on the same route is untouched by the override.
+    script.body = GOOD_ORDER
+    script.status = 201
+    with pytest.raises(FidelityViolation, match="no schema for status 201"):
+        client.get("/v2/orders/ord_1")

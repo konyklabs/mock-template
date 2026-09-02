@@ -20,6 +20,7 @@ core's opaque cursors (a real token's format is undocumented).
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -61,6 +62,12 @@ def page_envelope(
     next_token: str | None,
 ) -> dict[str, Any]:
     last_page = max(1, -(-total // page_size))
+    if current_token is None:
+        # JUDGMENT: the guide's documented first page carries
+        # ``currentPageToken: "cD0xLHM6MTAw"``, which is base64 of ``p=1,s:100``;
+        # the unit answers the same shape for a page nobody named by token,
+        # so the field is always the string the specification types.
+        current_token = base64.b64encode(f"p={page_number},s:{page_size}".encode()).decode()
     return {
         "currentPageNum": page_number,
         "results": results,

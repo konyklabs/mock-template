@@ -35,6 +35,7 @@ rules:
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
@@ -90,12 +91,20 @@ def tax_on(cents: int, rate: TaxRate) -> int:
     return _round(Decimal(cents) * rate.rate, rate.rounding)
 
 
-def taxes_on(cents: int, rates: Sequence[TaxRate]) -> list[dict[str, Any]]:
+APPLIED_TAX_NAMESPACE = uuid.UUID("7c0b6d1e-3a5f-4d2b-9e8c-2f1a0b9c8d7e")
+"""JUDGMENT -- an ``AppliedTaxRate`` is a ToastReference, so the specification
+requires its own ``guid``. Toast assigns one; this unit derives one from the
+selection and the rate (uuid5), so it is stable across runs and never draws
+on the id stream. Found by the fidelity validator (konyklabs/roadmap#56)."""
+
+
+def taxes_on(cents: int, rates: Sequence[TaxRate], *, owner: str = "") -> list[dict[str, Any]]:
     """The ``appliedTaxes`` entries (cents) for ``cents`` under ``rates``, in
-    the documented shape: ``{taxRate{guid, entityType}, name, rate, taxAmount,
-    type}``."""
+    the documented shape: ``{guid, entityType, taxRate{guid, entityType}, name,
+    rate, taxAmount, type}``. ``owner`` is the selection the tax applies to."""
     return [
         {
+            "guid": str(uuid.uuid5(APPLIED_TAX_NAMESPACE, f"{owner}:{rate.guid}")),
             "entityType": "AppliedTaxRate",
             "taxRate": {"guid": rate.guid, "entityType": "TaxRate"},
             "name": rate.name,

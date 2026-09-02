@@ -394,9 +394,7 @@ class ToastOrdersSurface:
                 "guestOrderStatus": GuestOrderStatus.RECEIVED.value,
                 "voided": False,
                 "numberOfGuests": request.numberOfGuests,
-                "deliveryInfo": None
-                if request.deliveryInfo is None
-                else request.deliveryInfo.model_dump(exclude_none=True) or None,
+                "deliveryInfo": None if request.deliveryInfo is None else _complete_delivery_info(request.deliveryInfo),
                 "curbsidePickupInfo": request.curbsidePickupInfo,
                 "requiredPrepTime": request.requiredPrepTime,
                 "pricingFeatures": list(request.pricingFeatures or []),
@@ -554,7 +552,7 @@ class ToastOrdersSurface:
                     detail=f"Discount {request.discount.guid} is a {source.get('selectionType')} discount and cannot be applied at the {'check' if wanted_type == 'CHECK' else 'selection'} level.",
                     field=f"[{i}].discount.guid",
                 )
-            codes = list(source.get("promoCodes", []))
+            codes = [str(row.get("code")) for row in source.get("promoCodes", []) if isinstance(row, Mapping)]
             if codes and request.appliedPromoCode not in codes:
                 raise UnitError(
                     UnitErrorKind.INVALID_VALUE,
@@ -702,6 +700,23 @@ def _client_id(args: HandlerArgs) -> str:
     meta = args.auth.meta if args.auth is not None else None
     value = None if meta is None else meta.get("client_id")
     return str(value) if isinstance(value, str) else ""
+
+
+def _complete_delivery_info(info: Any) -> dict[str, Any] | None:
+    """DOCUMENTED: ``DeliveryInfo`` requires ``address1``, ``city``, ``state``
+    and ``zipCode`` (the orders specification's ``required`` list). An order
+    created with a partial address is refused, field by field, so that the
+    stored document is one the specification describes. Found by the fidelity
+    validator (konyklabs/roadmap#56)."""
+    document = dict(info.model_dump(exclude_none=True))
+    if not document:
+        return None
+    for name in ("address1", "city", "state", "zipCode"):
+        if not document.get(name):
+            raise UnitError(
+                UnitErrorKind.MISSING_FIELD, detail=f"deliveryInfo.{name} is required.", field=f"deliveryInfo.{name}"
+            )
+    return document
 
 
 def _scope_flags(args: HandlerArgs) -> dict[str, bool]:
@@ -862,5 +877,5 @@ def _reprice_selection(selection: dict[str, Any], index: MenuIndex) -> None:
     selection["price"] = max(0, base - taken)
     selection["receiptLinePrice"] = selection["price"]
     rates = [index.tax_rates[g] for g in selection.get("_rates", []) if g in index.tax_rates]
-    selection["appliedTaxes"] = taxes_on(selection["price"], rates)
+    selection["appliedTaxes"] = taxes_on(selection["price"], rates, owner=str(selection.get("guid", "")))
     selection["tax"] = sum(int(t["taxAmount"]) for t in selection["appliedTaxes"])

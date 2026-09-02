@@ -172,7 +172,13 @@ def test_the_documented_get_refusals(h: Harness) -> None:
 
 def test_customer_and_delivery_info_need_their_documented_scopes(h: Harness) -> None:
     body = order_body(
-        deliveryInfo={"address1": "1 Main St", "city": "Springfield", "notes": "ring twice"},
+        deliveryInfo={
+            "address1": "1 Main St",
+            "city": "Springfield",
+            "state": "MA",
+            "zipCode": "01101",
+            "notes": "ring twice",
+        },
     )
     body["checks"][0]["customer"] = {"firstName": "Ada", "lastName": "Lovelace", "phone": "2175550199"}
     body["diningOption"] = {"guid": c.DINING_OPTION_TAKE_OUT_GUID}
@@ -355,9 +361,6 @@ def test_item_discount_reproduces_the_documented_applied_discount(h: Harness) ->
         "guid",
         "entityType",
         "externalId",
-        "approver",
-        "processingState",
-        "loyaltyDetails",
         "name",
         "comboItems",
         "discountAmount",
@@ -414,13 +417,19 @@ def test_applicable_discounts_answers_the_documented_shape(h: Harness) -> None:
 
 
 def test_delivery_info_patch_merges_and_journals(h: Harness) -> None:
-    order = h.post("/orders/v2/orders", order_body(deliveryInfo={"address1": "1 Main St"})).json()
+    order = h.post(
+        "/orders/v2/orders",
+        order_body(deliveryInfo={"address1": "1 Main St", "city": "Springfield", "state": "MA", "zipCode": "01101"}),
+    ).json()
     response = h.patch(
         f"/orders/v2/orders/{order['guid']}/deliveryInfo", {"notes": "leave at door", "deliveryState": "IN_PROGRESS"}
     )
     assert response.status == 200, response.text
     assert response.json()["deliveryInfo"] == {
         "address1": "1 Main St",
+        "city": "Springfield",
+        "state": "MA",
+        "zipCode": "01101",
         "notes": "leave at door",
         "deliveryState": "IN_PROGRESS",
     }

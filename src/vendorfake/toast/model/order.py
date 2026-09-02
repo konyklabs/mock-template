@@ -252,24 +252,32 @@ def _external_ref(guid: Any, entity_type: str, external_id: Any) -> dict[str, An
 
 def project_applied_discount(stored: Mapping[str, Any]) -> dict[str, Any]:
     """The documented AppliedDiscount, key order from apiDiscountingOrders.html."""
-    return {
+    # ``approver``, ``processingState`` and ``loyaltyDetails`` are omitted
+    # rather than answered null: the schema types them as objects/enums with
+    # no nullable, and the discounting walkthrough's example does not carry
+    # them (JUDGMENT: omission; found by the fidelity validator, roadmap#56).
+    document = {
         "guid": stored.get("guid"),
         "entityType": "AppliedCustomDiscount",
         "externalId": stored.get("externalId"),
-        "approver": None,
-        "processingState": None,
-        "loyaltyDetails": None,
-        "name": stored.get("name"),
-        "comboItems": [],
-        "discountAmount": _money(stored.get("discountAmount")),
-        "discount": _ref(stored.get("discount")),
-        "triggers": [
-            {"selection": _ref(trigger.get("selection")), "quantity": trigger.get("quantity")}
-            for trigger in stored.get("triggers", [])
-            if isinstance(trigger, Mapping)
-        ],
-        "appliedPromoCode": stored.get("appliedPromoCode"),
     }
+    document.update(
+        compact(
+            {
+                "name": stored.get("name"),
+                "comboItems": [],
+                "discountAmount": _money(stored.get("discountAmount")),
+                "discount": _ref(stored.get("discount")),
+                "triggers": [
+                    {"selection": _ref(trigger.get("selection")), "quantity": trigger.get("quantity")}
+                    for trigger in stored.get("triggers", [])
+                    if isinstance(trigger, Mapping)
+                ],
+                "appliedPromoCode": stored.get("appliedPromoCode"),
+            }
+        )
+    )
+    return document
 
 
 def _external(stored: Mapping[str, Any], entity_type: str, rest: dict[str, Any]) -> dict[str, Any]:

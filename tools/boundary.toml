@@ -42,7 +42,7 @@ allowed_modules = [
 [externals]
 "src/vendorfake/core/" = ["httpx", "pydantic"]
 "src/vendorfake/conformance/" = ["httpx"]
-"src/vendorfake/fidelity/" = ["httpx", "jsonschema", "openapi_schema_validator", "referencing"]
+"src/vendorfake/fidelity/" = ["httpx", "jsonschema", "openapi_schema_validator", "referencing", "yaml"]
 
 # ---------------------------------------------------------------------------
 # No vendor slug may appear as a literal token or string under these prefixes.

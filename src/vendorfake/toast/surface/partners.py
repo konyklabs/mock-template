@@ -22,6 +22,8 @@ token is the core's opaque cursor.
 
 from __future__ import annotations
 
+from typing import Any
+
 from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route
 from vendorfake.toast.entities import COL
@@ -103,18 +105,33 @@ class ToastPartnersSurface:
         # recomputed from the first row's position.
         first_index = rows.index(page.items[0]) if page.items else len(rows)
         return json_(
-            page_envelope(
-                page.items,
-                total=len(rows),
-                page_size=page_size,
-                page_number=first_index // page_size + 1,
-                current_token=token,
-                next_token=page.cursor,
+            _omit_none(
+                page_envelope(
+                    page.items,
+                    total=len(rows),
+                    page_size=page_size,
+                    page_number=first_index // page_size + 1,
+                    current_token=token,
+                    next_token=page.cursor,
+                )
             )
         )
 
     def restaurants(self, args: HandlerArgs) -> ReplyInit:
-        return json_(self._rows(args))
+        return json_(_omit_none(self._rows(args)))
+
+
+def _omit_none(node: Any) -> Any:
+    """JUDGMENT: a page token or a restaurant field with no value is omitted,
+    not answered null -- the partners specification types them as plain
+    strings; the guide documents null only for ``nextPageNum`` and
+    ``previousPageNum`` (declared deviations). Found by the fidelity
+    validator (konyklabs/roadmap#56)."""
+    if isinstance(node, dict):
+        return {k: _omit_none(v) for k, v in node.items() if v is not None or k in ("nextPageNum", "previousPageNum")}
+    if isinstance(node, list):
+        return [_omit_none(item) for item in node]
+    return node
 
 
 def partner_routes(deps: ToastDeps) -> tuple[Route, ...]:

@@ -44,6 +44,22 @@ REQUIRED = (
     "vendorfake/square/fidelity/corpus/orders.pay.zero-total.json",
     "vendorfake/square/fidelity/corpus/orders.search.by-location.json",
     "vendorfake/square/fidelity/corpus/webhooks.subscriptions.create.shape.json",
+    "vendorfake/toast/fidelity/declaration.json",
+    "vendorfake/toast/fidelity/pin.json",
+    "vendorfake/toast/fidelity/corpus/auth.bearer.missing.json",
+    "vendorfake/toast/fidelity/corpus/auth.bearer.unrecognized.json",
+    "vendorfake/toast/fidelity/corpus/auth.login.invalid-credentials.json",
+    "vendorfake/toast/fidelity/corpus/auth.login.machine-client.json",
+    "vendorfake/toast/fidelity/corpus/auth.restaurant.unknown.json",
+    "vendorfake/toast/fidelity/corpus/config.taxrates.by-guid.json",
+    "vendorfake/toast/fidelity/corpus/config.taxrates.list.json",
+    "vendorfake/toast/fidelity/corpus/menus.v3.menus.json",
+    "vendorfake/toast/fidelity/corpus/menus.v3.metadata.json",
+    "vendorfake/toast/fidelity/corpus/orders.create.other-payment.json",
+    "vendorfake/toast/fidelity/corpus/orders.get.errors.json",
+    "vendorfake/toast/fidelity/corpus/orders.prices.documented-example.json",
+    "vendorfake/toast/fidelity/corpus/orders.void.voidall.json",
+    "vendorfake/toast/fidelity/corpus/stock.search.by-guid.json",
     "vendorfake/square/profiles/full.json",
     "vendorfake/square/profiles/no-chaos.json",
     "vendorfake/square/profiles/no-faults.json",
@@ -65,6 +81,12 @@ REQUIRED = (
     "vendorfake/toast/profiles/chaos-demo.json",
     "vendorfake/toast/seed/default.seed.json",
 )
+
+
+#: Files that must NOT ship: a non-vendored vendor's extract is cut at run time
+#: from a fresh fetch and never committed (konyklabs/roadmap#56). Its presence in
+#: a wheel would mean a copy of the vendor's document went out under our name.
+FORBIDDEN = ("vendorfake/toast/fidelity/extract.json",)
 
 
 def main() -> int:
@@ -90,6 +112,12 @@ def main() -> int:
         missing = [path for path in REQUIRED if path not in names]
         for path in REQUIRED:
             print(f"  {'ok  ' if path in names else 'MISS'} {path}")
+        leaked = [path for path in FORBIDDEN if path in names]
+        for path in leaked:
+            print(f"  LEAK {path} -- must never ship; see FORBIDDEN")
+        if leaked:
+            print(f"wheel: {len(leaked)} file(s) that must never ship are in {wheels[0].name}")
+            return 1
         if missing:
             print(f"wheel: {len(missing)} data file(s) missing from {wheels[0].name}")
             print("       the source tree works and the wheel does not; check")

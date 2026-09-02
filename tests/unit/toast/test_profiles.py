@@ -93,7 +93,7 @@ def test_chaos_demo_ships_four_rules_on_a_virtual_clock_and_the_request_rules_fi
         assert h.get(f"/orders/v2/orders/{guid}").status == 200  # the stored token never changed
 
 
-SEED_DIGEST = "f078f1a4b8cfb09217a934bd43ec6bb57990620e9dec61da87668f9a04227ead"
+SEED_DIGEST = "d0b431457434043b4f314118385c4a9b1ea2cde0926beb2329227884d07407f1"
 """The entity digest of the shipped scenario, pinned as a literal.
 
 Identical on every profile because seeded ids come from the document, never
@@ -102,7 +102,11 @@ digest ignores. A change to the scenario changes this line on purpose; a
 change to anything else that moves it is the regression this test exists to
 catch (the same claim conformance C06/C22 make across units and processes).
 The value moved when the branch rebased onto the #35 chassis: the digest now
-scrubs volatile names at any depth and keeps their presence markers."""
+scrubs volatile names at any depth and keeps their presence markers.
+
+Re-pinned for konyklabs/roadmap#56: the seeded discount's promo codes became
+the ``PromoCode`` objects the configuration specification describes.
+"""
 
 
 @pytest.mark.parametrize("name", SHIPPED)

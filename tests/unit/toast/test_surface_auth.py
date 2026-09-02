@@ -7,7 +7,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from tests.unit.toast.harness import CLIENT_ID, CLIENT_SECRET, RESTAURANT, Harness, Silent, harness
+from tests.unit.toast.harness import CLIENT_ID, CLIENT_SECRET, LEDGER, RESTAURANT, SURFACE, Harness, Silent, harness
+from vendorfake.fidelity.validate import ValidatingClient
 from vendorfake.toast.entities import COL
 from vendorfake.toast.jwt import decode_jwt_payload, verify_jwt
 from vendorfake.toast.seed.constants import SEED_PARTNER_GUID, SEED_SCOPES
@@ -124,7 +125,6 @@ def test_a_token_lacking_the_scope_gets_the_documented_403_through_the_kernel() 
     from vendorfake import create_unit
     from vendorfake.core.kernel.reply import json_
     from vendorfake.core.kernel.types import Route
-    from vendorfake.core.transport.inprocess import in_process
     from vendorfake.toast.vendor import create_toast_vendor
 
     guarded = Route(
@@ -140,7 +140,9 @@ def test_a_token_lacking_the_scope_gets_the_documented_403_through_the_kernel() 
     overlay = VendorOverlay(create_toast_vendor(), routes=lambda routes: (*routes, guarded))
     unit = create_unit(vendor=overlay, profile="full", logger=Silent())
     try:
-        api = in_process(unit)
+        api = ValidatingClient(
+            unit, SURFACE, LEDGER, strict_undeclared=False
+        )  # the test-only route is not a vendor route
         p = Harness(unit=unit, api=api, auth={})
         weak = p.restricted_token("menus:read")
         forbidden = api.post("/test/guarded", {}, headers=weak)
