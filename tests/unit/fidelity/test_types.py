@@ -139,7 +139,9 @@ def test_a_declaration_needs_a_schema_and_a_source() -> None:
 def test_loaders_name_the_missing_package() -> None:
     with pytest.raises(FileNotFoundError, match=r"declaration\.json"):
         load_declaration("vendorfake.fidelity")
-    with pytest.raises(FileNotFoundError, match=r"extract\.json"):
+    # The extract needs the declaration first (it decides whether the extract
+    # is beside it or cut at run time), so the missing file named is that one.
+    with pytest.raises(FileNotFoundError, match=r"declaration\.json"):
         load_extract("vendorfake.fidelity")
 
 

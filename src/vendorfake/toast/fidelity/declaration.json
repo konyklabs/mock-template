@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "vendored": false,
+  "sources": [
+    { "kind": "swagger2", "url": "https://doc.toasttab.com/toast-api-specifications/toast-authentication-api.yaml", "label": "authentication" },
+    { "kind": "swagger2", "url": "https://doc.toasttab.com/toast-api-specifications/toast-config-api.yaml", "label": "config" },
+    { "kind": "swagger2", "url": "https://doc.toasttab.com/toast-api-specifications/toast-menus-api-v3.yaml", "label": "menus" },
+    { "kind": "swagger2", "url": "https://doc.toasttab.com/toast-api-specifications/toast-orders-api.yaml", "label": "orders" },
+    { "kind": "swagger2", "url": "https://doc.toasttab.com/toast-api-specifications/toast-partners-api.yaml", "label": "partners" },
+    { "kind": "swagger2", "url": "https://doc.toasttab.com/toast-api-specifications/toast-restaurants-api.yaml", "label": "restaurants" },
+    { "kind": "openapi3", "url": "https://doc.toasttab.com/toast-api-specifications/toast-stock-api.yaml", "label": "stock" }
+  ],
+  "error_schema": "ErrorMessage",
+  "extension_map": {
+    "x-nullable": "nullable",
+    "x-toast-read-only": "readOnly"
+  },
+  "aliases": [],
+  "excused": [],
+  "deviations": [],
+  "stubs_accepted": [],
+  "variables": {}
+}

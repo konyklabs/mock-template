@@ -79,16 +79,22 @@ class SpecSource:
 
     kind: SourceKind
     url: str
-    #: A prefix the spec omits and the unit's paths carry (Swagger 2 ``basePath``,
-    #: OAS 3 ``servers[0].url`` path). Empty when the spec's paths are the unit's.
+    #: A prefix the spec omits and the unit's paths carry. Empty means "take
+    #: it from the document" (Swagger 2 ``basePath``, OAS 3 ``servers[0].url``);
+    #: set it to override what the document says.
     base_path: str = ""
+    #: Short name for this source, used to namespace a schema that two sources
+    #: define differently (``<label>.<Name>``). Defaults to the URL's file stem.
+    label: str = ""
 
     @classmethod
     def of(cls, row: Mapping[str, Any]) -> SpecSource:
         kind = row["kind"]
         if kind not in ("openapi3", "swagger2", "fragments"):
             raise ValueError(f"unknown spec source kind {kind!r}; expected openapi3, swagger2 or fragments")
-        return cls(kind=kind, url=str(row["url"]), base_path=str(row.get("base_path", "")))
+        url = str(row["url"])
+        label = str(row.get("label") or url.rsplit("/", 1)[-1].split(".")[0])
+        return cls(kind=kind, url=url, base_path=str(row.get("base_path", "")), label=label)
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +225,20 @@ class FidelityDeclaration:
     #: document dangles there. A stub validates everything it types, so a
     #: new one is a red offline check until it is listed here, on purpose.
     stubs_accepted: tuple[str, ...] = ()
+    #: Whether the extract is committed beside the declaration. ``False`` is
+    #: the fetch-never-commit mode (konyklabs/roadmap#56): only ``pin.json``
+    #: (facts about the upstream bytes) ships; the extract is cut at run time
+    #: from a fresh fetch into a local cache and no upstream byte enters the
+    #: repository. The reason is the vendor's terms, not convenience.
+    vendored: bool = True
+    #: The component schema an error body is validated against when the
+    #: document declares the status without a schema (or not at all). Kept
+    #: in the extract as a root even if no operation references it.
+    error_schema: str | None = None
+    #: Vendor extension keys with a standard meaning, mapped onto the OAS
+    #: keyword the validator honours (``{"x-nullable": "nullable"}``). Data,
+    #: so this package names no vendor. Unmapped ``x-`` keys are stripped.
+    extension_map: Mapping[str, str] = field(default_factory=dict)
     #: Values a corpus case may interpolate as ``${vars.<name>}`` -- seeded ids
     #: the vendor's scenario fixes, so a case can name them without a lookup.
     variables: Mapping[str, str] = field(default_factory=dict)
@@ -246,6 +266,9 @@ class FidelityDeclaration:
             error_envelope=None if envelope is None else str(envelope),
             error_member=None if member is None else str(member),
             stubs_accepted=tuple(str(n) for n in doc.get("stubs_accepted", ())),
+            vendored=bool(doc.get("vendored", True)),
+            error_schema=None if doc.get("error_schema") is None else str(doc["error_schema"]),
+            extension_map={str(k): str(v) for k, v in dict(doc.get("extension_map", {})).items()},
             variables={str(k): str(v) for k, v in dict(doc.get("variables", {})).items()},
         )
 
@@ -431,4 +454,13 @@ def load_declaration(anchor: str) -> FidelityDeclaration:
 
 
 def load_extract(anchor: str) -> Extract:
+    """The extract for ``anchor``: read beside the declaration when it is
+    vendored, otherwise cut from a fresh fetch into the local cache (see
+    ``vendorfake.fidelity.cache``), which is the only place a non-vendored
+    vendor's upstream bytes ever land."""
+    declaration = load_declaration(anchor)
+    if not declaration.vendored:
+        from vendorfake.fidelity.cache import cached_extract
+
+        return cached_extract(anchor, declaration)
     return Extract(_read_json(anchor, EXTRACT_FILE))

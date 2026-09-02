@@ -36,6 +36,10 @@
           },
           "base_path": {
             "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }
@@ -160,6 +164,24 @@
         "minLength": 1
       },
       "description": "Schema names the extract may stub to {} because upstream dangles there. Every stub in the extract must be listed, or pin --check --offline fails."
+    },
+    "vendored": {
+      "type": "boolean",
+      "description": "False = fetch-never-commit: only pin.json ships; the extract is cut at run time into a local cache."
+    },
+    "error_schema": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Component schema an error body is validated against when the document declares the status without a schema."
+    },
+    "extension_map": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "propertyNames": {
+        "pattern": "^x-"
+      }
     }
   },
   "dependentRequired": {
