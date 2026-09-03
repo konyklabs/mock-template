@@ -364,6 +364,43 @@ def test_a_fault_fires_before_the_key_is_consumed() -> None:
     assert calls == ["ok"]
 
 
+def test_a_response_phase_fault_is_not_stored_against_the_key() -> None:
+    """``connection_reset`` (and the other four response-phase faults) leaves
+    the handler's real body untouched and only attaches a
+    ``UnitResponse.transport`` directive plus the ``vendorfake-fault`` header
+    (``core/chaos/faults.py``'s ``_directive``). ``IdempotencyRecord`` has
+    nowhere to put a transport directive, so storing that response would make
+    a replay a clean 200 that still claimed ``vendorfake-fault`` -- worse than
+    either "clean" or "faulted" on its own, and it would silently switch off
+    ``is_transport_fault`` for a validator on every later replay of the key.
+    The fault must not burn the key at all: a replay re-runs the handler, the
+    same guarantee ``test_a_fault_fires_before_the_key_is_consumed`` gives a
+    request-scope fault.
+    """
+    calls: list[str] = []
+    unit = make_unit(
+        [route("POST", "/v2/orders", _handler(calls), idempotency=_IDEM)],
+        chaos_rules=[
+            {
+                "id": "r1",
+                "scope": "request",
+                "fault": "connection_reset",
+                "match": {"route": "POST /v2/orders"},
+                "when": {"times": 1},
+            }
+        ],
+    )
+    api = in_process(unit)
+    first = api.post("/v2/orders", {"idempotency_key": "k1"})
+    assert first.status == 200
+    assert first.header("vendorfake-fault") == "connection_reset"
+    second = api.post("/v2/orders", {"idempotency_key": "k1"})
+    assert second.status == 200
+    assert second.header("vendorfake-fault") is None
+    assert second.header("x-unit-idempotent-replay") is None
+    assert calls == ["ok", "ok"]
+
+
 def test_a_non_2xx_response_is_not_stored_against_the_key() -> None:
     calls: list[str] = []
 

@@ -105,7 +105,12 @@ from urllib.parse import parse_qsl
 from vendorfake.core.capability.gates import CoreCapability, assert_capability_declarations
 from vendorfake.core.capability.registry import CapabilityRegistry
 from vendorfake.core.chaos.engine import ChaosEngine, ChaosSubject
-from vendorfake.core.chaos.faults import RESPONSE_PHASE_FAULTS, apply_request_fault, apply_response_fault
+from vendorfake.core.chaos.faults import (
+    RESPONSE_PHASE_FAULTS,
+    apply_request_fault,
+    apply_response_fault,
+    is_transport_fault,
+)
 from vendorfake.core.chaos.rules import matched_routes
 from vendorfake.core.chaos.selector import FaultSelector
 from vendorfake.core.config.models import ResolvedConfig
@@ -971,13 +976,35 @@ class Unit:
         # A response-scope fault ("the vendor returned garbage") corrupts a
         # REAL answer, so it can only run after the handler produced one --
         # unlike every fault above, which fires instead of the handler ever
-        # running. It runs before the idempotency store so a replay of this
-        # key gets exactly what the caller got the first time, faulted or not.
-        # It never touches ``ctx``, so it cannot journal anything on its own;
-        # DELAYS LEAVE AS DATA applies here too, via ``UnitResponse.transport``.
+        # running. It never touches ``ctx``, so it cannot journal anything on
+        # its own; DELAYS LEAVE AS DATA applies here too, via
+        # ``UnitResponse.transport``.
         if decision is not None and decision.fault in RESPONSE_PHASE_FAULTS:
             res = apply_response_fault(decision, res, log=self._log)
-        if idem is not None and idem_key is not None and 200 <= res.status < 300:
+        # A faulted response is never the one recorded against the
+        # idempotency key. Earlier this stored whatever the handler-plus-fault
+        # pipeline produced, on the theory that "a replay gets exactly what
+        # the caller got the first time, faulted or not" -- but
+        # ``IdempotencyRecord`` (``core/state/store.py``) has nowhere to put a
+        # ``UnitResponse.transport`` directive, so a stored ``connection_reset``
+        # or ``slow_body`` replayed as a clean 200 that still carried the
+        # ``vendorfake-fault`` header the real fault stamped: worse than
+        # either "clean" or "faulted" on its own, and it switches off any
+        # schema validator that trusts :func:`is_transport_fault`
+        # (``core/chaos/faults.py``), silently, on every later replay of that
+        # key. Checking the header -- which every response-phase fault
+        # stamps, not only the three transport-directive ones -- catches
+        # ``malformed_body`` and ``body_mutation`` the same way rather than
+        # special-casing the three that carry a directive; a key that was
+        # never recorded simply re-runs the handler on its next use, the same
+        # as any other request this route has not seen yet.
+        if (
+            idem is not None
+            and idem_key is not None
+            and 200 <= res.status < 300
+            and res.transport is None
+            and not is_transport_fault(res)
+        ):
             self._store.put_idempotent(
                 IdempotencyRecord(
                     scope=idem.scope,

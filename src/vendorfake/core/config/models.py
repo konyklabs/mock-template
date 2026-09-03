@@ -320,9 +320,14 @@ class ResolvedConfig(BaseModel):
     webhooks: ResolvedWebhooks
     chaos: ResolvedChaos
     clock: ClockSection
-    errors: ErrorsSection
+    #: Defaulted rather than required, like ``requests`` and ``unmatched``
+    #: below: ``ErrorsSection`` is a total default (``sidecar`` defaults to
+    #: ``"headers"``) and :func:`resolve_config` always supplies a value, so a
+    #: caller assembling a ``ResolvedConfig`` by hand -- every kernel test
+    #: does -- should not have to name a knob it is not exercising.
+    errors: ErrorsSection = Field(default_factory=ErrorsSection)
     transport: TransportSection
-    #: Defaulted rather than required, unlike the three above: a unit built
+    #: Defaulted rather than required, unlike the four above: a unit built
     #: before this section existed logs requests at the default bound, and a
     #: caller assembling a ``ResolvedConfig`` by hand -- every kernel test does
     #: -- should not have to name a knob it is not exercising.

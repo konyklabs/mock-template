@@ -93,7 +93,11 @@ commit subject.
   published at `GET /__unit/chaos` and `GET /__unit/info` (and so in
   `vendorfake info`'s output), distinguishing these five from every fault that
   came before them. Every faulted response, old kinds included, now carries
-  `Vendorfake-Fault` and `Vendorfake-Rule` headers.
+  `Vendorfake-Fault` and `Vendorfake-Rule` headers. `provenance` is
+  keyword-only with a default of `"vendor"`, so it is purely additive: a
+  fork's existing three- or four-positional `FaultSpec(...)` construction
+  (`name, scope, summary[, params]`) keeps its v0.1.0 meaning rather than
+  silently binding its `params` prose to `provenance`.
 
 
 * **vendorfake:** discover profiles and routes by code — `registry.available_profiles`, `registry.routes`, `Driver.route_for`/`path_for`, and a per-vendor `paths` module of hand-written path constants kept honest against the router by `tests/unit/test_paths_drift.py` (konyklabs/roadmap#70)
