@@ -26,6 +26,15 @@ Every argument matches [`vendorfake.testing.unit`](../README.md#pytest)'s own:
 `profile`, `env`, `seed` and `clock_start` are the same keyword arguments
 `unit()` takes, with the same defaults.
 
+`clock_start` carries the same precondition it does on `unit()`: it requires
+a virtual clock, and setting it against the default real clock is a loud
+refusal at fixture setup, not a mode switch. Pair it with `env`:
+
+```python
+@pytest.mark.vendorfake("square", clock_start="2026-01-01T00:00:00Z", env={"VENDORFAKE_CLOCK": "virtual"})
+def test_a_token_expires_on_schedule(vendorfake_unit): ...
+```
+
 ## The fixtures
 
 `vendorfake_unit` is function-scoped and yields the

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import unquote
 
 import pytest
 
@@ -155,3 +156,48 @@ def test_everything_else_is_one_compact_json_header() -> None:
 def test_the_info_header_is_omitted_when_nothing_is_left_for_it() -> None:
     sidecar = unit_error_sidecar(UnitError(UnitErrorKind.NOT_FOUND), "judgment")
     assert ERROR_INFO_HEADER not in sidecar_headers(sidecar)
+
+
+# ---------------------------------------------------------------------------
+# the headers are ASCII-safe (konyklabs/roadmap#71 review, blocker)
+# ---------------------------------------------------------------------------
+
+
+def test_sidecar_headers_are_ascii_safe_by_construction() -> None:
+    """`UnitError.info` is a published channel that carries consumer-supplied
+    strings verbatim (a chaos rule id, a store entity id, a pydantic `loc`
+    path), and a header value must stay within the ASCII range every HTTP
+    stack this project touches encodes header values as -- `field`
+    percent-encodes non-ASCII as UTF-8 (RFC 3986); `info` is JSON built with
+    `ensure_ascii=True` rather than the wire-body encoder's
+    `ensure_ascii=False`.
+    """
+    err = UnitError(UnitErrorKind.MISSING_FIELD, info={"note": "café 寿司"})
+    sidecar = unit_error_sidecar(err, "judgment", field="寿司-id")
+    headers = sidecar_headers(sidecar)
+
+    for name, value in headers.items():
+        assert value.isascii(), f"{name}={value!r} is not ASCII"
+
+    assert unquote(headers[ERROR_FIELD_HEADER]) == "寿司-id"
+    assert json.loads(headers[ERROR_INFO_HEADER]) == {"note": "café 寿司"}
+
+
+def test_ascii_printable_punctuation_in_field_is_left_alone() -> None:
+    """The percent-encoding only has to fire on non-ASCII: a plain field path
+    -- dots, brackets, an underscore -- passes through unchanged, which is
+    what keeps the plain-ASCII assertions elsewhere in this file (e.g.
+    `sidecar_headers(with_field)[ERROR_FIELD_HEADER] == "price"`) true
+    without any decoding step."""
+    sidecar = unit_error_sidecar(UnitError(UnitErrorKind.MISSING_FIELD), "judgment", field="order.line_items[0].uid")
+    assert sidecar_headers(sidecar)[ERROR_FIELD_HEADER] == "order.line_items[0].uid"
+
+
+def test_a_percent_in_the_field_survives_the_round_trip() -> None:
+    """`%` itself must stay escaped, or `urllib.parse.unquote` on the header a
+    consumer reads back would misparse a literal percent as the start of an
+    escape sequence and return the wrong string."""
+    sidecar = unit_error_sidecar(UnitError(UnitErrorKind.MISSING_FIELD), "judgment", field="100%-off")
+    header_value = sidecar_headers(sidecar)[ERROR_FIELD_HEADER]
+    assert header_value.isascii()
+    assert unquote(header_value) == "100%-off"

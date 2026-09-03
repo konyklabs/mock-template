@@ -13,6 +13,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote, unquote
 
 import httpx
 import pytest
@@ -443,26 +444,151 @@ def test_the_error_sidecar_rides_headers_by_default_and_errors_sidecar_moves_it(
     consumer substituting a recorded real response for this fake's answer
     should see no field the real vendor never sends. `errors.sidecar` says
     where the one dict `unit_error_sidecar` builds rides; walked here through
-    `GET /__unit/errors`, which shapes every kind without consuming one.
+    every row of `GET /__unit/errors` -- all twenty kinds plus `no_route` --
+    not just the first. A regression confined to one shaper branch (a single
+    kind, or the not-found path) would not show up if only the first kind
+    were ever inspected, which is exactly the gap an earlier review round
+    found in this test.
     """
     from vendorfake import available_vendors
 
     kind_header = "Vendorfake-Error-Kind"
+    provenance_header = "Vendorfake-Status-Provenance"
+
+    def rows(catalogue: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+        """Every kind, labelled by its own name, plus `no_route` last."""
+        return [(row["kind"], row) for row in catalogue["kinds"]] + [("no_route", catalogue["no_route"])]
+
     for vendor in available_vendors():
         with unit(vendor) as driver:  # the true default: no env at all
-            row = driver.client.get("/__unit/errors").json()["kinds"][0]
-            assert "unit_error" not in row["body"], f"{vendor}: default profile still leaks unit_error into the body"
-            assert row["headers"].get(kind_header), f"{vendor}: default profile has no sidecar header"
+            catalogue = driver.client.get("/__unit/errors").json()
+            assert catalogue["count"] == len(catalogue["kinds"])
+            for label, row in rows(catalogue):
+                assert "unit_error" not in row["body"], (
+                    f"{vendor}/{label}: default profile still leaks unit_error into the body"
+                )
+                assert row["headers"].get(kind_header), f"{vendor}/{label}: default profile has no sidecar kind header"
+                assert row["headers"].get(provenance_header), (
+                    f"{vendor}/{label}: default profile has no sidecar provenance header"
+                )
 
         with unit(vendor, env={"VENDORFAKE_ERROR_SIDECAR": "body"}) as driver:
-            row = driver.client.get("/__unit/errors").json()["kinds"][0]
-            assert "unit_error" in row["body"], f"{vendor}: errors.sidecar=body dropped the v0.1 body key"
-            assert kind_header not in row["headers"], f"{vendor}: errors.sidecar=body still emits headers"
+            catalogue = driver.client.get("/__unit/errors").json()
+            for label, row in rows(catalogue):
+                assert "unit_error" in row["body"], f"{vendor}/{label}: errors.sidecar=body dropped the v0.1 body key"
+                assert kind_header not in row["headers"], f"{vendor}/{label}: errors.sidecar=body still emits headers"
 
         with unit(vendor, env={"VENDORFAKE_ERROR_SIDECAR": "both"}) as driver:
-            row = driver.client.get("/__unit/errors").json()["kinds"][0]
-            assert "unit_error" in row["body"], f"{vendor}: errors.sidecar=both dropped the body key"
-            assert row["headers"].get(kind_header), f"{vendor}: errors.sidecar=both dropped the headers"
+            catalogue = driver.client.get("/__unit/errors").json()
+            for label, row in rows(catalogue):
+                assert "unit_error" in row["body"], f"{vendor}/{label}: errors.sidecar=both dropped the body key"
+                assert row["headers"].get(kind_header), f"{vendor}/{label}: errors.sidecar=both dropped the headers"
+
+
+# ---------------------------------------------------------------------------
+# The sidecar headers are ASCII-safe (konyklabs/roadmap#71 review, blocker)
+# ---------------------------------------------------------------------------
+
+_INFO_HEADER = "Vendorfake-Error-Info"
+_FIELD_HEADER = "Vendorfake-Error-Field"
+
+
+def test_a_non_ascii_chaos_rule_id_survives_both_transports() -> None:
+    """A chaos rule's own `id` reaches `UnitError.info` verbatim
+    (`core/chaos/faults.py`'s `rule = decision.rule_id`), and it is
+    consumer-supplied text with no ASCII guarantee. Before this fix: in
+    process, `httpx.Response(headers=...)` raised `UnicodeEncodeError` before
+    a response ever came back; over real HTTP, the ASGI stack's Latin-1
+    header encoding turned the intended 429 into an unrelated 500 with no
+    sidecar headers at all.
+    """
+    rule_id = "sushi-寿司-rule"
+    rule = {
+        "id": rule_id,
+        "scope": "request",
+        "fault": "rate_limit",
+        "match": {"route": "GET /v2/locations"},
+        "when": {"nth": [1]},
+    }
+
+    with unit("square") as square:
+        square.add_chaos_rule(rule)
+        response = square.client.get("/v2/locations", headers=square.seed.auth)
+        assert response.status_code == 429
+        info = json.loads(response.headers[_INFO_HEADER])
+        assert info["chaos_rule"] == rule_id
+
+    with unit("square") as square, serve_in_thread(square) as over_http:
+        square.add_chaos_rule(rule)
+        response = over_http.client.get("/v2/locations", headers=square.seed.auth)
+        assert response.status_code == 429
+        info = json.loads(response.headers[_INFO_HEADER])
+        assert info["chaos_rule"] == rule_id
+
+
+def test_a_non_ascii_entity_id_survives_both_transports() -> None:
+    """A consumer-supplied entity id reaches `UnitError.info` verbatim --
+    `DELETE /__unit/chaos/rules/{id}` on a rule that was never added raises
+    the same `info={"id": entity_id}` shape as `core/state/store.py`'s
+    generic not-found (`chaos_rule_delete` in `core/control/plane.py`), from a
+    URL path segment rather than a request body, which is the same failure
+    family as the chaos rule id above from a different consumer-supplied
+    string.
+    """
+    entity_id = "order-寿司-99"
+    path = f"/__unit/chaos/rules/{quote(entity_id, safe='')}"
+
+    with unit("square") as square:
+        response = square.client.delete(path)
+        assert response.status_code == 404
+        info = json.loads(response.headers[_INFO_HEADER])
+        assert info["id"] == entity_id
+
+    with unit("square") as square, serve_in_thread(square) as over_http:
+        response = over_http.client.delete(path)
+        assert response.status_code == 404
+        info = json.loads(response.headers[_INFO_HEADER])
+        assert info["id"] == entity_id
+
+
+def test_a_non_ascii_field_name_survives_both_transports() -> None:
+    """An extra-forbidden key's own name becomes both `field` and an `info`
+    entry (`core/config/models.py`'s `unit_error_from_validation`, reached
+    here through a chaos rule document's `extra="forbid"` schema) -- the one
+    path that exercises `Vendorfake-Error-Field`'s percent-encoding and
+    `Vendorfake-Error-Info`'s ASCII-safe JSON on the same response. The field
+    header must also round-trip through `urllib.parse.unquote` back to the
+    exact key a consumer wrote.
+
+    Toast, not Square: Square's own error body already names the field, so
+    its `errors.py` never puts `field` into the sidecar at all (see
+    `sidecar_headers`'s docstring) and this response would carry no
+    `Vendorfake-Error-Field` header to check. Toast (like Clover) passes
+    `field=err.field or None` through, which is the vendor family this header
+    actually exists for.
+    """
+    bad_key = "寿司"
+    document = {
+        "id": "r-field",
+        "scope": "request",
+        "fault": "rate_limit",
+        "match": {"route": "GET /menus/v3/menus"},
+        bad_key: "unexpected",
+    }
+
+    with unit("toast") as toast:
+        response = toast.client.post("/__unit/chaos/rules", json=document)
+        assert response.status_code == 400
+        assert unquote(response.headers[_FIELD_HEADER]) == bad_key
+        info = json.loads(response.headers[_INFO_HEADER])
+        assert info["errors"][0]["field"] == bad_key
+
+    with unit("toast") as toast, serve_in_thread(toast) as over_http:
+        response = over_http.client.post("/__unit/chaos/rules", json=document)
+        assert response.status_code == 400
+        assert unquote(response.headers[_FIELD_HEADER]) == bad_key
+        info = json.loads(response.headers[_INFO_HEADER])
+        assert info["errors"][0]["field"] == bad_key
 
 
 # ---------------------------------------------------------------------------

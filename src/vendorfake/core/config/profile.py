@@ -312,18 +312,34 @@ def _env_clock_start(env: Mapping[str, str]) -> str | None:
     variable this module parses -- not the bare ``ValueError``
     ``Clock.__init__`` itself raises for a profile document's own malformed
     ``clock.start``, which this loader does not otherwise touch.
+
+    A naive value is refused, not merely parsed: ``datetime.fromisoformat``
+    happily accepts ``"2026-01-01T00:00:00"`` and even a bare
+    ``"2026-01-01"``, neither of which names an instant, and this loader's
+    error message says "RFC 3339 instant" -- an ``UnitError`` naming that
+    format while silently accepting a string outside it would be worse than
+    no check at all. This mirrors the sibling check on the ``datetime`` this
+    module's own callers may pass instead of a string
+    (``vendorfake.testing._clock_start_env_value``), which raises for the
+    identical reason: a naive value has no defined instant across machines.
     """
     raw = env.get("VENDORFAKE_CLOCK_START")
     if not raw:
         return None
     try:
-        datetime.fromisoformat(raw)
+        parsed = datetime.fromisoformat(raw)
     except ValueError as exc:
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,
             detail=f"VENDORFAKE_CLOCK_START={raw!r} is not an RFC 3339 instant, e.g. '2026-01-01T00:00:00Z'.",
             field="VENDORFAKE_CLOCK_START",
         ) from exc
+    if parsed.tzinfo is None:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"VENDORFAKE_CLOCK_START={raw!r} is not an RFC 3339 instant, e.g. '2026-01-01T00:00:00Z'.",
+            field="VENDORFAKE_CLOCK_START",
+        )
     return raw
 
 

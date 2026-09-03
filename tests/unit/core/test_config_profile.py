@@ -333,6 +333,27 @@ def test_a_malformed_clock_start_names_the_expected_format() -> None:
     assert "RFC 3339" in (caught.value.detail or "")
 
 
+@pytest.mark.parametrize("naive", ["2026-01-01T00:00:00", "2026-01-01"])
+def test_a_naive_clock_start_is_refused_not_silently_accepted(naive: str) -> None:
+    """``datetime.fromisoformat`` accepts a naive instant and a bare date --
+    neither is an RFC 3339 *instant*, which is what the error message this
+    loader raises on a malformed value names. Before this fix both silently
+    parsed and resolved to midnight UTC, so a caller who worked around the
+    sibling ``ValueError`` on a naive ``datetime``
+    (``vendorfake.testing._clock_start_env_value``) by switching to a string
+    got no signal that they had routed around the same timezone requirement.
+    """
+    with pytest.raises(UnitError) as caught:
+        resolve_config(
+            ProfileDocument(),
+            name="p",
+            env={"VENDORFAKE_CLOCK": "virtual", "VENDORFAKE_CLOCK_START": naive},
+        )
+    assert caught.value.kind is UnitErrorKind.INVALID_VALUE
+    assert caught.value.field == "VENDORFAKE_CLOCK_START"
+    assert "RFC 3339" in (caught.value.detail or "")
+
+
 def test_clock_start_on_a_real_clock_is_a_loud_refusal_not_a_silent_switch() -> None:
     """The mode default is 'real'; setting only the start must not flip it --
     that would be exactly the silent mode switch the spec forbids."""
