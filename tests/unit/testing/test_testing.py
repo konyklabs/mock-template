@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -18,10 +19,12 @@ import pytest
 
 from vendorfake.conformance.runner import resolve_target, run_check, select_checks
 from vendorfake.conformance.types import Outcome
+from vendorfake.core.kernel.types import UnitError
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.square.signer import verify_square_signature
 from vendorfake.testing import (
     LOG_LINES,
+    ClockInfo,
     CloverSeed,
     Driver,
     ServedUnit,
@@ -116,6 +119,56 @@ def test_the_profile_argument_wins_and_the_default_is_full() -> None:
     with unit("square", "oauth-only") as square:
         assert square.profile == "oauth-only"
         assert square.client.get("/v2/locations", headers=square.seed.auth).status_code == 501
+
+
+# ---------------------------------------------------------------------------
+# clock_start and Driver.clock() (konyklabs/roadmap#71, D1)
+# ---------------------------------------------------------------------------
+
+
+def test_driver_clock_reports_the_mode_and_the_pinned_instant() -> None:
+    with unit("square", env={"VENDORFAKE_CLOCK": "virtual"}, clock_start="2026-01-01T00:00:00Z") as square:
+        info = square.clock()
+        assert isinstance(info, ClockInfo)
+        assert info.mode == "virtual"
+        assert info.now == datetime(2026, 1, 1, tzinfo=UTC)
+        square.advance_clock(1_000)
+        assert square.clock().now == datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC)
+
+
+def test_clock_start_accepts_a_timezone_aware_datetime_the_same_as_a_string() -> None:
+    as_string = datetime(2026, 6, 15, 12, 30, tzinfo=UTC)
+    with unit("square", env={"VENDORFAKE_CLOCK": "virtual"}, clock_start=as_string) as square:
+        assert square.clock().now == as_string
+    with unit("square", env={"VENDORFAKE_CLOCK": "virtual"}, clock_start="2026-06-15T12:30:00Z") as square:
+        assert square.clock().now == as_string
+
+
+def test_a_naive_clock_start_datetime_raises_rather_than_guessing_local_time() -> None:
+    with (
+        pytest.raises(ValueError, match="no timezone"),
+        unit("square", env={"VENDORFAKE_CLOCK": "virtual"}, clock_start=datetime(2026, 1, 1)),
+    ):
+        pass  # pragma: no cover - the context manager never yields
+
+
+def test_clock_start_on_a_real_clock_refuses_rather_than_silently_switching_modes() -> None:
+    with pytest.raises(UnitError, match="virtual"), unit("square", clock_start="2026-01-01T00:00:00Z"):
+        pass  # pragma: no cover - the context manager never yields
+
+
+def test_served_s_clock_start_reaches_the_child_through_this_process_s_own_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`served` has no general ``env`` parameter (see its docstring): every
+    other ``VENDORFAKE_*`` variable already goes through this process's own
+    ``os.environ``, and ``clock_start`` is layered onto exactly that for the
+    child, so the mode still has to come from here."""
+    monkeypatch.setenv("VENDORFAKE_CLOCK", "virtual")
+    with served("square", "no-faults", clock_start="2026-01-01T00:00:00Z") as child:
+        info = child.clock()
+        assert info.mode == "virtual"
+        assert info.now == datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def test_a_memory_sink_captures_instead_of_delivering() -> None:
@@ -367,7 +420,12 @@ def test_no_internal_marker_reaches_a_wire_body_from_any_vendor() -> None:
         return []
 
     for vendor in available_vendors():
-        with unit(vendor) as driver:
+        # errors.sidecar=both, not the default `headers` (konyklabs/roadmap#71):
+        # the check below wants the sidecar as a real dict it can walk, and
+        # `both` is the one mode that still puts it there without giving up
+        # coverage of the headers form (both channels build from the same
+        # dict; see core/kernel/shaping.py).
+        with unit(vendor, env={"VENDORFAKE_ERROR_SIDECAR": "both"}) as driver:
             catalogue = driver.client.get("/__unit/errors")
             assert dunder_keys(catalogue.json()) == [], f"{vendor}: internal key in the error catalogue"
             # The sidecar has to be ON, or this proves nothing: the leak lived
@@ -377,6 +435,34 @@ def test_no_internal_marker_reaches_a_wire_body_from_any_vendor() -> None:
             refused = driver.client.get("/definitely/not/a/route/at/all")
             assert refused.status_code == 404, f"{vendor}: expected a 404, got {refused.status_code}"
             assert dunder_keys(refused.json()) == [], f"{vendor}: internal key in a real refusal"
+
+
+def test_the_error_sidecar_rides_headers_by_default_and_errors_sidecar_moves_it() -> None:
+    """konyklabs/roadmap#71 D2: no 4xx or 5xx body from any vendor contains
+    `unit_error` under the default profile -- the whole point being that a
+    consumer substituting a recorded real response for this fake's answer
+    should see no field the real vendor never sends. `errors.sidecar` says
+    where the one dict `unit_error_sidecar` builds rides; walked here through
+    `GET /__unit/errors`, which shapes every kind without consuming one.
+    """
+    from vendorfake import available_vendors
+
+    kind_header = "Vendorfake-Error-Kind"
+    for vendor in available_vendors():
+        with unit(vendor) as driver:  # the true default: no env at all
+            row = driver.client.get("/__unit/errors").json()["kinds"][0]
+            assert "unit_error" not in row["body"], f"{vendor}: default profile still leaks unit_error into the body"
+            assert row["headers"].get(kind_header), f"{vendor}: default profile has no sidecar header"
+
+        with unit(vendor, env={"VENDORFAKE_ERROR_SIDECAR": "body"}) as driver:
+            row = driver.client.get("/__unit/errors").json()["kinds"][0]
+            assert "unit_error" in row["body"], f"{vendor}: errors.sidecar=body dropped the v0.1 body key"
+            assert kind_header not in row["headers"], f"{vendor}: errors.sidecar=body still emits headers"
+
+        with unit(vendor, env={"VENDORFAKE_ERROR_SIDECAR": "both"}) as driver:
+            row = driver.client.get("/__unit/errors").json()["kinds"][0]
+            assert "unit_error" in row["body"], f"{vendor}: errors.sidecar=both dropped the body key"
+            assert row["headers"].get(kind_header), f"{vendor}: errors.sidecar=both dropped the headers"
 
 
 # ---------------------------------------------------------------------------

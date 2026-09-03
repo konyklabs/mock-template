@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from vendorfake.core.kernel.shaping import (
     DEFAULT_RETRY_AFTER,
+    ERROR_FIELD_HEADER,
+    ERROR_INFO_HEADER,
+    ERROR_KIND_HEADER,
+    STATUS_PROVENANCE_HEADER,
     assert_error_table_total,
     mechanism_headers,
+    sidecar_headers,
     unit_error_sidecar,
 )
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
@@ -110,3 +117,41 @@ def test_every_other_kind_gets_no_mechanism_header() -> None:
         if kind in (UnitErrorKind.RATE_LIMITED, UnitErrorKind.CAPABILITY_DISABLED):
             continue
         assert mechanism_headers(UnitError(kind), retry_after_header=True) == {}, kind
+
+
+# ---------------------------------------------------------------------------
+# the sidecar, as headers (konyklabs/roadmap#71)
+# ---------------------------------------------------------------------------
+
+
+def test_kind_and_provenance_are_always_present() -> None:
+    err = UnitError(UnitErrorKind.NOT_FOUND)
+    sidecar = unit_error_sidecar(err, "judgment")
+    assert sidecar_headers(sidecar) == {
+        ERROR_KIND_HEADER: "not_found",
+        STATUS_PROVENANCE_HEADER: "judgment",
+    }
+
+
+def test_field_gets_its_own_header_only_when_the_sidecar_carries_one() -> None:
+    with_field = unit_error_sidecar(UnitError(UnitErrorKind.MISSING_FIELD), "judgment", field="price")
+    assert sidecar_headers(with_field)[ERROR_FIELD_HEADER] == "price"
+
+    without_field = unit_error_sidecar(UnitError(UnitErrorKind.MISSING_FIELD), "judgment", field=None)
+    assert ERROR_FIELD_HEADER not in sidecar_headers(without_field)
+
+
+def test_everything_else_is_one_compact_json_header() -> None:
+    """Every remaining key -- `info`'s own, and any further vendor extra --
+    goes into one header rather than one header per key: a header per key
+    would make the header *set* vary with the error, not just its value."""
+    err = UnitError(UnitErrorKind.VERSION_CONFLICT, info={"expected": 3, "actual": 4})
+    sidecar = unit_error_sidecar(err, "judgment", reason="stale_version")
+    headers = sidecar_headers(sidecar)
+    assert json.loads(headers[ERROR_INFO_HEADER]) == {"expected": 3, "actual": 4, "reason": "stale_version"}
+    assert ERROR_FIELD_HEADER not in headers
+
+
+def test_the_info_header_is_omitted_when_nothing_is_left_for_it() -> None:
+    sidecar = unit_error_sidecar(UnitError(UnitErrorKind.NOT_FOUND), "judgment")
+    assert ERROR_INFO_HEADER not in sidecar_headers(sidecar)

@@ -56,6 +56,7 @@ from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 __all__ = [
     "ChaosSection",
     "ClockSection",
+    "ErrorsSection",
     "ProfileDocument",
     "ResolvedConfig",
     "RetryPolicy",
@@ -165,6 +166,27 @@ class ClockSection(BaseModel):
     start: str | None = None
 
 
+class ErrorsSection(BaseModel):
+    """The profile's ``errors`` block. Native to this project; the reference
+    has no equivalent, because it never emitted the ``unit_error`` sidecar
+    anywhere but the body.
+
+    ``sidecar`` says *where* the sidecar rides, not *whether* it exists at
+    all -- that switch is each vendor's own ``vendor.error_sidecar`` (e.g.
+    :attr:`~vendorfake.square.config.SquareConfig.error_sidecar`), unchanged.
+    ``"headers"`` (the default, since konyklabs/roadmap#71) keeps a vendor's
+    body byte-for-byte identical to a real, recorded response, which the body
+    key never was: a consumer substituting a recorded fixture for this fake's
+    answer would see an extra field the real vendor never sends. ``"body"``
+    restores the v0.1 behaviour for one minor release
+    (DEPRECATED -- see CHANGELOG.md) and ``"both"`` emits it in both places.
+    """
+
+    model_config = _MODEL
+
+    sidecar: Literal["headers", "body", "both"] = "headers"
+
+
 class TransportSection(BaseModel):
     """Which binding the CLI should stand up, and where.
 
@@ -203,6 +225,7 @@ class ProfileDocument(BaseModel):
     webhooks: WebhooksSection = Field(default_factory=WebhooksSection)
     chaos: ChaosSection = Field(default_factory=ChaosSection)
     clock: ClockSection = Field(default_factory=ClockSection)
+    errors: ErrorsSection = Field(default_factory=ErrorsSection)
 
 
 class ResolvedWebhooks(BaseModel):
@@ -240,6 +263,7 @@ class ResolvedConfig(BaseModel):
     webhooks: ResolvedWebhooks
     chaos: ResolvedChaos
     clock: ClockSection
+    errors: ErrorsSection
     transport: TransportSection
     #: Read here rather than by the logger, so no module reaches for the
     #: process environment on its own. The reference's ``createLogger``

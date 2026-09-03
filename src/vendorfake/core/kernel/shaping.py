@@ -1,10 +1,11 @@
 """The vendor-neutral tail of every error table.
 
-FOR: the three things a vendor's ``ErrorShaper`` does that have nothing to do
-with that vendor's envelope -- the ``unit_error`` sidecar, the two mechanism
-headers, and the import-time check that its table is total -- so that a
-vendor writes its table and its envelope and nothing else. Square and Clover
-each carried all three, line for line, before this module.
+FOR: the things a vendor's ``ErrorShaper`` does that have nothing to do with
+that vendor's envelope -- the ``unit_error`` sidecar (as a body key or as
+headers), the two mechanism headers, and the import-time check that its table
+is total -- so that a vendor writes its table and its envelope and nothing
+else. Square and Clover each carried all of this, line for line, before this
+module.
 
 INVARIANT: **the table is exhaustive, checked at import, as a raise.** A
 missing row would otherwise present as one error kind answering 500 while the
@@ -32,13 +33,25 @@ Reserved keys go **last**, so an ``info`` document that happens to carry a
 vendor switches it with ``"error_sidecar": false`` in a profile's ``vendor``
 block.
 
+**Where it rides is a separate switch.** Until konyklabs/roadmap#71 the sidecar
+was always a ``unit_error`` body key, which put it inside a contract Square's
+and Toast's own envelopes are documented enough to be asserted on -- a
+consumer substituting a recorded real response for this fake's would see one
+extra field the real vendor never sends. ``errors.sidecar`` (profile-level,
+default ``"headers"``, env ``VENDORFAKE_ERROR_SIDECAR``) now says whether the
+same dict :func:`unit_error_sidecar` builds rides as the ``unit_error`` body
+key (``"body"``, the v0.1 behaviour, DEPRECATED), as :func:`sidecar_headers`'
+four ``Vendorfake-*`` headers (``"headers"``, the default), or both.
+
 The headers
 -----------
 ``retry-after`` on a 429, when the vendor's switch is on, from the chaos
 rule's ``retry_after_seconds`` or a one-second fallback (the reference's
 ``Number(info.retryAfterSeconds ?? 1)``); ``x-unit-capability`` on a 501,
 naming the capability that was off. A vendor adds its own documented headers
-around these -- Clover's ``X-RateLimit-*`` set, for one.
+around these -- Clover's ``X-RateLimit-*`` set, for one. The four
+``Vendorfake-*`` sidecar headers are a fourth thing this module builds, on the
+same ``errors.sidecar`` switch described above rather than unconditionally.
 """
 
 from __future__ import annotations
@@ -47,14 +60,19 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
-from vendorfake.core.util.json import compact
+from vendorfake.core.util.json import compact, dump_json
 from vendorfake.core.util.numbers import as_str
 
 __all__ = [
     "DEFAULT_RETRY_AFTER",
+    "ERROR_FIELD_HEADER",
+    "ERROR_INFO_HEADER",
+    "ERROR_KIND_HEADER",
+    "STATUS_PROVENANCE_HEADER",
     "Provenance",
     "assert_error_table_total",
     "mechanism_headers",
+    "sidecar_headers",
     "unit_error_sidecar",
 ]
 
@@ -64,6 +82,19 @@ Provenance = Literal["documented", "judgment"]
 #: The ``retry-after`` value a rate-limited response carries when the header
 #: is on and the chaos rule supplied no interval. One second.
 DEFAULT_RETRY_AFTER = "1"
+
+#: The four headers :func:`sidecar_headers` emits. ``Vendorfake-`` rather than
+#: the existing ``x-unit-`` prefix (:data:`~vendorfake.core.kernel.unit.REQUEST_ID_HEADER`-style,
+#: and ``x-unit-error`` itself, stamped by ``Unit._shape`` on every refusal
+#: regardless of the sidecar) because these four carry the sidecar's *content*
+#: -- an opt-in, switchable document -- where ``x-unit-error`` is a mechanism
+#: header the kernel always sends; giving the two the same prefix would make a
+#: consumer's header allow-list unable to tell "always there" from
+#: "only when the sidecar is on" apart.
+ERROR_KIND_HEADER = "Vendorfake-Error-Kind"
+STATUS_PROVENANCE_HEADER = "Vendorfake-Status-Provenance"
+ERROR_FIELD_HEADER = "Vendorfake-Error-Field"
+ERROR_INFO_HEADER = "Vendorfake-Error-Info"
 
 
 def assert_error_table_total(table: Mapping[UnitErrorKind, object] | Mapping[str, object], *, name: str) -> None:
@@ -108,6 +139,39 @@ def unit_error_sidecar(err: UnitError, provenance: Provenance, **extra: Any) -> 
             **extra,
         }
     )
+
+
+def sidecar_headers(sidecar: Mapping[str, Any]) -> dict[str, str]:
+    """:func:`unit_error_sidecar`'s dict, reshaped as headers.
+
+    FOR: ``errors.sidecar: "headers"`` (the default since konyklabs/roadmap#71)
+    and ``"both"``. One place builds these from the sidecar dict so every
+    vendor's ``errors.py`` calls it instead of each writing ``x-vendorfake-*``
+    headers by hand -- exactly the reasoning that put :func:`unit_error_sidecar`
+    itself here rather than in each vendor's table.
+
+    Four headers, not one per ``info`` key: :data:`ERROR_KIND_HEADER` and
+    :data:`STATUS_PROVENANCE_HEADER` carry the two keys every sidecar has;
+    :data:`ERROR_FIELD_HEADER` carries ``field`` only when a vendor supplied
+    one (Square's own body already names the field, so its sidecar never
+    does); everything else -- every ``info`` key and any further vendor extra
+    -- is one compact JSON document in :data:`ERROR_INFO_HEADER`, omitted
+    when there is nothing left to put in it. A header per ``info`` key would
+    make the header *set* vary with the error, which is a worse contract for
+    a consumer's client than one header whose *value* varies.
+    """
+    reserved = ("kind", "status_provenance", "field")
+    headers: dict[str, str] = {
+        ERROR_KIND_HEADER: as_str(sidecar.get("kind"), ""),
+        STATUS_PROVENANCE_HEADER: as_str(sidecar.get("status_provenance"), ""),
+    }
+    field = sidecar.get("field")
+    if field is not None:
+        headers[ERROR_FIELD_HEADER] = as_str(field, "")
+    extra = {key: value for key, value in sidecar.items() if key not in reserved}
+    if extra:
+        headers[ERROR_INFO_HEADER] = dump_json(extra).decode("utf-8")
+    return headers
 
 
 def mechanism_headers(err: UnitError, *, retry_after_header: bool) -> dict[str, str]:

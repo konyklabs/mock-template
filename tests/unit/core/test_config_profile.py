@@ -161,9 +161,12 @@ def test_the_process_environment_is_never_read(tmp_path: Path, monkeypatch: pyte
 
 def test_the_table_carries_the_sixteen_reference_names_renamed() -> None:
     """Renaming is checkable rather than remembered: a variable lost in
-    translation shows up here as a failure."""
-    assert len(ENV_TABLE) == 16
-    assert [var.replaces for var in ENV_TABLE] == [
+    translation shows up here as a failure. Ported rows only -- the two
+    vendorfake-native rows (``replaces=""``) added since have no reference
+    name to check against; :func:`test_the_native_rows_declare_no_reference_equivalent`
+    pins those."""
+    ported = [var for var in ENV_TABLE if var.replaces]
+    assert [var.replaces for var in ported] == [
         "UNIT_PROFILE",
         "UNIT_CAPABILITIES",
         "UNIT_SEED",
@@ -183,6 +186,16 @@ def test_the_table_carries_the_sixteen_reference_names_renamed() -> None:
     ]
     assert all(name.startswith("VENDORFAKE_") for name in env_names())
     assert sum(1 for var in ENV_TABLE if var.is_prefix) == 1
+
+
+def test_the_native_rows_declare_no_reference_equivalent() -> None:
+    """konyklabs/roadmap#71: ``VENDORFAKE_CLOCK_START`` and
+    ``VENDORFAKE_ERROR_SIDECAR`` are controls this project added; the
+    reference never emitted a switchable sidecar location or an env-settable
+    clock start, so there is no name to cite and ``replaces`` says so."""
+    native = {var.name for var in ENV_TABLE if not var.replaces}
+    assert native == {"VENDORFAKE_CLOCK_START", "VENDORFAKE_ERROR_SIDECAR"}
+    assert len(ENV_TABLE) == 18
 
 
 def test_no_unit_prefixed_alias_is_honoured() -> None:
@@ -291,6 +304,77 @@ def test_an_unknown_clock_mode_is_rejected_rather_than_cast() -> None:
         resolve_config(ProfileDocument(), name="p", env={"VENDORFAKE_CLOCK": "wall"})
     assert caught.value.kind is UnitErrorKind.INVALID_VALUE
     assert caught.value.field == "VENDORFAKE_CLOCK"
+
+
+# ---------------------------------------------------------------------------
+# VENDORFAKE_CLOCK_START (konyklabs/roadmap#71, D1)
+# ---------------------------------------------------------------------------
+
+
+def test_clock_start_is_reproducible_across_two_resolves() -> None:
+    """The whole point: two calls with the same env agree, where the mode-only
+    control left the start instant to wall-clock luck."""
+    env = {"VENDORFAKE_CLOCK": "virtual", "VENDORFAKE_CLOCK_START": "2026-01-01T00:00:00Z"}
+    first = resolve_config(ProfileDocument(), name="p", env=env)
+    second = resolve_config(ProfileDocument(), name="p", env=env)
+    assert first.clock.start == second.clock.start == "2026-01-01T00:00:00Z"
+    assert first.clock.mode == "virtual"
+
+
+def test_a_malformed_clock_start_names_the_expected_format() -> None:
+    with pytest.raises(UnitError) as caught:
+        resolve_config(
+            ProfileDocument(),
+            name="p",
+            env={"VENDORFAKE_CLOCK": "virtual", "VENDORFAKE_CLOCK_START": "not-an-instant"},
+        )
+    assert caught.value.kind is UnitErrorKind.INVALID_VALUE
+    assert caught.value.field == "VENDORFAKE_CLOCK_START"
+    assert "RFC 3339" in (caught.value.detail or "")
+
+
+def test_clock_start_on_a_real_clock_is_a_loud_refusal_not_a_silent_switch() -> None:
+    """The mode default is 'real'; setting only the start must not flip it --
+    that would be exactly the silent mode switch the spec forbids."""
+    with pytest.raises(UnitError) as caught:
+        resolve_config(ProfileDocument(), name="p", env={"VENDORFAKE_CLOCK_START": "2026-01-01T00:00:00Z"})
+    assert caught.value.kind is UnitErrorKind.INVALID_VALUE
+    assert caught.value.field == "VENDORFAKE_CLOCK_START"
+    assert "virtual" in (caught.value.detail or "")
+
+
+def test_clock_start_is_fine_when_the_profile_document_itself_sets_virtual_mode() -> None:
+    """The guard reads the resolved mode, not just the env layer: a profile
+    document's own clock.mode='virtual' satisfies it without VENDORFAKE_CLOCK."""
+    config = resolve_config(
+        ProfileDocument(clock={"mode": "virtual"}),  # type: ignore[arg-type]
+        name="p",
+        env={"VENDORFAKE_CLOCK_START": "2026-01-01T00:00:00Z"},
+    )
+    assert config.clock.mode == "virtual"
+    assert config.clock.start == "2026-01-01T00:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# VENDORFAKE_ERROR_SIDECAR (konyklabs/roadmap#71, D2)
+# ---------------------------------------------------------------------------
+
+
+def test_error_sidecar_defaults_to_headers() -> None:
+    assert resolve_config(ProfileDocument(), name="p").errors.sidecar == "headers"
+
+
+@pytest.mark.parametrize("mode", ["headers", "body", "both"])
+def test_error_sidecar_env_overrides_the_profile_document(mode: str) -> None:
+    config = resolve_config(ProfileDocument(), name="p", env={"VENDORFAKE_ERROR_SIDECAR": mode})
+    assert config.errors.sidecar == mode
+
+
+def test_an_unknown_error_sidecar_mode_is_rejected() -> None:
+    with pytest.raises(UnitError) as caught:
+        resolve_config(ProfileDocument(), name="p", env={"VENDORFAKE_ERROR_SIDECAR": "query-string"})
+    assert caught.value.kind is UnitErrorKind.INVALID_VALUE
+    assert caught.value.field == "VENDORFAKE_ERROR_SIDECAR"
 
 
 def test_a_misspelled_profile_key_is_a_startup_failure_naming_the_field() -> None:

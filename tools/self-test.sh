@@ -47,6 +47,11 @@ step "wheel data"        uv run python tools/check_wheel_data.py
 # the only place the aggregate rule -- every contract passed on at least one
 # profile -- is answerable at all. Every target runs every step: a vendor
 # whose matrix only ever ran on a laptop would ship a regression green.
+#
+# `-p vendorfake.conformance.plugin` loads the conformance plugin explicitly:
+# since konyklabs/roadmap#71 it is no longer a `pytest11` entry point that
+# installing the wheel auto-loads into every consumer's pytest run -- only
+# `vendorfake.pytest` (the `vendorfake` marker and its two fixtures) is.
 for entry in "${TARGETS[@]}"; do
   vendor="${entry%%=*}"
   TARGET="${entry#*=}"
@@ -56,6 +61,7 @@ for entry in "${TARGETS[@]}"; do
     uv run python -m vendorfake.conformance --target "$TARGET" --transport http --profile full
   step "plugin ($vendor)" \
     uv run python -m pytest --pyargs vendorfake.conformance -q \
+      -p vendorfake.conformance.plugin \
       --conformance-target "$TARGET" --conformance-strict
 done
 

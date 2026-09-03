@@ -32,6 +32,7 @@ these helpers and one written against the container.
 from __future__ import annotations
 
 import collections
+import os
 import queue
 import re
 import subprocess
@@ -41,7 +42,8 @@ import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from vendorfake.asgi import FrameworkTripwire
@@ -63,6 +65,7 @@ __all__ = [
     "DRAIN_TIMEOUT_S",
     "LOG_LINES",
     "SERVE_COMMAND",
+    "ClockInfo",
     "CloverSeed",
     "Delivery",
     "Driver",
@@ -100,6 +103,34 @@ exhausted -- settles in about fifteen seconds of real time."""
 _LISTENING = re.compile(r"listening on http://([^:\s]+):(\d+)")
 
 
+@dataclass(frozen=True, slots=True)
+class ClockInfo:
+    """The unit's clock, as :meth:`Driver.clock` reads it off ``/__unit/info``."""
+
+    now: datetime
+    mode: Literal["real", "virtual"]
+
+
+def _clock_start_env_value(clock_start: datetime | str) -> str:
+    """``VENDORFAKE_CLOCK_START``'s value, from either spelling :func:`unit`
+    and :func:`served` accept.
+
+    A naive ``datetime`` raises rather than being read as local time: a
+    ``clock_start`` two developers on two machines both wrote as
+    ``datetime(2026, 1, 1)`` must pin the same instant, and reading it as
+    local time would make it pin a different one on each machine -- silently,
+    since nothing about a naive ``datetime`` says which machine wrote it.
+    """
+    if isinstance(clock_start, str):
+        return clock_start
+    if clock_start.tzinfo is None:
+        raise ValueError(
+            f"clock_start={clock_start!r} has no timezone. A naive datetime has no defined instant across "
+            "machines; pass a timezone-aware one (e.g. datetime(..., tzinfo=UTC)) or an RFC 3339 string."
+        )
+    return clock_start.isoformat()
+
+
 @dataclass
 class Driver:
     """A unit you can talk to, however it was started."""
@@ -117,6 +148,16 @@ class Driver:
 
     def info(self) -> dict[str, Any]:
         return self._json(self.client.get("/__unit/info"))
+
+    def clock(self) -> ClockInfo:
+        """The unit's clock right now: its mode, and its current instant.
+
+        Reads ``/__unit/info``, so this is another request against the unit
+        like :meth:`health` and :meth:`deliveries` -- it advances nothing,
+        real or virtual.
+        """
+        payload = self.info()["clock"]
+        return ClockInfo(now=datetime.fromisoformat(str(payload["now"])), mode=payload["mode"])
 
     def deliveries(self) -> list[dict[str, Any]]:
         """Every webhook delivery attempt the unit made, oldest first."""
@@ -304,6 +345,7 @@ def unit(
     env: Mapping[str, str] | None = None,
     logger: Logger | None = None,
     seed: int | None = None,
+    clock_start: datetime | str | None = None,
 ) -> Iterator[StartedUnit]:
     """A unit in this process, stopped however the block ends.
 
@@ -323,8 +365,19 @@ def unit(
     ``seed`` restarts the stream (and the fault engine's RNG) from another
     number, for the rare test that needs two units to diverge; it is the
     ``VENDORFAKE_CHAOS_SEED`` layer, so an explicit ``env`` entry wins.
+
+    ``clock_start`` (a timezone-aware ``datetime``, or an RFC 3339 string) is
+    ``VENDORFAKE_CLOCK_START``: the instant a virtual clock starts at, so two
+    units built from it agree on every expiry down to the second -- see
+    :meth:`Driver.clock`. It requires ``clock.mode="virtual"`` and raises
+    rather than switching modes for you: set ``env={"VENDORFAKE_CLOCK":
+    "virtual"}`` (or ``VENDORFAKE_CLOCK=virtual`` for :func:`served`)
+    yourself, so a test that forgot it fails loudly instead of silently
+    running on a real clock the pinned start never touches.
     """
     environ: dict[str, str] = {} if seed is None else {"VENDORFAKE_CHAOS_SEED": str(seed)}
+    if clock_start is not None:
+        environ["VENDORFAKE_CLOCK_START"] = _clock_start_env_value(clock_start)
     environ.update(env or {})
     # This import brings the web framework in (FrameworkTripwire lives in
     # vendorfake.asgi), and it is paid deliberately: `framework_answered` must
@@ -393,6 +446,7 @@ def served(
     host: str = "127.0.0.1",
     log_level: str = "error",
     timeout_s: float = STARTUP_TIMEOUT_S,
+    clock_start: datetime | str | None = None,
 ) -> Iterator[ServedUnit]:
     """``vendorfake serve`` in a child process, with its URL.
 
@@ -407,6 +461,15 @@ def served(
     ``timeout_s`` is a real deadline: a child that never announces -- wedged,
     or not vendorfake at all -- is stopped and reported rather than waited
     on forever.
+
+    ``clock_start`` is :func:`unit`'s ``VENDORFAKE_CLOCK_START`` control,
+    layered onto this process's own environment for the child -- ``served``
+    has no general ``env`` parameter, so every other ``VENDORFAKE_*`` variable
+    still goes through your own ``os.environ`` before calling this, the way
+    the module docstring above describes. It requires ``VENDORFAKE_CLOCK=virtual``
+    already set there; the child raises the same loud refusal :func:`unit`
+    does rather than switching modes for you, and a refusal here surfaces as
+    the child exiting before it announces a port.
     """
     argv = [
         *SERVE_COMMAND,
@@ -421,7 +484,21 @@ def served(
         "--log-level",
         log_level,
     ]
-    process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # `cli.py` is documented as the only module that *reads* `os.environ` to
+    # resolve a unit's own config, so that a stray shell variable cannot
+    # silently change which profile a unit in *this* process resolves to.
+    # This reads it too, but for a different reason with the opposite
+    # failure mode: `Popen(argv)` with no `env=` already inherits the whole
+    # of `os.environ` for the child implicitly (that is plain subprocess
+    # behaviour, unrelated to this project), and `Popen`'s `env=` replaces
+    # rather than layers -- so naming one more variable for the child without
+    # dropping the rest of its inherited environment has no path that avoids
+    # this dict read. `None` (the exact prior behaviour) is used whenever
+    # `clock_start` is not given.
+    child_env = (
+        None if clock_start is None else {**os.environ, "VENDORFAKE_CLOCK_START": _clock_start_env_value(clock_start)}
+    )
+    process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=child_env)
     output = _ChildOutput(process)
     try:
         base_url = _wait_for_announcement(process, output, timeout_s)
