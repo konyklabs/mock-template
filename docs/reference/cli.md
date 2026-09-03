@@ -20,6 +20,10 @@ positional arguments:
     profiles     List the profiles a vendor ships.
     routes       List a vendor's route table.
     faults       List the built-in fault catalogue.
+    agent-setup  Write a Claude Code rules file for a consumer repo (and
+                 optionally an .mcp.json entry).
+    explain      Explain one route, fault, profile, error kind, or
+                 Vendorfake-* header.
     conformance  Run the conformance contracts against a unit.
 
 options:
@@ -142,6 +146,45 @@ options:
 
 ```text
 usage: vendorfake faults [-h] [--json]
+
+options:
+  -h, --help  show this help message and exit
+  --json      Machine output: one JSON document on stdout, nothing else on
+              stdout.
+```
+
+## `vendorfake agent-setup`
+
+```text
+usage: vendorfake agent-setup [-h] [--dir DIR] [--tests-glob TESTS_GLOB]
+                              [--mcp] [--allow-future] [--force]
+
+options:
+  -h, --help            show this help message and exit
+  --dir DIR             Repo root to write into. Defaults to the current
+                        directory.
+  --tests-glob TESTS_GLOB
+                        Glob the rules file's `paths:` frontmatter is scoped
+                        to. Defaults to 'tests/**'.
+  --mcp                 Also add a vendorfake entry to <dir>/.mcp.json.
+  --allow-future        Required together with --mcp to actually write the
+                        .mcp.json entry; `vendorfake mcp` does not exist until
+                        0.4. Without it, --mcp only prints a notice.
+  --force               Overwrite an existing rules file.
+```
+
+## `vendorfake explain`
+
+```text
+usage: vendorfake explain [-h] [--json] KIND ...
+
+positional arguments:
+  KIND
+    route     One route, by operation_id.
+    fault     One fault, by name.
+    profile   One profile, by name.
+    error     One core error kind, by name.
+    header    One Vendorfake-* header, by name.
 
 options:
   -h, --help  show this help message and exit
