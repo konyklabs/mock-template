@@ -164,10 +164,15 @@ consumer's CI should run against its own suite -- see this project's own
 ## What not to import
 
 `vendorfake.asgi` and `vendorfake.core` are internal. A test imports
-`vendorfake.testing`, `vendorfake.registry`, or a vendor's public surface
-(`vendorfake.square.signer`, ...) -- never those two. `vendorfake explain
-<route|fault|profile|error|header> <name>` answers "what is this" without
-opening the source at all.
+`vendorfake.testing`, `vendorfake.registry`, or a vendor's `paths` module
+(`vendorfake.square.paths`, ...) -- the one per-vendor import
+[the public API contract](https://github.com/konyklabs/vendorfake/blob/main/docs/api-contract.md)
+pins. A vendor's webhook signature scheme is documented and independently
+verifiable there too; the module that implements it (`vendorfake.square.signer`,
+...) is not one of the pinned imports, so verify a delivery against the
+documented algorithm rather than depending on that module's path. `vendorfake
+explain <route|fault|profile|error|header> <name>` answers "what is this"
+without opening the source at all.
 """
 
 

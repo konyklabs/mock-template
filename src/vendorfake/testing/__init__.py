@@ -61,7 +61,7 @@ import httpx
 
 from vendorfake import registry
 from vendorfake.core.config.models import UnmatchedPolicy
-from vendorfake.core.config.profile import load_profile
+from vendorfake.core.config.profile import ENV_VENDOR_PREFIX, load_profile
 from vendorfake.core.control.plane import DEFAULT_REQUEST_LIMIT
 from vendorfake.core.kernel.types import Logger
 from vendorfake.core.kernel.unit import Unit
@@ -1191,6 +1191,14 @@ def _served(
     does rather than switching modes for you, and a refusal here surfaces as
     the child exiting before it announces a port.
 
+    One of those other ``VENDORFAKE_*`` variables does not stay purely the
+    child's concern: any ``VENDORFAKE_VENDOR_*`` entry in this process's
+    ``os.environ`` is read here too, and layered onto the profile's own
+    ``vendor`` block the same way ``resolve_config`` layers it for the child,
+    so the seed handed back agrees with the credentials the served unit
+    actually answers with. Every other variable is the child's alone, exactly
+    as the paragraph above says.
+
     A nonexistent (or otherwise malformed) ``profile`` is refused with
     ``UnitError`` -- the same exception :func:`unit` raises for the identical
     mistake -- before ``subprocess.Popen`` ever runs, because the profile is
@@ -1210,15 +1218,41 @@ def _served(
     # vendor has no seed (or was seeded from the wrong vendor block) wastes
     # the startup on every call in a suite that does this per test, and
     # points the traceback at a line inside a connected client rather than at
-    # the vendor argument that is actually wrong. `profile` has nothing left
-    # to resolve here -- unlike `unit()`, `served()` has no `env` layer that
-    # could move it away from what the caller spelled, so the argument
-    # already is the resolved value; `load_profile` is called with no `env=`
-    # for the same reason -- and because this module is documented as never
-    # reading `os.environ` to resolve a unit's own config, which is `cli.py`'s
-    # job alone (see the child-spawning `env=` handling below, which is a
-    # different thing: passing the real environment *to the child*, not
-    # reading it to resolve *this* config).
+    # the vendor argument that is actually wrong.
+    #
+    # `env=vendor_env` -- not the no-`env=` this call used before -- because
+    # the child below is *not* built from `profile` alone: it inherits this
+    # process's whole `os.environ` (see the `Popen` call further down), and
+    # `cli.py`'s own `_serve` layers every `VENDORFAKE_VENDOR_*` variable in
+    # it onto the profile's `vendor` block before building its unit. Loading
+    # the profile here with no `env=` (the previous shape of this call)
+    # computed a `vendor_config` that quietly stopped matching the child's the
+    # moment such a variable was set -- review found this: a suite exporting
+    # `VENDORFAKE_VENDOR_APPLICATION_ID` for the whole run got a seed here
+    # that still carried the profile document's own id, while the served
+    # unit answered with the overridden one. `vendor_env` is filtered to just
+    # that one prefix rather than passed as the whole of `os.environ`,
+    # because `resolve_config` also reads `VENDORFAKE_CAPABILITIES`,
+    # `VENDORFAKE_CLOCK*` and the webhook-URL variables from `env=`, and
+    # nothing here needs them: only `loaded.config.vendor_config` is read
+    # below, and pulling in the rest would let an unrelated ambient variable
+    # (a stray `VENDORFAKE_CLOCK_START` without `VENDORFAKE_CLOCK=virtual` in
+    # the caller's shell, say) fail this call for a reason that has nothing
+    # to do with the seed it computes -- a failure `served()`'s own
+    # `clock_start=` handling below is deliberately the only thing that
+    # should be able to trigger, and did before this change.
+    #
+    # This is a narrow, deliberate second exception to `cli.py`'s "the only
+    # module that reads `os.environ`" invariant (see that module's docstring)
+    # -- the same exception the child-spawning `env=` handling further down
+    # already is, for the same reason: `served()` hands a subprocess the real
+    # environment by construction (that is what "serve this in a child
+    # process" means), so the parent-side computation that has to agree with
+    # what that child resolves cannot be built from an empty mapping the way
+    # `unit()`'s can. Reading a name *to pass to the child unchanged* and
+    # reading the one prefix of it *this process also needs to agree with*
+    # are the same underlying fact about `served()`, not two different
+    # invariant violations.
     #
     # `seed_for` is handed the profile's real `vendor` block --
     # `loaded.config.vendor_config` -- exactly as `unit()` hands it
@@ -1244,10 +1278,12 @@ def _served(
     # test can patch.
     definition = registry.resolve_vendor(vendor)
     resolved_name = definition.name
+    vendor_env = {key: value for key, value in os.environ.items() if key.startswith(ENV_VENDOR_PREFIX)}
     loaded = load_profile(
         profile_dir=definition.profile_dir,
         name=profile,
         base_dir=definition.base_dir,
+        env=vendor_env,
         defaults=definition.retry_defaults,
     )
     resolved_seed = _require_seed(
@@ -1266,17 +1302,19 @@ def _served(
         "--log-level",
         log_level,
     ]
-    # `cli.py` is documented as the only module that *reads* `os.environ` to
-    # resolve a unit's own config, so that a stray shell variable cannot
-    # silently change which profile a unit in *this* process resolves to.
-    # This reads it too, but for a different reason with the opposite
-    # failure mode: `Popen(argv)` with no `env=` already inherits the whole
-    # of `os.environ` for the child implicitly (that is plain subprocess
-    # behaviour, unrelated to this project), and `Popen`'s `env=` replaces
-    # rather than layers -- so naming one more variable for the child without
-    # dropping the rest of its inherited environment has no path that avoids
-    # this dict read. `None` (the exact prior behaviour) is used whenever
-    # `clock_start` is not given.
+    # `cli.py` is documented as the only module that reads `os.environ` to
+    # resolve a unit *built in that process*, so that a stray shell variable
+    # cannot silently change which profile a unit in *this* process resolves
+    # to -- `vendor_env` above is `served()`'s one narrow, documented
+    # exception to that, and this is the other: reading it here is for a
+    # different reason with the opposite failure mode. `Popen(argv)` with no
+    # `env=` already inherits the whole of `os.environ` for the child
+    # implicitly (that is plain subprocess behaviour, unrelated to this
+    # project), and `Popen`'s `env=` replaces rather than layers -- so naming
+    # one more variable for the child without dropping the rest of its
+    # inherited environment has no path that avoids this dict read. `None`
+    # (the exact prior behaviour) is used whenever `clock_start` is not
+    # given.
     child_env = (
         None if clock_start is None else {**os.environ, "VENDORFAKE_CLOCK_START": _clock_start_env_value(clock_start)}
     )
@@ -1291,10 +1329,14 @@ def _served(
                 profile=str(health["profile"]),
                 base_url=base_url,
                 client=client,
-                # The child's profile is not readable over the wire, so the
-                # application credentials are the vendor's defaults -- what
-                # every shipped profile sets. A custom profile that overrides
-                # them is a case for `unit()`, where the seed reads the config.
+                # `resolved_seed` is built above, before the child exists, from
+                # the same profile document and the same `VENDORFAKE_VENDOR_*`
+                # environment layer the child resolves its own config from
+                # (`vendor_env`, above) -- not the child's profile read back
+                # over the wire, which no route publishes. A custom profile's
+                # overrides, and an ambient `VENDORFAKE_VENDOR_*` override,
+                # both reach this seed the same way they reach the served
+                # unit's real credentials.
                 seed=resolved_seed,
                 process=process,
                 _output=output,

@@ -40,19 +40,32 @@ __all__ = [
 
 
 def _check_profile(vendor: str, profile: str) -> None:
-    """Refuse an unknown ``profile`` before a unit is built from it.
+    """Refuse an unknown *named* ``profile`` before a unit is built from it.
 
-    ``create_unit`` would eventually raise ``vendorfake.core.kernel.types.UnitError``
-    for a bad profile -- naming an absolute filesystem path, not the vendor's
-    real profile names, and not a ``ValueError`` this module's callers (and
-    ``cli.py:_explain``) know how to turn into a clean refusal. Checked here,
-    the same way ``explain_error`` checks ``kind`` against
-    ``UnitErrorKind`` before calling ``create_unit`` at all, in the same
-    message shape :func:`explain_profile` already uses for a bad profile
-    name.
+    A path-form ``profile`` -- absolute, or ending in ``.json``, the same
+    heuristic ``core/config/profile.py``'s ``profile_path`` uses -- is let
+    through unchecked: every other subcommand accepts ``--profile
+    ./my-profile.json`` alongside ``--profile full``, and this used to be the
+    one command that could not, because it checked ``profile`` against the
+    vendor's *named* profiles only and had no way to say "not a name, but
+    that's fine". A bad path still fails, just one call later, in
+    ``create_unit`` -> ``load_profile`` -- the same ``UnitError``
+    :func:`explain_route`/:func:`explain_error`'s caller (``cli.py:_explain``)
+    now catches alongside ``ValueError``, so it is no longer a traceback
+    (konyklabs/roadmap#74).
+
+    A named ``profile`` is still checked eagerly, before a unit is built,
+    for the same reason ``explain_error`` checks ``kind`` against
+    ``UnitErrorKind`` first: :func:`explain_profile` already uses this
+    message shape for a bad profile name, and the two callers of a bad name
+    should say the identical thing.
     """
+    from pathlib import Path
+
     from vendorfake.registry import available_profiles
 
+    if Path(profile).is_absolute() or profile.endswith(".json"):
+        return
     offered = sorted(row.name for row in available_profiles(vendor))
     if profile not in offered:
         raise ValueError(f"no profile named {profile!r} for vendor {vendor!r}. Available: {', '.join(offered)}")
@@ -312,6 +325,25 @@ def _headers() -> tuple[_HeaderInfo, ...]:
             "first: {route, score, operation_id}.",
             "on any response to a request that matched no route, over HTTP (served or container) -- "
             "in process the same information is an UnmatchedRequest exception by default",
+        ),
+        # `vendorfake-fault` / `vendorfake-rule` have no named constant to import
+        # -- every site that sets or reads them (core/chaos/faults.py's
+        # `_stamp`, core/kernel/unit.py's `_shape`, testing/transport.py) spells
+        # the literal string, so a constant here would be the one place
+        # inventing a name nothing else uses. `docs/api-contract.md`'s
+        # `Vendorfake-*` table is the canonical wording these two summaries are
+        # copied from.
+        _HeaderInfo(
+            _display("vendorfake-fault"),
+            "The chaos fault kind that shaped this response, e.g. 'rate_limit'.",
+            "on any response a chaos rule armed with a fault -- whether the fault raised a refusal "
+            "(kernel/unit.py's _shape) or corrupted an otherwise successful response "
+            "(core/chaos/faults.py's _stamp) -- over HTTP (served or container) or in process alike",
+        ),
+        _HeaderInfo(
+            _display("vendorfake-rule"),
+            "The id of the chaos rule that fired.",
+            "alongside Vendorfake-Fault, on the same responses",
         ),
     )
 

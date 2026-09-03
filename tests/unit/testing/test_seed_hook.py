@@ -206,6 +206,40 @@ def test_served_gives_the_hook_the_profiles_real_vendor_block(tmp_path: Path, mo
     )
 
 
+def test_served_layers_a_vendorfake_vendor_override_onto_the_seed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deep lens, F increment (konyklabs/roadmap#74): the parent-side seed
+    used to compute ``vendor_config`` from the profile document alone, while
+    the child -- ``vendorfake serve``, spawned with this process's whole
+    ``os.environ`` -- layers every ``VENDORFAKE_VENDOR_*`` variable on top,
+    the same way ``create_unit`` does for any caller that passes ``env=``.
+    A suite exporting ``VENDORFAKE_VENDOR_APP_ID`` for its whole run got a
+    seed here that still reported the profile document's own id, while the
+    served unit it configured against answered with the override -- a 401 a
+    consumer's test could not explain from its own assertions. Stopped at
+    ``subprocess.Popen``, the same way the test above proves the profile
+    half, so nothing here depends on a real child actually starting.
+    """
+    definition = _install(SeedingFakeVendor(), tmp_path, monkeypatch)
+    monkeypatch.setenv("VENDORFAKE_VENDOR_APP_ID", "env-override-app")
+
+    def stop_at_the_spawn_point(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+        raise RuntimeError("sentinel: served() reached subprocess.Popen, which is as far as this test goes")
+
+    monkeypatch.setattr(subprocess, "Popen", stop_at_the_spawn_point)
+
+    with pytest.raises(RuntimeError, match="sentinel: served"):  # noqa: SIM117 - the `with served(...)` is the subject
+        with served("acme", "acme-full") as driver:
+            pytest.fail(f"served() yielded {driver!r} instead of reaching the sentinel Popen")
+
+    assert isinstance(definition, SeedingFakeVendor)
+    # The override reaches the hook, and a sibling key the environment never
+    # named still comes from the profile document -- a layer, not a replace.
+    assert definition.seed_calls[-1]["app_id"] == "env-override-app"
+    assert definition.seed_calls[-1]["app_secret"] == VENDOR_BLOCK["app_secret"]
+
+
 def test_a_hook_returning_the_wrong_shape_is_named_at_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """As a hook defect, on the vendor, rather than as an ``AttributeError``
     on ``started.seed.credentials`` three frames into a consumer's test."""

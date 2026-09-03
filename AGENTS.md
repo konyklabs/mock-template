@@ -72,9 +72,12 @@ matter most:
 - Pydantic is permitted in `core/` only in the three files
   `tools/boundary.toml` names, because it parses an external document there;
   everywhere else in `core/` an entity stays a plain dict.
-- `cli.py` reads `os.environ` and nowhere else does; every first-party import
-  in it happens inside a function body so `vendorfake --help` never pays for
-  importing a web framework.
+- `cli.py` is the only module that resolves a unit's config from `os.environ`;
+  every first-party import in it happens inside a function body so `vendorfake
+  --help` never pays for importing a web framework. `vendorfake.testing.served()`
+  is the one documented exception, because it spawns `cli.py`'s own `serve`
+  subcommand as a child that inherits the real environment regardless -- see
+  its docstring in `src/vendorfake/testing/__init__.py`.
 
 ## Provenance labels
 

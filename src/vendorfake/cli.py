@@ -4,13 +4,23 @@ FOR: turning a shell invocation into a running unit, a description of one, or a
 report about one, without any other module in the distribution needing to know
 that a process environment exists.
 
-INVARIANT: **this is the only module that touches ``os.environ``.**
-``create_unit``'s ``env`` parameter defaults to an empty mapping, deliberately,
-so that a variable set by one test cannot change the profile a unit built by
-another test resolves to -- a whole class of order-dependent flake that simply
-cannot occur when the environment is passed in rather than read. The privilege
-of reading the real environment belongs to the process boundary, and this is
-it.
+INVARIANT: **this is the only module that resolves a unit's config from
+``os.environ``.** ``create_unit``'s ``env`` parameter defaults to an empty
+mapping, deliberately, so that a variable set by one test cannot change the
+profile a unit built by another test resolves to -- a whole class of
+order-dependent flake that simply cannot occur when the environment is passed
+in rather than read. The privilege of reading the real environment to resolve
+a unit belongs to the process boundary, and this is it.
+
+``vendorfake.testing.served()`` reads ``os.environ`` too, and is the one
+documented exception: it spawns this module's own ``serve`` subcommand as a
+child, which inherits the real environment by construction (that is what
+running a subprocess means, not a choice this project made), so it reads
+``os.environ``'s ``VENDORFAKE_VENDOR_*`` entries in the parent as well, to
+keep the seed it hands back in step with what that child resolves. See its
+docstring in ``vendorfake/testing/__init__.py``. Nothing about that exception
+lets a unit built *in this process* -- by ``create_unit``, or by ``unit()``,
+which calls it -- see a variable its caller did not pass explicitly.
 
 SECOND INVARIANT: **``vendorfake --help`` imports no web framework.** Every
 first-party import below happens inside a subcommand body, and the ``serve``
@@ -667,8 +677,18 @@ def _explain(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> i
     which one ``args.explain_kind`` named, resolves the vendor/profile flags
     the same way every other describing subcommand does, and chooses text or
     ``--json``.
+
+    ``UnitError`` is caught alongside ``ValueError`` for the same reason
+    ``_make_unit``/``_profiles``/``_routes_cmd`` do: ``route`` and ``error``
+    build a unit (:func:`~vendorfake.agent.explain.explain_route`,
+    :func:`~vendorfake.agent.explain.explain_error`), and
+    :func:`~vendorfake.agent.explain.explain_profile` scans the same profile
+    directory ``vendorfake profiles`` does -- either can raise it for a
+    malformed profile document, and this subcommand was the one place that
+    still turned that into a traceback (konyklabs/roadmap#74).
     """
     from vendorfake.agent import explain as explainer
+    from vendorfake.core.kernel.types import UnitError
     from vendorfake.core.util.json import dump_json
 
     kind = args.explain_kind
@@ -698,7 +718,7 @@ def _explain(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> i
             text = explainer.render_header(data)
         else:  # pragma: no cover - argparse restricts explain_kind to the five arms above
             raise SystemExit(f"{PROG}: no handler for explain kind {kind!r}")
-    except ValueError as exc:
+    except (ValueError, UnitError) as exc:
         raise SystemExit(f"{PROG}: {exc}") from None
 
     if _wants_json(args):

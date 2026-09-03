@@ -135,8 +135,14 @@ skipped, say so rather than omitting it.
 `vendorfake.asgi` and `vendorfake.core` are internal: not a supported
 surface, and free to change without a major version. A consumer imports
 `vendorfake.testing`, `vendorfake.registry`, `vendorfake.pytest`, or a
-vendor's public surface (`vendorfake.square.signer`,
-`vendorfake.clover.signer`, `vendorfake.toast.signer`) -- never those two.
+vendor's `paths` module (`vendorfake.square.paths`, `vendorfake.clover.paths`,
+`vendorfake.toast.paths`) -- the one per-vendor import
+[api-contract.md](api-contract.md) pins. Each vendor's webhook signature
+scheme is documented and independently verifiable there too; the module that
+implements it (`vendorfake.square.signer`, `vendorfake.clover.signer`,
+`vendorfake.toast.signer`) is not one of the pinned imports, so verify a
+delivery against the documented algorithm rather than depending on that
+module's path.
 
 ## More
 
