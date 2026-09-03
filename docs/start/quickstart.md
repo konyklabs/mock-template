@@ -50,10 +50,15 @@ curl -s -X POST http://localhost:8080/v2/orders/$ORDER_ID/pay \
 
 Both transitions fired real deliveries at any subscriber registered for
 `order.created` / `order.updated`, signed the way Square signs them and
-retried on Square's documented schedule if nothing was listening. See the
-per-vendor walkthroughs referenced from [the route reference](../reference/routes-square.md)
-for the OAuth dance, webhook subscriptions, and the Clover and Toast
-equivalents.
+retried on Square's documented schedule if nothing was listening. Every route
+the three vendors serve is in the route reference
+([Square](../reference/routes-square.md), [Clover](../reference/routes-clover.md),
+[Toast](../reference/routes-toast.md)); `vendorfake explain <route>` describes
+one in place; [the driver page](../concepts/driver.md#webhooks) covers webhook
+subscriptions and deliveries. Step-by-step walkthroughs of each vendor's OAuth
+dance and webhook subscription are not on this site yet; until they are, the
+credentials in [the seeded scenario](../seeded-scenario.md) are what a first
+call needs.
 
 The rest is discoverable, not memorised:
 
