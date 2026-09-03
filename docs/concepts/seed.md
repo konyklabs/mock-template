@@ -63,7 +63,26 @@ units to diverge.
 
 ## A third-party vendor's own seed
 
-`VendorDefinition` accepts an optional `seed` hook — a callable (or
-attribute) returning a `Seed`-protocol object for a built unit — so an
-entry-point vendor outside this distribution gets a real, typed seed from
-the `str` overload of `unit()` too, not just the three shipped here.
+Landing with this batch's API contract (stream F3, konyklabs/roadmap#74): a
+vendor from the `vendorfake.vendors` entry-point group can publish its own
+seed by implementing `SeedingVendor`, a separate `runtime_checkable`
+protocol — not a required member of `VendorDefinition`, because "this vendor
+has no seed" is a legitimate, permanent answer, unlike the required members a
+vendor writer must always supply something for. Its shape:
+
+```python
+class SeedingVendor(Protocol):
+    def seed(self, vendor_config: Mapping[str, object]) -> object: ...
+```
+
+`seed_for` discovers it structurally — `isinstance(definition, SeedingVendor)`
+— and asks it before falling back to the three vendors shipped here, so a
+vendor implementing it gets a real, typed seed from the `str` overload of
+`unit()` too. The return type is `object` because the core layer that
+declares the protocol may not import `vendorfake.testing`; what comes back is
+checked structurally against `vendorfake.testing.Seed` (`credentials`,
+`auth`, `read_only_auth`, `event_types`) at the point the unit is built, and a
+hook that returns the wrong shape is named as a hook defect there rather than
+surfacing later as an `AttributeError` on `started.seed.credentials`. A
+vendor that implements nothing is refused exactly as it was before this hook
+existed.

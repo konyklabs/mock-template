@@ -44,12 +44,14 @@ async client for the code under test coexist without a second fixture.
 ## Served
 
 ```python
-from vendorfake.testing import served, serve_in_thread
+from vendorfake.testing import served, unit, serve_in_thread
 
 with served("square") as square:
     square.base_url  # a real http://127.0.0.1:PORT
 
-driver, url = serve_in_thread(a_started_unit)
+with unit("square") as started:
+    with serve_in_thread(started) as driver:
+        driver.base_url  # a real http://127.0.0.1:PORT
 ```
 
 `served()` runs the shipped `vendorfake serve` in a child process and hands

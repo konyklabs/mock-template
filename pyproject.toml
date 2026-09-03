@@ -32,9 +32,10 @@ dependencies = [
   "pydantic>=2.7",
   "httpx>=0.27",
   # Declared because vendorfake.testing.transport imports it directly, for the
-  # async half of the in-process seam: an `httpx.AsyncClient` is usable under
-  # trio as well as asyncio, so the deliberate `delay_ms` wait is
-  # `anyio.sleep`. Nothing new is installed by this line -- httpx has depended
+  # async half of the in-process seam: an `httpx.AsyncClient` is meant to be
+  # usable under any anyio backend, so the deliberate `delay_ms` wait is
+  # `anyio.sleep` (exercised on asyncio in this suite). Nothing new is
+  # installed by this line -- httpx has depended
   # on anyio unconditionally since 0.23 -- but an import we make ourselves is
   # named here rather than inherited, so a future httpx that drops it fails
   # resolution instead of failing at a consumer's first async request.

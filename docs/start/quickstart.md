@@ -21,7 +21,13 @@ curl -s http://localhost:8080/v2/locations \
 # -> {"locations": [{"id": "18YC4JDH91E1H", "name": "Grant Park", ...
 ```
 
-Create and pay an order — a real state transition, not a canned response:
+Create and pay an order — a real state transition, not a canned response.
+The order id always comes from the create response, never from memory or a
+prior run: paste it into the pay call, or capture it with `jq` as shown.
+Order ids are deterministic per unit — a fresh unit given this exact
+sequence of calls always produces the same id — so the value below reproduces
+if you run these commands as written against a freshly started unit, but the
+rule is "read it from the response", not "this literal string":
 
 ```sh
 SEED=EAAAl-unit-seeded-access-token-full-scopes
@@ -32,20 +38,22 @@ curl -s -X POST http://localhost:8080/v2/orders \
   "order": {"location_id": "18YC4JDH91E1H",
             "line_items": [{"catalog_object_id": "2TZFAOHWGG7PAK2QEXWYPZSP", "quantity": "1"}]}
 }'
-# -> {"order": {"id": "CAIShCa1UcfqSiyfCVPNUIknxWD", "state": "OPEN", "version": 1, ...
+# -> {"order": {"id": "CAISsklPrNa6TmccpoqNpTsYSzJ", "state": "OPEN", "version": 1, ...
 
-curl -s -X POST http://localhost:8080/v2/orders/CAIShCa1UcfqSiyfCVPNUIknxWD/pay \
+ORDER_ID=CAISsklPrNa6TmccpoqNpTsYSzJ   # the "id" field from the response above
+
+curl -s -X POST http://localhost:8080/v2/orders/$ORDER_ID/pay \
   -H "Authorization: Bearer $SEED" -H 'Content-Type: application/json' \
   -d '{"idempotency_key": "pay-quickstart-1", "order_version": 1}'
-# -> {"order": {"id": "CAIShCa1UcfqSiyfCVPNUIknxWD", "state": "COMPLETED", "version": 2, ...
+# -> {"order": {"id": "CAISsklPrNa6TmccpoqNpTsYSzJ", "state": "COMPLETED", "version": 2, ...
 ```
 
 Both transitions fired real deliveries at any subscriber registered for
 `order.created` / `order.updated`, signed the way Square signs them and
 retried on Square's documented schedule if nothing was listening. See the
-per-vendor walkthroughs referenced from [the route reference]
-(../reference/routes-square.md) for the OAuth dance, webhook subscriptions,
-and the Clover and Toast equivalents.
+per-vendor walkthroughs referenced from [the route reference](../reference/routes-square.md)
+for the OAuth dance, webhook subscriptions, and the Clover and Toast
+equivalents.
 
 The rest is discoverable, not memorised:
 
