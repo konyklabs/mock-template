@@ -48,6 +48,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 import httpx
 
+from vendorfake.core.config.models import UnmatchedPolicy
+from vendorfake.core.control.plane import DEFAULT_REQUEST_LIMIT
 from vendorfake.core.kernel.types import Logger
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.logging import JsonLogger
@@ -56,10 +58,11 @@ from vendorfake.core.webhooks.sink import DeliverySink
 from vendorfake.registry import create_unit
 from vendorfake.testing.receiver import Delivery, WebhookReceiver, webhook_receiver
 from vendorfake.testing.seeds import CloverSeed, SquareSeed, ToastSeed, seed_for
-from vendorfake.testing.transport import UnitTransport
+from vendorfake.testing.transport import UnitTransport, UnmatchedRequest
 
 __all__ = [
     "CLIENT_TIMEOUT_S",
+    "DEFAULT_REQUEST_LIMIT",
     "DRAIN_TIMEOUT_S",
     "LOG_LINES",
     "SERVE_COMMAND",
@@ -71,6 +74,7 @@ __all__ = [
     "StartedUnit",
     "ToastSeed",
     "UnitTransport",
+    "UnmatchedRequest",
     "WebhookReceiver",
     "serve_in_thread",
     "served",
@@ -121,6 +125,123 @@ class Driver:
     def deliveries(self) -> list[dict[str, Any]]:
         """Every webhook delivery attempt the unit made, oldest first."""
         return list(self._json(self.client.get("/__unit/webhooks/deliveries"))["deliveries"])
+
+    # -- what was called -----------------------------------------------------
+
+    def requests(
+        self,
+        *,
+        operation_id: str | None = None,
+        route: str | None = None,
+        unmatched: bool | None = None,
+        limit: int = DEFAULT_REQUEST_LIMIT,
+    ) -> list[dict[str, Any]]:
+        """What the code under test called, **newest first**.
+
+        The counterpart to :meth:`deliveries`, and the answer to a question the
+        journal cannot be asked: the journal records committed mutations, so a
+        read, a 4xx and a request that matched nothing leave no trace in it.
+
+        ``operation_id`` is the stable name a route publishes (``ObtainToken``,
+        ``CreateOrder``; ``GET /__unit/routes`` lists them) and is the filter to
+        prefer, because it survives a vendor moving a path. ``route`` matches
+        the template form, ``"POST /v2/orders"``. ``unmatched=True`` narrows to
+        the calls no route answered, each carrying the routes it nearly asked
+        for. Control-plane traffic -- including this call -- is never recorded.
+
+        Bodies and headers are deliberately absent from a record; see
+        :class:`~vendorfake.core.kernel.types.RequestRecord`.
+        """
+        query: dict[str, str] = {"limit": str(limit)}
+        if operation_id is not None:
+            query["operation_id"] = operation_id
+        if route is not None:
+            query["route"] = route
+        if unmatched is not None:
+            query["unmatched"] = "true" if unmatched else "false"
+        return list(self._json(self.client.get("/__unit/requests", params=query))["requests"])
+
+    def clear_requests(self) -> int:
+        """Forget every recorded request, returning how many there were.
+
+        State is untouched: this is not :meth:`reset`. Use it to draw a line
+        under setup so that an ``assert_called`` afterwards counts only what
+        the part under test did.
+        """
+        return int(self._json(self.client.delete("/__unit/requests"))["cleared"])
+
+    def assert_called(
+        self,
+        operation_id: str,
+        *,
+        times: int | None = None,
+        at_least: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Assert an operation was called, and say what *was* called if not.
+
+        With neither argument: at least once. ``times`` is exact, ``at_least``
+        is a floor, and passing both is a programming error rather than a
+        conjunction -- one of them is always redundant and guessing which would
+        make the assertion mean different things to reader and runner.
+
+        The failure message lists every operation the unit did see, with
+        counts, in the spirit of pytest-httpx's "No response can be found for
+        X amongst:". A bare "expected 2, got 1" sends the reader to the log by
+        hand; the usual causes -- a typo'd path, a capability switched off, a
+        request that never left the code under test -- are all visible in that
+        list.
+
+        Returns the matching records, newest first, so a test can go on to
+        assert on the status or the fault of the call it just proved happened.
+        """
+        if times is not None and at_least is not None:
+            raise ValueError("pass times= or at_least=, not both: one of the two is always redundant")
+        capacity = self._request_capacity()
+        if capacity == 0:
+            # Refused rather than answered "saw 0", which would be a passing
+            # assert_called(times=0) and a failing everything else, for a unit
+            # that was never recording in the first place.
+            raise AssertionError(
+                f"vendorfake: the request log is switched off for this unit (requests.capacity is 0 "
+                f"in profile {self.profile!r}), so nothing can be asserted about what was called."
+            )
+        floor = 1 if (times is None and at_least is None) else at_least
+        found = self.requests(operation_id=operation_id, limit=capacity)
+        count = len(found)
+        if (times is not None and count != times) or (floor is not None and count < floor):
+            wanted = f"exactly {times}" if times is not None else f"at least {floor}"
+            raise AssertionError(
+                f"vendorfake: expected {wanted} call(s) to {operation_id!r} on {self.vendor} "
+                f"(profile {self.profile!r}), saw {count}.\n" + self._what_was_called(capacity)
+            )
+        return found
+
+    def _request_capacity(self) -> int:
+        """The log's own bound, so a count is over everything it holds.
+
+        Asked rather than assumed: a profile may have raised or lowered it, and
+        an assertion that counted the first hundred records of a log holding
+        ten thousand would be quietly wrong in exactly the long run where it
+        mattered.
+        """
+        return int(self._json(self.client.get("/__unit/requests", params={"limit": "1"}))["capacity"])
+
+    def _what_was_called(self, capacity: int) -> str:
+        records = self.requests(limit=capacity)
+        if not records:
+            return (
+                "Nothing was called at all. If this unit was reset (or clear_requests() ran) after the "
+                "code under test, the calls are gone; the log is cleared by reset()."
+            )
+        counts: dict[str, int] = {}
+        for record in records:
+            name = str(record.get("operation_id") or f"{record['method']} {record['path']} (no route matched)")
+            counts[name] = counts.get(name, 0) + 1
+        lines = [f"What was called ({len(records)} request(s) recorded):"]
+        lines.extend(
+            f"  {count:>3}  {name}" for name, count in sorted(counts.items(), key=lambda row: (-row[1], row[0]))
+        )
+        return "\n".join(lines)
 
     # -- webhooks ------------------------------------------------------------
 
@@ -304,6 +425,7 @@ def unit(
     env: Mapping[str, str] | None = None,
     logger: Logger | None = None,
     seed: int | None = None,
+    unmatched: UnmatchedPolicy | None = None,
 ) -> Iterator[StartedUnit]:
     """A unit in this process, stopped however the block ends.
 
@@ -323,6 +445,19 @@ def unit(
     ``seed`` restarts the stream (and the fault engine's RNG) from another
     number, for the rare test that needs two units to diverge; it is the
     ``VENDORFAKE_CHAOS_SEED`` layer, so an explicit ``env`` entry wins.
+
+    **A request no route matches raises**
+    :class:`~vendorfake.testing.transport.UnmatchedRequest` here, which is a
+    change from v0.1. In process this object is a test double, and a wrong path
+    is a test-authoring mistake that should fail the test that made it rather
+    than arrive as the vendor's 404 several assertions later. Pass
+    ``unmatched="vendor-404"`` for a test that deliberately calls an unmodelled
+    path -- a 404-handling rehearsal, say -- or set ``unmatched.policy`` in the
+    profile (or ``VENDORFAKE_UNMATCHED``) to change it for a whole suite.
+    :func:`served` and :func:`serve_in_thread` never raise: a served unit
+    stands in for the vendor, and there is no caller stack across a socket to
+    raise into. Either way the diagnosis is on the response, in
+    ``Vendorfake-Near-Miss``.
     """
     environ: dict[str, str] = {} if seed is None else {"VENDORFAKE_CHAOS_SEED": str(seed)}
     environ.update(env or {})
@@ -343,7 +478,8 @@ def unit(
         framework_answered=tripwire.get,
     )
     try:
-        with httpx.Client(transport=UnitTransport(built), base_url=IN_PROCESS_BASE_URL) as client:
+        transport = UnitTransport(built, unmatched=unmatched)
+        with httpx.Client(transport=transport, base_url=IN_PROCESS_BASE_URL) as client:
             yield StartedUnit(
                 vendor=built.name,
                 profile=built.context.config.profile,

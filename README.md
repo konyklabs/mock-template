@@ -42,7 +42,9 @@ quickstart below.
 ## Contents
 
 - [For consumers](#for-consumers): install, container, pytest and Vitest
-  fixtures, seeded credentials, rehearsing failures, the conformance suite
+  fixtures, seeded credentials, rehearsing failures,
+  [when a request does not match](#when-a-request-does-not-match), the
+  conformance suite
 - [Quickstart](#quickstart) (Square), [Clover quickstart](#clover-quickstart),
   [Toast quickstart](#toast-quickstart)
 - [Profiles](#profiles), [The Square surface](#the-square-surface)
@@ -300,6 +302,74 @@ tenant placeholder, e.g. `"route": "POST /v3/merchants/{mId}/orders"`.
 everything. The `chaos-demo` profile ships a preloaded set. Details and the
 401 rehearsal are under [Deterministic chaos](#deterministic-chaos).
 
+### When a request does not match
+
+A path this unit does not serve is, in a test, nearly always a typo, a wrong
+API version, or a profile with the capability switched off. In process the
+call fails where it was made, and the message says what the unit does serve:
+
+```
+vendorfake: no route matched POST /oauth2/tokens on square (profile 'full')
+Closest routes:
+  POST /oauth2/token         ObtainToken              0.70
+  POST /oauth2/revoke        RevokeToken              0.70
+  POST /oauth2/token/status  RetrieveTokenStatus      0.64
+GET /__unit/routes lists every route this profile serves; pass unmatched="vendor-404" to unit() to receive the vendor's own 404 instead.
+```
+
+The score weighs the path more heavily than the method and compares path
+*templates*, so `/v2/orders/abc` is scored against `/v2/orders/{order_id}` as
+the same shape. Two routes can tie — `tokens` is one character from `token`
+and no further from `revoke` — and the order is settled deterministically, so
+the same mistake prints the same message every run.
+
+That is `vendorfake.testing.UnmatchedRequest`, an `AssertionError` — so pytest
+reports it as a failure rather than an error, and a retry loop under test that
+catches `httpx.HTTPError` does not swallow it. A 404 from a route that *did*
+match — an id that does not exist — is a real answer and never raises.
+
+The same diagnosis rides on every unmatched response as the
+`Vendorfake-Near-Miss` header, a compact JSON array, so a served unit or the
+container reports it too:
+
+```sh
+curl -si http://localhost:8080/oauth2/tokens -X POST | grep -i near-miss
+# vendorfake-near-miss: [{"route":"POST /oauth2/token","score":0.7,"operation_id":"ObtainToken"},
+#                        {"route":"POST /oauth2/revoke","score":0.7,"operation_id":"RevokeToken"}, ...]
+```
+
+**Served units never raise** — they stand in for the vendor and answer as the
+vendor would. In process the default is the other way round, because there the
+unit is a test double. Pass `unit("square", unmatched="vendor-404")` for a test
+that probes an unmodelled path deliberately, or set `VENDORFAKE_UNMATCHED` (or
+`unmatched: {"policy": ...}` in a profile) for a whole suite.
+
+Whatever answered, every request is recorded — matched or not, 2xx or 4xx,
+which is what the journal cannot tell you, since no 4xx leaves a journal entry:
+
+```python
+with unit("square") as square:
+    place_an_order(base_url=square.base_url)  # the code under test
+
+    square.assert_called("CreateOrder", times=1)  # fails listing what WAS called
+    (call,) = square.requests(operation_id="CreateOrder")
+    assert call["status"] == 200
+    assert call.get("fault") is None  # a key with nothing to say is absent
+
+    square.requests(unmatched=True)  # anything that landed nowhere
+    square.clear_requests()  # draw a line under setup
+```
+
+A failing `assert_called` prints every operation the unit saw with counts, so a
+typo'd path or a capability that was switched off is visible in the message
+rather than found by hand. Over HTTP the same thing is
+`GET /__unit/requests?operation_id=CreateOrder`, with
+`GET /__unit/requests/unmatched/near-misses` for the misses and
+`DELETE /__unit/requests` to clear. The log is a ring holding the last 10,000
+requests (`requests: {"capacity": N}`, `VENDORFAKE_REQUEST_LOG_CAPACITY`), it
+records no bodies and no headers, control-plane calls never appear in it, and
+`reset()` clears it along with the state.
+
 ### Running the conformance suite against your unit
 
 The contracts the fake holds itself to — determinism, byte-identical bindings,
@@ -477,6 +547,10 @@ curl -s "http://localhost:8080/__unit/journal?since=19"
 curl -s http://localhost:8080/__unit/state/snapshot   # full state + digest
 curl -s -X POST http://localhost:8080/__unit/state/reset -H 'Content-Type: application/json' -d '{}'
 # -> back to the seed: {"entities": {"orders": 2, "tokens": 2, ...}, "digest": "594a6c28..."}
+
+curl -s "http://localhost:8080/__unit/requests?unmatched=true"
+# what was CALLED, as against what changed — including the calls that landed
+# nowhere, with the routes each of them nearly asked for
 ```
 
 Time is controllable when the unit starts with a virtual clock:
@@ -492,7 +566,7 @@ curl -s http://localhost:8080/v2/locations -H "Authorization: Bearer $SEED"
 # -> {"errors": [{"category": "AUTHENTICATION_ERROR", "code": "ACCESS_TOKEN_EXPIRED", ...
 ```
 
-The rest is discoverable, not memorised: `GET /__unit/routes` lists all 65
+The rest is discoverable, not memorised: `GET /__unit/routes` lists all 68
 routes with summaries, `GET /__unit/info` (or `vendorfake info --vendor square`)
 describes the whole unit — capabilities, auth, signing scheme, fault catalogue,
 retry schedule — and `vendorfake openapi --vendor square` prints an OpenAPI 3.1

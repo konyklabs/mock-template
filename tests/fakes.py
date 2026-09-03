@@ -191,16 +191,20 @@ def make_config(
     timeout_ms: int = 10_000,
     subscribers: Sequence[Mapping[str, object]] = (),
     disable_delivery: bool = False,
+    request_log_capacity: int | None = None,
+    unmatched: str | None = None,
 ) -> object:
     """A ``ResolvedConfig`` for a kernel test, with the knobs those tests move."""
     from vendorfake.core.config.models import (
         ClockSection,
+        RequestsSection,
         ResolvedChaos,
         ResolvedConfig,
         ResolvedWebhooks,
         RetryPolicy,
         SubscriberConfig,
         TransportSection,
+        UnmatchedSection,
     )
 
     return ResolvedConfig(
@@ -216,6 +220,8 @@ def make_config(
         ),
         clock=ClockSection(mode=clock_mode, start=clock_start),  # type: ignore[arg-type]
         transport=TransportSection(),
+        requests=RequestsSection() if request_log_capacity is None else RequestsSection(capacity=request_log_capacity),
+        unmatched=UnmatchedSection(policy=unmatched),  # type: ignore[arg-type]
         log_level=log_level,
     )
 

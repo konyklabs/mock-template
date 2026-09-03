@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+* **core:** record every request in a bounded in-memory log, distinct from the
+  journal, and publish it at `GET /__unit/requests` (filters: `operation_id`,
+  `route`, `unmatched`, `limit`), `DELETE /__unit/requests` and
+  `GET /__unit/requests/unmatched/near-misses`. The journal records committed
+  mutations by design, so a read, a 4xx or a call that matched no route left no
+  trace anywhere. Capacity comes from the profile (`requests: {capacity: N}`,
+  default 10,000) or `VENDORFAKE_REQUEST_LOG_CAPACITY`; bodies and headers are
+  not stored; control-plane requests are not recorded; `reset()` clears it.
+* **core:** answer an unmatched request with a `Vendorfake-Near-Miss` header
+  naming the three closest routes of the active capability set, ranked
+  deterministically. The vendor-shaped 404 body is unchanged.
+* **testing:** `Driver.requests()`, `Driver.assert_called(operation_id, times=,
+  at_least=)` — whose failure lists every operation that *was* called, with
+  counts — and `Driver.clear_requests()`.
+
+### ⚠ BREAKING CHANGES
+
+* **testing:** an in-process unit (`unit()`) now raises
+  `vendorfake.testing.UnmatchedRequest` — an `AssertionError` — for a request no
+  route matched, where v0.1.0 returned the vendor's 404. A test that
+  deliberately calls an unmodelled path opts out with
+  `unit(..., unmatched="vendor-404")`, with `VENDORFAKE_UNMATCHED=vendor-404`,
+  or with `unmatched: {"policy": "vendor-404"}` in its profile. Served units
+  (`served()`, `serve_in_thread()`, the container) are unaffected and never
+  raise: they stand in for the vendor and answer as the vendor would. A 404
+  from a route that did match — an id that does not exist — is unaffected on
+  every binding.
+
 ## 0.1.0 (2026-09-01)
 
 
