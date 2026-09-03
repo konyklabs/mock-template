@@ -239,7 +239,16 @@ def control_plane_routes(
                             "name": ctx.vendor.name,
                             "display_name": ctx.vendor.display_name,
                             "api_version": ctx.vendor.api_version,
-                            "roles": dict(ctx.vendor.roles),
+                            # ``getattr``, not the declared attribute: a third-party vendor
+                            # from the ``vendorfake.vendors`` entry-point group built against
+                            # v0.1.0 predates ``VendorDefinition.roles``, and a bare
+                            # ``ctx.vendor.roles`` would turn *every* GET /__unit/info for it
+                            # -- which the CLI's `info`, Driver.clock() and the conformance
+                            # runner all make as a matter of course -- into an AttributeError
+                            # from inside the control plane. Publishing ``{}`` instead means
+                            # conformance C34 reports the real defect ("add
+                            # VendorDefinition.roles") against a unit that still answers.
+                            "roles": dict(getattr(ctx.vendor, "roles", {})),
                             # The profile-name contract (conformance C35) is a promise about
                             # which *names* a vendor ships, not about the unit already running --
                             # so the check needs the roster, not just this unit's own profile.

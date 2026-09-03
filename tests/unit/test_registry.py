@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 import vendorfake
-from tests.fakes import FakeVendor, capability
+from tests.fakes import FakeVendor, VendorWithoutRoles, capability
 from vendorfake.registry import VENDOR_ENV_VAR, available_vendors, create_unit, resolve_vendor
 
 
@@ -306,6 +307,53 @@ def test_capabilities_falls_back_to_full_and_an_absolute_list_when_nothing_shipp
         assert unit.context.config.profile == "full"
         assert set(unit.context.config.capabilities) == {"orders", "chaos"}
         assert unit.context.config.requested_capabilities == ("orders", "chaos")
+    finally:
+        unit.stop()
+
+
+def _roleless(tmp_path: Path, capabilities: list[str]) -> Any:
+    """A 0.1.0-vintage entry-point vendor: no ``VendorDefinition.roles``."""
+    directory = tmp_path / "profiles"
+    directory.mkdir()
+    (directory / "full.json").write_text(json.dumps({"capabilities": capabilities}), encoding="utf-8")
+    inner = FakeVendor(
+        profile_dir=directory,
+        base_dir=tmp_path,
+        capabilities=tuple(
+            capability(name, kind="behavior" if name == "chaos" else "surface") for name in capabilities
+        ),
+    )
+    # `VendorWithoutRoles` deliberately does not satisfy the 0.2
+    # `VendorDefinition` protocol -- that is the whole point of it -- so the
+    # cast is the honest way to hand it to a signature that asks for one.
+    return cast("Any", VendorWithoutRoles(inner))
+
+
+def test_a_vendor_without_roles_refuses_a_role_request_by_name(tmp_path: Path) -> None:
+    """A vendor written against 0.1.0 has no `roles` mapping, so it cannot
+    answer a request phrased in role names. The refusal names the vendor and
+    the role rather than raising `AttributeError` from inside the registry --
+    and rather than silently reading `auth` as a capability literally called
+    `auth`, which would resolve to *some* profile and look like it worked."""
+    vendor = _roleless(tmp_path, ["orders", "chaos"])
+    with pytest.raises(ValueError) as caught:
+        create_unit(vendor=vendor, capabilities=["auth"])
+    message = str(caught.value)
+    assert "'acme'" in message
+    assert "auth" in message
+    assert "VendorDefinition.roles" in message
+
+
+def test_a_vendor_without_roles_still_resolves_its_own_capability_names(tmp_path: Path) -> None:
+    """The tolerance is not blanket: only a *role* name is refused. A request
+    in the vendor's own capability names never needed the mapping, so it keeps
+    working exactly as it did in 0.1.0 -- which is what makes `roles` a break
+    for one call shape and not for the whole vendor."""
+    vendor = _roleless(tmp_path, ["payments", "chaos"])
+    unit = create_unit(vendor=vendor, capabilities=["payments"])
+    try:
+        assert unit.context.config.requested_capabilities == ("payments",)
+        assert "payments" in unit.context.config.capabilities
     finally:
         unit.stop()
 

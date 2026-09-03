@@ -8,7 +8,7 @@ would pass under an implementation that answered every route with ``{}``.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -17,6 +17,7 @@ from tests.fakes import (
     FakeEvents,
     FakeSigner,
     FakeVendor,
+    VendorWithoutRoles,
     make_unit,
     route,
 )
@@ -236,6 +237,22 @@ def test_info_carries_all_seven_keys_the_conformance_suite_asserts_by_name() -> 
     body = api.get("/__unit/info").json()
     for key in ("vendor", "profile", "capabilities", "chaos", "webhooks", "clock", "state"):
         assert key in body, key
+
+
+def test_info_publishes_empty_roles_for_a_vendor_that_predates_the_property() -> None:
+    """``VendorDefinition.roles`` became a required protocol member in 0.2, so
+    a third-party vendor from the ``vendorfake.vendors`` entry-point group
+    built against 0.1.0 has no such attribute.
+
+    ``GET /__unit/info`` is on the path of the CLI's ``info`` subcommand,
+    ``Driver.clock()`` and the conformance runner, so reading ``roles`` as a
+    plain attribute would make every one of those an ``AttributeError`` --
+    turning a documented, fixable gap into a unit that cannot answer at all.
+    It publishes ``{}`` instead, which is what lets conformance C34 report the
+    real defect ("add ``VendorDefinition.roles``") against a live unit.
+    """
+    api, _ = _api(vendor=cast("FakeVendor", VendorWithoutRoles(_vendor())))
+    assert api.get("/__unit/info").json()["vendor"]["roles"] == {}
 
 
 def test_info_omits_an_absent_signer_rather_than_sending_null() -> None:

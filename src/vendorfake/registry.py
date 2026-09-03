@@ -242,8 +242,39 @@ def routes(vendor: str, profile: str = "full") -> tuple[RouteInfo, ...]:
 
 def _translate_capability_names(definition: VendorDefinition, requested: Sequence[str]) -> tuple[str, ...]:
     """A role name becomes this vendor's own capability name; anything else
-    passes through, on the assumption that it is already one."""
-    roles = definition.roles
+    passes through, on the assumption that it is already one.
+
+    ``roles`` is read with :func:`getattr` rather than as the attribute the
+    ``VendorDefinition`` protocol declares, because a third-party vendor
+    registered through the ``vendorfake.vendors`` entry-point group and built
+    against v0.1.0 predates the property and simply does not have it. A bare
+    ``definition.roles`` there is an ``AttributeError`` from inside a
+    ``create_unit`` call the caller cannot connect to anything -- which is a
+    worse failure than the one it is standing in for, and it fires even when
+    the caller asked for no role at all. See ``CHANGELOG.md``'s **Breaking
+    changes**: the fix is for the vendor to implement ``roles``, and this is
+    what makes the intervening failure legible.
+
+    A vendor that maps no roles still cannot answer a request *for* one, so
+    that case is a ``ValueError`` naming the vendor and the role rather than a
+    silent pass-through: ``capabilities=["auth"]`` against such a vendor would
+    otherwise be read as a request for a capability literally called ``auth``
+    and resolve to whatever profile happens to be a superset of it -- an
+    answer that looks like it worked.
+    """
+    roles: Mapping[str, str] = getattr(definition, "roles", {})
+    if not roles:
+        asked = [name for name in requested if name in ROLE_NAMES]
+        if asked:
+            raise ValueError(
+                f"Vendor {definition.name!r} maps no capability roles, so capabilities="
+                f"{list(requested)!r} cannot be resolved: {', '.join(asked)} "
+                f"{'is a role name' if len(asked) == 1 else 'are role names'} "
+                f"({', '.join(ROLE_NAMES)}) and this vendor publishes no VendorDefinition.roles "
+                "to translate it through. Implement `roles` on the vendor definition (see the "
+                "shipped vendors, and CHANGELOG.md's Breaking changes for 0.2), or ask for this "
+                "vendor's own capability names instead."
+            )
     return tuple(roles.get(name, name) for name in requested)
 
 

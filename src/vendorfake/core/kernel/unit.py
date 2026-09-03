@@ -109,7 +109,6 @@ from vendorfake.core.chaos.faults import (
     RESPONSE_PHASE_FAULTS,
     apply_request_fault,
     apply_response_fault,
-    is_transport_fault,
 )
 from vendorfake.core.chaos.rules import matched_routes
 from vendorfake.core.chaos.selector import FaultSelector
@@ -973,38 +972,46 @@ class Unit:
 
         # 8. handler, then store the response against the idempotency key ----
         res = normalize(route.handler(args))
-        # A response-scope fault ("the vendor returned garbage") corrupts a
-        # REAL answer, so it can only run after the handler produced one --
-        # unlike every fault above, which fires instead of the handler ever
-        # running. It never touches ``ctx``, so it cannot journal anything on
-        # its own; DELAYS LEAVE AS DATA applies here too, via
-        # ``UnitResponse.transport``.
-        if decision is not None and decision.fault in RESPONSE_PHASE_FAULTS:
-            res = apply_response_fault(decision, res, log=self._log)
-        # A faulted response is never the one recorded against the
-        # idempotency key. Earlier this stored whatever the handler-plus-fault
-        # pipeline produced, on the theory that "a replay gets exactly what
-        # the caller got the first time, faulted or not" -- but
-        # ``IdempotencyRecord`` (``core/state/store.py``) has nowhere to put a
-        # ``UnitResponse.transport`` directive, so a stored ``connection_reset``
-        # or ``slow_body`` replayed as a clean 200 that still carried the
-        # ``vendorfake-fault`` header the real fault stamped: worse than
-        # either "clean" or "faulted" on its own, and it switches off any
-        # schema validator that trusts :func:`is_transport_fault`
-        # (``core/chaos/faults.py``), silently, on every later replay of that
-        # key. Checking the header -- which every response-phase fault
-        # stamps, not only the three transport-directive ones -- catches
-        # ``malformed_body`` and ``body_mutation`` the same way rather than
-        # special-casing the three that carry a directive; a key that was
-        # never recorded simply re-runs the handler on its next use, the same
-        # as any other request this route has not seen yet.
-        if (
-            idem is not None
-            and idem_key is not None
-            and 200 <= res.status < 300
-            and res.transport is None
-            and not is_transport_fault(res)
-        ):
+        # WHAT GETS RECORDED IS THE HANDLER'S CLEAN ANSWER, RECORDED BEFORE
+        # ANY RESPONSE-PHASE FAULT TOUCHES IT.
+        #
+        # The handler has already run: it created the entity and journalled
+        # it. That commit is exactly what an idempotency key exists to make
+        # safe to retry, and this store has no transaction to undo it with
+        # (``core/state/store.py`` has no rollback and no savepoint). So the
+        # record is written here, between the handler and the fault, and the
+        # retry replays the answer the vendor really committed.
+        #
+        # Two earlier shapes were both wrong, and the reasons are worth
+        # keeping. First this stored whatever the handler-plus-fault pipeline
+        # produced, on the theory that "a replay gets exactly what the caller
+        # got the first time, faulted or not" -- but ``IdempotencyRecord``
+        # has nowhere to put a ``UnitResponse.transport`` directive, so a
+        # stored ``connection_reset`` or ``slow_body`` replayed as a clean
+        # 200 that still carried the ``vendorfake-fault`` header the real
+        # fault stamped, silently switching off any validator that trusts
+        # :func:`is_transport_fault` (``core/chaos/faults.py``) on every
+        # later replay of that key. Then it skipped the record entirely for a
+        # faulted response, by analogy with a request-scope fault. That
+        # analogy is false: a request-scope fault raises at step 4 or 6,
+        # *before* ``route.handler(args)`` ever runs, so nothing was
+        # committed and re-running is correct -- while a response-phase fault
+        # runs at step 8, *after* the commit, so skipping the record
+        # discards the only trace of it and a retry with the same key
+        # charges the caller twice. That is the single guarantee an
+        # idempotency key carries, modelled backwards, on precisely the
+        # fault (``connection_reset``) whose whole purpose is to rehearse a
+        # retry across a dropped connection.
+        #
+        # Recording the pre-fault ``res`` gets both: no ``TransportDirective``
+        # and no ``vendorfake-fault``/``vendorfake-rule`` header can reach
+        # ``IdempotencyRecord``, because the fault has not been applied yet,
+        # and the retry answers with the payment the handler really made.
+        # provenance: judgment -- no vendor documents what its idempotency
+        # store does when the response never reaches the caller; committing
+        # first and replaying the commit is what a real store's ordering
+        # gives you.
+        if idem is not None and idem_key is not None and 200 <= res.status < 300:
             self._store.put_idempotent(
                 IdempotencyRecord(
                     scope=idem.scope,
@@ -1016,6 +1023,14 @@ class Unit:
                     stored_at=self._clock.iso_ms(),
                 )
             )
+        # A response-scope fault ("the vendor returned garbage") corrupts a
+        # REAL answer, so it can only run after the handler produced one --
+        # unlike every fault above, which fires instead of the handler ever
+        # running. It never touches ``ctx``, so it cannot journal anything on
+        # its own; DELAYS LEAVE AS DATA applies here too, via
+        # ``UnitResponse.transport``.
+        if decision is not None and decision.fault in RESPONSE_PHASE_FAULTS:
+            res = apply_response_fault(decision, res, log=self._log)
         return res
 
     # -- pipeline helpers ---------------------------------------------------

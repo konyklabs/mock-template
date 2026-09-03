@@ -177,6 +177,32 @@ class FakeVendor:
         res.headers["acme-version"] = self.api_version or ""
 
 
+class VendorWithoutRoles:
+    """A v0.1.0-vintage third-party vendor: every ``VendorDefinition`` member
+    except ``roles``, which did not exist when it was written.
+
+    ``VendorDefinition.roles`` arrived in 0.2 as a *required* protocol member,
+    so a vendor registered through the ``vendorfake.vendors`` entry-point group
+    and built against 0.1.0 has no such attribute. This stands in for one, to
+    pin that the two runtime read sites -- ``registry._translate_capability_names``
+    and the control plane's ``info`` handler -- fail legibly rather than with an
+    ``AttributeError`` from somewhere the caller cannot connect to anything.
+
+    Delegation rather than a subclass with the field deleted, because a
+    dataclass field cannot be un-declared and ``del`` on the instance would
+    still leave the class attribute in place; ``__getattr__`` only fires for
+    what is genuinely absent, which is exactly the shape being modelled.
+    """
+
+    def __init__(self, inner: FakeVendor) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "roles":
+            raise AttributeError(name)
+        return getattr(self._inner, name)
+
+
 def make_config(
     *,
     profile: str = "test",

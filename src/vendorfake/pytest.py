@@ -43,9 +43,20 @@ vendorfake registers. Before, installing the wheel also auto-loaded
 ``pytest_sessionfinish`` hook that could flip a totally unrelated suite's exit
 code -- into every consumer's pytest run, whether or not that suite had ever
 heard of the conformance registry. That plugin still exists and still works;
-it is loaded explicitly now (``-p vendorfake.conformance.plugin``, or the
-``--pyargs vendorfake.conformance`` form the README shows), which is the shape
-a consumer choosing to *run* the conformance suite already uses.
+it is loaded explicitly now, which is the shape a consumer choosing to *run*
+the conformance suite already uses::
+
+    pytest --pyargs vendorfake.conformance -p vendorfake.conformance.plugin --conformance-target mypkg:target
+
+Both flags, not either: ``-p`` is what loads the plugin, and therefore what
+registers ``--conformance-target`` and wires up the ``conformance_case``
+fixture; ``--pyargs vendorfake.conformance`` only *selects* the tests, and
+nothing under ``src/vendorfake/conformance/`` auto-loads the plugin when they
+are collected (there is no ``conftest.py`` there, deliberately -- see
+``conformance/plugin.py``'s "WHY THIS FILE IMPORTS NO PYTEST"). Run the
+selection without ``-p`` and pytest rejects ``--conformance-target`` as an
+unrecognised argument, or, bare, fails at ``fixture 'conformance_case' not
+found``. The README and ``tools/self-test.sh`` show the same pair.
 
 WHY ``vendorfake.testing`` IS IMPORTED INSIDE THE FIXTURES. This module is
 loaded into every pytest session on a machine with vendorfake installed, most

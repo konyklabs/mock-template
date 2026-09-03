@@ -90,8 +90,13 @@ in full under the heading named beside it.
   `vendorfake_webhook_receiver` fixtures -- no `--conformance-*` options, no
   session hook. The marker takes `vendor`, `profile`, `env`, `seed`,
   `clock_start`, `unmatched` and `capabilities`. The conformance suite's
-  pytest form still exists; run it with `-p vendorfake.conformance.plugin`
-  or `pytest --pyargs vendorfake.conformance` (konyklabs/roadmap#71).
+  pytest form still exists, and now needs both flags together:
+  `pytest --pyargs vendorfake.conformance -p vendorfake.conformance.plugin`.
+  The two are not alternatives — `-p` is what loads the plugin (and so
+  registers `--conformance-target` and the rest), while `--pyargs
+  vendorfake.conformance` only selects the tests, which without the plugin
+  fail at fixture resolution. This is the form README and `tools/self-test.sh`
+  both use (konyklabs/roadmap#71).
 * **pytest:** the `vendorfake_async_unit` fixture, driven by the same
   `@pytest.mark.vendorfake(vendor, ...)` marker. It is a *synchronous* fixture
   yielding an object that owns an async client, which is what makes it work
@@ -131,7 +136,10 @@ in full under the heading named beside it.
   and the in-process transport matches the served one so a test green in one
   is green in the other.
 * **vendorfake:** discover profiles and routes by code — `registry.available_profiles`, `registry.routes`, `Driver.route_for`/`path_for`, and a per-vendor `paths` module of hand-written path constants kept honest against the router by `tests/unit/test_paths_drift.py` (konyklabs/roadmap#70)
-* **vendorfake:** add `VendorDefinition.roles`, the neutral capability-role vocabulary (`auth`, `orders`, `webhooks`, `chaos`) every vendor maps to its own capability names, published at `GET /__unit/info` under `vendor.roles` (konyklabs/roadmap#70)
+* **vendorfake:** add `VendorDefinition.roles`, the neutral capability-role vocabulary (`auth`, `orders`, `webhooks`, `chaos`) every vendor maps to its own capability names, published at `GET /__unit/info` under `vendor.roles`. It is a required member
+  of the `VendorDefinition` protocol, so it is also a **breaking change for a
+  third-party entry-point vendor built against 0.1.0** — see **Breaking
+  changes** (konyklabs/roadmap#70)
 * **vendorfake:** `create_unit`/`unit()` accept `capabilities=[...]` — role names or a vendor's own capability names — and resolve to the narrowest shipped profile that is a superset, or `full` plus an absolute list when none qualifies; passing `profile=` and `capabilities=` together, or an empty `capabilities=[]`, is a `ValueError`. `GET /__unit/info` echoes the request back under `requested_capabilities` (konyklabs/roadmap#70)
 * **vendorfake:** the package root re-exports `available_profiles` and
   `routes` alongside `available_vendors`, `create_unit` and `resolve_vendor`,
@@ -235,6 +243,25 @@ in full under the heading named beside it.
   `addopts`. `vendorfake-conformance` (the CLI) and
   `python -m vendorfake.conformance` are unaffected. What installing the wheel
   auto-loads is now the small `vendorfake` plugin instead.
+* **core:** `VendorDefinition.roles` is a new **required** member of the
+  `VendorDefinition` protocol (see Features). **Breaking for a third-party
+  vendor registered through the `vendorfake.vendors` entry-point group and
+  written against v0.1.0**, which has no `roles` attribute at all. **How it
+  shows up:** `GET /__unit/info` now publishes `vendor.roles`, and the CLI's
+  `vendorfake info`, `Driver.clock()` and the conformance runner all call that
+  route as a matter of course; `create_unit(capabilities=[...])` translates
+  role names through the same mapping. **Migration:** implement `roles` on the
+  vendor definition — a `Mapping[str, str]` taking each of `auth`, `orders`,
+  `webhooks` and `chaos` to one of that vendor's own declared capability
+  names, as the three shipped vendors do (`square/vendor.py`,
+  `clover/vendor.py`, `toast/vendor.py`). Conformance C34 checks the mapping is
+  complete and that every value names a capability the vendor really declares.
+  Until then the two runtime read sites are tolerant rather than fatal:
+  `GET /__unit/info` publishes `vendor.roles` as `{}` (so C34 reports the real
+  defect against a unit that still answers) and `create_unit(capabilities=...)`
+  raises a `ValueError` naming the vendor and the role, instead of an
+  `AttributeError` from inside the registry. Vendors written against 0.2 are
+  unaffected, and no consumer-facing call signature changed.
 
 ### Deprecations
 
