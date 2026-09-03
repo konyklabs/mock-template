@@ -41,6 +41,8 @@ on machinery another request has to feed.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -49,16 +51,23 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import Response, StreamingResponse
 
 from vendorfake.asgi.adapt import to_response, to_unit_request
 from vendorfake.core.control.openapi import document_for_unit
 from vendorfake.core.kernel.reply import JSON_CONTENT_TYPE
-from vendorfake.core.kernel.types import Logger
+from vendorfake.core.kernel.types import Logger, TransportDirective
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.util.json import dump_json
 
-__all__ = ["HTTP_METHODS", "OPENAPI_PATH", "FrameworkTripwire", "create_app", "registered_methods"]
+__all__ = [
+    "HTTP_METHODS",
+    "OPENAPI_PATH",
+    "FrameworkTripwire",
+    "TransportFaultAbort",
+    "create_app",
+    "registered_methods",
+]
 
 HTTP_METHODS: tuple[str, ...] = (
     "GET",
@@ -119,6 +128,57 @@ class FrameworkTripwire:
             self.recent.append(description)
 
 
+class TransportFaultAbort(Exception):
+    """Raised from inside a streaming ASGI body for ``connection_reset`` /
+    ``empty_response``, and never caught.
+
+    FOR: forcing the connection closed after the response has already started,
+    which is the one thing a served unit can do that an in-process one cannot
+    fake by raising a client-side exception directly -- there is a real socket
+    here, and the fault is what happens to it. Starlette's
+    :class:`~starlette.responses.StreamingResponse` sends ``http.response.start``
+    (status and headers) before it ever asks its body iterator for a chunk, so
+    by the time this is raised the caller has already committed to reading a
+    body it will not finish getting -- which is the "after http.response.start,
+    close without completing" the spec describes for ``connection_reset``, and
+    the closest this ASGI server allows for ``empty_response`` (no vendor
+    lets an HTTP response omit its status line, so "before any bytes" cannot
+    mean before *those*). Left to propagate: uvicorn logs the exception and
+    aborts the connection, which is what a real reset or a real stalled
+    connection looks like from the client's side too.
+    """
+
+
+async def _aborted_body() -> AsyncIterator[bytes]:
+    raise TransportFaultAbort()
+    yield b""  # type: ignore[unreachable]  # pragma: no cover - makes this an async generator
+
+
+async def _slow_body(body: bytes, chunk_bytes: int, chunk_delay_ms: int) -> AsyncIterator[bytes]:
+    """Stream ``body`` in ``chunk_bytes`` pieces, sleeping ``chunk_delay_ms``
+    between them -- awaited, never slept, so the event loop keeps serving
+    every other connection while this one dribbles in. Unlike the in-process
+    transport, this is a real stream over a real socket: a client whose own
+    read timeout is shorter than a gap disconnects on its own, with nothing
+    here needing to predict it (contrast ``testing/transport.py``, which has
+    no socket to let the client's own timeout race against).
+    """
+    chunk_bytes = max(1, chunk_bytes)
+    for offset in range(0, len(body), chunk_bytes):
+        if offset > 0:
+            await asyncio.sleep(chunk_delay_ms / 1000.0)
+        yield body[offset : offset + chunk_bytes]
+
+
+def _directive_response(status: int, headers: dict[str, str], directive: TransportDirective, body: bytes) -> Response:
+    if directive.kind == "slow_body":
+        chunk_bytes = directive.chunk_bytes if directive.chunk_bytes > 0 else 64
+        chunk_delay_ms = directive.chunk_delay_ms if directive.chunk_delay_ms > 0 else 100
+        return StreamingResponse(_slow_body(body, chunk_bytes, chunk_delay_ms), status_code=status, headers=headers)
+    # connection_reset / empty_response: see TransportFaultAbort.
+    return StreamingResponse(_aborted_body(), status_code=status, headers=headers)
+
+
 def create_app(
     unit: Unit,
     *,
@@ -166,6 +226,22 @@ def create_app(
         """The one path from a socket to the unit and back."""
         unit_request = await to_unit_request(request)
         response = await run_in_threadpool(unit.handle, unit_request)
+        if response.transport is not None:
+            return _directive_response(response.status, dict(response.headers), response.transport, response.body)
+        if response.delay_ms > 0:
+            # The kernel decided *whether* to delay; this binding decides how,
+            # and for a server holding a real socket that means awaiting rather
+            # than sleeping. `time.sleep` on the worker thread would be nearly
+            # as good -- it is not the event loop -- but the pool is finite, so
+            # a handful of concurrently delayed requests would stop answering
+            # everyone else, which is not what the fault is meant to rehearse.
+            #
+            # Nothing is short-circuited here the way the in-process transport
+            # short-circuits a delay longer than the caller's read timeout: over
+            # a socket the client's timeout is the client's business, and it
+            # will disconnect on its own. From the caller's point of view served
+            # mode behaves exactly as it did when the kernel slept.
+            await asyncio.sleep(response.delay_ms / 1000.0)
         return to_response(response)
 
     async def framework_answered(request: Request, exc: Exception) -> Response:

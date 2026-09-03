@@ -213,6 +213,58 @@ def test_a_toast_order_fires_a_webhook_under_the_restaurant_header():
 refuses one it will never send — a Square type on a Clover unit would
 otherwise register happily and never fire.
 
+#### Async consumers
+
+If your service takes an `httpx.AsyncClient`, use `async_client` on the same
+started unit. Same unit, same base URL, same transport — no second fixture and
+no ASGI wiring of your own:
+
+```python
+import pytest
+from vendorfake.testing import unit
+
+
+@pytest.mark.anyio  # or pytest-asyncio; the fixtures work under either
+async def test_the_service_refreshes_its_token():
+    with unit("square") as square:
+        seed = square.seed
+        answered = await square.async_client.post(
+            "/oauth2/token",
+            json={
+                "client_id": seed.application_id,
+                "client_secret": seed.application_secret,
+                "grant_type": "refresh_token",
+                "refresh_token": seed.refresh_token,
+            },
+        )
+        assert answered.status_code == 200
+```
+
+When your own fixtures are `async def`, `async_unit()` is the same thing as an
+async context manager, and it awaits the client's close on the way out:
+
+```python
+from vendorfake.testing import async_unit
+
+
+async def test_over_the_async_client():
+    async with async_unit("clover") as clover:
+        seed = clover.seed
+        answered = await clover.async_client.get(seed.path("/items"), headers=seed.auth)
+        assert answered.status_code == 200
+```
+
+Both clients are live at once, so set-up can stay synchronous while the code
+under test runs on the async one. There is also a pytest fixture,
+`vendorfake_async_unit`, driven by `@pytest.mark.vendorfake("square")` — see
+[docs/async-consumers.md](docs/async-consumers.md).
+
+**`vendorfake.asgi` is internal.** It is where the web framework lives and its
+shape is chosen to keep the core framework-free; nothing in it is a supported
+surface, and it may change without a major version. Everything an async
+consumer needs is on `vendorfake.testing`. If you want a real URL rather than
+an in-process client, that is `served()` or `serve_in_thread()`, below.
+
 Ids are deterministic per unit: two `unit("square")` blocks mint the same
 order ids, tokens and codes in the same order, from separate stores. That is
 what makes an id assertion stable run to run; it also means ids are not
@@ -332,13 +384,155 @@ curl -s -X POST http://localhost:8080/__unit/chaos/rules -H 'Content-Type: appli
 
 The faults every vendor supports: `rate_limit`, `server_error`,
 `unavailable`, `timeout`, `token_expiry` (one 401 without touching the stored
-token — the transient case a deactivate-on-401 handler gets wrong), and on
+token — the transient case a deactivate-on-401 handler gets wrong), on
 deliveries `webhook.duplicate`, `webhook.delay`, `webhook.out_of_order`,
-`webhook.drop_ack`, `webhook.drop`. Clover routes are matched with the
-tenant placeholder, e.g. `"route": "POST /v3/merchants/{mId}/orders"`.
-`GET /__unit/chaos` lists the catalogue; `POST /__unit/chaos/reset` disarms
-everything. The `chaos-demo` profile ships a preloaded set. Details and the
-401 rehearsal are under [Deterministic chaos](#deterministic-chaos).
+`webhook.drop_ack`, `webhook.drop`, and the five transport-fidelity faults —
+`malformed_body`, `body_mutation`, `connection_reset`, `empty_response`,
+`slow_body` — under [Transport faults](#transport-faults) below. Clover
+routes are matched with the tenant placeholder, e.g.
+`"route": "POST /v3/merchants/{mId}/orders"`. `GET /__unit/chaos` lists the
+catalogue, each fault's `provenance` included; `POST /__unit/chaos/reset`
+disarms everything. The `chaos-demo` profile ships a preloaded set. Details
+and the 401 rehearsal are under [Deterministic chaos](#deterministic-chaos).
+
+#### Timeouts
+
+The `timeout` fault produces a real client-side timeout in process, and it does
+it without anyone waiting. Ask for a delay longer than your client's read
+timeout and the client raises `httpx.ReadTimeout` immediately, so the test that
+proves your retry path runs costs a millisecond rather than the five seconds
+the rule names:
+
+```python
+import time
+
+import httpx
+import pytest
+from vendorfake.testing import UnitTransport, unit
+
+
+def test_my_retry_path_survives_a_timeout():
+    with unit("square") as square:
+        square.add_chaos_rule(
+            {
+                "id": "slow",
+                "scope": "request",
+                "fault": "timeout",
+                "match": {"route": "GET /v2/locations"},
+                "params": {"delay_ms": 5000},
+            }
+        )
+        client = httpx.Client(
+            transport=UnitTransport(square.unit),
+            base_url=square.base_url,
+            timeout=httpx.Timeout(0.2),
+        )
+        begun = time.monotonic()
+        with pytest.raises(httpx.ReadTimeout):
+            client.get("/v2/locations", headers=square.seed.auth)
+        assert (time.monotonic() - begun) < 0.1  # nothing slept
+```
+
+A delay *shorter* than the read timeout is waited out for real, so an assertion
+that your backoff took time still means something. Served mode
+(`served()`, `serve_in_thread()`) always waits: over a socket your timeout is
+yours to enforce, and the server behaves exactly as a slow vendor would. On a
+virtual clock (`VENDORFAKE_CLOCK=virtual`) the delay moves scenario time and
+the answer comes back at once.
+
+#### Transport faults
+
+Every fault above reproduces something a *vendor* documents — Square really
+does answer 429s, Clover really does time out. None of them can rehearse "the
+vendor returned garbage": an HTML error page behind a 502, invalid JSON, a
+200 missing its token, a documented field retyped to something else. No
+vendor documents its own garbage, so nothing in the faults above can shape
+one — which is exactly the distinction `GET /__unit/chaos` and `GET
+/__unit/info` publish as each fault's `provenance`: `"vendor"` for a
+documented failure mode, `"transport"` for what any HTTP dependency can do to
+a response independent of which vendor is behind it.
+
+| fault | params | what happens |
+|---|---|---|
+| `malformed_body` | `mode: invalid_json\|html\|empty\|truncate`, `status` (default 200; `html` defaults 502) | replaces a successful response's body with something the vendor's own schema forbids |
+| `body_mutation` | `ops: [{op: remove\|replace\|retype, pointer, value?, as?}]` | applies RFC 6901 JSON-pointer operations to a successful JSON response, after the handler ran, so the rest of the response stays faithful |
+| `connection_reset` | — | the connection closes after the response starts, before it completes |
+| `empty_response` | — | the connection closes as close to before any bytes as the binding can manage |
+| `slow_body` | `chunk_bytes` (default 64), `chunk_delay_ms` (default 100) | the body streams in chunks, with a real delay between them |
+
+The six cases a consumer most often hand-rolls a second mock for, each one
+rule:
+
+```python
+# HTML behind a 502
+{
+    "id": "html",
+    "scope": "request",
+    "fault": "malformed_body",
+    "match": {"route": "POST /oauth2/token"},
+    "params": {"mode": "html"},
+}
+
+# Invalid JSON
+{
+    "id": "bad-json",
+    "scope": "request",
+    "fault": "malformed_body",
+    "match": {"route": "POST /oauth2/token"},
+    "params": {"mode": "invalid_json"},
+}
+
+# 200 with no access_token
+{
+    "id": "no-token",
+    "scope": "request",
+    "fault": "body_mutation",
+    "match": {"route": "POST /oauth2/token"},
+    "params": {"ops": [{"op": "remove", "pointer": "/access_token"}]},
+}
+
+# 200 with access_token == ""
+{
+    "id": "empty-token",
+    "scope": "request",
+    "fault": "body_mutation",
+    "match": {"route": "POST /oauth2/token"},
+    "params": {"ops": [{"op": "replace", "pointer": "/access_token", "value": ""}]},
+}
+
+# 200 with expires_at missing
+{
+    "id": "no-expiry",
+    "scope": "request",
+    "fault": "body_mutation",
+    "match": {"route": "POST /oauth2/token"},
+    "params": {"ops": [{"op": "remove", "pointer": "/expires_at"}]},
+}
+
+# A documented number retyped to a string (Clover's access_token_expiration;
+# Square's own expires_at is already a string, so retyping it would not
+# exercise anything)
+{
+    "id": "retyped-expiry",
+    "scope": "request",
+    "fault": "body_mutation",
+    "match": {"route": "POST /oauth/v2/refresh"},
+    "params": {"ops": [{"op": "retype", "pointer": "/access_token_expiration"}]},
+}
+```
+
+Every faulted response — these five and the vendor faults above — carries
+`Vendorfake-Fault` and `Vendorfake-Rule` headers, so a test can tell a faulted
+answer from a real one without parsing the body.
+
+`slow_body` races a real client's read timeout the same way `timeout`'s
+`delay_ms` does, but on the *gap between two chunks*, not their sum: a read
+timeout is inactivity-based per chunk, so a client that tolerates each
+individual gap never times out no matter how long the whole transfer takes.
+`connection_reset` and `empty_response` are indistinguishable in served mode —
+by the time any binding could refuse to send a body, the status line and
+headers have already gone out over the socket — and are documented as such
+rather than pretending otherwise.
 
 ### When a request does not match
 

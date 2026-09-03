@@ -8,7 +8,15 @@ plane fit together. Three ways to hold a unit, one shape once you have it:
     A unit in this process, driven through an ``httpx.Client`` with no socket.
     Fast enough to build per test. Webhooks still go out over real HTTP to
     whatever URL is subscribed, so a :func:`webhook_receiver` on loopback sees
-    signed deliveries exactly as a served unit would send them.
+    signed deliveries exactly as a served unit would send them. An async
+    consumer reaches for :attr:`StartedUnit.async_client` on the same object --
+    same unit, same transport, no second wiring.
+
+:func:`async_unit`
+    The same thing as an ``async with``, for a consumer whose fixtures are
+    ``async def``. It delegates to :func:`unit`, so nothing about how a unit is
+    built has a second description; what it adds is awaiting the async client's
+    close on the way out.
 
 :func:`served`
     The shipped command, ``vendorfake serve``, in a child process, with a real
@@ -31,6 +39,7 @@ these helpers and one written against the container.
 
 from __future__ import annotations
 
+import asyncio
 import collections
 import os
 import queue
@@ -39,8 +48,8 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
@@ -83,6 +92,7 @@ __all__ = [
     "UnitTransport",
     "UnmatchedRequest",
     "WebhookReceiver",
+    "async_unit",
     "serve_in_thread",
     "served",
     "unit",
@@ -128,10 +138,17 @@ STARTUP_TIMEOUT_S = 60.0
 SHUTDOWN_TIMEOUT_S = 15.0
 
 CLIENT_TIMEOUT_S = 30.0
-"""The HTTP timeout for every client this module builds over a socket
-(:func:`served` and :func:`serve_in_thread`). One constant so the two cannot
-drift: they briefly did, and the thread-served client's httpx default of 5s
-was shorter than a real-clock :meth:`Driver.drain` legitimately takes."""
+"""The HTTP timeout for every client this module builds -- over a socket
+(:func:`served` and :func:`serve_in_thread`) and in process
+(:func:`unit`'s :attr:`Driver.client`, :attr:`StartedUnit.async_client`).
+One constant so none of them drift apart: the socket clients briefly did,
+and the thread-served client's httpx default of 5s was shorter than a
+real-clock :meth:`Driver.drain` legitimately takes. The in-process clients
+matter for the same reason since the `timeout` chaos fault started raising
+``httpx.ReadTimeout`` for a `delay_ms` past this threshold instead of
+waiting: left unset, httpx's own default is 5s, not this constant, and a
+consumer's rule armed past 5s but under 30s would raise where the built-in
+client is documented to answer with a 504 instead."""
 
 DRAIN_TIMEOUT_S = 120.0
 """How long :meth:`Driver.drain` waits, overriding the client timeout for
@@ -478,6 +495,54 @@ class StartedUnit(Driver[SeedT]):
     #: because a counter wired at neither end reports a literal 0 -- the
     #: regression tests/conformance/harness.py records as a real incident.
     tripwire: FrameworkTripwire = field(kw_only=True)
+    #: The transport behind :attr:`Driver.client`, kept so :attr:`async_client`
+    #: can share it rather than build a second one. Optional so that a caller
+    #: constructing a ``StartedUnit`` by hand -- there are none here, but the
+    #: type is public -- is not broken by this field; that path builds its own.
+    _transport: UnitTransport | None = field(default=None, kw_only=True, repr=False)
+    _async_client: httpx.AsyncClient | None = field(default=None, kw_only=True, repr=False)
+
+    @property
+    def async_client(self) -> httpx.AsyncClient:
+        """An ``httpx.AsyncClient`` onto the same unit, built on first access.
+
+        FOR: the async consumer -- a service that injects an ``AsyncClient``
+        and whose fixtures are ``async def``. Without this they re-implement
+        ASGI wiring per vendor against ``vendorfake.asgi``, which is internal
+        and not a supported surface.
+
+        Same base URL and the same transport instance as :attr:`client`, so the
+        two are interchangeable views of one unit: a request through either is
+        the same call into :meth:`Unit.handle`, and state written through one
+        is visible through the other immediately, with no socket in between.
+
+        Lazy, because building it costs an object that most tests never touch,
+        and because a fixture that constructed one eagerly would create it on
+        whatever loop happened to be running at fixture time. This transport
+        binds to no loop at all, but the habit is worth not forming.
+        """
+        if self._async_client is None:
+            transport = self._transport if self._transport is not None else UnitTransport(self.unit)
+            self._async_client = httpx.AsyncClient(
+                transport=transport, base_url=self.base_url, timeout=CLIENT_TIMEOUT_S
+            )
+        return self._async_client
+
+    async def aclose(self) -> None:
+        """Close the async client if one was built. Safe to call twice.
+
+        :func:`async_unit` awaits this on the way out. A test that reached for
+        :attr:`async_client` under the *synchronous* :func:`unit` may call it
+        too, but does not have to -- see :func:`_release_async_client`.
+
+        The reference is kept rather than dropped, so :attr:`async_client`
+        keeps answering with the closed client instead of quietly building a
+        fresh one. A request through it then raises, which is the right answer
+        for a block that has already ended; handing back a working client would
+        make "closed on exit" untrue for the one caller who noticed.
+        """
+        if self._async_client is not None:
+            await self._async_client.aclose()
 
 
 @dataclass
@@ -693,6 +758,8 @@ def _unit(
         logger=JsonLogger("warn") if logger is None else logger,
         framework_answered=tripwire.get,
     )
+    transport = UnitTransport(built, unmatched=unmatched)
+    started: StartedUnit[Any] | None = None
     try:
         # Before the client, so a vendor with no seed is refused with the unit
         # already stopped by the `finally` rather than left running behind a
@@ -705,9 +772,8 @@ def _unit(
         resolved_seed = _require_seed(
             built.name, built.context.config.profile, seed_for(built.name, built.context.config.vendor_config)
         )
-        transport = UnitTransport(built, unmatched=unmatched)
-        with httpx.Client(transport=transport, base_url=IN_PROCESS_BASE_URL) as client:
-            yield StartedUnit(
+        with httpx.Client(transport=transport, base_url=IN_PROCESS_BASE_URL, timeout=CLIENT_TIMEOUT_S) as client:
+            started = StartedUnit(
                 vendor=built.name,
                 profile=built.context.config.profile,
                 base_url=IN_PROCESS_BASE_URL,
@@ -715,9 +781,157 @@ def _unit(
                 seed=resolved_seed,
                 unit=built,
                 tripwire=tripwire,
+                _transport=transport,
             )
+            yield started
     finally:
+        if started is not None:
+            _release_async_client(started)
         built.stop()
+
+
+def _release_async_client(started: StartedUnit[Any]) -> None:
+    """Close a lazily built :attr:`StartedUnit.async_client` from sync code.
+
+    ``AsyncClient.aclose`` is a coroutine, and :func:`unit` is a synchronous
+    context manager, so there are two cases and they are not symmetric.
+
+    **No loop running.** ``asyncio.run`` finishes the close, which for this
+    client is one state flag: ``aclose`` awaits the transport's ``aclose``, and
+    :class:`UnitTransport` inherits the no-op. Cheap and exact.
+
+    **A loop already running** -- an ``async def`` test that used the plain
+    ``with unit(...)`` block, which is the shape the README shows. Nothing is
+    done, deliberately. A synchronous ``__exit__`` cannot await inside a live
+    loop, and the two ways round it are both worse than doing nothing:
+    ``asyncio.run`` raises there, and scheduling a task from an exiting fixture
+    leaves a coroutine that may be garbage-collected before the loop runs it,
+    which is a warning rather than a close. Nothing leaks either way -- this
+    transport owns no socket, no pool and no thread; ``aclose`` only marks the
+    client closed. Use :func:`async_unit` where the close should be real, and
+    it is awaited.
+    """
+    client = started._async_client
+    if client is None:
+        return
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(client.aclose())
+
+
+@overload
+def async_unit(
+    vendor: Literal["square"],
+    profile: str = ...,
+    *,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
+) -> AbstractAsyncContextManager[StartedUnit[SquareSeed]]: ...
+
+
+@overload
+def async_unit(
+    vendor: Literal["clover"],
+    profile: str = ...,
+    *,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
+) -> AbstractAsyncContextManager[StartedUnit[CloverSeed]]: ...
+
+
+@overload
+def async_unit(
+    vendor: Literal["toast"],
+    profile: str = ...,
+    *,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
+) -> AbstractAsyncContextManager[StartedUnit[ToastSeed]]: ...
+
+
+@overload
+def async_unit(
+    vendor: str,
+    profile: str = ...,
+    *,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
+) -> AbstractAsyncContextManager[StartedUnit[Seed]]: ...
+
+
+def async_unit(
+    vendor: str,
+    profile: str = "full",
+    *,
+    sink: DeliverySink | None = None,
+    env: Mapping[str, str] | None = None,
+    logger: Logger | None = None,
+    seed: int | None = None,
+    unmatched: UnmatchedPolicy | None = None,
+    clock_start: datetime | str | None = None,
+) -> AbstractAsyncContextManager[StartedUnit[Any]]:
+    """:func:`unit`, for a consumer whose fixtures are ``async def``.
+
+    Yields the same :class:`StartedUnit`, with the same arguments and the same
+    meaning for every one of them: this delegates to :func:`unit` rather than
+    repeating its construction, so there is one code path and two entry points.
+    A second copy would be a second place for the environment layering, the
+    seed and the tripwire wiring to drift, and the drift would be silent.
+
+    The overloads mirror :func:`unit`'s, so ``async_unit("clover")`` yields a
+    ``StartedUnit[CloverSeed]`` to a checker for the same reason. There is one
+    implementation, in :func:`_async_unit`; the overloads are declarations,
+    for the reason :func:`unit` gives.
+
+    What it adds is the exit: :meth:`StartedUnit.aclose` is awaited, so the
+    async client is genuinely closed rather than left for the loop.
+
+    Both clients are available inside the block -- ``async_client`` and the
+    synchronous ``client`` -- because a test often needs a synchronous set-up
+    call before the code under test runs.
+    """
+    return _async_unit(
+        vendor, profile, sink=sink, env=env, logger=logger, seed=seed, unmatched=unmatched, clock_start=clock_start
+    )
+
+
+@asynccontextmanager
+async def _async_unit(
+    vendor: str,
+    profile: str = "full",
+    *,
+    sink: DeliverySink | None = None,
+    env: Mapping[str, str] | None = None,
+    logger: Logger | None = None,
+    seed: int | None = None,
+    unmatched: UnmatchedPolicy | None = None,
+    clock_start: datetime | str | None = None,
+) -> AsyncIterator[StartedUnit[Seed]]:
+    """The body of :func:`async_unit`. See that function for the contract."""
+    with unit(
+        vendor, profile, sink=sink, env=env, logger=logger, seed=seed, unmatched=unmatched, clock_start=clock_start
+    ) as started:
+        try:
+            yield started
+        finally:
+            await started.aclose()
 
 
 @contextmanager

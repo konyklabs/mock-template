@@ -191,5 +191,21 @@ def test_the_param_catalogue_promises_snake_case_keys() -> None:
         "name": "rate_limit",
         "scope": "request",
         "summary": "Reject the request as rate limited.",
+        "provenance": "vendor",
         "params": "retry_after_seconds?",
     }
+
+
+def test_provenance_distinguishes_vendor_faults_from_transport_ones() -> None:
+    """``vendor``: this reproduces something a real vendor does. ``transport``:
+    no vendor documents it, because it is what any HTTP dependency can do to a
+    response independent of which vendor is behind it. See
+    ``core/chaos/faults.py``'s response-scope faults and the README's
+    "Transport faults" section.
+    """
+    by_name = {spec.name: spec.provenance for spec in BUILTIN_FAULTS}
+    assert by_name["rate_limit"] == "vendor"
+    assert by_name["timeout"] == "vendor"
+    assert by_name["webhook.duplicate"] == "vendor"
+    for name in ("malformed_body", "body_mutation", "connection_reset", "empty_response", "slow_body"):
+        assert by_name[name] == "transport", name

@@ -93,6 +93,7 @@ __all__ = [
     "STATUS_PROVENANCE_HEADER",
     "Provenance",
     "assert_error_table_total",
+    "header_text",
     "mechanism_headers",
     "sidecar_headers",
     "unit_error_sidecar",
@@ -142,8 +143,8 @@ def _ascii_json(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
 
 
-def _field_header_value(value: str) -> str:
-    """``field``, as a header value: ASCII passes through untouched, anything
+def header_text(value: str) -> str:
+    """Free text as a header value -- ``field``, a chaos rule id, anything a consumer typed: ASCII passes through untouched, anything
     else is percent-encoded UTF-8 (RFC 3986) via :data:`_FIELD_HEADER_SAFE`.
 
     ``field`` is free text rather than JSON already -- a chaos rule id, a
@@ -232,7 +233,7 @@ def sidecar_headers(sidecar: Mapping[str, Any]) -> dict[str, str]:
     }
     field = sidecar.get("field")
     if field is not None:
-        headers[ERROR_FIELD_HEADER] = _field_header_value(as_str(field, ""))
+        headers[ERROR_FIELD_HEADER] = header_text(as_str(field, ""))
     extra = {key: value for key, value in sidecar.items() if key not in reserved}
     if extra:
         headers[ERROR_INFO_HEADER] = _ascii_json(extra)

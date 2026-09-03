@@ -2,7 +2,12 @@
 
 ## Unreleased
 
+A placeholder heading for release-please to fold into the release notes; the
+entries below are hand-written because the behaviour change needs more than a
+commit subject.
+
 ### Features
+
 
 * **testing:** the vendor name narrows the seed. `unit()` and `served()` are
   overloaded on the vendor literal, so `unit("clover")` yields a
@@ -61,7 +66,36 @@
   suite's pytest form still exists; run it with `-p vendorfake.conformance.plugin`
   or `pytest --pyargs vendorfake.conformance` (konyklabs/roadmap#71).
 
+
+* **testing:** `UnitTransport` now implements both `httpx.BaseTransport` and
+  `httpx.AsyncBaseTransport`, so one instance drives an `httpx.Client` and an
+  `httpx.AsyncClient` over the same unit. `StartedUnit.async_client` is that
+  client, built on first access; `vendorfake.testing.async_unit()` is `unit()`
+  as an async context manager. An async consumer no longer writes ASGI wiring
+  per vendor against the internal `vendorfake.asgi`.
+* **pytest:** a `vendorfake_async_unit` fixture, registered through the
+  `pytest11` entry point and driven by `@pytest.mark.vendorfake(vendor, ...)`.
+  It is a synchronous fixture yielding an object that owns an async client, so
+  it works under pytest-asyncio (strict and auto) and under anyio's plugin
+  without vendorfake depending on either.
+* **core:** `UnitResponse` gains `delay_ms` (default `0`, additive).
+* **core:** five transport-fidelity faults -- `malformed_body`,
+  `body_mutation`, `connection_reset`, `empty_response`, `slow_body` -- for
+  "the vendor returned garbage", which no vendor documents and no other fault
+  can produce: an HTML error page behind a 502, invalid JSON, a 200 missing
+  its token, a documented field retyped to something else, a connection that
+  drops mid-response, a body that streams in slowly. `UnitResponse` gains
+  `transport: TransportDirective | None` (default `None`, additive) for the
+  three that are not a response at all; the in-process transport and the ASGI
+  binding each interpret it in the terms of the caller they hold.
+  `core/chaos/rules.py`'s `FaultSpec` gains `provenance: "vendor" | "transport"`,
+  published at `GET /__unit/chaos` and `GET /__unit/info` (and so in
+  `vendorfake info`'s output), distinguishing these five from every fault that
+  came before them. Every faulted response, old kinds included, now carries
+  `Vendorfake-Fault` and `Vendorfake-Rule` headers.
+
 ### Behaviour changes
+
 
 * **testing:** `Driver.seed` is no longer `Optional`. It was `None` for any
   vendor with no seed, which every consumer paid for with a guard on a value
@@ -71,7 +105,36 @@
   that publishes no seed must be driven with `create_unit()` rather than
   `unit()`.
 
+
+* **core:** the `timeout` chaos fault no longer calls `time.sleep` inside the
+  kernel. On a real clock it reports the delay on the response and each
+  binding carries it out: the in-process transport raises `httpx.ReadTimeout`
+  **without waiting** when the delay exceeds the client's read timeout, and
+  waits for real when it does not; the ASGI application awaits it, so served
+  mode is unchanged from a client's point of view; the file-drop binding waits
+  before writing the response document. Virtual-clock mode is unchanged --
+  scenario time moves and the answer is immediate.
+
+  What a consumer gains is the case that was previously unreachable in
+  process: a client-side timeout, and therefore a rehearsal of their retry
+  path, without starting a server. What changes for an existing consumer,
+  stated plainly: a `timeout` fault whose `delay_ms` exceeds the client's read
+  timeout now raises `httpx.ReadTimeout` instead of answering a 504. For the
+  built-in client -- `StartedUnit.client` and `StartedUnit.async_client`, what
+  `unit()` and `async_unit()` hand back -- that threshold is
+  `vendorfake.testing.CLIENT_TIMEOUT_S` (30 s), now passed to both explicitly
+  rather than left to httpx's own 5 s default. A consumer who needs the 504
+  answer for a longer delay passes a client built with a longer timeout, or
+  arms a shorter `delay_ms`. The raw in-process seam
+  (`vendorfake.core.transport.inprocess.InProcessClient`) holds no caller and
+  so takes no delay at all; the delay is readable there on
+  `response.raw.delay_ms`. Status, body and headers are unchanged everywhere.
+* **testing:** `UnitTransport` now reads `request.extensions["timeout"]`. It
+  is still consulted for nothing except a deliberate `delay_ms`; an ordinary
+  in-process call still cannot be interrupted by a timeout.
+
 ### Breaking changes
+
 
 * **testing:** an in-process unit (`unit()`) now raises
   `vendorfake.testing.UnmatchedRequest` — an `AssertionError` — for a request no
@@ -94,6 +157,16 @@
   its `pytest_sessionfinish` cross-profile check) must now load it explicitly:
   `-p vendorfake.conformance.plugin`. `vendorfake-conformance` (the CLI) and
   `python -m vendorfake.conformance` are unaffected.
+
+### Dependencies
+
+
+* `anyio` is now declared directly (it was already installed as an
+  unconditional dependency of `httpx`); `vendorfake.testing.transport` imports
+  it so the async wait works under trio as well as asyncio.
+* `pytest-asyncio` added to the dev group, used only to run a consumer's suite
+  under it inside `pytester`.
+
 
 ## 0.1.0 (2026-09-01)
 
