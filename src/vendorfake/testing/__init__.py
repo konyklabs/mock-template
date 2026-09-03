@@ -1243,8 +1243,8 @@ def _served(
     inheriting is the only sane default and the mapping is a delta on it.
     Every ``VENDORFAKE_*`` variable the child's ``load_profile`` reads goes
     through here -- ``VENDORFAKE_CLOCK=virtual``, ``VENDORFAKE_CAPABILITIES``
-    as a delta on the profile's list, a ``VENDORFAKE_VENDOR_*`` credential
-    override -- with one exception: ``VENDORFAKE_PROFILE`` is never consulted,
+    as an absolute list or a delta on the profile's, a ``VENDORFAKE_VENDOR_*``
+    credential override -- with one exception: ``VENDORFAKE_PROFILE`` is never consulted,
     because ``profile`` is a plain ``str = "full"`` passed to the child as an
     explicit ``--profile`` that wins over the variable. There is still no
     ``capabilities=`` parameter; resolve a capability request to a profile
