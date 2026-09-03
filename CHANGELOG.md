@@ -20,6 +20,20 @@ commit subject.
   it works under pytest-asyncio (strict and auto) and under anyio's plugin
   without vendorfake depending on either.
 * **core:** `UnitResponse` gains `delay_ms` (default `0`, additive).
+* **core:** five transport-fidelity faults -- `malformed_body`,
+  `body_mutation`, `connection_reset`, `empty_response`, `slow_body` -- for
+  "the vendor returned garbage", which no vendor documents and no other fault
+  can produce: an HTML error page behind a 502, invalid JSON, a 200 missing
+  its token, a documented field retyped to something else, a connection that
+  drops mid-response, a body that streams in slowly. `UnitResponse` gains
+  `transport: TransportDirective | None` (default `None`, additive) for the
+  three that are not a response at all; the in-process transport and the ASGI
+  binding each interpret it in the terms of the caller they hold.
+  `core/chaos/rules.py`'s `FaultSpec` gains `provenance: "vendor" | "transport"`,
+  published at `GET /__unit/chaos` and `GET /__unit/info` (and so in
+  `vendorfake info`'s output), distinguishing these five from every fault that
+  came before them. Every faulted response, old kinds included, now carries
+  `Vendorfake-Fault` and `Vendorfake-Rule` headers.
 
 ### Behaviour changes
 

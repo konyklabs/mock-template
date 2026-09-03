@@ -91,6 +91,7 @@ __all__ = [
     "SignInput",
     "Signer",
     "SignerProperties",
+    "TransportDirective",
     "TransportKind",
     "UnitContext",
     "UnitError",
@@ -163,7 +164,7 @@ class UnitError(Exception):
     replaces the TypeScript compiler's checking of a literal union.
     """
 
-    __slots__ = ("delay_ms", "detail", "field", "info", "kind")
+    __slots__ = ("delay_ms", "detail", "fault", "field", "info", "kind", "rule_id")
 
     def __init__(
         self,
@@ -173,6 +174,8 @@ class UnitError(Exception):
         field: str | None = None,
         info: Mapping[str, Any] | None = None,
         delay_ms: int = 0,
+        fault: str | None = None,
+        rule_id: str | None = None,
     ) -> None:
         resolved = UnitErrorKind(kind)
         super().__init__(detail if detail is not None else resolved.value)
@@ -194,6 +197,17 @@ class UnitError(Exception):
         #: reading that body is *documented* to see it; this is the copy the
         #: binding acts on.
         self.delay_ms: int = delay_ms
+        #: The chaos fault name and rule id that raised this error, or ``None``
+        #: for an ordinary refusal nothing armed. ``_shape`` stamps these as
+        #: the ``vendorfake-fault`` / ``vendorfake-rule`` headers so a test can
+        #: tell a faulted answer from a real one without parsing the body --
+        #: which is also why they are fields and not a second write into
+        #: :attr:`info`: ``info["chaos_rule"]`` already exists for the
+        #: pre-existing faults and changing its shape would change a body a
+        #: consumer may already be asserting against, where a header is new
+        #: surface nothing was reading before. See ``core/chaos/faults.py``.
+        self.fault: str | None = fault
+        self.rule_id: str | None = rule_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +267,39 @@ class UnitRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class TransportDirective:
+    """An instruction to a binding about the *socket*, not the vendor's bytes.
+
+    FOR: the three faults no vendor's response schema can express because they
+    are not a response at all -- a connection that closes mid-stream, one that
+    closes before anything legible arrives, and a body that dribbles in over
+    real time. ``UnitResponse.body`` still carries whatever the handler
+    produced (or ``malformed_body``/``body_mutation`` produced); this is a
+    second, separate instruction that says what a binding holding a real
+    caller does with those bytes, exactly the way :attr:`UnitResponse.delay_ms`
+    is a separate instruction about *when* they arrive.
+
+    The kernel never touches sockets, so it builds this value and stops; each
+    binding that holds one interprets it in the terms of the caller it holds
+    (see ``testing/transport.py`` and ``asgi/app.py``). A binding with no
+    caller -- the file-drop binding, which writes a document rather than
+    answering a request -- has nothing to interpret this against and ignores
+    it, exactly as it already ignores a field it does not recognise.
+
+    provenance: transport. No vendor documents any of the three; they are what
+    any HTTP dependency can do to a caller, independent of which vendor is
+    behind it. See ``core/chaos/faults.py`` and the README's "Transport
+    faults" section.
+    """
+
+    kind: Literal["connection_reset", "empty_response", "slow_body"]
+    #: ``slow_body`` only: bytes per chunk before the next delay.
+    chunk_bytes: int = 0
+    #: ``slow_body`` only: milliseconds paused between chunks.
+    chunk_delay_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class UnitResponse:
     """Already-serialised. A transport adapter returns ``body`` untouched."""
 
@@ -282,6 +329,10 @@ class UnitResponse:
     #: provenance: transport. No vendor documents it; it is how this
     #: distribution's bindings agree about a delay the kernel asked for.
     delay_ms: int = 0
+    #: A socket-level instruction alongside ``delay_ms``, or ``None`` for an
+    #: ordinary response. See :class:`TransportDirective`. Additive, default
+    #: ``None``, so every existing construction site keeps working unchanged.
+    transport: TransportDirective | None = None
 
 
 @dataclass(slots=True)

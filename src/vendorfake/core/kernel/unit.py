@@ -104,7 +104,7 @@ from urllib.parse import parse_qsl
 from vendorfake.core.capability.gates import CoreCapability, assert_capability_declarations
 from vendorfake.core.capability.registry import CapabilityRegistry
 from vendorfake.core.chaos.engine import ChaosEngine, ChaosSubject
-from vendorfake.core.chaos.faults import apply_request_fault
+from vendorfake.core.chaos.faults import RESPONSE_PHASE_FAULTS, apply_request_fault, apply_response_fault
 from vendorfake.core.chaos.rules import matched_routes
 from vendorfake.core.chaos.selector import FaultSelector
 from vendorfake.core.config.models import ResolvedConfig
@@ -694,7 +694,13 @@ class Unit:
                 res = self._run_pipeline(req, route, args)
             return self._finish(req, res, route, started)
         except UnitError as err:
-            shaped_error = self._shape(self._vendor.errors.shape(err, self._ctx), err.kind, delay_ms=err.delay_ms)
+            shaped_error = self._shape(
+                self._vendor.errors.shape(err, self._ctx),
+                err.kind,
+                delay_ms=err.delay_ms,
+                fault=err.fault,
+                rule_id=err.rule_id,
+            )
             return self._finish(req, shaped_error, route, started)
         except Exception as exc:
             # Not a UnitError, so nothing in the core meant this: it is a defect
@@ -774,6 +780,15 @@ class Unit:
 
         # 8. handler, then store the response against the idempotency key ----
         res = normalize(route.handler(args))
+        # A response-scope fault ("the vendor returned garbage") corrupts a
+        # REAL answer, so it can only run after the handler produced one --
+        # unlike every fault above, which fires instead of the handler ever
+        # running. It runs before the idempotency store so a replay of this
+        # key gets exactly what the caller got the first time, faulted or not.
+        # It never touches ``ctx``, so it cannot journal anything on its own;
+        # DELAYS LEAVE AS DATA applies here too, via ``UnitResponse.transport``.
+        if decision is not None and decision.fault in RESPONSE_PHASE_FAULTS:
+            res = apply_response_fault(decision, res, log=self._log)
         if idem is not None and idem_key is not None and 200 <= res.status < 300:
             self._store.put_idempotent(
                 IdempotencyRecord(
@@ -845,7 +860,15 @@ class Unit:
 
     # -- response shaping ---------------------------------------------------
 
-    def _shape(self, shaped: ShapedError, kind: UnitErrorKind, *, delay_ms: int = 0) -> UnitResponse:
+    def _shape(
+        self,
+        shaped: ShapedError,
+        kind: UnitErrorKind,
+        *,
+        delay_ms: int = 0,
+        fault: str | None = None,
+        rule_id: str | None = None,
+    ) -> UnitResponse:
         """The vendor's error body, plus the machine-readable ``x-unit-error``.
 
         The header is what lets a conformance check assert "this failed, and it
@@ -855,9 +878,19 @@ class Unit:
         refusal can ask its binding to hold the answer back -- today, the
         ``timeout`` fault on a real clock. It is a keyword with a default so
         every other call site here reads exactly as it did.
+
+        ``fault``/``rule_id`` come from the same error, when a chaos decision
+        raised it, and become the ``vendorfake-fault``/``vendorfake-rule``
+        headers -- the same two stamped on a successful response a
+        response-scope fault corrupted (``core/chaos/faults.py``), so a test
+        can tell any faulted answer from a real one without parsing the body,
+        whichever of the two mechanisms produced it.
         """
         headers = dict(shaped.headers)
         headers["x-unit-error"] = kind.value
+        if fault is not None and rule_id is not None:
+            headers["vendorfake-fault"] = fault
+            headers["vendorfake-rule"] = rule_id
         answered = normalize(ReplyInit(status=shaped.status, json=shaped.body, headers=headers))
         if delay_ms <= 0:
             return answered
@@ -878,12 +911,19 @@ class Unit:
                 "ms": round((time.monotonic() - started) * 1000, 3),
             },
         )
-        # ``delay_ms`` is carried across rather than offered to ``decorate``.
-        # ``MutableResponse`` is the vendor's last chance to shape what goes on
-        # the *wire*; how long a binding holds the answer back is not a vendor
-        # opinion, and putting it in reach of one would make the same fault
-        # behave differently per vendor for no stated reason.
-        return UnitResponse(status=mutable.status, headers=mutable.headers, body=mutable.body, delay_ms=res.delay_ms)
+        # ``delay_ms`` and ``transport`` are carried across rather than offered
+        # to ``decorate``. ``MutableResponse`` is the vendor's last chance to
+        # shape what goes on the *wire*; how long a binding holds the answer
+        # back, and what it does to the connection while doing it, are not
+        # vendor opinions, and putting either in reach of one would make the
+        # same fault behave differently per vendor for no stated reason.
+        return UnitResponse(
+            status=mutable.status,
+            headers=mutable.headers,
+            body=mutable.body,
+            delay_ms=res.delay_ms,
+            transport=res.transport,
+        )
 
 
 def _describe(exc: BaseException) -> str:

@@ -344,13 +344,16 @@ curl -s -X POST http://localhost:8080/__unit/chaos/rules -H 'Content-Type: appli
 
 The faults every vendor supports: `rate_limit`, `server_error`,
 `unavailable`, `timeout`, `token_expiry` (one 401 without touching the stored
-token — the transient case a deactivate-on-401 handler gets wrong), and on
+token — the transient case a deactivate-on-401 handler gets wrong), on
 deliveries `webhook.duplicate`, `webhook.delay`, `webhook.out_of_order`,
-`webhook.drop_ack`, `webhook.drop`. Clover routes are matched with the
-tenant placeholder, e.g. `"route": "POST /v3/merchants/{mId}/orders"`.
-`GET /__unit/chaos` lists the catalogue; `POST /__unit/chaos/reset` disarms
-everything. The `chaos-demo` profile ships a preloaded set. Details and the
-401 rehearsal are under [Deterministic chaos](#deterministic-chaos).
+`webhook.drop_ack`, `webhook.drop`, and the five transport-fidelity faults —
+`malformed_body`, `body_mutation`, `connection_reset`, `empty_response`,
+`slow_body` — under [Transport faults](#transport-faults) below. Clover
+routes are matched with the tenant placeholder, e.g.
+`"route": "POST /v3/merchants/{mId}/orders"`. `GET /__unit/chaos` lists the
+catalogue, each fault's `provenance` included; `POST /__unit/chaos/reset`
+disarms everything. The `chaos-demo` profile ships a preloaded set. Details
+and the 401 rehearsal are under [Deterministic chaos](#deterministic-chaos).
 
 #### Timeouts
 
@@ -396,6 +399,100 @@ that your backoff took time still means something. Served mode
 yours to enforce, and the server behaves exactly as a slow vendor would. On a
 virtual clock (`VENDORFAKE_CLOCK=virtual`) the delay moves scenario time and
 the answer comes back at once.
+
+#### Transport faults
+
+Every fault above reproduces something a *vendor* documents — Square really
+does answer 429s, Clover really does time out. None of them can rehearse "the
+vendor returned garbage": an HTML error page behind a 502, invalid JSON, a
+200 missing its token, a documented field retyped to something else. No
+vendor documents its own garbage, so nothing in the faults above can shape
+one — which is exactly the distinction `GET /__unit/chaos` and `GET
+/__unit/info` publish as each fault's `provenance`: `"vendor"` for a
+documented failure mode, `"transport"` for what any HTTP dependency can do to
+a response independent of which vendor is behind it.
+
+| fault | params | what happens |
+|---|---|---|
+| `malformed_body` | `mode: invalid_json\|html\|empty\|truncate`, `status` (default 200; `html` defaults 502) | replaces a successful response's body with something the vendor's own schema forbids |
+| `body_mutation` | `ops: [{op: remove\|replace\|retype, pointer, value?, as?}]` | applies RFC 6901 JSON-pointer operations to a successful JSON response, after the handler ran, so the rest of the response stays faithful |
+| `connection_reset` | — | the connection closes after the response starts, before it completes |
+| `empty_response` | — | the connection closes as close to before any bytes as the binding can manage |
+| `slow_body` | `chunk_bytes` (default 64), `chunk_delay_ms` (default 100) | the body streams in chunks, with a real delay between them |
+
+The six cases a consumer most often hand-rolls a second mock for, each one
+rule:
+
+```python
+# HTML behind a 502
+{
+    "id": "html",
+    "scope": "request",
+    "fault": "malformed_body",
+    "match": {"route": "POST /oauth2/token"},
+    "params": {"mode": "html"},
+}
+
+# Invalid JSON
+{
+    "id": "bad-json",
+    "scope": "request",
+    "fault": "malformed_body",
+    "match": {"route": "POST /oauth2/token"},
+    "params": {"mode": "invalid_json"},
+}
+
+# 200 with no access_token
+{
+    "id": "no-token",
+    "scope": "request",
+    "fault": "body_mutation",
+    "match": {"route": "POST /oauth2/token"},
+    "params": {"ops": [{"op": "remove", "pointer": "/access_token"}]},
+}
+
+# 200 with access_token == ""
+{
+    "id": "empty-token",
+    "scope": "request",
+    "fault": "body_mutation",
+    "match": {"route": "POST /oauth2/token"},
+    "params": {"ops": [{"op": "replace", "pointer": "/access_token", "value": ""}]},
+}
+
+# 200 with expires_at missing
+{
+    "id": "no-expiry",
+    "scope": "request",
+    "fault": "body_mutation",
+    "match": {"route": "POST /oauth2/token"},
+    "params": {"ops": [{"op": "remove", "pointer": "/expires_at"}]},
+}
+
+# A documented number retyped to a string (Clover's access_token_expiration;
+# Square's own expires_at is already a string, so retyping it would not
+# exercise anything)
+{
+    "id": "retyped-expiry",
+    "scope": "request",
+    "fault": "body_mutation",
+    "match": {"route": "POST /oauth/v2/refresh"},
+    "params": {"ops": [{"op": "retype", "pointer": "/access_token_expiration"}]},
+}
+```
+
+Every faulted response — these five and the vendor faults above — carries
+`Vendorfake-Fault` and `Vendorfake-Rule` headers, so a test can tell a faulted
+answer from a real one without parsing the body.
+
+`slow_body` races a real client's read timeout the same way `timeout`'s
+`delay_ms` does, but on the *gap between two chunks*, not their sum: a read
+timeout is inactivity-based per chunk, so a client that tolerates each
+individual gap never times out no matter how long the whole transfer takes.
+`connection_reset` and `empty_response` are indistinguishable in served mode —
+by the time any binding could refuse to send a body, the status line and
+headers have already gone out over the socket — and are documented as such
+rather than pretending otherwise.
 
 ### Running the conformance suite against your unit
 

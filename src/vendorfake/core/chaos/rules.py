@@ -67,6 +67,7 @@ __all__ = [
     "ChaosScope",
     "ChaosWhen",
     "FaultName",
+    "FaultProvenance",
     "FaultSpec",
     "glob_match",
     "matched_routes",
@@ -164,6 +165,21 @@ class ChaosRule(BaseModel):
     note: str | None = None
 
 
+FaultProvenance = Literal["vendor", "transport"]
+"""Where a fault's *behaviour* comes from -- not to be confused with
+:data:`vendorfake.core.kernel.shaping.Provenance`, which says where an error
+*status* came from. ``"vendor"``: this fault reproduces something a real
+vendor does (a documented rate limit, an outage, a 5xx) even where the exact
+trigger is this project's own invention. ``"transport"``: nothing a vendor
+documents, because no vendor's API contract covers what a socket, a proxy or
+a flaky link between them can do to a response that already left the
+handler -- a connection dropped mid-body, a body that doesn't parse, a field
+retyped in flight. See ``core/chaos/faults.py`` for the five faults that
+introduced the second value, and the README's "Transport faults" section for
+the distinction stated to a consumer.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class FaultSpec:
     """One fault a fork gets without writing any code. Published by ``/__unit/info``."""
@@ -171,41 +187,88 @@ class FaultSpec:
     name: FaultName
     scope: ChaosScope
     summary: str
+    provenance: FaultProvenance
     #: Prose description of the ``params`` keys this fault reads, if any.
     params: str | None = None
 
     def as_json(self) -> dict[str, object]:
-        body: dict[str, object] = {"name": self.name, "scope": self.scope, "summary": self.summary}
+        body: dict[str, object] = {
+            "name": self.name,
+            "scope": self.scope,
+            "summary": self.summary,
+            "provenance": self.provenance,
+        }
         if self.params is not None:
             body["params"] = self.params
         return body
 
 
 BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
-    FaultSpec("rate_limit", "request", "Reject the request as rate limited.", "retry_after_seconds?"),
-    FaultSpec("server_error", "request", "Fail the request with a vendor-shaped 5xx."),
-    FaultSpec("unavailable", "request", "Fail the request as temporarily unavailable."),
-    FaultSpec("timeout", "request", "Stall the request, then fail it.", "delay_ms (default 100)"),
+    FaultSpec("rate_limit", "request", "Reject the request as rate limited.", "vendor", "retry_after_seconds?"),
+    FaultSpec("server_error", "request", "Fail the request with a vendor-shaped 5xx.", "vendor"),
+    FaultSpec("unavailable", "request", "Fail the request as temporarily unavailable.", "vendor"),
+    FaultSpec("timeout", "request", "Stall the request, then fail it.", "vendor", "delay_ms (default 100)"),
     FaultSpec(
         "token_expiry",
         "request",
         "Treat the caller token as expired mid-flow, without touching stored state.",
+        "vendor",
     ),
     FaultSpec(
-        "webhook.duplicate", "webhook", "Deliver the same event body more than once.", "copies (default 1 extra)"
+        "webhook.duplicate",
+        "webhook",
+        "Deliver the same event body more than once.",
+        "vendor",
+        "copies (default 1 extra)",
     ),
-    FaultSpec("webhook.out_of_order", "webhook", "Hold this event until the next one has been delivered."),
+    FaultSpec("webhook.out_of_order", "webhook", "Hold this event until the next one has been delivered.", "vendor"),
     FaultSpec(
         "webhook.drop_ack",
         "webhook",
         "Ignore a successful subscriber response so the retry schedule runs.",
+        "vendor",
     ),
-    FaultSpec("webhook.delay", "webhook", "Delay delivery.", "delay_ms"),
+    FaultSpec("webhook.delay", "webhook", "Delay delivery.", "vendor", "delay_ms"),
     FaultSpec(
         "webhook.drop",
         "webhook",
         "Silently swallow the delivery: recorded as dropped, never sent to the subscriber. "
         "Filter with match.event_type.",
+        "vendor",
+    ),
+    # -- transport faults: provenance: transport -- see FaultProvenance above.
+    FaultSpec(
+        "malformed_body",
+        "request",
+        "Replace a successful response's body with something the vendor's own schema forbids.",
+        "transport",
+        "mode (invalid_json|html|empty|truncate), status (default 200; html defaults 502)",
+    ),
+    FaultSpec(
+        "body_mutation",
+        "request",
+        "Apply RFC 6901 JSON-pointer operations to a successful JSON response body, after the handler ran.",
+        "transport",
+        "ops (list of {op, pointer, value?, as?})",
+    ),
+    FaultSpec(
+        "connection_reset",
+        "request",
+        "Drop the connection after the response starts, before it completes.",
+        "transport",
+    ),
+    FaultSpec(
+        "empty_response",
+        "request",
+        "Drop the connection as close to before any bytes as the binding can manage.",
+        "transport",
+    ),
+    FaultSpec(
+        "slow_body",
+        "request",
+        "Stream a successful response body in chunks, with a delay between them.",
+        "transport",
+        "chunk_bytes (default 64), chunk_delay_ms (default 100)",
     ),
 )
 """The faults the core implements, as data. The ``params`` prose is a promise:

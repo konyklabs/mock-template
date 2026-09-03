@@ -58,6 +58,22 @@ true while the kernel did the sleeping itself: nothing consulted
 about. The served fixtures were the only way to rehearse a client timeout.
 See ``vendorfake.core.chaos.faults`` for the other half of the change.
 
+TRANSPORT-FIDELITY FAULTS, added alongside the timeout one. ``slow_body``
+folds into the same read-timeout race as a deliberate delay, but on a
+different number: whether the caller times out is decided against a single
+chunk gap, not the sum of them, because a real read timeout is inactivity-
+based per chunk and a served unit streaming many gaps each under it never
+times a patient client out (see :func:`_would_exhaust_read_timeout_ms` and
+``tests/integration/test_transport_faults_served.py``, which proves it against
+a real socket). Once it is decided the caller waits, this binding -- which has
+no real stream to hold open -- waits the aggregate once and hands back the
+whole body, which is the honest simulation of "every chunk eventually
+arrived". ``connection_reset`` and ``empty_response`` have no wait to race at
+all: nothing here holds a socket to reset or starve, so this binding raises
+the exception a real one would surface -- ``httpx.RemoteProtocolError`` and
+``httpx.ReadError`` respectively -- immediately. See
+:class:`~vendorfake.core.kernel.types.TransportDirective`.
+
 WHY NOT ``httpx.ASGITransport``. It exists and it would exercise the FastAPI
 adapter, but it is asynchronous only, so ``httpx.Client`` cannot use it and
 half of this seam would be missing. The ASGI adapter is exercised by
@@ -66,6 +82,7 @@ half of this seam would be missing. The ASGI adapter is exercised by
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -119,25 +136,88 @@ def _read_timeout(request: httpx.Request) -> float | None:
         return None
 
 
-def _expired(request: httpx.Request, answered: UnitResponse) -> httpx.ReadTimeout | None:
-    """The exception this delay should raise instead of being waited out.
+def _wait_owed_ms(answered: UnitResponse) -> int:
+    """How long this response should be held back, once it is decided the
+    caller will wait for it at all (see :func:`_expired`, which decides that
+    on a different number for ``slow_body``).
 
-    ``None`` when the delay fits inside what the caller is willing to wait, in
+    Two faults ask a binding to wait: ``timeout`` (:attr:`UnitResponse.delay_ms`)
+    and ``slow_body`` (:attr:`TransportDirective.chunk_bytes` /
+    ``chunk_delay_ms``, read as the total of the gaps *between* chunks -- this
+    binding has no real stream to hold open, so the honest way to simulate
+    "every chunk eventually arrived" is to wait the aggregate once and hand
+    back the whole body). The two cannot both be set: they come from different
+    fault kinds, and fault selection arms at most one per request.
+    """
+    directive = answered.transport
+    if directive is not None and directive.kind == "slow_body":
+        chunk_bytes = directive.chunk_bytes if directive.chunk_bytes > 0 else 64
+        chunks = max(1, math.ceil(len(answered.body) / chunk_bytes))
+        return max(0, chunks - 1) * directive.chunk_delay_ms
+    return answered.delay_ms
+
+
+def _would_exhaust_read_timeout_ms(answered: UnitResponse) -> int:
+    """The single gap a caller's read timeout actually races against.
+
+    **Not** the aggregate :func:`_wait_owed_ms` computes. A real client's read
+    timeout is inactivity-based per chunk -- httpx's own words are "the
+    maximum duration to wait for a chunk of data to be received" -- so a
+    served unit streaming ``slow_body`` genuinely never times a patient-enough
+    client out no matter how many gaps there are, so long as no single one of
+    them exceeds the read timeout; ``tests/integration/test_transport_faults_served.py``
+    proves this against a real socket. Matching that here, rather than
+    comparing the sum, is what keeps a test green in process green against a
+    served unit too -- the parity this module's own docstring states as an
+    invariant.
+    """
+    directive = answered.transport
+    if directive is not None and directive.kind == "slow_body":
+        return directive.chunk_delay_ms
+    return answered.delay_ms
+
+
+def _expired(request: httpx.Request, answered: UnitResponse) -> httpx.ReadTimeout | None:
+    """The exception this wait should raise instead of being waited out.
+
+    ``None`` when the wait fits inside what the caller is willing to wait, in
     which case the caller gets the response after a real wait. The comparison is
-    strictly greater-than: a delay *equal* to the read timeout is the boundary
+    strictly greater-than: a wait *equal* to the read timeout is the boundary
     case a socket resolves by racing, and answering is the choice that does not
     make a test flaky.
     """
-    if answered.delay_ms <= 0:
+    gap = _would_exhaust_read_timeout_ms(answered)
+    if gap <= 0:
         return None
     read = _read_timeout(request)
-    if read is None or answered.delay_ms / 1000.0 <= read:
+    if read is None or gap / 1000.0 <= read:
         return None
     return httpx.ReadTimeout(
-        f"the unit delayed this response by {answered.delay_ms}ms, longer than the client's "
-        f"{read}s read timeout (an injected 'timeout' fault; nothing waited)",
+        f"the unit would hold this response back by at least {gap}ms, longer than the client's "
+        f"{read}s read timeout (an injected fault; nothing waited)",
         request=request,
     )
+
+
+def _rule_id(answered: UnitResponse) -> str:
+    return answered.headers.get("vendorfake-rule", "?")
+
+
+def _connection_fault(request: httpx.Request, answered: UnitResponse) -> Exception | None:
+    """``connection_reset`` / ``empty_response``: no socket exists to reset or
+    starve, so this binding raises the exception a real one would surface,
+    directly and without waiting. See ``core/kernel/types.py``'s
+    ``TransportDirective`` and the README's "Transport faults" section.
+    """
+    directive = answered.transport
+    if directive is None:
+        return None
+    rule = _rule_id(answered)
+    if directive.kind == "connection_reset":
+        return httpx.RemoteProtocolError(f"vendorfake: connection reset by fault rule {rule}", request=request)
+    if directive.kind == "empty_response":
+        return httpx.ReadError(f"vendorfake: empty response by fault rule {rule}", request=request)
+    return None
 
 
 class UnitTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
@@ -151,11 +231,15 @@ class UnitTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         answered = self._answer(request, request.read())
+        fault = _connection_fault(request, answered)
+        if fault is not None:
+            raise fault
         expired = _expired(request, answered)
         if expired is not None:
             raise expired
-        if answered.delay_ms > 0:
-            time.sleep(answered.delay_ms / 1000.0)
+        owed = _wait_owed_ms(answered)
+        if owed > 0:
+            time.sleep(owed / 1000.0)
         return self._respond(request, answered)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
@@ -167,11 +251,15 @@ class UnitTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
         raise under another's.
         """
         answered = self._answer(request, await request.aread())
+        fault = _connection_fault(request, answered)
+        if fault is not None:
+            raise fault
         expired = _expired(request, answered)
         if expired is not None:
             raise expired
-        if answered.delay_ms > 0:
-            await anyio.sleep(answered.delay_ms / 1000.0)
+        owed = _wait_owed_ms(answered)
+        if owed > 0:
+            await anyio.sleep(owed / 1000.0)
         return self._respond(request, answered)
 
     # -- shared by both protocols -------------------------------------------
