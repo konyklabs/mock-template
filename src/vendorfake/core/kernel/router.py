@@ -50,6 +50,7 @@ __all__ = [
     "MethodNotAllowed",
     "NoRoute",
     "Router",
+    "is_control_path",
     "percent_decode",
     "split_path",
 ]
@@ -157,7 +158,7 @@ class Router:
         that every path into the table -- a vendor's list, a control plane, a
         test building a router by hand -- passes the same gate.
         """
-        if not route.internal and _reserved(route.path):
+        if not route.internal and is_control_path(route.path):
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail=(
@@ -219,7 +220,19 @@ class Router:
         return NoRoute()
 
 
-def _reserved(path: str) -> bool:
+def is_control_path(path: str) -> bool:
+    """True for the control-plane namespace: exactly the bare prefix, or anything under it.
+
+    The one definition of "this path belongs to the observer, not the vendor"
+    -- used both to keep a vendor route from claiming the namespace
+    (:meth:`Router.add`, :func:`assert_no_reserved_paths`) and to keep
+    control-plane traffic out of the request log
+    (:mod:`vendorfake.core.kernel.unit`). ``startswith(INTERNAL_PATH_PREFIX)``
+    alone would miss the bare path with no trailing slash -- ``/__unit`` --
+    which matches no registered route (every control route lives at
+    ``/__unit/<segment>``) but is still the observer's own traffic, not a
+    vendor 404.
+    """
     return path == INTERNAL_PATH_PREFIX.rstrip("/") or path.startswith(INTERNAL_PATH_PREFIX)
 
 
@@ -230,7 +243,7 @@ def assert_no_reserved_paths(routes: Sequence[Route]) -> None:
     holding a route list can check it before building anything -- a vendor
     self-test, for instance, which has no reason to construct a router.
     """
-    offenders = [route.key for route in routes if not route.internal and _reserved(route.path)]
+    offenders = [route.key for route in routes if not route.internal and is_control_path(route.path)]
     if not offenders:
         return
     raise UnitError(

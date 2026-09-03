@@ -112,7 +112,7 @@ from vendorfake.core.config.models import ResolvedConfig
 from vendorfake.core.kernel.magic import MagicExtraction, extract_magic
 from vendorfake.core.kernel.nearmiss import NEAR_MISS_HEADER, near_miss_header, near_misses
 from vendorfake.core.kernel.reply import normalize
-from vendorfake.core.kernel.router import INTERNAL_PATH_PREFIX, Match, MethodNotAllowed, Router
+from vendorfake.core.kernel.router import Match, MethodNotAllowed, Router, is_control_path
 from vendorfake.core.kernel.shaping import assert_error_table_total, header_text
 from vendorfake.core.kernel.types import (
     AuthResult,
@@ -1112,12 +1112,14 @@ class Unit:
         # recording step in `handle` would have to be repeated four times and
         # would be forgotten on the fifth.
         #
-        # Excluded by path prefix, not only by matched route: an unmatched
-        # `/__unit/*` request (a mistyped control path, or a wrong verb on a
-        # real control route) is still the observer's own traffic, and must
-        # stay absent from the log by construction rather than merely when it
-        # happens to resolve to an internal route.
-        if (route is None or not route.internal) and not req.path.startswith(INTERNAL_PATH_PREFIX):
+        # Excluded by path, not only by matched route: an unmatched control-
+        # plane request (a mistyped control path, a wrong verb on a real
+        # control route, or the bare `/__unit` with no trailing slash) is
+        # still the observer's own traffic, and must stay absent from the log
+        # by construction rather than merely when it happens to resolve to an
+        # internal route. `is_control_path` is the one place that namespace is
+        # defined, shared with `Router.add`'s reservation check.
+        if (route is None or not route.internal) and not is_control_path(req.path):
             self._requests.record(
                 RequestRecord(
                     id=req.id,
