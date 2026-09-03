@@ -41,7 +41,7 @@ from importlib.metadata import entry_points
 from vendorfake.core.config.models import parse_profile_document
 from vendorfake.core.config.profile import load_profile
 from vendorfake.core.control.plane import control_plane_routes
-from vendorfake.core.kernel.types import Logger, VendorDefinition
+from vendorfake.core.kernel.types import Logger, SeedingVendor, VendorDefinition
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.webhooks.sink import DeliverySink
 
@@ -51,6 +51,8 @@ __all__ = [
     "VENDOR_ENV_VAR",
     "ProfileInfo",
     "RouteInfo",
+    "SeedingVendor",
+    "VendorDefinition",
     "available_profiles",
     "available_vendors",
     "create_unit",

@@ -55,7 +55,10 @@ directly, for a caller who wants a seed without building a unit.
 ### `vendorfake.registry` — discovery and construction
 
 The five names above, plus `ProfileInfo`, `RouteInfo`, `ROLE_NAMES`,
-`ENTRY_POINT_GROUP` and `VENDOR_ENV_VAR`.
+`ENTRY_POINT_GROUP`, `VENDOR_ENV_VAR`, and the two protocols a third-party
+vendor implements — `VendorDefinition` and `SeedingVendor`, re-exported here
+from `vendorfake.core.kernel.types` for the reason given under *Publishing a
+vendor of your own* below.
 
 ### `vendorfake.pytest` — the plugin the wheel auto-loads
 
@@ -78,16 +81,20 @@ serves.
 
 A distribution publishes a vendor through the `vendorfake.vendors` entry-point
 group — `square = "vendorfake.square:VENDOR"` is the shape. Two things are
-public for that purpose:
+public for that purpose, both re-exported from `vendorfake.registry` so that
+writing a vendor needs no import into an internal package:
 
-- `vendorfake.core.kernel.types.VendorDefinition`, the protocol such an object
-  satisfies. It is reached through an internal package, and it is nonetheless
-  part of the contract, because there is no way to write a vendor without it.
-- `vendorfake.core.kernel.types.SeedingVendor`, its optional extension: a
-  vendor that implements `seed(vendor_config)` gets a real `.seed` out of
+- `vendorfake.registry.VendorDefinition`, the protocol such an object
+  satisfies. There is no way to write a vendor without it.
+- `vendorfake.registry.SeedingVendor`, its optional extension: a vendor that
+  implements `seed(vendor_config)` gets a real `.seed` out of
   `unit("<its name>")` instead of the `LookupError` a seedless vendor draws.
   The object it returns must satisfy `vendorfake.testing.Seed`; one that does
   not is refused by name when the unit is built.
+
+Both are defined in `vendorfake.core.kernel.types`, which stays internal —
+every other name that module exports can change in any release. Only the two
+re-exported through `vendorfake.registry` are pinned.
 
 Adding a member to `VendorDefinition` is a breaking change for a third-party
 vendor and is announced as one.
@@ -124,8 +131,14 @@ resolved result.
 | `Vendorfake-Fault` | The chaos fault kind that shaped this response |
 | `Vendorfake-Rule` | The id of the chaos rule that fired |
 
-Header names are case-insensitive on the wire; this package sets them in lower
-case and writes them capitalised in prose.
+Header names are case-insensitive on the wire, and the package is not
+consistent about the case it sets: the four error-sidecar headers
+(`Vendorfake-Error-Kind`, `Vendorfake-Status-Provenance`,
+`Vendorfake-Error-Field`, `Vendorfake-Error-Info`) go out capitalised, and the
+near-miss and chaos headers (`Vendorfake-Near-Miss`, `Vendorfake-Fault`,
+`Vendorfake-Rule`) go out lower case. Read either with a case-insensitive
+lookup, which is what every HTTP client here already does; this table writes
+every name capitalised in prose regardless of which one a given response uses.
 
 ## Internal
 
@@ -133,14 +146,22 @@ These may change in any release, in any way, without notice. Import them and an
 upgrade may move them under you.
 
 - **`vendorfake.asgi`** — the only place a web framework is imported. A public
-  module never re-exports anything from it, and
-  `tests/unit/test_public_api.py` asserts that importing a public module never
-  costs you FastAPI. If you want a real socket, use `served()`,
-  `serve_in_thread()` or the container.
+  module never re-exports anything from it: `tests/unit/test_public_api.py`
+  asserts that no public module's `__all__` hands back a name defined in
+  `vendorfake.asgi`, and that no public module imports it at module scope.
+  That check does not follow a public module's own imports transitively —
+  `tools/boundary_check.py` and the `import-linter` contract in
+  `pyproject.toml` are what enforce the deeper property, that no chain of
+  imports starting from a public module reaches a web framework at all. If
+  you want a real socket, use `served()`, `serve_in_thread()` or the
+  container.
 - **`vendorfake.core`** — the whole stateful machinery: the kernel, the store,
   the chaos engine, the webhook dispatcher, the clock, the control plane's
-  implementation. The two exceptions are named under *Publishing a vendor of
-  your own* above.
+  implementation. `VendorDefinition` and `SeedingVendor` are defined here but
+  are not an exception to this: they are public through their re-export at
+  `vendorfake.registry`, named under *Publishing a vendor of your own* above,
+  and the rest of this package — everything reached only through
+  `vendorfake.core.*` directly — is not pinned.
 - **`vendorfake.conformance` internals.** The suite is meant to be *run* —
   `vendorfake-conformance`, `python -m vendorfake.conformance`, or
   `-p vendorfake.conformance.plugin`. Its clause ids and their published
@@ -152,9 +173,9 @@ upgrade may move them under you.
 
 ## White-box handles
 
-`started.unit` and `started.unit.store` are documented and supported. They are
-the intended way to assert against state a vendor surface does not publish,
-and reaching for them is not a workaround.
+`started.unit` and `started.unit.context.store` are documented and supported.
+They are the intended way to assert against state a vendor surface does not
+publish, and reaching for them is not a workaround.
 
 They are **not frozen**. They may change between minor releases, with a
 changelog entry, but without a deprecation period. The reason for the weaker

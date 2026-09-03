@@ -58,6 +58,8 @@ PUBLIC_API: Mapping[str, tuple[str, ...]] = {
         "VENDOR_ENV_VAR",
         "ProfileInfo",
         "RouteInfo",
+        "SeedingVendor",
+        "VendorDefinition",
         "available_profiles",
         "available_vendors",
         "create_unit",
@@ -421,3 +423,36 @@ def test_no_public_module_hands_out_an_internal_one(module_name: str) -> None:
                 assert not alias.name.startswith("vendorfake.asgi"), (
                     f"{module_name} imports {alias.name} at module scope, line {node.lineno}"
                 )
+
+
+# ---------------------------------------------------------------------------
+# The white-box handles: prose that names an attribute path, checked by
+# actually resolving it.
+# ---------------------------------------------------------------------------
+
+WHITE_BOX_HANDLES = ("unit", "unit.context.store")
+"""Every dotted attribute path ``docs/api-contract.md``'s *White-box handles*
+section names as documented and supported, read off a ``StartedUnit``.
+
+Round 1 of this review found the doc naming ``started.unit.store`` -- copied
+from an earlier internal shape rather than checked against the code, where
+the real attribute is ``started.unit.context.store``. Prose describing an
+attribute path is exactly the kind of claim this module exists to make
+mechanical rather than trust to a read-through, so it is resolved here: a
+rename to ``Unit.context`` or ``UnitContext.store`` fails this test instead of
+leaving the contract quietly wrong again.
+"""
+
+
+def test_the_documented_white_box_handles_still_resolve() -> None:
+    from vendorfake.testing import unit
+
+    with unit("square") as started:
+        for path in WHITE_BOX_HANDLES:
+            target: object = started
+            for attr in path.split("."):
+                assert hasattr(target, attr), (
+                    f"docs/api-contract.md names started.{path} as a white-box handle, but "
+                    f"{type(target).__name__!r} has no {attr!r}"
+                )
+                target = getattr(target, attr)

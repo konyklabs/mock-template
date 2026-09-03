@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
 
@@ -876,21 +877,28 @@ def test_served_enforces_its_startup_deadline_on_a_child_that_never_announces(mo
 
 
 @pytest.fixture
-def seedless_vendor(monkeypatch: pytest.MonkeyPatch) -> None:
+def seedless_vendor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A vendor named ``acme`` that ``registry.resolve_vendor`` reports, for
     the duration of one test. No seed describes ``acme``, so any caller that
     reaches :func:`~vendorfake.testing._require_seed` for it is refused.
 
-    ``served()`` never loads a profile before that refusal -- the resolved
-    vendor's name is all it needs -- so, unlike
-    ``tests/unit/testing/test_seed_typing.py``'s fixture of the same name,
-    this one does not need a real profile document on disk.
+    ``served()`` now loads the profile before that refusal, the same way
+    :func:`~vendorfake.testing.unit` always has -- resolving the vendor's real
+    config is what lets a ``SeedingVendor`` hook see it (see the seed-hook
+    tests below and ``tests/unit/testing/test_seed_hook.py``), and a seedless
+    vendor is refused only once that load succeeds and the hook still has
+    nothing to say. So, like ``tests/unit/testing/test_seed_typing.py``'s
+    fixture of the same name, this one needs a real profile document on disk.
 
     Patches the attribute on ``vendorfake.registry``, not a name imported
     into another module: that is the substitution :func:`served` must route
     through for a test to reach it at all (see the test below).
     """
-    monkeypatch.setattr("vendorfake.registry.resolve_vendor", lambda name: FakeVendor(name="acme"))
+    (tmp_path / "seedless.json").write_text(
+        json.dumps({"name": "seedless", "capabilities": ["orders", "chaos"]}), encoding="utf-8"
+    )
+    definition = FakeVendor(name="acme", profile_dir=tmp_path, base_dir=tmp_path)
+    monkeypatch.setattr("vendorfake.registry.resolve_vendor", lambda name: definition)
 
 
 @pytest.mark.usefixtures("seedless_vendor")
@@ -910,9 +918,10 @@ def test_served_refuses_a_seedless_vendor_before_spawning_a_child(monkeypatch: p
     ``vendorfake.registry.resolve_vendor`` does not touch. With that bug,
     this test's ``pytest.raises(LookupError)`` would not even match: the
     unpatched lookup fails ``acme`` for a different reason (``ValueError``,
-    no such vendor) before ``served()`` ever gets far enough to consult a
-    seed at all. The ``subprocess.Popen`` sentinel below is the direct check
-    that no child is ever spawned for a vendor that was going to be refused.
+    no such vendor) before ``served()`` ever gets far enough to load a
+    profile or consult a seed at all. The ``subprocess.Popen`` sentinel below
+    is the direct check that no child is ever spawned for a vendor that was
+    going to be refused.
     """
 
     def refuse_to_spawn(*args: object, **kwargs: object) -> subprocess.Popen[str]:

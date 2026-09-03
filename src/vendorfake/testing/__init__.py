@@ -61,6 +61,7 @@ import httpx
 
 from vendorfake import registry
 from vendorfake.core.config.models import UnmatchedPolicy
+from vendorfake.core.config.profile import load_profile
 from vendorfake.core.control.plane import DEFAULT_REQUEST_LIMIT
 from vendorfake.core.kernel.types import Logger
 from vendorfake.core.kernel.unit import Unit
@@ -1190,17 +1191,33 @@ def _served(
     does rather than switching modes for you, and a refusal here surfaces as
     the child exiting before it announces a port.
     """
-    # Resolved and refused before the child is spawned: `seed_for` is a pure
-    # branch on the vendor's canonical name, and `registry.resolve_vendor` is
-    # the same registry lookup `create_unit` pays for internally, so neither
-    # needs a running unit. Paying for a subprocess that boots, announces its
-    # port and answers a health check only to be told the vendor has no seed
-    # wastes the startup on every call in a suite that does this per test, and
+    # Resolved and refused before the child is spawned: `registry.resolve_vendor`
+    # is the same registry lookup `create_unit` pays for internally, and
+    # `load_profile` below is the same profile loader `create_unit` calls too
+    # -- neither needs a running unit. Paying for a subprocess that boots,
+    # announces its port and answers a health check only to be told the
+    # vendor has no seed (or was seeded from the wrong vendor block) wastes
+    # the startup on every call in a suite that does this per test, and
     # points the traceback at a line inside a connected client rather than at
     # the vendor argument that is actually wrong. `profile` has nothing left
     # to resolve here -- unlike `unit()`, `served()` has no `env` layer that
     # could move it away from what the caller spelled, so the argument
-    # already is the resolved value.
+    # already is the resolved value; `load_profile` is called with no `env=`
+    # for the same reason -- and because this module is documented as never
+    # reading `os.environ` to resolve a unit's own config, which is `cli.py`'s
+    # job alone (see the child-spawning `env=` handling below, which is a
+    # different thing: passing the real environment *to the child*, not
+    # reading it to resolve *this* config).
+    #
+    # `seed_for` is handed the profile's real `vendor` block --
+    # `loaded.config.vendor_config` -- exactly as `unit()` hands it
+    # `built.context.config.vendor_config`. Review round 1 caught this
+    # passing `{}` instead: invisible for the three built-in vendors, whose
+    # config models default to exactly what the shipped profiles carry, and
+    # wrong for a third-party `SeedingVendor` hook the moment its profile
+    # overrides anything. `definition=` is passed too, which is what lets
+    # this cost only the one registry lookup already paid for above, rather
+    # than a second one inside `seed_for`.
     #
     # Called as `registry.resolve_vendor` -- an attribute lookup on the
     # module -- rather than through a name bound at import time: `unit()`
@@ -1214,8 +1231,17 @@ def _served(
     # believed the vendor had been substituted. The module reference is what
     # keeps `unit()` and `served()` resolving through the one indirection a
     # test can patch.
-    resolved_name = registry.resolve_vendor(vendor).name
-    resolved_seed = _require_seed(resolved_name, profile, seed_for(resolved_name, {}))
+    definition = registry.resolve_vendor(vendor)
+    resolved_name = definition.name
+    loaded = load_profile(
+        profile_dir=definition.profile_dir,
+        name=profile,
+        base_dir=definition.base_dir,
+        defaults=definition.retry_defaults,
+    )
+    resolved_seed = _require_seed(
+        resolved_name, profile, seed_for(resolved_name, loaded.config.vendor_config, definition=definition)
+    )
     argv = [
         *SERVE_COMMAND,
         "--vendor",

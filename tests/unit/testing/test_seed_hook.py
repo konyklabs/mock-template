@@ -27,6 +27,7 @@ and these are the same case answered the other way.
 from __future__ import annotations
 
 import json
+import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,7 +36,7 @@ import pytest
 
 from tests.fakes import FakeVendor
 from vendorfake.core.kernel.types import SeedingVendor
-from vendorfake.testing import NO_SEED_HINT, Seed, unit
+from vendorfake.testing import NO_SEED_HINT, Seed, served, unit
 from vendorfake.testing.seeds import CloverSeed, SquareSeed, ToastSeed, seed_for
 
 VENDOR_BLOCK = {"app_id": "acme-app", "app_secret": "acme-secret"}
@@ -101,6 +102,23 @@ class WrongShapeVendor(FakeVendor):
         return {"app_id": "acme-app"}
 
 
+@dataclass
+class NonCallableSeedVendor(FakeVendor):
+    """A vendor whose ``seed`` is data, not the hook.
+
+    ``seed`` is a realistic name to collide on: this package uses it for seed
+    *data* everywhere else (every vendor ships a ``seed/`` subpackage, and a
+    profile document carries a ``"seed"`` key), so a third-party
+    ``VendorDefinition`` -- typically a dataclass -- naming a field ``seed``
+    for its own reasons is not a contrived case. ``isinstance(...,
+    SeedingVendor)`` still reports ``True`` for it: a ``runtime_checkable``
+    Protocol whose only member is a method checks attribute presence, not
+    callability.
+    """
+
+    seed: Path = field(default_factory=lambda: Path("seed/scenario.json"))
+
+
 def _install(definition: FakeVendor, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeVendor:
     """Give ``definition`` a real profile on disk and make the registry find it."""
     (tmp_path / "acme-full.json").write_text(
@@ -161,6 +179,33 @@ def test_the_hook_reads_the_resolved_profile_not_a_default(tmp_path: Path, monke
     assert definition.seed_calls[-1]["app_id"] == "other-app"
 
 
+def test_served_gives_the_hook_the_profiles_real_vendor_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review round 1's major finding: ``served()`` used to hand the hook an
+    empty mapping regardless of what the profile's own ``vendor`` block said,
+    while ``unit()`` handed it the real one. The fix resolves the profile in
+    the parent the same way ``unit()`` does, before the child is spawned --
+    proven here by stopping the test at the spawn point itself. Nothing about
+    ``served()`` can actually boot a fixture vendor with no real entry point,
+    but nothing needs to: the seed is resolved, and the hook is called,
+    before ``subprocess.Popen`` is ever reached.
+    """
+    definition = _install(SeedingFakeVendor(), tmp_path, monkeypatch)
+
+    def stop_at_the_spawn_point(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+        raise RuntimeError("sentinel: served() reached subprocess.Popen, which is as far as this test goes")
+
+    monkeypatch.setattr(subprocess, "Popen", stop_at_the_spawn_point)
+
+    with pytest.raises(RuntimeError, match="sentinel: served"):  # noqa: SIM117 - the `with served(...)` is the subject
+        with served("acme", "acme-full") as driver:
+            pytest.fail(f"served() yielded {driver!r} instead of reaching the sentinel Popen")
+
+    assert isinstance(definition, SeedingFakeVendor)
+    assert definition.seed_calls == [VENDOR_BLOCK], (
+        f"hook called {len(definition.seed_calls)}x: {definition.seed_calls}"
+    )
+
+
 def test_a_hook_returning_the_wrong_shape_is_named_at_startup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """As a hook defect, on the vendor, rather than as an ``AttributeError``
     on ``started.seed.credentials`` three frames into a consumer's test."""
@@ -175,6 +220,26 @@ def test_a_hook_returning_the_wrong_shape_is_named_at_startup(tmp_path: Path, mo
     assert "vendorfake.testing.Seed" in message
     for member in ("credentials", "auth", "read_only_auth", "event_types"):
         assert member in message
+
+
+def test_a_non_callable_seed_attribute_is_a_legible_refusal_not_a_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``isinstance(definition, SeedingVendor)`` passes for a vendor whose
+    ``seed`` is data rather than a method -- see :class:`NonCallableSeedVendor`
+    -- so the call site has to name that defect itself instead of crashing
+    with a bare ``TypeError: 'PosixPath' object is not callable`` three
+    frames inside this package.
+    """
+    _install(NonCallableSeedVendor(), tmp_path, monkeypatch)
+
+    with pytest.raises(TypeError) as refused:  # noqa: SIM117 - the `with unit(...)` is the subject
+        with unit("acme", "acme-full") as started:
+            pytest.fail(f"unit() yielded {started!r} for a vendor whose seed attribute is not callable")
+
+    message = str(refused.value)
+    assert "'acme'" in message
+    assert "not callable" in message
 
 
 def test_a_vendor_without_the_hook_is_still_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

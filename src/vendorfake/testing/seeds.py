@@ -415,7 +415,25 @@ def _from_hook(definition: VendorDefinition, vendor: str, vendor_config: Mapping
 
     if not isinstance(definition, SeedingVendor):
         return None
-    published = definition.seed(vendor_config)
+    hook = definition.seed
+    if not callable(hook):
+        # `runtime_checkable` on a method-only Protocol checks attribute
+        # presence, not callability, so this is reachable: `seed` is a
+        # generic name and this package's own convention for seed *data*
+        # besides (every vendor ships a `seed/` subpackage; a profile
+        # document carries a `"seed"` key), so a `VendorDefinition` with a
+        # non-callable `seed` field is a realistic collision, not a
+        # theoretical one. Named here, at the vendor, as a hook defect --
+        # the same way a hook returning the wrong shape is below -- rather
+        # than left to surface as a bare `TypeError: '...' object is not
+        # callable` three frames inside this module, which reads like a
+        # vendorfake bug and names nothing a vendor author can act on.
+        raise TypeError(
+            f"vendor {vendor!r} has a SeedingVendor.seed attribute that is not callable "
+            f"(a {type(hook).__name__!r}). SeedingVendor.seed must be a method: "
+            f"seed(self, vendor_config) -> object."
+        )
+    published = hook(vendor_config)
     missing = [name for name in _SEED_MEMBERS if not hasattr(published, name)]
     if missing:
         raise TypeError(

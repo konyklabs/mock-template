@@ -585,3 +585,27 @@ def test_a_malformed_profile_document_is_a_refusal_too(tmp_path: Path, monkeypat
         run("info", "--vendor", "acme", "--profile", "broken")
 
     assert str(raised.value).startswith("vendorfake: "), str(raised.value)
+
+
+def test_the_profiles_subcommand_refuses_a_malformed_profile_document_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same widened ``except (ValueError, UnitError)`` in ``_profiles`` as
+    the test above exercises for ``info``, and not the same code path:
+    ``profiles`` takes no ``--profile`` flag, so its ``UnitError`` can only
+    come from ``available_profiles``'s own scan of every document in the
+    vendor's profile directory, not from loading one named document. Reverting
+    the clause in ``_profiles`` back to ``except ValueError`` leaves this test
+    -- and only this one -- red.
+    """
+    import vendorfake.registry as registry_module
+    from tests.fakes import FakeVendor
+
+    (tmp_path / "broken.json").write_text('{"name": "broken", "capabilities": "not-a-list"}', encoding="utf-8")
+    definition = FakeVendor(name="acme", profile_dir=tmp_path, base_dir=tmp_path)
+    monkeypatch.setattr(registry_module, "resolve_vendor", lambda name: definition)
+
+    with pytest.raises(SystemExit) as raised:
+        run("profiles", "--vendor", "acme")
+
+    assert str(raised.value).startswith("vendorfake: "), str(raised.value)
