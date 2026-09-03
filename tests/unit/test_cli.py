@@ -378,7 +378,7 @@ def test_routes_excludes_internal_routes_unless_asked() -> None:
 
 
 def test_faults_lists_every_key_of_the_fault_param_table() -> None:
-    from vendorfake.core.chaos.faults import FAULT_DESCRIPTIONS, FAULT_PARAM_KEYS
+    from vendorfake.core.chaos.faults import FAULT_DESCRIPTIONS, FAULT_PARAM_KEYS, FAULT_PROVENANCE
 
     code, out = run("faults", "--json")
     assert code == 0
@@ -387,6 +387,28 @@ def test_faults_lists_every_key_of_the_fault_param_table() -> None:
     for row in rows:
         assert row["params"] == list(FAULT_PARAM_KEYS[row["name"]])
         assert row["description"] == FAULT_DESCRIPTIONS[row["name"]]
+        assert row["provenance"] == FAULT_PROVENANCE[row["name"]]
+
+
+def test_faults_json_names_transport_provenance_for_exactly_the_five_transport_faults() -> None:
+    """E-transport-faults.md's definition of done item 5: provenance appears
+    in the ``faults`` CLI output, not only in the control-plane listings."""
+    from vendorfake.core.chaos.faults import RESPONSE_PHASE_FAULTS
+
+    code, out = run("faults", "--json")
+    assert code == 0
+    rows = {row["name"]: row["provenance"] for row in json.loads(out)}
+    assert {name for name, provenance in rows.items() if provenance == "transport"} == RESPONSE_PHASE_FAULTS
+    assert rows["rate_limit"] == "vendor"
+
+
+def test_faults_table_form_has_a_provenance_column() -> None:
+    code, out = run("faults")
+    assert code == 0
+    header, *rows = out.splitlines()
+    assert "provenance" in header
+    assert any("transport" in row for row in rows)
+    assert any("vendor" in row for row in rows)
 
 
 def test_fault_descriptions_names_exactly_the_fault_param_keys_names() -> None:

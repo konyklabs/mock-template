@@ -128,6 +128,37 @@ def test_slow_body_with_gaps_under_the_read_timeout_never_times_out_however_long
     assert response.json()["access_token"]
 
 
+def test_slow_body_with_an_explicit_zero_delay_streams_with_no_gap_served(served_square: Driver) -> None:
+    """An explicit ``chunk_delay_ms: 0`` must produce no gap between chunks
+    served, the same as it already does in process
+    (``tests/unit/test_transport_faults_binding.py``): zero is a value a rule
+    can reach on purpose, not "unset". Before this fix ``asgi/app.py``
+    substituted its own 100ms default over an explicit zero, so the same
+    directive streamed instantly in process and dribbled for whole seconds
+    served, with no rule anywhere asking for that gap -- see
+    ``asgi/app.py``'s ``_directive_response`` docstring.
+    """
+    served_square.add_chaos_rule(
+        {
+            "id": "slow-zero",
+            "scope": "request",
+            "fault": "slow_body",
+            "match": {"route": "POST /oauth2/token"},
+            "params": {"chunk_bytes": 8, "chunk_delay_ms": 0},
+        }
+    )
+    with httpx.Client(base_url=served_square.base_url, timeout=2.0) as client:
+        begun = time.monotonic()
+        response = client.post("/oauth2/token", json=_token_body(served_square.seed))
+        elapsed_s = time.monotonic() - begun
+    assert response.status_code == 200
+    assert response.json()["access_token"]
+    # A token response splits into many more than one 8-byte chunk, so the
+    # buggy 100ms-per-gap default this pins would take several seconds; a
+    # genuine zero gap completes in well under a second even on a slow CI box.
+    assert elapsed_s < 1.0, f"a zero chunk_delay_ms took {elapsed_s:.2f}s served -- the 100ms default leaked through"
+
+
 def test_slow_body_delivers_the_full_body_to_a_patient_client(served_square: Driver) -> None:
     served_square.add_chaos_rule(
         {

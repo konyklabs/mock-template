@@ -172,8 +172,23 @@ async def _slow_body(body: bytes, chunk_bytes: int, chunk_delay_ms: int) -> Asyn
 
 def _directive_response(status: int, headers: dict[str, str], directive: TransportDirective, body: bytes) -> Response:
     if directive.kind == "slow_body":
+        # ``chunk_delay_ms`` is read raw, not defaulted here: the kernel
+        # already resolved it once, in ``core/chaos/faults.py``'s
+        # ``_directive`` (``max(0, as_int(params.get("chunk_delay_ms"), 100))``),
+        # so an explicit ``0`` is a value a rule reached on purpose and this
+        # binding must honour it rather than re-substituting its own 100ms
+        # default over it. ``testing/transport.py``'s ``_wait_owed_ms`` reads
+        # the same field the same way, for the same reason: parity between
+        # bindings is the invariant this module's own docstring states, and a
+        # rule that asks for no gap must produce no gap served or in process
+        # (found by review round 2 of konyklabs/roadmap#73). ``chunk_bytes``
+        # has no equivalent problem -- the kernel clamps it with
+        # ``max(1, ...)`` before a directive ever exists, so the ``else 64``
+        # fallback below is unreachable from the rule path and only guards a
+        # ``TransportDirective`` built by hand with the field left at its
+        # dataclass default.
         chunk_bytes = directive.chunk_bytes if directive.chunk_bytes > 0 else 64
-        chunk_delay_ms = directive.chunk_delay_ms if directive.chunk_delay_ms > 0 else 100
+        chunk_delay_ms = directive.chunk_delay_ms
         return StreamingResponse(_slow_body(body, chunk_bytes, chunk_delay_ms), status_code=status, headers=headers)
     # connection_reset / empty_response: see TransportFaultAbort.
     return StreamingResponse(_aborted_body(), status_code=status, headers=headers)

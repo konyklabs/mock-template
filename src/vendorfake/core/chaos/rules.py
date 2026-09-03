@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -187,7 +187,18 @@ class FaultSpec:
     name: FaultName
     scope: ChaosScope
     summary: str
-    provenance: FaultProvenance
+    #: Keyword-only, defaulting to ``"vendor"``. This field was added after
+    #: ``summary`` and ahead of the pre-existing ``params``; every shipped
+    #: fault with parameters was constructed on v0.1.0 as four positional
+    #: arguments (``name, scope, summary, params``), and a positional
+    #: ``provenance`` here would silently bind a fork's params prose to it
+    #: instead of raising -- loud constructions (three args, or five) fail
+    #: either way, but the four-arg shape is exactly the one every existing
+    #: parameterised fault used. Keyword-only restores that meaning: a
+    #: four-positional call still means ``(name, scope, summary, params)``,
+    #: and the field is purely additive (found by review round 2 of
+    #: konyklabs/roadmap#73; see CHANGELOG.md's ``Unreleased`` entry).
+    provenance: FaultProvenance = field(kw_only=True, default="vendor")
     #: Prose description of the ``params`` keys this fault reads, if any.
     params: str | None = None
 
@@ -204,71 +215,78 @@ class FaultSpec:
 
 
 BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
-    FaultSpec("rate_limit", "request", "Reject the request as rate limited.", "vendor", "retry_after_seconds?"),
-    FaultSpec("server_error", "request", "Fail the request with a vendor-shaped 5xx.", "vendor"),
-    FaultSpec("unavailable", "request", "Fail the request as temporarily unavailable.", "vendor"),
-    FaultSpec("timeout", "request", "Stall the request, then fail it.", "vendor", "delay_ms (default 100)"),
+    FaultSpec(
+        "rate_limit", "request", "Reject the request as rate limited.", "retry_after_seconds?", provenance="vendor"
+    ),
+    FaultSpec("server_error", "request", "Fail the request with a vendor-shaped 5xx.", provenance="vendor"),
+    FaultSpec("unavailable", "request", "Fail the request as temporarily unavailable.", provenance="vendor"),
+    FaultSpec("timeout", "request", "Stall the request, then fail it.", "delay_ms (default 100)", provenance="vendor"),
     FaultSpec(
         "token_expiry",
         "request",
         "Treat the caller token as expired mid-flow, without touching stored state.",
-        "vendor",
+        provenance="vendor",
     ),
     FaultSpec(
         "webhook.duplicate",
         "webhook",
         "Deliver the same event body more than once.",
-        "vendor",
         "copies (default 1 extra)",
+        provenance="vendor",
     ),
-    FaultSpec("webhook.out_of_order", "webhook", "Hold this event until the next one has been delivered.", "vendor"),
+    FaultSpec(
+        "webhook.out_of_order",
+        "webhook",
+        "Hold this event until the next one has been delivered.",
+        provenance="vendor",
+    ),
     FaultSpec(
         "webhook.drop_ack",
         "webhook",
         "Ignore a successful subscriber response so the retry schedule runs.",
-        "vendor",
+        provenance="vendor",
     ),
-    FaultSpec("webhook.delay", "webhook", "Delay delivery.", "vendor", "delay_ms"),
+    FaultSpec("webhook.delay", "webhook", "Delay delivery.", "delay_ms", provenance="vendor"),
     FaultSpec(
         "webhook.drop",
         "webhook",
         "Silently swallow the delivery: recorded as dropped, never sent to the subscriber. "
         "Filter with match.event_type.",
-        "vendor",
+        provenance="vendor",
     ),
     # -- transport faults: provenance: transport -- see FaultProvenance above.
     FaultSpec(
         "malformed_body",
         "request",
         "Replace a successful response's body with something the vendor's own schema forbids.",
-        "transport",
         "mode (invalid_json|html|empty|truncate), status (default 200; html defaults 502)",
+        provenance="transport",
     ),
     FaultSpec(
         "body_mutation",
         "request",
         "Apply RFC 6901 JSON-pointer operations to a successful JSON response body, after the handler ran.",
-        "transport",
         "ops (list of {op, pointer, value?, as?})",
+        provenance="transport",
     ),
     FaultSpec(
         "connection_reset",
         "request",
         "Drop the connection after the response starts, before it completes.",
-        "transport",
+        provenance="transport",
     ),
     FaultSpec(
         "empty_response",
         "request",
         "Drop the connection as close to before any bytes as the binding can manage.",
-        "transport",
+        provenance="transport",
     ),
     FaultSpec(
         "slow_body",
         "request",
         "Stream a successful response body in chunks, with a delay between them.",
-        "transport",
         "chunk_bytes (default 64), chunk_delay_ms (default 100)",
+        provenance="transport",
     ),
 )
 """The faults the core implements, as data. The ``params`` prose is a promise:

@@ -147,25 +147,24 @@ def _unmatched_message(unit: Unit, method: str, path: str, header: str) -> str:
         misses: Any = json.loads(header)
     except ValueError:  # pragma: no cover - the kernel always writes valid JSON
         misses = []
+    top_operation = ""
     if misses:
         lines.append("Closest routes:")
         width = max(len(str(miss.get("route", ""))) for miss in misses)
         for miss in misses:
             operation = str(miss.get("operation_id") or "")
+            if not top_operation:
+                top_operation = operation
             lines.append(f"  {miss.get('route', '')!s:<{width}}  {operation:<24} {float(miss.get('score', 0)):.2f}")
     else:
         lines.append("This profile enables no route at all to compare against.")
-    # DEVIATION from the spec's closing line ("Use vendorfake.square.paths or
-    # driver.path_for(...)"): neither `vendorfake.<vendor>.paths` nor
-    # `driver.path_for` exists on this branch -- they are stream C's
-    # discovery helpers. Pointing at them here would name an API a reader
-    # cannot import yet, so this points at the one discovery surface that
-    # does exist instead. TODO(stream C, roadmap#72): once those helpers
-    # land, swap this line for the spec's.
-    lines.append(
-        "GET /__unit/routes lists every route this profile serves; "
-        'pass unmatched="vendor-404" to unit() to receive the vendor\'s own 404 instead.'
-    )
+    # The spec's own closing line (S-strict-and-request-log.md): point at
+    # stream C's discovery helpers, now that they exist on this branch --
+    # ``vendorfake.<vendor>.paths`` and ``Driver.path_for`` (roadmap#70) --
+    # rather than at the lower-level ``GET /__unit/routes`` this used to name
+    # in their place.
+    example = f'path_for("{top_operation}")' if top_operation else "path_for(...)"
+    lines.append(f'Use vendorfake.{unit.name}.paths or driver.{example}; or pass unmatched="vendor-404".')
     return "\n".join(lines)
 
 
@@ -352,9 +351,10 @@ class UnitTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
         """The same decision, on the caller's event loop.
 
         ``anyio.sleep`` rather than ``asyncio.sleep``: ``httpx`` depends on
-        ``anyio`` and an ``AsyncClient`` is usable under trio, so an
-        asyncio-only wait here would work under one consumer's test runner and
-        raise under another's.
+        ``anyio``, so an ``AsyncClient`` is meant to be usable under any
+        backend anyio supports, and an asyncio-only wait here would tie this
+        transport to one of them regardless. Exercised on asyncio in this
+        suite; nothing here is tested under trio.
         """
         answered = self._answer(request, await request.aread())
         fault = _connection_fault(request, answered)

@@ -15,9 +15,15 @@ from pathlib import Path
 import pytest
 
 from vendorfake.core.config.models import (
+    ClockSection,
+    ErrorsSection,
     ProfileDocument,
+    ResolvedChaos,
+    ResolvedConfig,
+    ResolvedWebhooks,
     RetryPolicy,
     SubscriberConfig,
+    TransportSection,
     WebhooksSection,
     parse_profile_document,
 )
@@ -396,6 +402,25 @@ def test_clock_start_is_fine_when_the_profile_document_itself_sets_virtual_mode(
 
 def test_error_sidecar_defaults_to_headers() -> None:
     assert resolve_config(ProfileDocument(), name="p").errors.sidecar == "headers"
+
+
+def test_resolved_config_does_not_require_naming_errors() -> None:
+    """``ErrorsSection`` is a total default (``sidecar`` defaults to
+    ``"headers"``) and :func:`resolve_config` always supplies a value, so
+    ``ResolvedConfig.errors`` is defaulted the same way ``requests`` and
+    ``unmatched`` are: a caller assembling one by hand should not have to name
+    a knob it is not exercising. Constructed directly rather than through
+    :func:`resolve_config`, which always passes ``errors`` and so would not
+    catch a regression back to a required field.
+    """
+    config = ResolvedConfig(
+        profile="p",
+        webhooks=ResolvedWebhooks(retry=RetryPolicy()),
+        chaos=ResolvedChaos(seed=1),
+        clock=ClockSection(),
+        transport=TransportSection(),
+    )
+    assert config.errors == ErrorsSection()
 
 
 @pytest.mark.parametrize("mode", ["headers", "body", "both"])

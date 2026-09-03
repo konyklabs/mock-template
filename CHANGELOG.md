@@ -93,7 +93,11 @@ commit subject.
   published at `GET /__unit/chaos` and `GET /__unit/info` (and so in
   `vendorfake info`'s output), distinguishing these five from every fault that
   came before them. Every faulted response, old kinds included, now carries
-  `Vendorfake-Fault` and `Vendorfake-Rule` headers.
+  `Vendorfake-Fault` and `Vendorfake-Rule` headers. `provenance` is
+  keyword-only with a default of `"vendor"`, so it is purely additive: a
+  fork's existing three- or four-positional `FaultSpec(...)` construction
+  (`name, scope, summary[, params]`) keeps its v0.1.0 meaning rather than
+  silently binding its `params` prose to `provenance`.
 
 
 * **vendorfake:** discover profiles and routes by code — `registry.available_profiles`, `registry.routes`, `Driver.route_for`/`path_for`, and a per-vendor `paths` module of hand-written path constants kept honest against the router by `tests/unit/test_paths_drift.py` (konyklabs/roadmap#70)
@@ -174,14 +178,15 @@ commit subject.
 
 * `anyio` is now declared directly (it was already installed as an
   unconditional dependency of `httpx`); `vendorfake.testing.transport` imports
-  it so the async wait works under trio as well as asyncio.
+  it so the async wait is meant to work under any anyio backend rather than
+  tying this transport to one of them; exercised on asyncio in this suite.
 * `pytest-asyncio` added to the dev group, used only to run a consumer's suite
   under it inside `pytester`.
 
 ### Bug Fixes
 
 
-* **vendorfake:** `unit()`'s `profile` argument now resolves the same three-step precedence `create_unit` documents — an explicit `profile=` argument, then `VENDORFAKE_PROFILE` in the `env=` mapping given to that call, then `full` — where v0.1.0 passed the literal string `"full"` and so never read `VENDORFAKE_PROFILE` from an `env=` mapping passed to `unit()` at all. **Behaviour change:** a caller who builds one `env` mapping for a whole test module and passes it to both `served()` (a real environment) and `unit()` will now see `unit()` honour `VENDORFAKE_PROFILE` in it too, where v0.1.0 silently ignored the variable for this call (konyklabs/roadmap#70)
+* **vendorfake:** `unit()`'s `profile` argument now resolves the same three-step precedence `create_unit` documents — an explicit `profile=` argument, then `VENDORFAKE_PROFILE` in the `env=` mapping given to that call, then `full` — where v0.1.0 passed the literal string `"full"` and so never read `VENDORFAKE_PROFILE` from an `env=` mapping passed to `unit()` at all. **Behaviour change:** `unit("square", env={"VENDORFAKE_PROFILE": "oauth-only"})` now starts on the `oauth-only` profile, where v0.1.0 silently ignored the entry and always started `full`. `served()` is unaffected — it keeps a plain `profile: str = "full"` and takes no `env=` argument at all, so this precedence applies only to `unit()`, `async_unit()` and the pytest fixtures built on it (konyklabs/roadmap#70)
 
 ### Documentation
 

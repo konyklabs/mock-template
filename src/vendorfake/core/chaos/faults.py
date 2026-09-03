@@ -101,7 +101,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 from vendorfake.core.chaos.engine import ChaosDecision
-from vendorfake.core.chaos.rules import BUILTIN_FAULTS
+from vendorfake.core.chaos.rules import BUILTIN_FAULTS, FaultProvenance
 from vendorfake.core.kernel.shaping import header_text
 from vendorfake.core.kernel.types import (
     Logger,
@@ -120,6 +120,7 @@ __all__ = [
     "DEFAULT_TIMEOUT_DELAY_MS",
     "FAULT_DESCRIPTIONS",
     "FAULT_PARAM_KEYS",
+    "FAULT_PROVENANCE",
     "RESPONSE_PHASE_FAULTS",
     "FaultPhase",
     "apply_request_fault",
@@ -180,6 +181,16 @@ publishes, derived rather than retyped so ``vendorfake faults``, ``vendorfake in
 (which prints ``GET /__unit/info`` unchanged) and the catalogue cannot say two
 different things about the same fault, and so a fault added to the catalogue
 (the five transport-fidelity kinds, for one) appears in every listing at once."""
+
+FAULT_PROVENANCE: Mapping[str, FaultProvenance] = {spec.name: spec.provenance for spec in BUILTIN_FAULTS}
+""":attr:`~vendorfake.core.chaos.rules.FaultSpec.provenance` per fault, keyed
+by name exactly as :data:`FAULT_PARAM_KEYS` and :data:`FAULT_DESCRIPTIONS` --
+what :func:`is_transport_fault` reads instead of re-deciding per-kind which
+faults are transport-level, and what ``vendorfake faults`` reads for its own
+``provenance`` column. Derived from :data:`~vendorfake.core.chaos.rules.BUILTIN_FAULTS`
+for the same reason :data:`FAULT_DESCRIPTIONS` is: one fault added there with
+``provenance="transport"`` is transport-level everywhere at once, including
+here, with nothing else to update."""
 
 
 def _delay_owed(clock: Clock, delay_ms: float) -> int:
@@ -312,17 +323,43 @@ balancer did. That is the point under test."""
 
 
 def is_transport_fault(response: UnitResponse) -> bool:
-    """Whether ``response`` was produced by a transport fault rather than by a
-    vendor's own handler.
+    """Whether ``response`` was produced by one of the five transport-fidelity
+    faults (``provenance: "transport"`` in
+    :data:`~vendorfake.core.chaos.rules.BUILTIN_FAULTS`), as opposed to any
+    fault at all.
 
     FOR: stream #55's ``ValidatingClient``, which checks a response against the
     vendor's documented schema and must not fail a request this fake never
     claimed matches one -- a ``malformed_body`` or ``body_mutation`` response
-    is supposed to violate the schema. Reading the ``vendorfake-fault`` header
-    this module stamps is enough: nothing else in this distribution sets it,
-    on any response, ever.
+    is supposed to violate the schema, and its transport-level cousins
+    (``connection_reset``, ``empty_response``, ``slow_body``) never reach a
+    validator as a parsed body at all. A ``rate_limit`` 429 or a
+    ``server_error`` 500, by contrast, IS the vendor's own documented error
+    envelope and must still be validated -- it is a real fault, just not a
+    transport one.
+
+    Reads the ``vendorfake-fault`` header rather than deciding from
+    ``response.transport`` or a ``ChaosDecision``: the header is the one thing
+    every faulted response carries and the only place a fault's *name*
+    reaches this predicate, so a fork's own transport-provenance fault is
+    caught the same way a built-in one is, with nothing to update here.
+
+    Earlier this returned ``"vendorfake-fault" in response.headers`` on the
+    claim that nothing else in this distribution sets that header. That claim
+    was false within this same PR: ``kernel/unit.py``'s ``_shape`` stamps
+    ``vendorfake-fault`` on *every* faulted response, old kinds included --
+    E2's "every response produced by any fault (old kinds too) carries
+    Vendorfake-Fault" -- so the old body answered ``True`` for a ``rate_limit``
+    or ``token_expiry`` response too, telling a schema validator to skip a
+    body it is required to check (found by review round 3 of
+    konyklabs/roadmap#73). An unrecognised fault name -- the header missing,
+    or naming a kind this process has never heard of -- answers ``False``:
+    unknown is not transport.
     """
-    return "vendorfake-fault" in response.headers
+    fault = response.headers.get("vendorfake-fault")
+    if fault is None:
+        return False
+    return FAULT_PROVENANCE.get(fault) == "transport"
 
 
 def apply_response_fault(decision: ChaosDecision, response: UnitResponse, *, log: Logger) -> UnitResponse:
