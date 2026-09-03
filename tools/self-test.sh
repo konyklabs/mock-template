@@ -9,6 +9,15 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
 
+# `--quick` is what a pull request runs in CI (konyklabs/roadmap#103): every
+# static check, the wheel and the docs -- about half a minute -- and neither
+# the pytest suite (5371 tests, over four minutes single-threaded on a runner)
+# nor the nine conformance runs below. Those the full script keeps for a push
+# to main, a dispatch, and a laptop before a push, where they belong: the
+# evidence a PR carries is the self-test output pasted from that laptop run.
+QUICK=0
+if [ "${1:-}" = "--quick" ]; then QUICK=1; fi
+
 names=()
 codes=()
 
@@ -61,7 +70,9 @@ step "ruff format"       uv run ruff format --check .
 step "mypy --strict"     uv run mypy
 step "import-linter"     uv run lint-imports
 step "boundary check"    uv run python tools/boundary_check.py -v
-step "pytest"            uv run pytest
+if [ "$QUICK" -eq 0 ]; then
+  step "pytest"          uv run pytest
+fi
 step "wheel data"        uv run python tools/check_wheel_data.py
 step "docs"              _docs_step
 
@@ -78,6 +89,7 @@ step "docs"              _docs_step
 # installing the wheel auto-loads into every consumer's pytest run -- only
 # `vendorfake.pytest` (the `vendorfake` marker and its three fixtures) is.
 for entry in "${TARGETS[@]}"; do
+  if [ "$QUICK" -eq 1 ]; then break; fi
   vendor="${entry%%=*}"
   TARGET="${entry#*=}"
   step "matrix ($vendor)" \
