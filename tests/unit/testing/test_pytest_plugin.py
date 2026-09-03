@@ -85,3 +85,51 @@ def test_the_webhook_receiver_fixture_is_usable_standalone(pytester: pytest.Pyte
     pytester.makepyfile(test_receiver=_RECEIVER_SUITE)
     result = pytester.runpytest_subprocess()
     result.assert_outcomes(passed=1)
+
+
+_UNMATCHED_SUITE = """
+import pytest
+
+@pytest.mark.vendorfake("square")
+def test_the_strict_default_raises(vendorfake_unit):
+    from vendorfake.testing import UnmatchedRequest
+    with pytest.raises(UnmatchedRequest):
+        vendorfake_unit.client.get("/v2/nothing-here")
+
+
+@pytest.mark.vendorfake("square", unmatched="vendor-404")
+def test_the_opt_out_answers_instead(vendorfake_unit):
+    assert vendorfake_unit.client.get("/v2/nothing-here").status_code == 404
+"""
+
+
+def test_the_marker_carries_the_unmatched_policy(pytester: pytest.Pytester) -> None:
+    """The marker's keyword list is the plugin's whole surface onto
+    :func:`vendorfake.testing.unit`, so a control that stream S added to that
+    function and stream D's marker never learned about would be unreachable
+    from the fixture -- a consumer wanting the v0.1 404 back would have had to
+    abandon the fixture and call ``unit()`` by hand. Both halves are asserted
+    in one subprocess: the strict default raises, and ``unmatched=`` reaches
+    the unit that answers instead (konyklabs/roadmap#67).
+    """
+    pytester.makepyfile(test_unmatched=_UNMATCHED_SUITE)
+    result = pytester.runpytest_subprocess()
+    result.assert_outcomes(passed=2)
+
+
+def test_the_marker_still_refuses_a_keyword_it_does_not_know(pytester: pytest.Pytester) -> None:
+    """Widening the keyword list must not widen it to anything: a typo'd
+    ``unmatchd=`` is a test-authoring mistake, and silently dropping it would
+    leave the suite running strict while its author believed otherwise."""
+    pytester.makepyfile(
+        test_typo="""
+import pytest
+
+@pytest.mark.vendorfake("square", unmatchd="vendor-404")
+def test_typo(vendorfake_unit):
+    assert False
+"""
+    )
+    result = pytester.runpytest_subprocess()
+    result.assert_outcomes(errors=1)
+    assert "unmatchd" in result.stdout.str()

@@ -44,13 +44,14 @@ from typing import Any
 
 import pytest
 
-from vendorfake.testing import StartedUnit, WebhookReceiver, unit, webhook_receiver
+from vendorfake.core.config.models import UnmatchedPolicy
+from vendorfake.testing import Seed, StartedUnit, WebhookReceiver, unit, webhook_receiver
 
 __all__ = ["vendorfake_unit", "vendorfake_webhook_receiver"]
 
 MARKER_NAME = "vendorfake"
 MARKER_LINE = (
-    "vendorfake(vendor, profile='full', env=None, seed=None, clock_start=None): "
+    "vendorfake(vendor, profile='full', env=None, seed=None, clock_start=None, unmatched=None): "
     "the unit vendorfake_unit builds and yields as a StartedUnit"
 )
 
@@ -63,7 +64,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture
-def vendorfake_unit(request: pytest.FixtureRequest) -> Iterator[StartedUnit]:
+def vendorfake_unit(request: pytest.FixtureRequest) -> Iterator[StartedUnit[Seed]]:
     """A :class:`~vendorfake.testing.StartedUnit` built from this test's
     ``@pytest.mark.vendorfake(...)``.
 
@@ -76,6 +77,12 @@ def vendorfake_unit(request: pytest.FixtureRequest) -> Iterator[StartedUnit]:
     build it from is a test author's mistake -- the fix is one decorator --
     not a precondition the environment failed to meet, so this fails naming
     the fix rather than skipping.
+
+    Yielded as ``StartedUnit[Seed]`` -- the structural seed, not a vendor's
+    own -- because the vendor arrives here as a runtime marker argument, so
+    there is nothing for a checker to narrow on. A test that wants
+    ``seed.merchant_id`` to type-check calls :func:`vendorfake.testing.unit`
+    with the vendor literal instead; that is what the overloads on it are for.
     """
     marker = request.node.get_closest_marker(MARKER_NAME)
     if marker is None:
@@ -95,13 +102,14 @@ def vendorfake_unit(request: pytest.FixtureRequest) -> Iterator[StartedUnit]:
     env: Mapping[str, str] | None = kwargs.pop("env", None)
     seed: int | None = kwargs.pop("seed", None)
     clock_start: datetime | str | None = kwargs.pop("clock_start", None)
+    unmatched: UnmatchedPolicy | None = kwargs.pop("unmatched", None)
     if kwargs:
         pytest.fail(
             f"@pytest.mark.{MARKER_NAME}(...) on {request.node.nodeid} names unknown keyword(s) "
             f"{sorted(kwargs)}. @pytest.mark.{MARKER_LINE}",
             pytrace=False,
         )
-    with unit(vendor, profile, env=env, seed=seed, clock_start=clock_start) as started:
+    with unit(vendor, profile, env=env, seed=seed, clock_start=clock_start, unmatched=unmatched) as started:
         yield started
 
 
