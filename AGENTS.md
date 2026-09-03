@@ -105,7 +105,12 @@ committing it.
 `@check(id=...)` in whichever module under
 `src/vendorfake/conformance/checks/` matches their subsystem (`auth`,
 `capabilities`, `chaos`, `control_plane`, `discovery`, `errors`, `state`,
-`transport`, `webhooks`); a new check takes the next free id. `checks/__init__.py`
+`transport`, `webhooks`); a new check takes the next free id. The ids are
+not contiguous, on purpose: C24 is held by the open branch `fix/46` (roadmap
+#46), C25–C32 were left as margin when stream S of the 0.2 batch was
+renumbered from C24 to C33 after colliding with it, and C34–C35 are stream
+C's. **Next free id: C36**; the margin is taken only by the branch that
+holds C24, when it lands. `checks/__init__.py`
 imports every module and sorts the registry into id order, so report order
 never depends on import order. `manifest.json` is the committed
 id-to-name-and-expected-skips record; `tests/conformance/test_manifest.py`

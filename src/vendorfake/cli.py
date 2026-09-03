@@ -585,7 +585,7 @@ def _routes_cmd(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -
 
 
 def _faults(args: argparse.Namespace, out: TextIO) -> int:
-    """List the built-in fault catalogue: name, provenance, parameters,
+    """List the built-in fault catalogue: name, provenance, phase, parameters,
     one-line description.
 
     Read from ``FAULT_PARAM_KEYS``, ``FAULT_PROVENANCE`` and
@@ -596,7 +596,7 @@ def _faults(args: argparse.Namespace, out: TextIO) -> int:
     (E-transport-faults.md's definition of done item 5: provenance appears in
     the chaos listings *and in the ``faults`` CLI output*).
     """
-    from vendorfake.core.chaos.faults import FAULT_DESCRIPTIONS, FAULT_PARAM_KEYS, FAULT_PROVENANCE
+    from vendorfake.core.chaos.faults import FAULT_DESCRIPTIONS, FAULT_PARAM_KEYS, FAULT_PHASE, FAULT_PROVENANCE
     from vendorfake.core.util.json import dump_json
 
     names = sorted(FAULT_PARAM_KEYS)
@@ -605,6 +605,7 @@ def _faults(args: argparse.Namespace, out: TextIO) -> int:
             {
                 "name": name,
                 "provenance": FAULT_PROVENANCE[name],
+                "phase": FAULT_PHASE[name],
                 "params": list(FAULT_PARAM_KEYS[name]),
                 "description": FAULT_DESCRIPTIONS[name],
             }
@@ -618,12 +619,13 @@ def _faults(args: argparse.Namespace, out: TextIO) -> int:
                 {
                     "name": name,
                     "provenance": FAULT_PROVENANCE[name],
+                    "phase": FAULT_PHASE[name],
                     "params": ", ".join(FAULT_PARAM_KEYS[name]),
                     "description": FAULT_DESCRIPTIONS[name],
                 }
                 for name in names
             ],
-            ("name", "provenance", "params", "description"),
+            ("name", "provenance", "phase", "params", "description"),
         ),
         file=out,
     )

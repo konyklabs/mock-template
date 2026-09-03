@@ -187,3 +187,23 @@ def test_marker_arguments_fails_directly_on_a_third_positional_argument() -> Non
 
     with pytest.raises(Failed, match="at most two positional"):
         _marker_arguments(_FakeRequest(), "vendorfake_unit")  # type: ignore[arg-type]
+
+
+def test_the_marker_refuses_an_unmatched_value_that_is_not_a_policy(pytester: pytest.Pytester) -> None:
+    """``unmatched=True`` is the slip ``Driver.requests(unmatched=...)``
+    invites; it used to turn strict mode off silently
+    (konyklabs/roadmap#99, item 1)."""
+    pytester.makepyfile(
+        test_slip="""
+import pytest
+
+@pytest.mark.vendorfake("square", unmatched=True)
+def test_slip(vendorfake_unit):
+    assert False
+"""
+    )
+    result = pytester.runpytest_subprocess()
+    result.assert_outcomes(errors=1)
+    out = result.stdout.str()
+    assert "unmatched=True" in out
+    assert "vendor-404" in out

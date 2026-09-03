@@ -67,6 +67,7 @@ __all__ = [
     "ChaosScope",
     "ChaosWhen",
     "FaultName",
+    "FaultPhase",
     "FaultProvenance",
     "FaultSpec",
     "glob_match",
@@ -175,8 +176,32 @@ documents, because no vendor's API contract covers what a socket, a proxy or
 a flaky link between them can do to a response that already left the
 handler -- a connection dropped mid-body, a body that doesn't parse, a field
 retyped in flight. See ``core/chaos/faults.py`` for the five faults that
-introduced the second value, and the README's "Transport faults" section for
-the distinction stated to a consumer.
+introduced the second value, and ``docs/concepts/chaos-rules-and-faults.md``
+("Transport faults") for the distinction stated to a consumer.
+"""
+
+FaultPhase = Literal["request", "response", "delivery"]
+"""*When* a fault fires, relative to the handler -- the axis
+:data:`FaultProvenance` does not carry, and the one that answers "will this
+fault let the handler commit?" (konyklabs/roadmap#101, item 17).
+
+``"request"``
+    Fires instead of the handler. Nothing is committed: the caller's 429,
+    5xx or 504 left no journal entry behind, and a retry starts clean.
+``"response"``
+    Fires on the answer, *after* the handler ran and committed. Against a
+    single-use rotation that means the credential is spent by a call the
+    caller saw fail -- exactly what a real gateway mangling a response after
+    the write does, and the reason a consumer must be able to read this off
+    the catalogue rather than off ``core/chaos/faults.py``. The request log
+    marks such an answer with ``discarded_mutation`` and names the journal
+    seq it committed.
+``"delivery"``
+    A webhook delivery, not a request at all; the ``webhook.*`` faults.
+
+Orthogonal to provenance: ``timeout`` is ``vendor``/``request`` and
+``malformed_body`` is ``transport``/``response``, so neither axis can be
+inferred from the other.
 """
 
 
@@ -199,6 +224,10 @@ class FaultSpec:
     #: and the field is purely additive (found by review round 2 of
     #: konyklabs/roadmap#73; see CHANGELOG.md's ``Unreleased`` entry).
     provenance: FaultProvenance = field(kw_only=True, default="vendor")
+    #: Keyword-only for the same reason as ``provenance``. ``"request"`` by
+    #: default because that is what every fault was before the response-phase
+    #: five existed; the catalogue below states it explicitly anyway.
+    phase: FaultPhase = field(kw_only=True, default="request")
     #: Prose description of the ``params`` keys this fault reads, if any.
     params: str | None = None
 
@@ -208,6 +237,7 @@ class FaultSpec:
             "scope": self.scope,
             "summary": self.summary,
             "provenance": self.provenance,
+            "phase": self.phase,
         }
         if self.params is not None:
             body["params"] = self.params
@@ -216,16 +246,33 @@ class FaultSpec:
 
 BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
     FaultSpec(
-        "rate_limit", "request", "Reject the request as rate limited.", "retry_after_seconds?", provenance="vendor"
+        "rate_limit",
+        "request",
+        "Reject the request as rate limited.",
+        "retry_after_seconds?",
+        provenance="vendor",
+        phase="request",
     ),
-    FaultSpec("server_error", "request", "Fail the request with a vendor-shaped 5xx.", provenance="vendor"),
-    FaultSpec("unavailable", "request", "Fail the request as temporarily unavailable.", provenance="vendor"),
-    FaultSpec("timeout", "request", "Stall the request, then fail it.", "delay_ms (default 100)", provenance="vendor"),
+    FaultSpec(
+        "server_error", "request", "Fail the request with a vendor-shaped 5xx.", provenance="vendor", phase="request"
+    ),
+    FaultSpec(
+        "unavailable", "request", "Fail the request as temporarily unavailable.", provenance="vendor", phase="request"
+    ),
+    FaultSpec(
+        "timeout",
+        "request",
+        "Stall the request, then fail it.",
+        "delay_ms (default 100)",
+        provenance="vendor",
+        phase="request",
+    ),
     FaultSpec(
         "token_expiry",
         "request",
         "Treat the caller token as expired mid-flow, without touching stored state.",
         provenance="vendor",
+        phase="request",
     ),
     FaultSpec(
         "webhook.duplicate",
@@ -233,26 +280,30 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
         "Deliver the same event body more than once.",
         "copies (default 1 extra)",
         provenance="vendor",
+        phase="delivery",
     ),
     FaultSpec(
         "webhook.out_of_order",
         "webhook",
         "Hold this event until the next one has been delivered.",
         provenance="vendor",
+        phase="delivery",
     ),
     FaultSpec(
         "webhook.drop_ack",
         "webhook",
         "Ignore a successful subscriber response so the retry schedule runs.",
         provenance="vendor",
+        phase="delivery",
     ),
-    FaultSpec("webhook.delay", "webhook", "Delay delivery.", "delay_ms", provenance="vendor"),
+    FaultSpec("webhook.delay", "webhook", "Delay delivery.", "delay_ms", provenance="vendor", phase="delivery"),
     FaultSpec(
         "webhook.drop",
         "webhook",
         "Silently swallow the delivery: recorded as dropped, never sent to the subscriber. "
         "Filter with match.event_type.",
         provenance="vendor",
+        phase="delivery",
     ),
     # -- transport faults: provenance: transport -- see FaultProvenance above.
     FaultSpec(
@@ -261,6 +312,7 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
         "Replace a successful response's body with something the vendor's own schema forbids.",
         "mode (invalid_json|html|empty|truncate), status (default 200; html defaults 502)",
         provenance="transport",
+        phase="response",
     ),
     FaultSpec(
         "body_mutation",
@@ -268,18 +320,21 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
         "Apply RFC 6901 JSON-pointer operations to a successful JSON response body, after the handler ran.",
         "ops (list of {op, pointer, value?, as?})",
         provenance="transport",
+        phase="response",
     ),
     FaultSpec(
         "connection_reset",
         "request",
         "Drop the connection after the response starts, before it completes.",
         provenance="transport",
+        phase="response",
     ),
     FaultSpec(
         "empty_response",
         "request",
         "Drop the connection as close to before any bytes as the binding can manage.",
         provenance="transport",
+        phase="response",
     ),
     FaultSpec(
         "slow_body",
@@ -287,6 +342,7 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
         "Stream a successful response body in chunks, with a delay between them.",
         "chunk_bytes (default 64), chunk_delay_ms (default 100)",
         provenance="transport",
+        phase="response",
     ),
 )
 """The faults the core implements, as data. The ``params`` prose is a promise:

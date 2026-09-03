@@ -58,6 +58,16 @@ true while the kernel did the sleeping itself: nothing consulted
 about. The served fixtures were the only way to rehearse a client timeout.
 See ``vendorfake.core.chaos.faults`` for the other half of the change.
 
+On a virtual clock the same comparison is made against the delay the rule
+*asked for* (``Vendorfake-Delay-Ms`` on the answer) rather than the delay the
+kernel still owes, which is zero there because scenario time already moved.
+So ``timeout`` with a ``delay_ms`` past the client's read timeout raises
+``ReadTimeout`` on either clock, and under it a virtual clock still answers
+at once with its 504. A *served* unit on a virtual clock cannot do the same:
+over a socket only a real wait can time a client out, so it answers the 504
+immediately -- the one residue of the split, and stated in
+``docs/concepts/clock.md``.
+
 TRANSPORT-FIDELITY FAULTS, added alongside the timeout one. ``slow_body``
 folds into the same read-timeout race as a deliberate delay, but on a
 different number: whether the caller times out is decided against a single
@@ -101,19 +111,45 @@ from typing import Any
 import anyio
 import httpx
 
-from vendorfake.core.config.models import UnmatchedPolicy
+from vendorfake.core.config.models import UNMATCHED_POLICIES, UnmatchedPolicy
 from vendorfake.core.kernel.nearmiss import NEAR_MISS_HEADER
 from vendorfake.core.kernel.types import UnitResponse
-from vendorfake.core.kernel.unit import Unit, make_request
+from vendorfake.core.kernel.unit import DELAY_ASKED_HEADER, Unit, make_request
 from vendorfake.core.transport.inprocess import TRANSPORT
 
-__all__ = ["DEFAULT_INPROCESS_POLICY", "UnitTransport", "UnmatchedRequest"]
+__all__ = ["DEFAULT_INPROCESS_POLICY", "UnitTransport", "UnmatchedRequest", "checked_unmatched"]
 
 DEFAULT_INPROCESS_POLICY: UnmatchedPolicy = "error"
 """What an in-process binding does when the profile does not say.
 
 Named rather than inlined because :func:`vendorfake.testing.unit` documents it
 and a test asserts the two agree."""
+
+
+def checked_unmatched(value: object) -> UnmatchedPolicy | None:
+    """``value`` as an :data:`UnmatchedPolicy`, or a refusal naming the two.
+
+    The Python argument used to be stored verbatim and compared only against
+    ``"error"``, so ``unit("square", unmatched="raise")`` -- or
+    ``unmatched=True``, a likely slip given ``Driver.requests`` has a boolean
+    keyword of the same name -- silently turned strict mode *off* while the
+    caller believed they had turned it on. The environment spelling
+    (``VENDORFAKE_UNMATCHED``) was already refused one layer down; this is
+    the same refusal for the argument, at the call, before a unit is built
+    (konyklabs/roadmap#99, item 1). Lives here, on the class that stores the
+    value, so :class:`UnitTransport` built directly is refused the same way
+    as :func:`vendorfake.testing.unit`; re-exported from ``vendorfake.testing``.
+    """
+    if value is None:
+        return None
+    for policy in UNMATCHED_POLICIES:
+        if value == policy:
+            return policy
+    raise ValueError(
+        f"unmatched={value!r} is not one of {', '.join(repr(p) for p in UNMATCHED_POLICIES)}. "
+        f'"error" raises UnmatchedRequest for a request no route matched; "vendor-404" answers '
+        f"the vendor's own 404 with the diagnosis in the Vendorfake-Near-Miss header."
+    )
 
 
 class UnmatchedRequest(AssertionError):
@@ -273,7 +309,7 @@ def _expired(request: httpx.Request, answered: UnitResponse) -> httpx.ReadTimeou
     case a socket resolves by racing, and answering is the choice that does not
     make a test flaky.
     """
-    gap = _would_exhaust_read_timeout_ms(answered)
+    gap = max(_would_exhaust_read_timeout_ms(answered), _delay_asked_ms(answered))
     if gap <= 0:
         return None
     read = _read_timeout(request)
@@ -286,6 +322,29 @@ def _expired(request: httpx.Request, answered: UnitResponse) -> httpx.ReadTimeou
     )
 
 
+def _delay_asked_ms(answered: UnitResponse) -> int:
+    """The delay a ``timeout`` rule asked for, off :data:`DELAY_ASKED_HEADER`
+    -- the only number that survives a virtual clock, where the kernel has
+    already spent the delay in scenario time and answers with ``delay_ms=0``.
+
+    Raced against the read timeout so that one rule means one thing on both
+    clocks: ``delay_ms: 120000`` against a 10 s client raises ``ReadTimeout``
+    whether the clock is real or virtual, where before the virtual clock
+    answered a 504 the consumer's "network error" assertion then failed on,
+    naming a status (konyklabs/roadmap#101, item 18). Under the threshold the
+    virtual clock still answers at once: the wait itself is still
+    :func:`_wait_owed_ms`, which reads ``delay_ms`` and is zero there. Zero
+    for an answer that carries no such header, so nothing else changes.
+    """
+    raw = answered.headers.get(DELAY_ASKED_HEADER)
+    if raw is None:
+        return 0
+    try:
+        return max(0, math.ceil(float(raw)))
+    except ValueError:  # pragma: no cover - the kernel writes this header from a number
+        return 0
+
+
 def _rule_id(answered: UnitResponse) -> str:
     return answered.headers.get("vendorfake-rule", "?")
 
@@ -294,7 +353,8 @@ def _connection_fault(request: httpx.Request, answered: UnitResponse) -> Excepti
     """``connection_reset`` / ``empty_response``: no socket exists to reset or
     starve, so this binding raises the exception a real one would surface,
     directly and without waiting. See ``core/kernel/types.py``'s
-    ``TransportDirective`` and the README's "Transport faults" section.
+    ``TransportDirective`` and ``docs/concepts/chaos-rules-and-faults.md``
+    ("Transport faults").
     """
     directive = answered.transport
     if directive is None:
@@ -323,6 +383,7 @@ class UnitTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
     __slots__ = ("_unit", "_unmatched")
 
     def __init__(self, unit: Unit, *, unmatched: UnmatchedPolicy | None = None) -> None:
+        unmatched = checked_unmatched(unmatched)
         self._unit = unit
         declared = unit.context.config.unmatched.policy
         self._unmatched: UnmatchedPolicy = (

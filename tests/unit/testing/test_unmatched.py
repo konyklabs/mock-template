@@ -146,3 +146,37 @@ def test_a_policy_that_is_not_one_of_the_two_is_refused_at_startup() -> None:
     configured to fail loudly still answering 404s."""
     with pytest.raises(Exception, match="VENDORFAKE_UNMATCHED"), unit("square", env={"VENDORFAKE_UNMATCHED": "err"}):
         pass
+
+
+# -- konyklabs/roadmap#99, item 1: the argument is validated, not stored ------
+
+
+@pytest.mark.parametrize("bad", ["raise", True, "ERROR", 0])
+def test_unit_refuses_an_unmatched_value_that_is_not_a_policy(bad: object) -> None:
+    """Before, any value here silently meant ``vendor-404`` -- strict mode
+    *off* while the caller believed they had turned it on."""
+    from vendorfake.testing import async_unit, unit
+
+    with pytest.raises(ValueError) as caught:
+        unit("square", unmatched=bad)  # type: ignore[call-overload]
+    assert repr(bad) in str(caught.value)
+    assert "'vendor-404'" in str(caught.value) and "'error'" in str(caught.value)
+    with pytest.raises(ValueError):
+        async_unit("square", unmatched=bad)  # type: ignore[call-overload]
+
+
+def test_checked_unmatched_passes_the_two_policies_and_none() -> None:
+    from vendorfake.testing import checked_unmatched
+
+    assert checked_unmatched(None) is None
+    assert checked_unmatched("error") == "error"
+    assert checked_unmatched("vendor-404") == "vendor-404"
+
+
+def test_the_transport_constructor_refuses_the_same_values() -> None:
+    """The publicly exported constructor stores the value; it must not be the
+    one door the check misses."""
+    from vendorfake.testing import UnitTransport, unit
+
+    with unit("square") as started, pytest.raises(ValueError, match="unmatched=True"):
+        UnitTransport(started.unit, unmatched=True)  # type: ignore[arg-type]

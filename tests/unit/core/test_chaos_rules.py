@@ -192,6 +192,7 @@ def test_the_param_catalogue_promises_snake_case_keys() -> None:
         "scope": "request",
         "summary": "Reject the request as rate limited.",
         "provenance": "vendor",
+        "phase": "request",
         "params": "retry_after_seconds?",
     }
 

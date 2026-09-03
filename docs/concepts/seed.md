@@ -33,17 +33,23 @@ unit is built, not discovered later as a missing attribute.
 
 ## What every seed has in common
 
-Four fields on `vendorfake.testing.Seed`, useful for a test parametrized
+Five fields on `vendorfake.testing.Seed`, useful for a test parametrized
 across vendors:
 
+- `token` — the seeded credential a consumer *stores* per tenant, under
+  names that do not change per vendor: `access_token`, `refresh_token`
+  (`None` exactly when `credentials.grant` is `client_credentials`) and
+  `tenant_id` (Clover's `merchant_id`, Square's `merchant_id` — the seller
+  the token belongs to, not a location — and Toast's `restaurant_guid`).
 - `credentials` — the app credential from the seeded scenario, under names
   that do not change per vendor (`app_id`, `app_secret`, `grant`) even
   though the vendor's own field names do (Square: `application_id`; Clover
   and Toast: `client_id`). `grant` names the token lifecycle worth
   branching on: Square and Clover issue a refresh token and rotate it,
-  Toast issues a bearer with no refresh and expects a fresh login —
-  `refresh_token` is deliberately *not* on the shared type, because Toast
-  has none and faking one would be a lie the type system helped tell.
+  Toast issues a bearer with no refresh and expects a fresh login — a bare
+  `refresh_token` field is deliberately *not* on the shared type, because
+  Toast has none and faking one would be a lie the type system helped tell;
+  `token.refresh_token` is where it lives, honestly typed `str | None`.
 - `auth` — headers for the full-scope seeded bearer, ready to pass to a
   client. For Toast this carries the bearer **and** the
   `Toast-Restaurant-External-ID` header together, because a
@@ -80,7 +86,7 @@ class SeedingVendor(Protocol):
 vendor implementing it gets a real, typed seed from the `str` overload of
 `unit()` too. The return type is `object` because the core layer that
 declares the protocol may not import `vendorfake.testing`; what comes back is
-checked structurally against `vendorfake.testing.Seed` (`credentials`,
+checked structurally against `vendorfake.testing.Seed` (`credentials`, `token`,
 `auth`, `read_only_auth`, `event_types`) at the point the unit is built, and a
 hook that returns the wrong shape is named as a hook defect there rather than
 surfacing later as an `AttributeError` on `started.seed.credentials`. A

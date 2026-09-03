@@ -29,6 +29,7 @@ from vendorfake.testing import (
     SquareSeed,
     StartedUnit,
     ToastSeed,
+    Token,
     serve_in_thread,
     served,
     unit,
@@ -41,6 +42,14 @@ def _credentials_of(seed: Seed) -> Credentials:
     return seed.credentials
 
 
+def _stored_row(seed: Seed) -> tuple[str, str | None, str]:
+    """The other half (konyklabs/roadmap#101 item 16): a consumer's stored
+    credential row, built from ``Seed`` alone with no ``Any`` escape."""
+    token: Token = seed.token
+    assert_type(token.refresh_token, str | None)
+    return (token.access_token, token.refresh_token, token.tenant_id)
+
+
 def square_narrows() -> None:
     with unit("square") as started:
         assert_type(started, StartedUnit[SquareSeed])
@@ -48,6 +57,7 @@ def square_narrows() -> None:
         assert_type(started.seed.credentials.app_id, str)
         assert_type(started.seed.merchant_id, str)
         _credentials_of(started.seed)
+        _stored_row(started.seed)
 
 
 def clover_narrows() -> None:

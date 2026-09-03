@@ -170,6 +170,17 @@ def _marker_arguments(request: pytest.FixtureRequest, fixture: str) -> tuple[str
             f"@pytest.mark.{MARKER_LINE}",
             pytrace=False,
         )
+    if "unmatched" in options:
+        # The same refusal ``unit()`` makes, surfaced as a pytest failure at
+        # setup so it names the test: ``unmatched=True`` here is the slip
+        # ``Driver.requests(unmatched=...)`` invites, and it used to turn
+        # strict mode off silently (konyklabs/roadmap#99, item 1).
+        from vendorfake.testing import checked_unmatched
+
+        try:
+            checked_unmatched(options["unmatched"])
+        except ValueError as exc:
+            pytest.fail(f"@pytest.mark.{MARKER}(...) on {request.node.nodeid}: {exc}", pytrace=False)
     return vendor, options
 
 

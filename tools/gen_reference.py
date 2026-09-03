@@ -158,11 +158,13 @@ def _faults_page() -> None:
 
     scope_of = {spec.name: spec.scope for spec in BUILTIN_FAULTS}
     provenance_of = {spec.name: spec.provenance for spec in BUILTIN_FAULTS}
+    phase_of = {spec.name: spec.phase for spec in BUILTIN_FAULTS}
     rows = [
         (
             f"`{name}`",
             scope_of.get(name, ""),
             provenance_of.get(name, ""),
+            phase_of.get(name, ""),
             keys,
             FAULT_DESCRIPTIONS.get(name, ""),
         )
@@ -172,17 +174,20 @@ def _faults_page() -> None:
         "faults.md",
         source=(
             "`vendorfake.core.chaos.faults.FAULT_PARAM_KEYS` / `FAULT_DESCRIPTIONS`, "
-            "`vendorfake.core.chaos.rules.BUILTIN_FAULTS` (scope, provenance)"
+            "`vendorfake.core.chaos.rules.BUILTIN_FAULTS` (scope, provenance, phase)"
         ),
         title="Faults",
         intro=(
             "Every built-in fault. `provenance: vendor` reproduces a failure mode "
             "the vendor documents; `provenance: transport` is a transport-level "
-            "failure mode no vendor documents. See "
+            "failure mode no vendor documents. `phase: request` fires instead of "
+            "the handler, so nothing is committed; `phase: response` fires on the "
+            "answer *after* the handler committed, so a retry does not start "
+            "clean; `phase: delivery` is a webhook delivery. See "
             "[Chaos rules and faults](../concepts/chaos-rules-and-faults.md) and "
             "[Provenance labels](../concepts/provenance-labels.md)."
         ),
-        body=_table(("Fault", "Scope", "Provenance", "Params", "Description"), rows),
+        body=_table(("Fault", "Scope", "Provenance", "Phase", "Params", "Description"), rows),
     )
 
 

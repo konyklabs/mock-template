@@ -84,6 +84,38 @@ async def test_items_are_readable(vendorfake_async_unit):
     assert answered.status_code == 200
 ```
 
+### Narrowing the seed under a type checker
+
+Both fixtures are declared `StartedUnit[Seed]`: the vendor is a runtime
+marker argument, so there is nothing for a checker to narrow on and
+`vendorfake_unit.seed.merchant_id` is a type error even on a `"clover"`
+marker. Three ways out, in order of preference:
+
+- Stay on the structural `Seed`. `seed.credentials` (`app_id`, `app_secret`,
+  `grant`) and `seed.token` (`access_token`, `refresh_token: str | None`,
+  `tenant_id`) are the cross-vendor views, and a test parametrized over
+  vendors should need nothing else.
+- Narrow once, at the top of the test, with an assertion the checker
+  understands and the runtime enforces:
+
+  ```python
+  from vendorfake.testing import CloverSeed
+
+
+  @pytest.mark.vendorfake("clover")
+  def test_the_merchant_is_seeded(vendorfake_unit):
+      seed = vendorfake_unit.seed
+      assert isinstance(seed, CloverSeed)
+      assert seed.merchant_id  # narrowed
+  ```
+
+- Call `unit("clover")` from a fixture of your own instead: the literal
+  overload yields `StartedUnit[CloverSeed]` with no assertion at all.
+
+`typing.cast` works too, but it is the one option that can be wrong without
+anything failing; prefer the `isinstance`, which costs one line and cannot
+lie.
+
 The fixture function itself is a plain, synchronous `def`, not `async def` —
 it yields an object that owns an `httpx.AsyncClient` rather than being a
 coroutine itself. That is what lets it work under `pytest-asyncio` (strict or

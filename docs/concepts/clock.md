@@ -59,9 +59,18 @@ the unit's own state does:
   shorter than the read timeout is waited out for real. Served mode always
   waits for real, because over a socket the timeout is the client's own to
   enforce.
-- **Virtual clock**: the delay advances scenario time on the calling
-  thread and the response comes back immediately — an elapsed-wall-time
-  assertion is meaningless here and none is made.
+- **Virtual clock, in-process**: the delay advances scenario time on the
+  calling thread and the response comes back immediately — an
+  elapsed-wall-time assertion is meaningless here and none is made. The
+  client's read timeout is still honoured: the answer carries
+  `Vendorfake-Delay-Ms` (the delay the rule asked for), and if that exceeds
+  the read timeout the client raises `httpx.ReadTimeout` without waiting,
+  exactly as on a real clock. So one rule means one thing on both clocks: a
+  `delay_ms` past the client's timeout is a client-side timeout, under it a
+  504 — and only the wait differs.
+- **Virtual clock, served**: answers the 504 immediately. Over a socket
+  only a real wait can time a client out, and a virtual clock never waits
+  for real; a served unit is the one place the split is still visible.
 
 An earlier design routed every `timeout` fault through the clock
 unconditionally, on the reasoning that a fake should never really sleep.

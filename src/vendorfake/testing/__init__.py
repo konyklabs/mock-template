@@ -70,8 +70,8 @@ from vendorfake.core.webhooks.models import matches_event_type
 from vendorfake.core.webhooks.sink import DeliverySink
 from vendorfake.registry import RouteInfo, create_unit
 from vendorfake.testing.receiver import Delivery, WebhookReceiver, webhook_receiver
-from vendorfake.testing.seeds import CloverSeed, Credentials, Seed, SquareSeed, ToastSeed, seed_for
-from vendorfake.testing.transport import UnitTransport, UnmatchedRequest
+from vendorfake.testing.seeds import CloverSeed, Credentials, Seed, SquareSeed, ToastSeed, Token, seed_for
+from vendorfake.testing.transport import UnitTransport, UnmatchedRequest, checked_unmatched
 
 __all__ = [
     "CLIENT_TIMEOUT_S",
@@ -92,10 +92,12 @@ __all__ = [
     "SquareSeed",
     "StartedUnit",
     "ToastSeed",
+    "Token",
     "UnitTransport",
     "UnmatchedRequest",
     "WebhookReceiver",
     "async_unit",
+    "checked_unmatched",
     "serve_in_thread",
     "served",
     "unit",
@@ -759,7 +761,7 @@ def unit(
         env=env,
         logger=logger,
         seed=seed,
-        unmatched=unmatched,
+        unmatched=checked_unmatched(unmatched),
         clock_start=clock_start,
     )
 
@@ -1033,7 +1035,10 @@ def async_unit(
         env=env,
         logger=logger,
         seed=seed,
-        unmatched=unmatched,
+        # Checked here, at the call, and not only inside ``unit()`` on
+        # ``__aenter__``: the refusal should land on the line that spelled
+        # the value, before an ``async with`` is entered.
+        unmatched=checked_unmatched(unmatched),
         clock_start=clock_start,
     )
 

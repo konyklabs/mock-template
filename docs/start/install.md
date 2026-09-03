@@ -3,16 +3,28 @@
 Python 3.11 or newer. Not on PyPI yet — install from the tag:
 
 ```sh
-pip install "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
+pip install "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.2.0"
 # or, in a uv project:
-uv add "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
+uv add "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.2.0"
 
 vendorfake vendors            # -> clover, square, toast
 vendorfake serve --vendor square
 ```
 
-Drop the `@v0.1.0` to track `main`. From a checkout of this repository:
+Drop the `@v0.2.0` to track `main`. From a checkout of this repository:
 `uv sync && uv run vendorfake serve --vendor square`.
+
+## Pinning a commit instead of a tag
+
+A tag is the only pin whose version string means what it says. Release-please
+bumps `pyproject.toml` at release time, so a commit on `main` between two tags
+still reports the *previous* release from `importlib.metadata.version("vendorfake")`
+and `vendorfake.__version__` — `8b199f1`, the 0.2 integration head, said
+`0.1.0` on a tree with three breaking changes. If you pin a commit for early
+access, the discriminator is the changelog's `Unreleased` heading at that
+commit, not the version; and a runtime branch on `__version__` (say, on where
+the `unit_error` sidecar rides) will take the wrong arm. Releases are cut
+often enough that a tag is usually days behind `main` at most; prefer it.
 
 ## As a container
 

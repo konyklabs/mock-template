@@ -119,6 +119,7 @@ from vendorfake.core.capability.gates import CoreCapability, assert_capability_d
 from vendorfake.core.capability.registry import CapabilityRegistry
 from vendorfake.core.chaos.engine import ChaosDecision, ChaosEngine, ChaosSubject
 from vendorfake.core.chaos.faults import (
+    INTACT_RESPONSE_FAULTS,
     RESPONSE_PHASE_FAULTS,
     apply_request_fault,
     apply_response_fault,
@@ -159,6 +160,7 @@ from vendorfake.core.webhooks.dispatcher import WebhookDispatcher
 from vendorfake.core.webhooks.sink import DeliverySink, HttpSink
 
 __all__ = [
+    "DELAY_ASKED_HEADER",
     "REQUEST_ID_HEADER",
     "ControlBinding",
     "DispatcherFactory",
@@ -180,6 +182,9 @@ Production callers pass nothing and get the one correct dispatcher.
 """
 
 REQUEST_ID_HEADER = "x-unit-request-id"
+DELAY_ASKED_HEADER = "vendorfake-delay-ms"
+"""On a ``timeout``-faulted answer: the ``delay_ms`` the rule asked for, as the
+rule spelled it, whichever clock the unit runs on. See ``Unit._shape``."""
 """Echoed on every response, and honoured on the way *in*.
 
 A binding that mints a fresh id for a request whose caller already supplied one
@@ -475,6 +480,17 @@ class _Trace:
 
     fault: str | None = None
     rule_id: str | None = None
+    #: ``store.journal_seq`` immediately before and after the handler ran --
+    #: read inside ``_run_pipeline`` step 8, so on a ``serialized`` route
+    #: (every shipped route) both reads happen under the pipeline lock and no
+    #: other request's commit can land between them. Read at the top of
+    #: ``handle`` instead, before the lock, the ASGI threadpool could
+    #: attribute a concurrent request's commit to this one (found by review
+    #: of konyklabs/roadmap#101). A fork's ``serialized=False`` route gets a
+    #: best-effort window instead; a request that never reached the handler
+    #: leaves both at zero, which reads as "committed nothing".
+    journal_seq_before: int = 0
+    journal_seq_after: int = 0
     #: The decision drawn at step 3, whole -- ``fault``/``rule_id`` above are
     #: the two fields the request log wants, kept as they were because other
     #: code reads them.
@@ -899,6 +915,7 @@ class Unit:
                 delay_ms=err.delay_ms,
                 fault=err.fault,
                 rule_id=err.rule_id,
+                delay_asked_ms=_delay_asked_ms(err),
             )
             # An error that left the pipeline by *raising* -- a 401, a missing
             # scope, a missing idempotency key, an idempotency conflict -- is
@@ -1062,7 +1079,15 @@ class Unit:
         if replayed is not None:
             res = replayed
         else:
-            res = normalize(route.handler(args))
+            trace.journal_seq_before = self._store.journal_seq
+            try:
+                res = normalize(route.handler(args))
+            finally:
+                # In a ``finally`` because a handler that committed and then
+                # raised has still committed: the shaped error the caller gets
+                # is exactly the "looked like it failed" case the request log
+                # exists to name.
+                trace.journal_seq_after = self._store.journal_seq
             # WHAT GETS RECORDED IS THE HANDLER'S CLEAN ANSWER, RECORDED BEFORE
             # ANY RESPONSE-PHASE FAULT TOUCHES IT.
             #
@@ -1219,6 +1244,7 @@ class Unit:
         delay_ms: int = 0,
         fault: str | None = None,
         rule_id: str | None = None,
+        delay_asked_ms: str | None = None,
     ) -> UnitResponse:
         """The vendor's error body, plus the machine-readable ``x-unit-error``.
 
@@ -1235,13 +1261,33 @@ class Unit:
         headers -- the same two stamped on a successful response a
         response-scope fault corrupted (``core/chaos/faults.py``), so a test
         can tell any faulted answer from a real one without parsing the body,
-        whichever of the two mechanisms produced it.
+        whichever of the two mechanisms produced it. A ``rule_id`` with no
+        ``fault`` is a rule-authoring refusal and becomes
+        ``vendorfake-rule-error`` instead: the rule is named, and the absence
+        of ``vendorfake-fault`` stays truthful.
         """
         headers = dict(shaped.headers)
         headers["x-unit-error"] = kind.value
         if fault is not None and rule_id is not None:
             headers["vendorfake-fault"] = fault
             headers["vendorfake-rule"] = header_text(rule_id)
+        elif rule_id is not None:
+            # A rule was involved but no fault fired: the payout refused its
+            # own params (a ``body_mutation`` pointer that is not in *this*
+            # answer, say). Without this a consumer that reads status codes
+            # and not bodies sees an unexplained 400 with none of the fault
+            # headers, and reads it as the vendor failing
+            # (konyklabs/roadmap#101, item 19).
+            headers["vendorfake-rule-error"] = header_text(rule_id)
+        if delay_asked_ms is not None:
+            # The delay the ``timeout`` rule ASKED for, on either clock --
+            # distinct from ``delay_ms`` below, which is what the binding
+            # still owes and is zero on a virtual clock because scenario time
+            # already moved. The in-process transport compares this one
+            # against the client's read timeout, so the same rule raises
+            # ``ReadTimeout`` on both clocks instead of a 504 on one of them
+            # (konyklabs/roadmap#101, item 18).
+            headers[DELAY_ASKED_HEADER] = delay_asked_ms
         answered = normalize(ReplyInit(status=shaped.status, json=shaped.body, headers=headers))
         if delay_ms <= 0:
             return answered
@@ -1283,6 +1329,20 @@ class Unit:
         # internal route. `is_control_path` is the one place that namespace is
         # defined, shared with `Router.add`'s reservation check.
         if (route is None or not route.internal) and not is_control_path(req.path):
+            # Recorded on the one path every answer leaves through, from the
+            # two reads step 8 took around the handler. "Committed" is a seq
+            # that moved; "discarded" is a commit the caller was not handed
+            # cleanly -- the payout was attempted, and it either corrupted the
+            # answer or refused with the 400 naming the rule. A fault in
+            # ``INTACT_RESPONSE_FAULTS`` did neither: the caller has the
+            # handler's answer, only later. All of this is what a real
+            # gateway mangling a response after the write does, which is what
+            # a response-phase fault rehearses, and none of it was readable
+            # anywhere but the journal.
+            committed = trace.journal_seq_after > trace.journal_seq_before
+            deprived = trace.response_fault_attempted and (
+                trace.decision is None or trace.decision.fault not in INTACT_RESPONSE_FAULTS
+            )
             self._requests.record(
                 RequestRecord(
                     id=req.id,
@@ -1297,6 +1357,8 @@ class Unit:
                     rule_id=trace.rule_id,
                     duration_ms=round(elapsed_ms),
                     near_misses=trace.near_misses,
+                    committed_journal_seq=trace.journal_seq_after if committed else None,
+                    discarded_mutation=committed and deprived,
                 )
             )
         # ``delay_ms`` and ``transport`` are carried across rather than offered
@@ -1312,6 +1374,17 @@ class Unit:
             delay_ms=res.delay_ms,
             transport=res.transport,
         )
+
+
+def _delay_asked_ms(err: UnitError) -> str | None:
+    """The ``timeout`` fault's requested delay, for :data:`DELAY_ASKED_HEADER`;
+    ``None`` for every other error. Read from ``info`` -- the consumer-visible
+    copy ``core/chaos/faults.py`` fills on either clock -- rather than from
+    ``delay_ms``, which is already zero by the time a virtual clock answers."""
+    if err.fault != "timeout" or err.info is None:
+        return None
+    asked = err.info.get("delay_ms")
+    return None if asked is None else str(asked)
 
 
 def _describe(exc: BaseException) -> str:
