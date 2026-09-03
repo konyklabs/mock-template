@@ -71,8 +71,9 @@ async def test_items_are_readable(clover):
 ```
 
 `async_unit` takes exactly the arguments `unit` takes — `vendor`, `profile`,
-`sink`, `env`, `logger`, `seed` — and delegates to it, so there is one
-description of how a unit is built and two ways in. What it adds is the exit:
+`capabilities`, `sink`, `env`, `logger`, `seed`, `unmatched`, `clock_start` —
+and delegates to it, so there is one description of how a unit is built and
+two ways in. What it adds is the exit:
 the async client's `aclose()` is awaited. The synchronous `unit()` cannot await
 inside a running event loop, so it leaves the client for the loop; nothing
 leaks either way, because this transport owns no socket, no connection pool and

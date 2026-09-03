@@ -1150,7 +1150,7 @@ curl -si -X POST http://localhost:8080/orders/v2/prices -H 'Authorization: Beare
 # HTTP/1.1 403 Forbidden
 # vendorfake-error-kind: forbidden_scope
 # vendorfake-status-provenance: documented
-# vendorfake-error-info: {"missing":["orders:write"]}
+# vendorfake-error-info: {"missing":["orders:write"],"granted":["orders:read","menus:read","config:read","restaurants:read","partners:read","stock:read"]}
 # {"status":403,"code":10010,"message":"The access token is missing the required permission(s): orders:write.",
 #  "messageKey":null,"fieldName":null,"link":null,"requestId":"ea47429c-b794-4c8d-9710-5ac5a15b0ab0",
 #  "developerMessage":null,"errors":[],"canRetry":null}

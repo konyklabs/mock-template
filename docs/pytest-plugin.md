@@ -18,13 +18,16 @@ the conformance suite against your unit" in the [README](../README.md).
 ## The marker
 
 ```python
-@pytest.mark.vendorfake(vendor, profile="full", env=None, seed=None, clock_start=None)
+@pytest.mark.vendorfake(vendor, profile=None, env=None, seed=None, clock_start=None, unmatched=None, capabilities=None)
 ```
 
-Every argument matches [`vendorfake.testing.unit`](../README.md#pytest)'s own:
+Every keyword matches [`vendorfake.testing.unit`](../README.md#pytest)'s own:
 `vendor` is required and positional (`"square"`, `"clover"` or `"toast"`);
-`profile`, `env`, `seed` and `clock_start` are the same keyword arguments
-`unit()` takes, with the same defaults.
+`profile`, `env`, `seed`, `clock_start`, `unmatched` and `capabilities` are the
+same keyword arguments `unit()` takes, with the same defaults and the same
+meaning -- `unmatched` selects the unmatched-request policy (e.g.
+`"vendor-404"`) and `capabilities` narrows to the smallest shipped profile
+that is a superset of what it names.
 
 `clock_start` carries the same precondition it does on `unit()`: it requires
 a virtual clock, and setting it against the default real clock is a loud
