@@ -33,7 +33,16 @@ from typing import Any
 import httpx
 import pytest
 
-from vendorfake.testing import CloverSeed, SquareSeed, StartedUnit, ToastSeed, UnitTransport, async_unit, unit
+from vendorfake.testing import (
+    CLIENT_TIMEOUT_S,
+    CloverSeed,
+    SquareSeed,
+    StartedUnit,
+    ToastSeed,
+    UnitTransport,
+    async_unit,
+    unit,
+)
 from vendorfake.toast.surface.auth import LOGIN_PATH as TOAST_LOGIN_PATH
 
 Seed = SquareSeed | CloverSeed | ToastSeed
@@ -208,6 +217,19 @@ async def test_async_unit_takes_the_same_arguments_as_unit() -> None:
 # ---------------------------------------------------------------------------
 # The delay: whose clock, and whose timeout.
 # ---------------------------------------------------------------------------
+
+
+def test_the_built_in_clients_read_timeout_is_client_timeout_s() -> None:
+    """Pins the fix for the review-A-1 major finding: left unset, httpx's own
+    default read timeout is 5s, shorter than `CLIENT_TIMEOUT_S` (30s) and
+    silently different from what the CHANGELOG documents as the threshold a
+    `timeout` fault's `delay_ms` is measured against on `StartedUnit.client`
+    and `StartedUnit.async_client`. If either client is ever built without
+    passing `timeout=CLIENT_TIMEOUT_S` explicitly again, this fails loudly
+    instead of a consumer's test raising `ReadTimeout` at 5s undocumented."""
+    with unit("square") as started:
+        assert started.client.timeout.read == CLIENT_TIMEOUT_S
+        assert started.async_client.timeout.read == CLIENT_TIMEOUT_S
 
 
 def _armed(started: StartedUnit, delay_ms: int) -> None:

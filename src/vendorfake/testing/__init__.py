@@ -97,10 +97,17 @@ STARTUP_TIMEOUT_S = 60.0
 SHUTDOWN_TIMEOUT_S = 15.0
 
 CLIENT_TIMEOUT_S = 30.0
-"""The HTTP timeout for every client this module builds over a socket
-(:func:`served` and :func:`serve_in_thread`). One constant so the two cannot
-drift: they briefly did, and the thread-served client's httpx default of 5s
-was shorter than a real-clock :meth:`Driver.drain` legitimately takes."""
+"""The HTTP timeout for every client this module builds -- over a socket
+(:func:`served` and :func:`serve_in_thread`) and in process
+(:func:`unit`'s :attr:`Driver.client`, :attr:`StartedUnit.async_client`).
+One constant so none of them drift apart: the socket clients briefly did,
+and the thread-served client's httpx default of 5s was shorter than a
+real-clock :meth:`Driver.drain` legitimately takes. The in-process clients
+matter for the same reason since the `timeout` chaos fault started raising
+``httpx.ReadTimeout`` for a `delay_ms` past this threshold instead of
+waiting: left unset, httpx's own default is 5s, not this constant, and a
+consumer's rule armed past 5s but under 30s would raise where the built-in
+client is documented to answer with a 504 instead."""
 
 DRAIN_TIMEOUT_S = 120.0
 """How long :meth:`Driver.drain` waits, overriding the client timeout for
@@ -304,7 +311,9 @@ class StartedUnit(Driver):
         """
         if self._async_client is None:
             transport = self._transport if self._transport is not None else UnitTransport(self.unit)
-            self._async_client = httpx.AsyncClient(transport=transport, base_url=self.base_url)
+            self._async_client = httpx.AsyncClient(
+                transport=transport, base_url=self.base_url, timeout=CLIENT_TIMEOUT_S
+            )
         return self._async_client
 
     async def aclose(self) -> None:
@@ -401,7 +410,7 @@ def unit(
     transport = UnitTransport(built)
     started: StartedUnit | None = None
     try:
-        with httpx.Client(transport=transport, base_url=IN_PROCESS_BASE_URL) as client:
+        with httpx.Client(transport=transport, base_url=IN_PROCESS_BASE_URL, timeout=CLIENT_TIMEOUT_S) as client:
             started = StartedUnit(
                 vendor=built.name,
                 profile=built.context.config.profile,

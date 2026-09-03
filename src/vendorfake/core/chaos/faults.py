@@ -96,6 +96,7 @@ and the README's "Transport faults" section.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
@@ -189,16 +190,18 @@ def _delay_owed(clock: Clock, delay_ms: float) -> int:
     whose clock to spend it on. Nothing here sleeps -- see the module
     docstring's second reversal.
 
-    Rounded to a whole millisecond because :attr:`UnitResponse.delay_ms` is an
-    ``int``, and rounded rather than truncated so a sub-millisecond delay does
-    not silently become no delay at all.
+    Rounded up to a whole millisecond because :attr:`UnitResponse.delay_ms` is
+    an ``int``: ``math.ceil`` rather than ``round`` so a sub-millisecond delay
+    does not silently become no delay at all -- ``round`` is banker's rounding
+    to even and sends both ``0.4`` and ``0.5`` to zero, which would make the
+    guarantee false for exactly the case it names.
     """
     if delay_ms <= 0:
         return 0
     if clock.mode == "virtual":
         clock.advance(delay_ms)
         return 0
-    return max(0, round(delay_ms))
+    return max(0, math.ceil(delay_ms))
 
 
 def apply_request_fault(

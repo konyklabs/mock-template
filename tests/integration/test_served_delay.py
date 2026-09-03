@@ -21,6 +21,7 @@ against the client's timeout rather than against the delay.
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Iterator
 
@@ -94,12 +95,21 @@ def test_a_patient_client_gets_the_fault_after_the_delay(served_square: Driver) 
 
 
 def test_the_delay_does_not_block_the_server_for_everyone_else(served_square: Driver) -> None:
-    """``await asyncio.sleep`` and not ``time.sleep`` on the worker thread.
+    """Rules out an inline blocking sleep in ``dispatch`` itself.
 
     A delayed request must not hold the event loop, or one armed fault would
     make the whole unit unreachable -- including the control-plane call a test
     needs in order to disarm it. Proved by asking for something else while a
     two-second delay is outstanding, and getting it promptly.
+
+    What this does *not* rule out: ``dispatch`` awaits
+    ``run_in_threadpool(unit.handle, ...)`` before it ever reaches the delay,
+    and that pool holds 40 workers by default. A regression that took the
+    delay itself via the pool (``run_in_threadpool(time.sleep, ...)`` in place
+    of the real ``await asyncio.sleep``) would still leave 39 workers free for
+    this test's one unrelated request, so it would stay green here. See
+    :func:`test_the_delay_does_not_saturate_the_worker_thread_pool` for the
+    version that actually distinguishes the two.
     """
     served_square.add_chaos_rule(
         {
@@ -122,3 +132,58 @@ def test_the_delay_does_not_block_the_server_for_everyone_else(served_square: Dr
 
     assert health.status_code == 200
     assert elapsed_s < 1.0, f"an unrelated request waited {elapsed_s:.2f}s behind a delayed one"
+
+
+#: anyio's default worker-thread limiter for ``run_in_threadpool`` caps
+#: concurrent calls at 40
+#: (``anyio.to_thread.current_default_thread_limiter().total_tokens``,
+#: unconfigured by this project). One more than that outstanding at once is
+#: what the test below needs to guarantee every worker thread is occupied if
+#: the delay were ever taken on one.
+WORKER_THREAD_POOL_SIZE = 40
+
+
+def test_the_delay_does_not_saturate_the_worker_thread_pool(served_square: Driver) -> None:
+    """Closes the gap the test above discloses but cannot rule out itself.
+
+    Fires one more concurrently delayed request than anyio's default 40
+    worker threads, then asks for something else. If the delay costs no
+    thread at all -- a coroutine suspended on the event loop, which is what
+    ``dispatch`` actually does -- the unrelated request answers immediately no
+    matter how many delayed requests are outstanding. If a regression took
+    the delay via ``run_in_threadpool`` instead, all 40 workers would be busy
+    sleeping and the unrelated request would queue behind them, well past the
+    bound below.
+    """
+    served_square.add_chaos_rule(
+        {
+            "id": "slow",
+            "scope": "request",
+            "fault": "timeout",
+            "match": {"route": "GET /v2/locations"},
+            "params": {"delay_ms": DELAY_MS},
+        }
+    )
+    with (
+        httpx.Client(base_url=served_square.base_url, timeout=CLIENT_TIMEOUT_S) as slow,
+        httpx.Client(base_url=served_square.base_url, timeout=5.0) as quick,
+    ):
+
+        def _drive_one() -> None:
+            with pytest.raises(httpx.ReadTimeout):
+                slow.get("/v2/locations", headers={"authorization": "Bearer irrelevant"})
+
+        threads = [threading.Thread(target=_drive_one) for _ in range(WORKER_THREAD_POOL_SIZE + 1)]
+        for thread in threads:
+            thread.start()
+        time.sleep(0.1)  # let every delayed request reach the server and enter the wait
+        begun = time.monotonic()
+        health = quick.get("/__unit/health")
+        elapsed_s = time.monotonic() - begun
+        for thread in threads:
+            thread.join(timeout=CLIENT_TIMEOUT_S + 5.0)
+
+    assert health.status_code == 200
+    assert elapsed_s < 1.0, (
+        f"an unrelated request waited {elapsed_s:.2f}s behind {WORKER_THREAD_POOL_SIZE + 1} delayed ones"
+    )

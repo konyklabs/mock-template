@@ -48,10 +48,17 @@ commit subject.
 
   What a consumer gains is the case that was previously unreachable in
   process: a client-side timeout, and therefore a rehearsal of their retry
-  path, without starting a server. What changes for an existing consumer is
-  elapsed wall time on the raw in-process seam
-  (`vendorfake.core.transport.inprocess.InProcessClient`), which holds no
-  caller and so takes no delay; the delay is readable there on
+  path, without starting a server. What changes for an existing consumer,
+  stated plainly: a `timeout` fault whose `delay_ms` exceeds the client's read
+  timeout now raises `httpx.ReadTimeout` instead of answering a 504. For the
+  built-in client -- `StartedUnit.client` and `StartedUnit.async_client`, what
+  `unit()` and `async_unit()` hand back -- that threshold is
+  `vendorfake.testing.CLIENT_TIMEOUT_S` (30 s), now passed to both explicitly
+  rather than left to httpx's own 5 s default. A consumer who needs the 504
+  answer for a longer delay passes a client built with a longer timeout, or
+  arms a shorter `delay_ms`. The raw in-process seam
+  (`vendorfake.core.transport.inprocess.InProcessClient`) holds no caller and
+  so takes no delay at all; the delay is readable there on
   `response.raw.delay_ms`. Status, body and headers are unchanged everywhere.
 * **testing:** `UnitTransport` now reads `request.extensions["timeout"]`. It
   is still consulted for nothing except a deliberate `delay_ms`; an ordinary

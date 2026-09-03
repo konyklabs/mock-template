@@ -58,8 +58,12 @@ toast = "vendorfake.toast:VENDOR"
 vendorfake_conformance = "vendorfake.conformance.plugin"
 # The consumer-facing fixtures. Registered as an entry point rather than left
 # for a consumer's `pytest_plugins` line, because "installed and the fixtures
-# are there" is the experience being offered; the module imports nothing
-# expensive at load time so a suite that never uses it pays almost nothing.
+# are there" is the experience being offered; the module itself imports
+# nothing expensive at load time, so a suite that never uses its fixture pays
+# only this module's own small cost -- not zero, and not "nothing expensive",
+# since vendorfake_conformance above already pays for httpx, the vendor
+# registry and the profile loader in the same session regardless. See
+# vendorfake.pytest's vendorfake_async_unit docstring for the measurement.
 vendorfake = "vendorfake.pytest"
 
 [dependency-groups]

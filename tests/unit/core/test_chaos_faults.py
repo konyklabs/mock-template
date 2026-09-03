@@ -110,12 +110,28 @@ def test_a_real_clock_timeout_reports_the_delay_instead_of_sleeping_it() -> None
     assert elapsed_ms < 20, f"the kernel slept for {elapsed_ms:.1f}ms; the binding owns the wait"
 
 
-def test_a_sub_millisecond_delay_rounds_rather_than_vanishing() -> None:
-    """``delay_ms`` on the response is an int. Truncating would turn a 0.6ms
-    delay into no delay at all, which reads as "the fault did not fire"."""
+@pytest.mark.parametrize(
+    ("delay_ms", "expected"),
+    [
+        # 0.4 and 0.5 are the cases plain ``round`` (banker's rounding to
+        # even) sent to zero -- review-A-1's major-adjacent minor finding.
+        # ``math.ceil`` is what actually keeps the module docstring's promise
+        # for every sub-millisecond delay, not only the one below that
+        # happened to round up anyway.
+        (0.4, 1),
+        (0.5, 1),
+        (0.6, 1),
+        (1.5, 2),
+        (2.5, 3),
+    ],
+)
+def test_a_sub_millisecond_delay_rounds_up_rather_than_vanishing(delay_ms: float, expected: int) -> None:
+    """``delay_ms`` on the response is an int. Truncating -- or rounding to
+    even -- would turn a delay just under a whole millisecond into no delay
+    at all, which reads as "the fault did not fire"."""
     with pytest.raises(UnitError) as caught:
-        _apply("timeout", clock=Clock("real"), delay_ms=0.6)
-    assert caught.value.delay_ms == 1
+        _apply("timeout", clock=Clock("real"), delay_ms=delay_ms)
+    assert caught.value.delay_ms == expected
 
 
 def test_a_virtual_clock_timeout_moves_time_and_returns_at_once() -> None:

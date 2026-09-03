@@ -141,11 +141,21 @@ def vendorfake_async_unit(request: Any) -> Iterator[StartedUnit]:
     ``async_client``. Set-up in a synchronous call and the code under test on
     the async one is the ordinary shape, and it is one object.
 
-    ``vendorfake.testing`` is imported here rather than at module scope. This
-    module is loaded by every pytest session on a machine where vendorfake is
-    installed, including the suites that never use it, and the import pulls in
-    ``httpx``, the vendor registry and the profile loader. The same argument
-    ``pyproject.toml`` records for keeping FastAPI out of ``vendorfake --help``.
+    ``vendorfake.testing`` is imported here rather than at module scope --
+    but not because it keeps ``httpx``, the vendor registry or the profile
+    loader out of a session that never uses this fixture: the sibling
+    ``pytest11`` entry point, ``vendorfake_conformance``, already imports
+    ``vendorfake.conformance.runner`` at module scope, which pulls all three
+    in regardless, in exactly the same sessions this plugin loads in
+    (review-A-1 measured it: ~114ms already spent before this module is even
+    imported). What the lazy import here actually buys is smaller and purely
+    local: this module's own ~20ms and ``vendorfake.testing``'s further
+    ~17ms are paid only by a session that calls this fixture, not by every
+    session vendorfake is installed into -- a real but modest saving,
+    recorded accurately rather than by the larger claim that does not hold.
+    Do not read this as licence to move the import back to module scope on
+    the theory that it "changes nothing" -- for this module in isolation it
+    still would.
     """
     from vendorfake.testing import unit
 
