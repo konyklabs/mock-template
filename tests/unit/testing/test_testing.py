@@ -208,6 +208,19 @@ def test_served_s_env_is_a_layer_over_the_inherited_environment_that_beats_it_an
         assert child.clock().now == datetime(2026, 6, 15, 12, 30, tzinfo=UTC)
 
 
+def test_served_refuses_a_seed_document_in_env_before_spawning_a_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review found that ``VENDORFAKE_SEED`` in the mapping made the child
+    hydrate from one document while ``.seed`` -- derived from the vendor's
+    constants, never from a document -- described another: a measured 401 on
+    ``.seed.auth``. Refused eagerly, and without a child ever being spawned."""
+    import vendorfake.testing as testing
+
+    monkeypatch.setattr(testing, "SERVE_COMMAND", (sys.executable, "-c", "raise SystemExit('spawned')"))
+    with pytest.raises(ValueError, match="VENDORFAKE_SEED"):  # noqa: SIM117 - the `with served(...)` is the subject
+        with served("square", "no-faults", env={"VENDORFAKE_SEED": "/nope/other.seed.json"}) as driver:
+            pytest.fail(f"served() yielded {driver!r} with a seed document in env=")
+
+
 def test_served_s_env_credential_override_reaches_the_child_and_the_seed_alike(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

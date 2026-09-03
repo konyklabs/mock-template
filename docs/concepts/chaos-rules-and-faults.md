@@ -166,8 +166,10 @@ test pays changes run to run, which reads as a flake and is not one.
 
 `POST /__unit/state/reset` — [`driver.reset()`](driver.md#chaos-and-reset)
 — re-hydrates the store from the seed document with no restart, putting
-the seeded single-use token back. The per-test fixture is three calls on
-the way in and one on the way out:
+the seeded single-use token back; it clears the request log and the
+journal with it, so `assert_called(..., times=1)` counts only this test's
+calls. Armed chaos rules are the one thing it leaves in place. The per-test
+fixture is two calls on the way in and one on the way out:
 
 ```python
 import pytest
@@ -182,18 +184,25 @@ def clover():
 
 @pytest.fixture(autouse=True)
 def fresh(clover):
-    clover.reset()  # the seed scenario again: the single-use token is back
+    clover.reset()  # the seed scenario again: single-use token back, request log empty
     clover.reset_chaos()  # no rule from a previous test, whatever order ran
-    clover.clear_requests()  # assert_called counts only this test's calls
     yield
     clover.reset_chaos()  # a rule this test leaked cannot blame the next one
 ```
 
-The same three calls over HTTP, for a suite in another language or a
-container: `POST /__unit/state/reset`, `POST /__unit/chaos/reset`,
-`DELETE /__unit/requests`. `reset()` also drops every webhook subscriber a
-test registered — subscribe *after* the reset, not in a session fixture
-above it ([Driver → Chaos and reset](driver.md#chaos-and-reset)).
+The same two calls over HTTP, for a suite in another language or a
+container: `POST /__unit/state/reset` and `POST /__unit/chaos/reset`
+(`DELETE /__unit/requests` — `clear_requests()` — draws a line under setup
+*without* a reset). `reset()` also drops every webhook subscriber a test
+registered — subscribe *after* the reset, not in a session fixture above
+it ([Driver → Chaos and reset](driver.md#chaos-and-reset)).
+
+**A virtual clock is not rewound.** `reset()` re-hydrates against the
+clock as it stands, and no control-plane route sets it back, so every
+absolute expiry in the seed moves forward by whatever an earlier test
+advanced — an assertion on an exact `expires_at` passes or fails on test
+order. On a shared [virtual clock](clock.md), assert relative to `clock()`
+or give the advancing test its own unit.
 
 The [pytest plugin](../pytest-plugin.md)'s `vendorfake_unit` is
 function-scoped for exactly this reason: a fresh in-process unit costs

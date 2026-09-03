@@ -488,9 +488,11 @@ class Driver(Generic[SeedT]):
         unrelated to what it tests -- and under random ordering, which test
         that is changes run to run. A session-scoped :func:`served` or
         :func:`unit` therefore needs ``reset()`` in a per-test fixture, with
-        :meth:`reset_chaos` and :meth:`clear_requests` beside it; the recipe
-        is "Sharing one unit across tests" in
-        ``docs/concepts/chaos-rules-and-faults.md``.
+        :meth:`reset_chaos` beside it (rules are the one thing a reset leaves
+        armed); the request log and the journal are cleared by the reset
+        itself, so :meth:`clear_requests` is for drawing a line *without*
+        one. A virtual clock is not rewound -- see the recipe, "Sharing one
+        unit across tests" in ``docs/concepts/chaos-rules-and-faults.md``.
 
         Everything a test created goes, **including subscribers registered
         through the control plane or the vendor API**: the store is cleared
@@ -1241,14 +1243,22 @@ def _served(
     a served child stands in for a vendor and has to be reachable from
     whatever ``PATH``, locale and proxy settings the shell provides, so
     inheriting is the only sane default and the mapping is a delta on it.
-    Every ``VENDORFAKE_*`` variable the child's ``load_profile`` reads goes
-    through here -- ``VENDORFAKE_CLOCK=virtual``, ``VENDORFAKE_CAPABILITIES``
-    as an absolute list or a delta on the profile's, a ``VENDORFAKE_VENDOR_*``
-    credential override -- with one exception: ``VENDORFAKE_PROFILE`` is never consulted,
-    because ``profile`` is a plain ``str = "full"`` passed to the child as an
-    explicit ``--profile`` that wins over the variable. There is still no
-    ``capabilities=`` parameter; resolve a capability request to a profile
-    name by hand (or via :func:`unit`) before passing it as ``profile=``.
+    ``VENDORFAKE_CLOCK=virtual``, ``VENDORFAKE_CAPABILITIES`` (an absolute
+    list or a delta on the profile's), a ``VENDORFAKE_VENDOR_*`` credential
+    override, the webhook and request-log variables: all reach the child
+    through here. Five do not, and an entry for them is silently beaten
+    rather than refused. ``VENDORFAKE_PROFILE``, ``VENDORFAKE_HOST``,
+    ``VENDORFAKE_PORT`` and ``VENDORFAKE_LOG_LEVEL`` are the four things this
+    function passes to the child as explicit flags (``profile=``, ``host=``,
+    ``port=``, ``log_level=``), and the CLI prefers a flag to the variable;
+    use the parameter. ``VENDORFAKE_TRANSPORT`` is ignored by ``serve``,
+    which only ever binds HTTP. ``VENDORFAKE_SEED`` is the one entry that is
+    refused (``ValueError``), because the seed handed back on ``.seed`` is
+    derived from the vendor's module constants, not read from a document, and
+    could not follow an alternate one -- the child would answer with tokens
+    the seed does not carry. There is still no ``capabilities=`` parameter;
+    resolve a capability request to a profile name by hand (or via
+    :func:`unit`) before passing it as ``profile=``.
 
     Both pipes are read on a daemon thread for the life of the child, so a
     child that logs more than the pipe buffers cannot block mid-test, and
@@ -1360,6 +1370,19 @@ def _served(
     if clock_start is not None:
         layer["VENDORFAKE_CLOCK_START"] = _clock_start_env_value(clock_start)
     layer.update(env or {})
+    # Refused here, before the child exists, rather than discovered as a 401
+    # three assertions later: the parent-side `resolved_seed` below comes from
+    # `seed_for`, which derives every id and token from the vendor's module
+    # constants and never reads the document `VENDORFAKE_SEED` points at, so
+    # the child would hydrate from one scenario while `.seed` described
+    # another. Review caught this with a measured 401 on `.seed.auth` against
+    # a child seeded from an alternate file.
+    if "VENDORFAKE_SEED" in layer:
+        raise ValueError(
+            "served(env=...) cannot carry VENDORFAKE_SEED: the .seed handed back is derived from the vendor's "
+            "constants, not from a seed document, and would not describe the child. Use a profile whose "
+            "document points at the seed you want, and pass it as profile=."
+        )
     vendor_env = {key: value for key, value in {**os.environ, **layer}.items() if key.startswith(ENV_VENDOR_PREFIX)}
     loaded = load_profile(
         profile_dir=definition.profile_dir,

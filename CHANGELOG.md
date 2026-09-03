@@ -15,14 +15,17 @@ the 0.2 gate approval (konyklabs/roadmap#99).
   and the parent-resolved `.seed` reads the same `VENDORFAKE_VENDOR_*` layer
   so its credentials agree with the child's. Two differently-seeded children
   can now run in one process with nothing written to `os.environ`, which
-  makes them safe under `pytest-xdist`. `VENDORFAKE_PROFILE` in the mapping
-  is never consulted (`profile=` is passed to the child explicitly); there is
-  still no `capabilities=`. Additive — a call without `env=` behaves as
-  before (#102, item 20).
+  makes them safe under `pytest-xdist`. Entries for what `served()` passes
+  as a flag (`VENDORFAKE_PROFILE`, `VENDORFAKE_HOST`, `VENDORFAKE_PORT`,
+  `VENDORFAKE_LOG_LEVEL`) are beaten by the flag; a `VENDORFAKE_SEED` entry
+  is refused before the child is spawned, since `.seed` could not describe
+  it; there is still no `capabilities=`. Additive — a call without `env=`
+  behaves as before (#102, item 20).
 * **docs:** *Sharing one unit across tests* in `docs/concepts/chaos-rules-and-faults.md`:
   a session-scoped `served()` or `unit()` against a vendor with single-use
   state (Clover's refresh rotation) needs `reset()` per test, with the
-  three-call fixture; linked from the served binding, the driver's reset
+  fixture, what a reset clears (the request log too) and what it does not
+  (armed rules, a virtual clock); linked from the served binding, the driver's reset
   bullet, the Playwright and compose recipes and the pytest-plugin page, and
   from `Driver.reset()`'s and `served()`'s own docstrings (#102, item 21).
 * **testing:** `seed.token` — the seeded credential a consumer *stores* per
