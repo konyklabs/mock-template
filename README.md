@@ -274,6 +274,60 @@ header together, because a restaurant-scoped call needs both.
 (`sandbox.dev.clover.com`) and the API host (`apisandbox.dev.clover.com`). The
 unit serves both on one origin, so point both settings at it.
 
+### Discovering profiles and routes
+
+Find a profile name or a route path by code, not by listing a vendor
+package in a scratch clone:
+
+```python
+from vendorfake.registry import available_profiles, routes
+from vendorfake.testing import unit
+from vendorfake.toast import paths
+
+for profile in available_profiles("toast"):
+    print(profile.name, profile.capabilities)
+# oauth-only ('auth', 'chaos')
+# orders-only ('orders', 'payments', 'menus', 'config', 'restaurants', 'partners', 'stock', 'chaos')
+# ...
+
+for route in routes("square", profile="full"):
+    if route.operation_id == "ObtainToken":
+        print(route.method, route.path)  # POST /oauth2/token
+
+with unit("toast") as driver:
+    driver.path_for("Login")  # /authentication/v1/authentication/login
+    driver.route_for("Login").capability  # 'auth'
+
+print(paths.LOGIN)  # /authentication/v1/authentication/login, the same string
+```
+
+Every vendor ships an `<vendor>.paths` module (`vendorfake.square.paths`,
+`vendorfake.clover.paths`, `vendorfake.toast.paths`) with one `UPPER_SNAKE`
+constant per route carrying an `operation_id` — `paths.OBTAIN_TOKEN`,
+`paths.REFRESH_TOKEN`, `paths.LOGIN` — kept honest against the router by
+`tests/unit/test_paths_drift.py` in this repository, so a constant can never
+name a path the unit does not actually serve.
+
+`profile=` and `capabilities=` are two different ways to say which surface a
+unit should start with — passing both is a `ValueError`. `capabilities=`
+takes either a vendor's own capability names (`"oauth"`, `"order-lifecycle"`)
+or the four neutral roles every vendor maps the same way — `auth`, `orders`,
+`webhooks`, `chaos` — and resolves to the narrowest shipped profile that is a
+superset of the request, or `full` plus that exact set when no shipped
+profile qualifies:
+
+```python
+with unit("toast", capabilities=["auth"]) as driver:  # -> profile "oauth-only"
+    ...
+with unit("square", capabilities=["oauth", "payments"]) as driver:  # -> "no-faults"
+    ...
+```
+
+`GET /__unit/info` echoes both facts back — `profile` (which one was
+started) and `requested_capabilities` (what was actually asked for, when
+`capabilities=` was used) — so a consumer never has to guess which one a
+running unit resolved to.
+
 ### Rehearsing failures
 
 Faults are rules, not dice: same seed, same profile, same faults every run.

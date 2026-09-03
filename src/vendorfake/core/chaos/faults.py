@@ -69,6 +69,7 @@ __all__ = [
     "AUTH_PHASE_FAULTS",
     "DEFAULT_RETRY_AFTER_SECONDS",
     "DEFAULT_TIMEOUT_DELAY_MS",
+    "FAULT_DESCRIPTIONS",
     "FAULT_PARAM_KEYS",
     "FaultPhase",
     "apply_request_fault",
@@ -105,6 +106,30 @@ are checkable against each other rather than merely written next to each other.
 The ``webhook.*`` rows are the delivery-scope faults, whose implementations
 live with the dispatcher; their keys are declared here so the catalogue has one
 owner."""
+
+FAULT_DESCRIPTIONS: Mapping[str, str] = {
+    "rate_limit": "Refuse the request with 429 rate_limited, naming how many seconds to wait before retrying.",
+    "server_error": "Refuse the request with 500 internal, an injected failure with no cause of its own.",
+    "unavailable": "Refuse the request with 503 unavailable, as if this vendor's service were down.",
+    "timeout": "Stall for delay_ms, then refuse with 504 timeout -- a real sleep on a real clock, a jump on a virtual one.",
+    "token_expiry": "Refuse an otherwise-valid request with 401 token_expired, after authentication succeeds and "
+    "before the handler runs, without changing the stored token.",
+    "webhook.duplicate": "Delivers one event copies+1 times with the same event_id, so a consumer can rehearse "
+    "deduplication.",
+    "webhook.delay": "Holds a delivery for delay_ms before sending it, without changing its retry count.",
+    "webhook.out_of_order": "Holds one delivery until the following event has gone out, so two events arrive "
+    "out of the order they were produced in.",
+    "webhook.drop_ack": "Delivers the event, then discards the subscriber's response so the dispatcher retries "
+    "an event the subscriber actually received.",
+    "webhook.drop": "Never sends the delivery at all -- indistinguishable from an unreachable subscriber.",
+}
+"""One line per built-in fault, keyed exactly as :data:`FAULT_PARAM_KEYS`.
+
+Published by ``vendorfake faults`` and reachable at
+:func:`vendorfake.core.chaos.rules.BUILTIN_FAULTS` (whose ``as_json`` already
+carries the catalogue's parameter names); this is the prose half, kept beside
+the parameter table rather than duplicated into the CLI so the two can never
+name a fault the other one has never heard of."""
 
 
 def _stall(clock: Clock, delay_ms: float) -> None:

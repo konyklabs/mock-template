@@ -245,6 +245,15 @@ class ResolvedConfig(BaseModel):
     #: process environment on its own. The reference's ``createLogger``
     #: defaulted straight from ``process.env``, which is the leak this closes.
     log_level: str = "info"
+    #: What ``registry.create_unit(capabilities=[...])`` was asked for, before
+    #: role translation and profile selection -- ``None`` for a unit started
+    #: by ``profile=`` the ordinary way. Not set by :func:`resolve_config`;
+    #: the registry lays it over the resolved config after choosing a profile,
+    #: because the request is a fact about *how a unit was asked for* and this
+    #: module never sees a role name. Published at ``/__unit/info`` so a
+    #: consumer who resolved a profile from capabilities can confirm what was
+    #: actually requested, not just which profile it landed on.
+    requested_capabilities: tuple[str, ...] | None = None
 
 
 def unit_error_from_validation(exc: ValidationError, *, source: str | None = None) -> UnitError:

@@ -1122,3 +1122,95 @@ none may be FAIL, and the report must be red. What C11 discriminates is a
 is against a foreign implementation reached over ``--base-url``, which has no
 Python startup assertion in front of it.
 """
+
+
+# ---------------------------------------------------------------------------
+# C24 -- every vendor maps all four capability roles to a declared capability.
+# ---------------------------------------------------------------------------
+
+
+def _point_the_auth_role_at_an_undeclared_capability(inner: VendorDefinition) -> VendorDefinition:
+    broken = {**dict(inner.roles), "auth": "not-a-declared-capability"}
+    return VendorOverlay(inner, roles=broken)
+
+
+register(
+    Mutant(
+        id="M32",
+        name="role-mapped-to-an-undeclared-capability",
+        defect="VendorDefinition.roles['auth'] names a capability this vendor never declares.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C24"}),
+        also_trips=frozenset({"C25"}),
+        cascade=(
+            "C25 resolves every role name through the same published vendor.roles mapping C24 checks. "
+            "On the 'oauth-only' profile it asks whether the capability role 'auth' resolves to is "
+            "enabled, and an undeclared capability can never be enabled -- so the same corrupted "
+            "entry that fails C24's completeness check also fails C25's formula for this one profile."
+        ),
+        vendor=_point_the_auth_role_at_an_undeclared_capability,
+        profiles=("oauth-only",),
+    )
+)
+"""Stream C's registry.create_unit(capabilities=[...]) translates a role name
+through this exact mapping before it ever reaches a profile; a vendor that
+forgot to keep an entry pointed at something real would make that resolution
+raise on a capability that can never be enabled, silently, for a caller who
+never sees `roles` at all. Nothing about ordinary request handling would
+notice -- no route's own capability is spelled 'auth' -- which is why this
+mutant reaches the vendor definition rather than the route table.
+"""
+
+
+# ---------------------------------------------------------------------------
+# C25 -- the profile-name contract.
+# ---------------------------------------------------------------------------
+
+
+def _report_chaos_disabled(document: dict[str, Any]) -> dict[str, Any]:
+    rows = [
+        dict(row) if row.get("name") != "chaos" else {**dict(row), "enabled": False}
+        for row in document.get("capabilities", ())
+    ]
+    return {**document, "capabilities": rows}
+
+
+register(
+    Mutant(
+        id="M33",
+        name="no-chaos-profile-reports-its-chaos-role-disabled",
+        defect=(
+            "GET /__unit/capabilities reports the capability role 'chaos' as disabled on the "
+            "'no-chaos' profile -- exactly the state the profile-name contract forbids for a "
+            "profile whose whole point is that request-scope faults stay live and only delivery "
+            "faults are switched off."
+        ),
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C25"}),
+        also_trips=frozenset({"C14"}),
+        cascade=(
+            "C14 computes its own 'everything currently enabled' baseline from GET /__unit/capabilities "
+            "(chaos/checks.py::in_band_trigger_respects_the_capability_gate: `original = [row.name for row "
+            "in env.capabilities() if row.enabled]`). With chaos already reported disabled, `toggled = "
+            "gate in original` is False, so C14 skips its own `set_capabilities` call entirely -- the real "
+            "registry is never actually toggled -- and then probes the in-band trigger expecting it gated. "
+            "It fires for real, because chaos was never truly off, and C14 reports that as its own defect. "
+            "Measured, not assumed: this is the exact failure the mutant run against this fixture showed "
+            "before this line was added."
+        ),
+        # C08 and C12 both declare Requires(chaos=True); their precondition check
+        # (conformance/env.py::unmet_precondition) reads the same lying document,
+        # so both correctly report the capability as off and SKIP rather than run
+        # -- an accurate consequence of the lie, not a second undiscovered defect.
+        skips_everywhere=frozenset({"C08", "C12"}),
+        control=replace_control_route("GET", "/__unit/capabilities", rewrite_document(_report_chaos_disabled)),
+        profiles=("no-chaos",),
+    )
+)
+"""'no-chaos' reads like it should mean 'no chaos at all' and does not: it
+switches off only delivery-scope faults (`webhooks.chaos`), which is a real
+distinction from `no-faults` that a consumer can only trust if the name and
+the published capability state agree. This mutant breaks exactly that
+agreement, at the wire document C25 reads, without touching the vendor
+definition C24 checks or any route a request-handling contract would notice.
+"""

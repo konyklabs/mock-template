@@ -228,9 +228,13 @@ def control_plane_routes(
                             "name": ctx.vendor.name,
                             "display_name": ctx.vendor.display_name,
                             "api_version": ctx.vendor.api_version,
+                            "roles": dict(ctx.vendor.roles),
                         }
                     ),
                     "profile": ctx.config.profile,
+                    "requested_capabilities": (
+                        None if ctx.config.requested_capabilities is None else list(ctx.config.requested_capabilities)
+                    ),
                     "capabilities": [view.as_json() for view in ctx.capabilities.view()],
                     "not_supported": dict(ctx.vendor.not_supported),
                     "auth": dict(ctx.vendor.auth.describe()),

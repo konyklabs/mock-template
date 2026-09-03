@@ -53,7 +53,7 @@ from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.logging import JsonLogger
 from vendorfake.core.webhooks.models import matches_event_type
 from vendorfake.core.webhooks.sink import DeliverySink
-from vendorfake.registry import create_unit
+from vendorfake.registry import RouteInfo, create_unit
 from vendorfake.testing.receiver import Delivery, WebhookReceiver, webhook_receiver
 from vendorfake.testing.seeds import CloverSeed, SquareSeed, ToastSeed, seed_for
 from vendorfake.testing.transport import UnitTransport
@@ -66,6 +66,7 @@ __all__ = [
     "CloverSeed",
     "Delivery",
     "Driver",
+    "RouteInfo",
     "ServedUnit",
     "SquareSeed",
     "StartedUnit",
@@ -117,6 +118,37 @@ class Driver:
 
     def info(self) -> dict[str, Any]:
         return self._json(self.client.get("/__unit/info"))
+
+    def _route_table(self) -> list[dict[str, Any]]:
+        return list(self._json(self.client.get("/__unit/routes"))["routes"])
+
+    def route_for(self, operation_id: str) -> RouteInfo:
+        """The route named ``operation_id``, discovered from ``GET
+        /__unit/routes`` -- works over any binding this :class:`Driver`
+        happens to be, in-process or served, because it never reaches for a
+        ``Unit`` object.
+
+        Raises ``KeyError`` naming every operation id this unit actually
+        registers, so a typo is a startup failure that lists the real ones
+        rather than a ``KeyError`` with nothing to go on.
+        """
+        for row in self._route_table():
+            if row.get("operation_id") == operation_id:
+                return RouteInfo(
+                    method=str(row["method"]),
+                    path=str(row["path"]),
+                    operation_id=operation_id,
+                    capability=str(row["capability"]),
+                    summary=None if row.get("summary") is None else str(row["summary"]),
+                    internal=bool(row.get("internal", False)),
+                )
+        known = sorted(str(row["operation_id"]) for row in self._route_table() if row.get("operation_id"))
+        raise KeyError(f"no route with operation_id {operation_id!r}. Known: {known}")
+
+    def path_for(self, operation_id: str) -> str:
+        """``self.route_for(operation_id).path``, for the common case that
+        only wants the path template."""
+        return self.route_for(operation_id).path
 
     def deliveries(self) -> list[dict[str, Any]]:
         """Every webhook delivery attempt the unit made, oldest first."""
@@ -298,14 +330,21 @@ def _seed_of(built: Unit) -> SquareSeed | CloverSeed | ToastSeed | None:
 @contextmanager
 def unit(
     vendor: str,
-    profile: str = "full",
+    profile: str | None = None,
     *,
+    capabilities: Sequence[str] | None = None,
     sink: DeliverySink | None = None,
     env: Mapping[str, str] | None = None,
     logger: Logger | None = None,
     seed: int | None = None,
 ) -> Iterator[StartedUnit]:
     """A unit in this process, stopped however the block ends.
+
+    ``profile`` defaults to ``None``, which resolves to ``full`` -- the same
+    default it has always had -- unless ``capabilities`` is given instead;
+    see :func:`~vendorfake.registry.create_unit` for exactly how a
+    capability request resolves to a profile, and note that supplying both
+    ``profile`` and ``capabilities`` is a ``ValueError``.
 
     ``sink`` defaults to real HTTP delivery, so a subscribed
     :func:`webhook_receiver` sees signed bytes; pass
@@ -337,6 +376,7 @@ def unit(
     built = create_unit(
         vendor=vendor,
         profile=profile,
+        capabilities=capabilities,
         env=environ,
         sink=sink,
         logger=JsonLogger("warn") if logger is None else logger,

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import vendorfake
-from tests.fakes import FakeVendor
+from tests.fakes import FakeVendor, capability
 from vendorfake.registry import VENDOR_ENV_VAR, available_vendors, create_unit, resolve_vendor
 
 
@@ -138,3 +138,142 @@ def test_the_vendor_env_var_is_not_in_the_profile_loader_s_table() -> None:
     from vendorfake.core.config.profile import env_names
 
     assert VENDOR_ENV_VAR not in env_names()
+
+
+# ---------------------------------------------------------------------------
+# Discovery: profiles, routes, and capabilities=.
+# ---------------------------------------------------------------------------
+
+
+def test_available_profiles_names_match_the_packaged_files_on_disk() -> None:
+    """Read independently through ``importlib.resources`` rather than the
+    ``Path.glob`` ``available_profiles`` itself uses, so this would still
+    catch a discovery bug that pointed at the wrong directory and happened to
+    glob it consistently with itself."""
+    from importlib import resources
+
+    from vendorfake.registry import available_profiles
+
+    found = available_profiles("toast")
+    assert len(found) == 6
+    on_disk = {
+        entry.name.removesuffix(".json")
+        for entry in (resources.files("vendorfake.toast") / "profiles").iterdir()
+        if entry.name.endswith(".json")
+    }
+    assert {row.name for row in found} == on_disk
+    assert all(row.vendor == "toast" for row in found)
+    assert list(found) == sorted(found, key=lambda row: row.name)
+
+
+def test_available_profiles_reads_the_same_schema_load_profile_validates_against() -> None:
+    """Every field a profile document may carry is present or ``None`` --
+    never absent -- because a caller reads a dataclass, not a dict that might
+    be missing a key on a profile that never set one."""
+    from vendorfake.registry import available_profiles
+
+    row = next(p for p in available_profiles("square") if p.name == "oauth-only")
+    assert row.capabilities == ("oauth", "chaos")
+    assert row.seed == "seed/default.seed.json"
+    assert "OAuth" in row.summary
+
+
+def test_available_profiles_refuses_an_unknown_vendor_the_same_way_resolve_vendor_does() -> None:
+    from vendorfake.registry import available_profiles
+
+    with pytest.raises(ValueError) as caught:
+        available_profiles("nosuchvendor")
+    assert "no vendor named 'nosuchvendor'" in str(caught.value)
+
+
+def test_routes_contains_the_documented_operation_and_agrees_with_path_for() -> None:
+    from vendorfake.registry import routes
+    from vendorfake.testing import unit as start_unit
+
+    table = routes("square")
+    row = next(r for r in table if r.operation_id == "ObtainToken")
+    assert row.path == "/oauth2/token"
+    assert row.method == "POST"
+    assert row.capability == "oauth"
+    assert row.internal is False
+
+    with start_unit("square") as driver:
+        assert driver.path_for("ObtainToken") == "/oauth2/token"
+        assert driver.route_for("ObtainToken").capability == "oauth"
+
+
+def test_route_for_an_unknown_operation_id_lists_the_ones_that_exist() -> None:
+    from vendorfake.testing import unit as start_unit
+
+    with start_unit("square") as driver:
+        with pytest.raises(KeyError) as caught:
+            driver.route_for("NoSuchOperation")
+        assert "ObtainToken" in str(caught.value)
+
+
+def test_capabilities_and_profile_together_is_a_value_error() -> None:
+    with pytest.raises(ValueError) as caught:
+        create_unit(vendor="square", profile="full", capabilities=["oauth"])
+    assert "capabilities" in str(caught.value)
+    assert "profile" in str(caught.value)
+
+
+def test_capabilities_translates_a_role_name_into_this_vendors_own_and_picks_the_narrowest_profile() -> None:
+    unit = create_unit(vendor="toast", capabilities=["auth"])
+    try:
+        assert unit.context.config.profile == "oauth-only"
+        assert unit.context.config.requested_capabilities == ("auth",)
+    finally:
+        unit.stop()
+
+
+def test_capabilities_picks_the_narrowest_shipped_superset_profile() -> None:
+    unit = create_unit(vendor="square", capabilities=["oauth", "payments"])
+    try:
+        # Square ships no profile naming exactly {oauth, payments}; `no-faults`
+        # is the smallest shipped profile that is a superset of it (`no-chaos`
+        # and `full` are supersets too, but larger), which is what the DoD's
+        # "narrowest superset profile" example names.
+        assert unit.context.config.profile == "no-faults"
+        assert set(unit.context.config.capabilities) >= {"oauth", "payments"}
+        assert unit.context.config.requested_capabilities == ("oauth", "payments")
+    finally:
+        unit.stop()
+
+
+def test_capabilities_falls_back_to_full_and_an_absolute_list_when_nothing_shipped_matches(tmp_path: Path) -> None:
+    """The other half of the DoD's "or": a vendor whose shipped profiles do
+    not include one that is a superset of the request at all -- unreachable
+    with the three built-in vendors, whose ``full`` profile enables every
+    capability by definition and is therefore always a superset of any valid
+    request. A fixture vendor with a smaller `full` demonstrates the branch
+    directly rather than leaving it merely plausible.
+    """
+    directory = tmp_path / "profiles"
+    directory.mkdir()
+    (directory / "full.json").write_text(json.dumps({"capabilities": ["orders"]}), encoding="utf-8")
+    (directory / "narrow.json").write_text(json.dumps({"capabilities": ["chaos"]}), encoding="utf-8")
+    vendor = FakeVendor(
+        profile_dir=directory,
+        base_dir=tmp_path,
+        capabilities=(capability("orders"), capability("chaos", kind="behavior")),
+        roles={"auth": "orders", "orders": "orders", "webhooks": "webhooks", "chaos": "chaos"},
+    )
+    unit = create_unit(vendor=vendor, capabilities=["orders", "chaos"])
+    try:
+        # Neither `full` ({orders}) nor `narrow` ({chaos}) is a superset of
+        # {orders, chaos}, so resolution falls back to `full` plus the
+        # absolute list through VENDORFAKE_CAPABILITIES.
+        assert unit.context.config.profile == "full"
+        assert set(unit.context.config.capabilities) == {"orders", "chaos"}
+        assert unit.context.config.requested_capabilities == ("orders", "chaos")
+    finally:
+        unit.stop()
+
+
+def test_a_unit_started_by_profile_reports_no_requested_capabilities() -> None:
+    unit = create_unit(vendor="square", profile="full")
+    try:
+        assert unit.context.config.requested_capabilities is None
+    finally:
+        unit.stop()

@@ -71,6 +71,23 @@ def _add_unit_flags(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_json_flag(parser: argparse.ArgumentParser) -> None:
+    """``--json``, honoured by every subcommand that describes something and
+    returns rather than serving or forwarding to another CLI.
+
+    ``serve`` and ``conformance`` do not carry it: a running server has no
+    single document to print, and ``conformance`` forwards its arguments
+    verbatim to a runner with its own reporting format (``--strict`` and a
+    text or JSON report of its own) -- a second ``--json`` at this level
+    would be a second, disagreeing answer to what that flag means.
+    """
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Machine output: one JSON document on stdout, nothing else on stdout.",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG,
@@ -100,6 +117,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     info = subcommands.add_parser("info", help="Print what a unit would be, as JSON, without serving it.")
     _add_unit_flags(info)
+    _add_json_flag(info)  # already the only thing this prints; accepted so a caller need not special-case it
 
     openapi = subcommands.add_parser("openapi", help="Print the OpenAPI 3.1 document for a unit's route table.")
     _add_unit_flags(openapi)
@@ -108,8 +126,42 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Omit the /__unit/* control plane, describing only the vendor surface.",
     )
+    _add_json_flag(openapi)  # ditto: already the only thing this prints
 
-    subcommands.add_parser("vendors", help="List the vendors that would resolve here.")
+    vendors = subcommands.add_parser("vendors", help="List the vendors that would resolve here.")
+    _add_json_flag(vendors)
+
+    profiles = subcommands.add_parser("profiles", help="List the profiles a vendor ships.")
+    profiles.add_argument(
+        "--vendor",
+        default=None,
+        help="Vendor to describe. Defaults to $VENDORFAKE_VENDOR; with exactly one vendor installed that "
+        "one is used, otherwise the command refuses and lists them.",
+    )
+    _add_json_flag(profiles)
+
+    routes = subcommands.add_parser("routes", help="List a vendor's route table.")
+    routes.add_argument(
+        "--vendor",
+        default=None,
+        help="Vendor to describe. Defaults to $VENDORFAKE_VENDOR; with exactly one vendor installed that "
+        "one is used, otherwise the command refuses and lists them.",
+    )
+    routes.add_argument(
+        "--profile",
+        default=None,
+        help="Profile to build the table against. The table itself does not vary by profile; see the "
+        "docstring of vendorfake.registry.routes. Defaults to $VENDORFAKE_PROFILE, then 'full'.",
+    )
+    routes.add_argument(
+        "--internal",
+        action="store_true",
+        help="Include the /__unit/* control plane. Omitted by default: this is the vendor surface.",
+    )
+    _add_json_flag(routes)
+
+    faults = subcommands.add_parser("faults", help="List the built-in fault catalogue.")
+    _add_json_flag(faults)
 
     conformance = subcommands.add_parser("conformance", help="Run the conformance contracts against a unit.")
     conformance.add_argument("rest", nargs=argparse.REMAINDER, help="Arguments forwarded to the conformance runner.")
@@ -140,6 +192,39 @@ def _env_int(env: Mapping[str, str], name: str) -> int | None:
         return int(raw)
     except ValueError:
         raise SystemExit(f"{PROG}: {name}={raw!r} is not an integer") from None
+
+
+def _resolve_vendor_name(args: argparse.Namespace, env: Mapping[str, str]) -> str:
+    """``--vendor``, then ``$VENDORFAKE_VENDOR``, then the sole installed
+    vendor when there is exactly one -- the same precedence ``create_unit``
+    resolves through its own vendor argument, reached here for a subcommand
+    that only needs a name and never builds a unit at all.
+    """
+    from vendorfake.registry import VENDOR_ENV_VAR, available_vendors
+
+    name = args.vendor or _env_str(env, VENDOR_ENV_VAR)
+    if name:
+        return name
+    offered = available_vendors()
+    if len(offered) == 1:
+        return offered[0]
+    listing = ", ".join(offered) if offered else "(none installed)"
+    raise SystemExit(f"{PROG}: needs a vendor: pass --vendor, or set {VENDOR_ENV_VAR}. Available: {listing}")
+
+
+def _table(rows: Sequence[Mapping[str, object]], columns: Sequence[str]) -> str:
+    """A minimal aligned table. No dependency earns its place for four columns."""
+    widths = [len(col) for col in columns]
+    for row in rows:
+        for index, col in enumerate(columns):
+            widths[index] = max(widths[index], len(str(row.get(col, ""))))
+
+    def line(values: Sequence[object]) -> str:
+        return "  ".join(str(value).ljust(width) for value, width in zip(values, widths, strict=True))
+
+    lines = [line(columns), line(["-" * width for width in widths])]
+    lines.extend(line([row.get(col, "") for col in columns]) for row in rows)
+    return "\n".join(lines)
 
 
 def _make_unit(
@@ -254,21 +339,139 @@ def _openapi(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> i
         unit.stop()
 
 
-def _vendors(out: TextIO) -> int:
+def _vendors(args: argparse.Namespace, out: TextIO) -> int:
     """List what would actually resolve, not what is declared.
 
     ``available_vendors`` filters through an importability check, so a name
     printed here is a name that will start. A list that advertised a vendor
     which then failed to import would be worse than no list.
     """
+    from vendorfake.core.util.json import dump_json
     from vendorfake.registry import available_vendors
 
     found = available_vendors()
     if not found:
         print(f"{PROG}: no vendors installed", file=sys.stderr)
         return 1
+    if args.json:
+        print(dump_json(list(found)).decode("utf-8"), file=out)
+        return 0
     for name in found:
         print(name, file=out)
+    return 0
+
+
+def _profiles(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
+    """List the profiles a vendor ships: ``vendorfake.registry.available_profiles``,
+    over the command line, so a consumer never has to list a package's
+    ``profiles/`` directory in a scratch clone to find a name."""
+    from vendorfake.core.util.json import dump_json
+    from vendorfake.registry import available_profiles
+
+    name = _resolve_vendor_name(args, env)
+    try:
+        found = available_profiles(name)
+    except ValueError as exc:
+        raise SystemExit(f"{PROG}: {exc}") from None
+    if args.json:
+        payload = [
+            {
+                "vendor": row.vendor,
+                "name": row.name,
+                "summary": row.summary,
+                "capabilities": list(row.capabilities),
+                "seed": row.seed,
+            }
+            for row in found
+        ]
+        print(dump_json(payload).decode("utf-8"), file=out)
+        return 0
+    print(
+        _table(
+            [{"name": row.name, "capabilities": ", ".join(row.capabilities), "summary": row.summary} for row in found],
+            ("name", "capabilities", "summary"),
+        ),
+        file=out,
+    )
+    return 0
+
+
+def _routes_cmd(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
+    """List a vendor's route table: ``vendorfake.registry.routes``, over the
+    command line. Internal (``/__unit/*``) routes are omitted unless
+    ``--internal`` is given -- this describes the vendor surface by default."""
+    from vendorfake.core.util.json import dump_json
+    from vendorfake.registry import routes as list_routes
+
+    name = _resolve_vendor_name(args, env)
+    profile = args.profile or _env_str(env, "VENDORFAKE_PROFILE") or "full"
+    try:
+        found = list_routes(name, profile)
+    except ValueError as exc:
+        raise SystemExit(f"{PROG}: {exc}") from None
+    if not args.internal:
+        found = tuple(row for row in found if not row.internal)
+    if args.json:
+        payload = [
+            {
+                "method": row.method,
+                "path": row.path,
+                "operation_id": row.operation_id,
+                "capability": row.capability,
+                "summary": row.summary,
+                "internal": row.internal,
+            }
+            for row in found
+        ]
+        print(dump_json(payload).decode("utf-8"), file=out)
+        return 0
+    print(
+        _table(
+            [
+                {
+                    "method": row.method,
+                    "path": row.path,
+                    "operation_id": row.operation_id or "",
+                    "capability": row.capability,
+                }
+                for row in found
+            ],
+            ("method", "path", "operation_id", "capability"),
+        ),
+        file=out,
+    )
+    return 0
+
+
+def _faults(args: argparse.Namespace, out: TextIO) -> int:
+    """List the built-in fault catalogue: name, parameters, one-line description.
+
+    Read from ``FAULT_PARAM_KEYS`` and ``FAULT_DESCRIPTIONS`` in
+    ``core/chaos/faults.py`` -- the same two mappings ``GET /__unit/chaos``
+    and ``GET /__unit/info`` publish each rule against, so this can never
+    name a fault the unit itself has never heard of.
+    """
+    from vendorfake.core.chaos.faults import FAULT_DESCRIPTIONS, FAULT_PARAM_KEYS
+    from vendorfake.core.util.json import dump_json
+
+    names = sorted(FAULT_PARAM_KEYS)
+    if args.json:
+        payload = [
+            {"name": name, "params": list(FAULT_PARAM_KEYS[name]), "description": FAULT_DESCRIPTIONS[name]}
+            for name in names
+        ]
+        print(dump_json(payload).decode("utf-8"), file=out)
+        return 0
+    print(
+        _table(
+            [
+                {"name": name, "params": ", ".join(FAULT_PARAM_KEYS[name]), "description": FAULT_DESCRIPTIONS[name]}
+                for name in names
+            ],
+            ("name", "params", "description"),
+        ),
+        file=out,
+    )
     return 0
 
 
@@ -320,7 +523,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "openapi":
         return _openapi(args, env, out)
     if args.command == "vendors":
-        return _vendors(out)
+        return _vendors(args, out)
+    if args.command == "profiles":
+        return _profiles(args, env, out)
+    if args.command == "routes":
+        return _routes_cmd(args, env, out)
+    if args.command == "faults":
+        return _faults(args, out)
     if args.command == "conformance":
         return _conformance(args)
 
