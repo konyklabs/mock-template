@@ -57,7 +57,10 @@ The ``unit_error`` sidecar is a deliberate, namespaced deviation from Square's
 wire format: a consumer that reads only ``errors`` never sees it, and a
 consumer debugging this fake gets the machine-readable reason without parsing
 prose. It is off with ``"error_sidecar": false`` in a profile's ``vendor``
-block.
+block. Since konyklabs/roadmap#71 it defaults to riding as headers rather than
+as a body key -- ``errors.sidecar`` in a profile, or ``VENDORFAKE_ERROR_SIDECAR``
+-- so this ``errors`` array is, by default, byte-for-byte what Square itself
+would send.
 """
 
 from __future__ import annotations
@@ -70,6 +73,7 @@ from vendorfake.core.kernel.shaping import (
     Provenance,
     assert_error_table_total,
     mechanism_headers,
+    sidecar_headers,
     unit_error_sidecar,
 )
 from vendorfake.core.kernel.types import (
@@ -397,14 +401,24 @@ class SquareErrorShaper:
                 )
             ]
         }
+        headers = mechanism_headers(err, retry_after_header=self._retry_after_header)
         if self._sidecar:
             # Since konyklabs/roadmap#35 the sidecar is the core's: `info`
             # keys come first and the reserved `kind`/`status_provenance` last
             # (so an info document cannot clobber them), and None-valued info
             # keys are compacted away. Before, this vendor wrote the reserved
             # keys first and kept None values. Nothing pinned either detail.
-            body["unit_error"] = unit_error_sidecar(err, mapping.provenance)
-        headers = mechanism_headers(err, retry_after_header=self._retry_after_header)
+            #
+            # Since konyklabs/roadmap#71, WHERE it rides is `ctx.config.errors.sidecar`,
+            # not this constructor: `errors.py` builds the one dict either way,
+            # and `core/kernel/shaping.py` is the only place that turns it into
+            # a body key or into headers.
+            sidecar = unit_error_sidecar(err, mapping.provenance)
+            mode = ctx.config.errors.sidecar
+            if mode != "headers":
+                body["unit_error"] = sidecar
+            if mode != "body":
+                headers.update(sidecar_headers(sidecar))
         return ShapedError(status=mapping.status, body=body, headers=headers)
 
     def not_found(self, req: UnitRequest, ctx: UnitContext, *, describing: bool = False) -> ShapedError:

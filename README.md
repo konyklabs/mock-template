@@ -242,6 +242,12 @@ standalone project — ten tests against Square and Clover, about a second —
 plus a Testcontainers variant against the image. `uv sync && uv run pytest`
 inside it.
 
+Installing vendorfake also registers a `pytest11` plugin of its own —
+`@pytest.mark.vendorfake(...)` and the `vendorfake_unit` /
+`vendorfake_webhook_receiver` fixtures, for a suite that would rather not
+write the fixtures above by hand. It does nothing until a test asks for one
+of those two; see [`docs/pytest-plugin.md`](docs/pytest-plugin.md).
+
 ### Vitest
 
 [`examples/vitest-consumer`](examples/vitest-consumer) is the same suite in
@@ -412,10 +418,17 @@ for every vendor:
 vendorfake-conformance --target vendorfake.testing.conformance:square_target
 vendorfake-conformance --target vendorfake.testing.conformance:clover_target --transport http --profile full
 vendorfake-conformance --target vendorfake.testing.conformance:toast_target --strict
-pytest --pyargs vendorfake.conformance --conformance-target vendorfake.testing.conformance:square_target
+pytest --pyargs vendorfake.conformance -p vendorfake.conformance.plugin \
+  --conformance-target vendorfake.testing.conformance:square_target
 
 vendorfake-conformance --base-url http://localhost:8080     # a unit already running, e.g. the container
 ```
+
+`-p vendorfake.conformance.plugin` loads the pytest form explicitly. Installing
+vendorfake no longer auto-loads it into every pytest run the way it did before
+0.2 — the `vendorfake` entry point it registers instead is the marker and
+fixtures under [`docs/pytest-plugin.md`](docs/pytest-plugin.md), which stay
+out of your way unless you ask for them.
 
 ## Quickstart
 
@@ -598,6 +611,20 @@ curl -s http://localhost:8080/v2/locations -H "Authorization: Bearer $SEED"
 # -> {"errors": [{"category": "AUTHENTICATION_ERROR", "code": "ACCESS_TOKEN_EXPIRED", ...
 ```
 
+`VENDORFAKE_CLOCK` alone leaves the start *instant* to wall-clock luck, so an
+`expires_at` assertion is deterministic within a run and different the next.
+`VENDORFAKE_CLOCK_START` (an RFC 3339 instant; requires `VENDORFAKE_CLOCK=virtual`,
+refused otherwise rather than silently switching modes) pins it, so two units
+started from the same value agree on every expiry to the second:
+
+```sh
+VENDORFAKE_CLOCK=virtual VENDORFAKE_CLOCK_START=2026-01-01T00:00:00Z vendorfake serve --vendor square
+```
+
+In Python, `unit("square", env={"VENDORFAKE_CLOCK": "virtual"}, clock_start="2026-01-01T00:00:00Z")`
+(a timezone-aware `datetime` works too), and `driver.clock()` reads the
+mode and the current instant back.
+
 The rest is discoverable, not memorised: `GET /__unit/routes` lists all 68
 routes with summaries, `GET /__unit/info` (or `vendorfake info --vendor square`)
 describes the whole unit — capabilities, auth, signing scheme, fault catalogue,
@@ -700,7 +727,8 @@ curl -s http://localhost:8080/v3/merchants/$M/orders/240Q4JZPXN595 -H "Authoriza
 
 A wrong bearer, an expired one, a token without the permission, or another
 merchant's `{mId}` all answer the same `{"message":"401 Unauthorized"}` —
-Clover documents no 403 — and the `unit_error` sidecar says which it was.
+Clover documents no 403 — and the `unit_error` sidecar (the
+`Vendorfake-Error-Kind` response header, by default) says which it was.
 
 ### The webhook an order fires
 
@@ -840,19 +868,27 @@ curl -s -X POST http://localhost:8080/orders/v2/orders/$O/void -H "Authorization
 ```
 
 Every refusal is the documented `ErrorMessage` — `status`, `code`,
-`message`, `requestId` and the documented nulls — with the documented status:
-a missing scope is a **403** (unlike Clover's 401), a malformed guid a 400
-with "The GUID was malformed", a 429 carries `X-Toast-RateLimit-By` /
-`-Remaining` / `-Reset` and `Retry-After`. The `unit_error` sidecar names the
-kind and whether the status is `documented` or `judgment`:
+`message`, `requestId` and the documented nulls, no more — with the
+documented status: a missing scope is a **403** (unlike Clover's 401), a
+malformed guid a 400 with "The GUID was malformed", a 429 carries
+`X-Toast-RateLimit-By` / `-Remaining` / `-Reset` and `Retry-After`. The
+`unit_error` sidecar names the kind and whether the status is `documented` or
+`judgment`; by default it rides as headers rather than in the body, so this
+`ErrorMessage` document is byte-for-byte what Toast itself would send:
 
 ```sh
 curl -si -X POST http://localhost:8080/orders/v2/prices -H 'Authorization: Bearer unit-seeded-toast-access-token-read-only' \
-  -H "Toast-Restaurant-External-ID: $R" -H 'Content-Type: application/json' -d "$BODY" | sed -n '1p;/^{/p'
+  -H "Toast-Restaurant-External-ID: $R" -H 'Content-Type: application/json' -d "$BODY" \
+  | grep -iE '^(HTTP|vendorfake-|\{)'
 # HTTP/1.1 403 Forbidden
+# vendorfake-error-kind: forbidden_scope
+# vendorfake-status-provenance: documented
+# vendorfake-error-info: {"missing":["orders:write"]}
 # {"status":403,"code":10010,"message":"The access token is missing the required permission(s): orders:write.",
 #  "messageKey":null,"fieldName":null,"link":null,"requestId":"ea47429c-b794-4c8d-9710-5ac5a15b0ab0",
-#  "developerMessage":null,"errors":[],"canRetry":null,"unit_error":{"missing":["orders:write"], ... "status_provenance":"documented"}}
+#  "developerMessage":null,"errors":[],"canRetry":null}
+# errors.sidecar: body (or both) in a profile, or VENDORFAKE_ERROR_SIDECAR=body, restores the
+# v0.1 "unit_error" body key instead (DEPRECATED -- see CHANGELOG.md).
 ```
 
 ### The webhooks an order fires

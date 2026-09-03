@@ -185,6 +185,7 @@ def make_config(
     chaos_strict_rules: bool = False,
     clock_mode: str = "real",
     clock_start: str | None = None,
+    error_sidecar: str = "headers",
     log_level: str = "error",
     schedule_ms: Sequence[int] = (),
     time_scale: float = 1.0,
@@ -197,6 +198,7 @@ def make_config(
     """A ``ResolvedConfig`` for a kernel test, with the knobs those tests move."""
     from vendorfake.core.config.models import (
         ClockSection,
+        ErrorsSection,
         RequestsSection,
         ResolvedChaos,
         ResolvedConfig,
@@ -219,6 +221,7 @@ def make_config(
             seed=chaos_seed, rules=tuple(dict(r) for r in chaos_rules), strict_rules=chaos_strict_rules
         ),
         clock=ClockSection(mode=clock_mode, start=clock_start),  # type: ignore[arg-type]
+        errors=ErrorsSection(sidecar=error_sidecar),  # type: ignore[arg-type]
         transport=TransportSection(),
         requests=RequestsSection() if request_log_capacity is None else RequestsSection(capacity=request_log_capacity),
         unmatched=UnmatchedSection(policy=unmatched),  # type: ignore[arg-type]

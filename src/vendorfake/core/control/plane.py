@@ -57,7 +57,11 @@ TWELVE ROUTES THE REFERENCE DOES NOT HAVE
 ``GET /__unit/errors``
     The vendor's shaping of every one of the twenty core error kinds, read over
     the wire instead of by importing the vendor's table -- each row with the
-    provenance of its status, from ``ErrorShaper.describe``.
+    provenance of its status, from ``ErrorShaper.describe``. Each row's own
+    ``headers`` already shows where the ``unit_error`` sidecar rides under the
+    active ``errors.sidecar`` (``"headers"`` by default since
+    konyklabs/roadmap#71) -- there is no separate contract to document here,
+    only this route's existing ``body``/``headers`` split reflecting it.
 ``GET /__unit/machines`` and ``POST /__unit/machines/probe``
     Declared lifecycles, with ``terminal`` derived from ``to == []`` in the
     machine itself, and a way to evaluate a transition without mutating
@@ -281,6 +285,13 @@ def control_plane_routes(
         rather than from the vendor's table, so a vendor that has forgotten one
         answers with the shape it produces for an unknown kind -- or fails
         loudly here -- instead of simply not appearing in the report.
+
+        Each row's ``body`` and ``headers`` are the vendor's shaping under
+        whatever ``errors.sidecar`` this unit was started with, so under the
+        default (``"headers"``, since konyklabs/roadmap#71) the ``unit_error``
+        sidecar shows up in ``headers`` and nowhere in ``body`` -- this route
+        was never body-only, it just used to have nothing to put in
+        ``headers`` before the sidecar moved there.
         """
         ctx = args.ctx
         # Provenance comes from `describe()`, never from the shaped body: the

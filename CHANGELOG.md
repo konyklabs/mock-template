@@ -40,8 +40,28 @@
 * **testing:** `Driver.requests()`, `Driver.assert_called(operation_id, times=,
   at_least=)` — whose failure lists every operation that *was* called, with
   counts — and `Driver.clear_requests()`.
+* **testing:** `VENDORFAKE_CLOCK_START` and `unit()`/`served()`'s `clock_start=`
+  pin the virtual clock's start instant, so two units built from the same
+  `clock_start` agree on every expiry to the second (konyklabs/roadmap#71).
+  Requires `clock.mode="virtual"`; setting it against a real clock is now a
+  loud refusal rather than a silent no-op. `Driver.clock() -> ClockInfo` reads
+  a unit's current mode and instant off `/__unit/info`.
+* **core:** the `unit_error` sidecar now defaults to riding as response
+  headers (`Vendorfake-Error-Kind`, `Vendorfake-Status-Provenance`,
+  `Vendorfake-Error-Field`, `Vendorfake-Error-Info`) instead of a
+  `unit_error` body key, so a vendor's default-profile body is byte-for-byte
+  what the real vendor would send (konyklabs/roadmap#71). `errors.sidecar`
+  (profile) / `VENDORFAKE_ERROR_SIDECAR` (env) selects `"headers"` (default),
+  `"body"` or `"both"`.
+* **testing:** a new, minimal `pytest11` entry point, `vendorfake` (module
+  `vendorfake.pytest`), replaces `vendorfake_conformance` as what installing
+  the wheel auto-loads into a consumer's pytest run. It exposes only the
+  `vendorfake` marker and the `vendorfake_unit` / `vendorfake_webhook_receiver`
+  fixtures -- no `--conformance-*` options, no session hook. The conformance
+  suite's pytest form still exists; run it with `-p vendorfake.conformance.plugin`
+  or `pytest --pyargs vendorfake.conformance` (konyklabs/roadmap#71).
 
-### Bug Fixes
+### Behaviour changes
 
 * **testing:** `Driver.seed` is no longer `Optional`. It was `None` for any
   vendor with no seed, which every consumer paid for with a guard on a value
@@ -51,7 +71,7 @@
   that publishes no seed must be driven with `create_unit()` rather than
   `unit()`.
 
-### ⚠ BREAKING CHANGES
+### Breaking changes
 
 * **testing:** an in-process unit (`unit()`) now raises
   `vendorfake.testing.UnmatchedRequest` — an `AssertionError` — for a request no
@@ -63,6 +83,17 @@
   raise: they stand in for the vendor and answer as the vendor would. A 404
   from a route that did match — an id that does not exist — is unaffected on
   every binding.
+* **core:** a consumer reading `unit_error` out of a vendor's response body
+  under the default profile no longer finds it there -- it is in the
+  `Vendorfake-*` headers instead. Set `"errors": {"sidecar": "body"}` in your
+  profile, or `VENDORFAKE_ERROR_SIDECAR=body`, to keep the v0.1 body key for
+  this minor release; `"both"` keeps both. The body-riding form is
+  **DEPRECATED** and may be removed in a future minor release.
+* **testing:** a consumer whose pytest run relied on the `vendorfake_conformance`
+  `pytest11` entry point being auto-loaded (its `--conformance-*` options, or
+  its `pytest_sessionfinish` cross-profile check) must now load it explicitly:
+  `-p vendorfake.conformance.plugin`. `vendorfake-conformance` (the CLI) and
+  `python -m vendorfake.conformance` are unaffected.
 
 ## 0.1.0 (2026-09-01)
 

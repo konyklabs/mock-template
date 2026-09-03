@@ -47,7 +47,7 @@ square = "vendorfake.square:VENDOR"
 toast = "vendorfake.toast:VENDOR"
 
 [project.entry-points.pytest11]
-vendorfake_conformance = "vendorfake.conformance.plugin"
+vendorfake = "vendorfake.pytest"
 
 [dependency-groups]
 dev = [

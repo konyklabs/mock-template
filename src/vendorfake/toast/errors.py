@@ -57,7 +57,10 @@ renumbers a scenario's guids and two units answer the same sequence.
 
 The ``unit_error`` sidecar is a deliberate, namespaced deviation from Toast's
 wire format, off with ``"error_sidecar": false`` in a profile's ``vendor``
-block.
+block. Since konyklabs/roadmap#71 it defaults to riding as headers rather than
+as a body key -- ``errors.sidecar`` in a profile, or ``VENDORFAKE_ERROR_SIDECAR``
+-- so this ``ErrorMessage`` document is, by default, exactly the documented
+shape above, no thirteenth key.
 """
 
 from __future__ import annotations
@@ -70,6 +73,7 @@ from vendorfake.core.kernel.shaping import (
     Provenance,
     assert_error_table_total,
     mechanism_headers,
+    sidecar_headers,
     unit_error_sidecar,
 )
 from vendorfake.core.kernel.types import (
@@ -279,9 +283,16 @@ class ToastErrorShaper:
             message=err.detail or mapping.message,
             requestId=CATALOGUE_REQUEST_ID if describing else self._request_ids.request_id(),
         ).wire()
-        if self._sidecar:
-            body["unit_error"] = unit_error_sidecar(err, mapping.provenance, field=err.field or None)
         headers = mechanism_headers(err, retry_after_header=self._retry_after_header)
+        if self._sidecar:
+            # WHERE it rides is `ctx.config.errors.sidecar`, not this
+            # constructor -- see core/kernel/shaping.py (konyklabs/roadmap#71).
+            sidecar = unit_error_sidecar(err, mapping.provenance, field=err.field or None)
+            mode = ctx.config.errors.sidecar
+            if mode != "headers":
+                body["unit_error"] = sidecar
+            if mode != "body":
+                headers.update(sidecar_headers(sidecar))
         if "retry-after" in headers:
             # The core's mechanism header, in the casing Toast documents.
             headers[RETRY_AFTER_HEADER] = headers.pop("retry-after")

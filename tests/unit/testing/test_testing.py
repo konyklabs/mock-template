@@ -11,17 +11,21 @@ import json
 import os
 import sys
 import time
+from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote, unquote
 
 import httpx
 import pytest
 
 from vendorfake.conformance.runner import resolve_target, run_check, select_checks
 from vendorfake.conformance.types import Outcome
+from vendorfake.core.kernel.types import UnitError
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.square.signer import verify_square_signature
 from vendorfake.testing import (
     LOG_LINES,
+    ClockInfo,
     CloverSeed,
     Driver,
     ServedUnit,
@@ -116,6 +120,56 @@ def test_the_profile_argument_wins_and_the_default_is_full() -> None:
     with unit("square", "oauth-only") as square:
         assert square.profile == "oauth-only"
         assert square.client.get("/v2/locations", headers=square.seed.auth).status_code == 501
+
+
+# ---------------------------------------------------------------------------
+# clock_start and Driver.clock() (konyklabs/roadmap#71, D1)
+# ---------------------------------------------------------------------------
+
+
+def test_driver_clock_reports_the_mode_and_the_pinned_instant() -> None:
+    with unit("square", env={"VENDORFAKE_CLOCK": "virtual"}, clock_start="2026-01-01T00:00:00Z") as square:
+        info = square.clock()
+        assert isinstance(info, ClockInfo)
+        assert info.mode == "virtual"
+        assert info.now == datetime(2026, 1, 1, tzinfo=UTC)
+        square.advance_clock(1_000)
+        assert square.clock().now == datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC)
+
+
+def test_clock_start_accepts_a_timezone_aware_datetime_the_same_as_a_string() -> None:
+    as_string = datetime(2026, 6, 15, 12, 30, tzinfo=UTC)
+    with unit("square", env={"VENDORFAKE_CLOCK": "virtual"}, clock_start=as_string) as square:
+        assert square.clock().now == as_string
+    with unit("square", env={"VENDORFAKE_CLOCK": "virtual"}, clock_start="2026-06-15T12:30:00Z") as square:
+        assert square.clock().now == as_string
+
+
+def test_a_naive_clock_start_datetime_raises_rather_than_guessing_local_time() -> None:
+    with (
+        pytest.raises(ValueError, match="no timezone"),
+        unit("square", env={"VENDORFAKE_CLOCK": "virtual"}, clock_start=datetime(2026, 1, 1)),
+    ):
+        pass  # pragma: no cover - the context manager never yields
+
+
+def test_clock_start_on_a_real_clock_refuses_rather_than_silently_switching_modes() -> None:
+    with pytest.raises(UnitError, match="virtual"), unit("square", clock_start="2026-01-01T00:00:00Z"):
+        pass  # pragma: no cover - the context manager never yields
+
+
+def test_served_s_clock_start_reaches_the_child_through_this_process_s_own_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`served` has no general ``env`` parameter (see its docstring): every
+    other ``VENDORFAKE_*`` variable already goes through this process's own
+    ``os.environ``, and ``clock_start`` is layered onto exactly that for the
+    child, so the mode still has to come from here."""
+    monkeypatch.setenv("VENDORFAKE_CLOCK", "virtual")
+    with served("square", "no-faults", clock_start="2026-01-01T00:00:00Z") as child:
+        info = child.clock()
+        assert info.mode == "virtual"
+        assert info.now == datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def test_a_memory_sink_captures_instead_of_delivering() -> None:
@@ -367,10 +421,16 @@ def test_no_internal_marker_reaches_a_wire_body_from_any_vendor() -> None:
         return []
 
     for vendor in available_vendors():
-        # `unmatched="vendor-404"`: this test's whole subject is the BODY of a
-        # real refusal, so it is one of the cases the strict default is not
-        # for -- it probes an unmodelled path deliberately.
-        with unit(vendor, unmatched="vendor-404") as driver:
+        # Two opt-outs, one for each stream that touched this test.
+        # `unmatched="vendor-404"` (konyklabs/roadmap#72): this test's whole
+        # subject is the BODY of a real refusal, so it is one of the cases the
+        # strict default is not for -- it probes an unmodelled path
+        # deliberately. `errors.sidecar=both` (konyklabs/roadmap#71): the check
+        # below wants the sidecar as a real dict it can walk, and `both` is the
+        # one mode that still puts it there without giving up coverage of the
+        # headers form (both channels build from the same dict; see
+        # core/kernel/shaping.py).
+        with unit(vendor, unmatched="vendor-404", env={"VENDORFAKE_ERROR_SIDECAR": "both"}) as driver:
             catalogue = driver.client.get("/__unit/errors")
             assert dunder_keys(catalogue.json()) == [], f"{vendor}: internal key in the error catalogue"
             # The sidecar has to be ON, or this proves nothing: the leak lived
@@ -380,6 +440,159 @@ def test_no_internal_marker_reaches_a_wire_body_from_any_vendor() -> None:
             refused = driver.client.get("/definitely/not/a/route/at/all")
             assert refused.status_code == 404, f"{vendor}: expected a 404, got {refused.status_code}"
             assert dunder_keys(refused.json()) == [], f"{vendor}: internal key in a real refusal"
+
+
+def test_the_error_sidecar_rides_headers_by_default_and_errors_sidecar_moves_it() -> None:
+    """konyklabs/roadmap#71 D2: no 4xx or 5xx body from any vendor contains
+    `unit_error` under the default profile -- the whole point being that a
+    consumer substituting a recorded real response for this fake's answer
+    should see no field the real vendor never sends. `errors.sidecar` says
+    where the one dict `unit_error_sidecar` builds rides; walked here through
+    every row of `GET /__unit/errors` -- all twenty kinds plus `no_route` --
+    not just the first. A regression confined to one shaper branch (a single
+    kind, or the not-found path) would not show up if only the first kind
+    were ever inspected, which is exactly the gap an earlier review round
+    found in this test.
+    """
+    from vendorfake import available_vendors
+
+    kind_header = "Vendorfake-Error-Kind"
+    provenance_header = "Vendorfake-Status-Provenance"
+
+    def rows(catalogue: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+        """Every kind, labelled by its own name, plus `no_route` last."""
+        return [(row["kind"], row) for row in catalogue["kinds"]] + [("no_route", catalogue["no_route"])]
+
+    for vendor in available_vendors():
+        with unit(vendor) as driver:  # the true default: no env at all
+            catalogue = driver.client.get("/__unit/errors").json()
+            assert catalogue["count"] == len(catalogue["kinds"])
+            for label, row in rows(catalogue):
+                assert "unit_error" not in row["body"], (
+                    f"{vendor}/{label}: default profile still leaks unit_error into the body"
+                )
+                assert row["headers"].get(kind_header), f"{vendor}/{label}: default profile has no sidecar kind header"
+                assert row["headers"].get(provenance_header), (
+                    f"{vendor}/{label}: default profile has no sidecar provenance header"
+                )
+
+        with unit(vendor, env={"VENDORFAKE_ERROR_SIDECAR": "body"}) as driver:
+            catalogue = driver.client.get("/__unit/errors").json()
+            for label, row in rows(catalogue):
+                assert "unit_error" in row["body"], f"{vendor}/{label}: errors.sidecar=body dropped the v0.1 body key"
+                assert kind_header not in row["headers"], f"{vendor}/{label}: errors.sidecar=body still emits headers"
+
+        with unit(vendor, env={"VENDORFAKE_ERROR_SIDECAR": "both"}) as driver:
+            catalogue = driver.client.get("/__unit/errors").json()
+            for label, row in rows(catalogue):
+                assert "unit_error" in row["body"], f"{vendor}/{label}: errors.sidecar=both dropped the body key"
+                assert row["headers"].get(kind_header), f"{vendor}/{label}: errors.sidecar=both dropped the headers"
+
+
+# ---------------------------------------------------------------------------
+# The sidecar headers are ASCII-safe (konyklabs/roadmap#71 review, blocker)
+# ---------------------------------------------------------------------------
+
+_INFO_HEADER = "Vendorfake-Error-Info"
+_FIELD_HEADER = "Vendorfake-Error-Field"
+
+
+def test_a_non_ascii_chaos_rule_id_survives_both_transports() -> None:
+    """A chaos rule's own `id` reaches `UnitError.info` verbatim
+    (`core/chaos/faults.py`'s `rule = decision.rule_id`), and it is
+    consumer-supplied text with no ASCII guarantee. Before this fix: in
+    process, `httpx.Response(headers=...)` raised `UnicodeEncodeError` before
+    a response ever came back; over real HTTP, the ASGI stack's Latin-1
+    header encoding turned the intended 429 into an unrelated 500 with no
+    sidecar headers at all.
+    """
+    rule_id = "sushi-寿司-rule"
+    rule = {
+        "id": rule_id,
+        "scope": "request",
+        "fault": "rate_limit",
+        "match": {"route": "GET /v2/locations"},
+        "when": {"nth": [1]},
+    }
+
+    with unit("square") as square:
+        square.add_chaos_rule(rule)
+        response = square.client.get("/v2/locations", headers=square.seed.auth)
+        assert response.status_code == 429
+        info = json.loads(response.headers[_INFO_HEADER])
+        assert info["chaos_rule"] == rule_id
+
+    with unit("square") as square, serve_in_thread(square) as over_http:
+        square.add_chaos_rule(rule)
+        response = over_http.client.get("/v2/locations", headers=square.seed.auth)
+        assert response.status_code == 429
+        info = json.loads(response.headers[_INFO_HEADER])
+        assert info["chaos_rule"] == rule_id
+
+
+def test_a_non_ascii_entity_id_survives_both_transports() -> None:
+    """A consumer-supplied entity id reaches `UnitError.info` verbatim --
+    `DELETE /__unit/chaos/rules/{id}` on a rule that was never added raises
+    the same `info={"id": entity_id}` shape as `core/state/store.py`'s
+    generic not-found (`chaos_rule_delete` in `core/control/plane.py`), from a
+    URL path segment rather than a request body, which is the same failure
+    family as the chaos rule id above from a different consumer-supplied
+    string.
+    """
+    entity_id = "order-寿司-99"
+    path = f"/__unit/chaos/rules/{quote(entity_id, safe='')}"
+
+    with unit("square") as square:
+        response = square.client.delete(path)
+        assert response.status_code == 404
+        info = json.loads(response.headers[_INFO_HEADER])
+        assert info["id"] == entity_id
+
+    with unit("square") as square, serve_in_thread(square) as over_http:
+        response = over_http.client.delete(path)
+        assert response.status_code == 404
+        info = json.loads(response.headers[_INFO_HEADER])
+        assert info["id"] == entity_id
+
+
+def test_a_non_ascii_field_name_survives_both_transports() -> None:
+    """An extra-forbidden key's own name becomes both `field` and an `info`
+    entry (`core/config/models.py`'s `unit_error_from_validation`, reached
+    here through a chaos rule document's `extra="forbid"` schema) -- the one
+    path that exercises `Vendorfake-Error-Field`'s percent-encoding and
+    `Vendorfake-Error-Info`'s ASCII-safe JSON on the same response. The field
+    header must also round-trip through `urllib.parse.unquote` back to the
+    exact key a consumer wrote.
+
+    Toast, not Square: Square's own error body already names the field, so
+    its `errors.py` never puts `field` into the sidecar at all (see
+    `sidecar_headers`'s docstring) and this response would carry no
+    `Vendorfake-Error-Field` header to check. Toast (like Clover) passes
+    `field=err.field or None` through, which is the vendor family this header
+    actually exists for.
+    """
+    bad_key = "寿司"
+    document = {
+        "id": "r-field",
+        "scope": "request",
+        "fault": "rate_limit",
+        "match": {"route": "GET /menus/v3/menus"},
+        bad_key: "unexpected",
+    }
+
+    with unit("toast") as toast:
+        response = toast.client.post("/__unit/chaos/rules", json=document)
+        assert response.status_code == 400
+        assert unquote(response.headers[_FIELD_HEADER]) == bad_key
+        info = json.loads(response.headers[_INFO_HEADER])
+        assert info["errors"][0]["field"] == bad_key
+
+    with unit("toast") as toast, serve_in_thread(toast) as over_http:
+        response = over_http.client.post("/__unit/chaos/rules", json=document)
+        assert response.status_code == 400
+        assert unquote(response.headers[_FIELD_HEADER]) == bad_key
+        info = json.loads(response.headers[_INFO_HEADER])
+        assert info["errors"][0]["field"] == bad_key
 
 
 # ---------------------------------------------------------------------------

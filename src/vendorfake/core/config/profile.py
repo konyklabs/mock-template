@@ -55,6 +55,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -97,9 +98,16 @@ DEFAULT_ENV_SIGNATURE_KEY = "unit-signature-key"
 class EnvVar:
     """One environment variable, with the reference name it replaces.
 
-    ``replaces`` exists so the rename is a checkable fact: a test asserts this
-    table against the reference's sixteen, which is the only way a variable
-    silently disappearing in translation shows up as a failure.
+    ``replaces`` exists so the rename is a checkable fact: a test asserts the
+    *ported* rows of this table against the reference's sixteen, which is the
+    only way a variable silently disappearing in translation shows up as a
+    failure. ``replaces=None`` marks a row with no reference equivalent at all
+    -- a control this project added that the TypeScript original never had --
+    so the absence is a stated fact rather than something a reader has to
+    notice is missing from the citation. Streams #71 and #72 each reached for a
+    sentinel here and picked differently (``""`` and ``None``); ``None`` won on
+    integration because it is the value the declared type already allowed and
+    the one a ported row can never take by accident.
     """
 
     name: str
@@ -155,6 +163,18 @@ ENV_TABLE: tuple[EnvVar, ...] = (
     ),
     EnvVar("VENDORFAKE_CHAOS_SEED", "UNIT_CHAOS_SEED", "chaos.seed", "Seed for the fault engine's RNG."),
     EnvVar("VENDORFAKE_CLOCK", "UNIT_CLOCK", "clock.mode", "'real' or 'virtual'."),
+    EnvVar(
+        "VENDORFAKE_CLOCK_START",
+        None,
+        "clock.start",
+        "RFC 3339 instant the virtual clock starts at. Requires clock.mode='virtual'.",
+    ),
+    EnvVar(
+        "VENDORFAKE_ERROR_SIDECAR",
+        None,
+        "errors.sidecar",
+        "Where the 'unit_error' sidecar is emitted: 'headers' (default), 'body' or 'both'.",
+    ),
     EnvVar("VENDORFAKE_TRANSPORT", "UNIT_TRANSPORT", "transport.kind", "Which binding the CLI stands up."),
     EnvVar(
         "VENDORFAKE_TRANSPORT_DIR",
@@ -185,8 +205,10 @@ ENV_TABLE: tuple[EnvVar, ...] = (
         "'vendor-404' or 'error': what an in-process binding does with a request no route matched.",
     ),
 )
-"""Every environment variable this loader reads: the sixteen the reference read,
-renamed, plus the ones this build added, which carry ``replaces=None``.
+"""Every environment variable this loader reads. Twenty entries, one of them a
+prefix: the sixteen the reference read, renamed (``replaces`` set), plus four
+vendorfake-native controls the reference never had (``replaces=None``) -- see
+:attr:`EnvVar.replaces`.
 
 ``VENDORFAKE_VENDOR`` (no trailing underscore) is deliberately absent: it
 selects which vendor module to load, which happens before a profile exists, and
@@ -324,6 +346,60 @@ def _env_clock_mode(env: Mapping[str, str]) -> str | None:
     return raw
 
 
+def _env_clock_start(env: Mapping[str, str]) -> str | None:
+    """``VENDORFAKE_CLOCK_START``, validated as an RFC 3339 instant.
+
+    Before this the virtual clock's *mode* was env-overridable but its *start*
+    instant was not, so an expiry assertion was deterministic within a run and
+    irreproducible across two (konyklabs/roadmap#71). Malformed input is a
+    loud startup failure naming the expected format, matching every other
+    variable this module parses -- not the bare ``ValueError``
+    ``Clock.__init__`` itself raises for a profile document's own malformed
+    ``clock.start``, which this loader does not otherwise touch.
+
+    A naive value is refused, not merely parsed: ``datetime.fromisoformat``
+    happily accepts ``"2026-01-01T00:00:00"`` and even a bare
+    ``"2026-01-01"``, neither of which names an instant, and this loader's
+    error message says "RFC 3339 instant" -- an ``UnitError`` naming that
+    format while silently accepting a string outside it would be worse than
+    no check at all. This mirrors the sibling check on the ``datetime`` this
+    module's own callers may pass instead of a string
+    (``vendorfake.testing._clock_start_env_value``), which raises for the
+    identical reason: a naive value has no defined instant across machines.
+    """
+    raw = env.get("VENDORFAKE_CLOCK_START")
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"VENDORFAKE_CLOCK_START={raw!r} is not an RFC 3339 instant, e.g. '2026-01-01T00:00:00Z'.",
+            field="VENDORFAKE_CLOCK_START",
+        ) from exc
+    if parsed.tzinfo is None:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"VENDORFAKE_CLOCK_START={raw!r} is not an RFC 3339 instant, e.g. '2026-01-01T00:00:00Z'.",
+            field="VENDORFAKE_CLOCK_START",
+        )
+    return raw
+
+
+def _env_error_sidecar(env: Mapping[str, str]) -> str | None:
+    raw = env.get("VENDORFAKE_ERROR_SIDECAR")
+    if not raw:
+        return None
+    if raw not in ("headers", "body", "both"):
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"VENDORFAKE_ERROR_SIDECAR={raw!r} is not 'headers', 'body' or 'both'.",
+            field="VENDORFAKE_ERROR_SIDECAR",
+        )
+    return raw
+
+
 def resolve_config(
     document: ProfileDocument,
     *,
@@ -377,6 +453,22 @@ def resolve_config(
 
     chaos_seed = _env_int(environ, "VENDORFAKE_CHAOS_SEED")
     clock_mode = _env_clock_mode(environ)
+    clock_start = _env_clock_start(environ)
+    if clock_start is not None and (clock_mode or document.clock.mode) != "virtual":
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                "VENDORFAKE_CLOCK_START requires a virtual clock; set VENDORFAKE_CLOCK=virtual "
+                '(or env={"VENDORFAKE_CLOCK": "virtual"}) rather than silently switching modes.'
+            ),
+            field="VENDORFAKE_CLOCK_START",
+        )
+    clock_updates: dict[str, Any] = {}
+    if clock_mode is not None:
+        clock_updates["mode"] = clock_mode
+    if clock_start is not None:
+        clock_updates["start"] = clock_start
+    error_sidecar = _env_error_sidecar(environ)
     port = _env_int(environ, "VENDORFAKE_PORT")
     capacity = _env_int(environ, "VENDORFAKE_REQUEST_LOG_CAPACITY")
     if capacity is not None and capacity < 0:
@@ -402,7 +494,10 @@ def resolve_config(
             rules=document.chaos.rules,
             strict_rules=document.chaos.strict_rules,
         ),
-        clock=document.clock if clock_mode is None else document.clock.model_copy(update={"mode": clock_mode}),
+        clock=document.clock if not clock_updates else document.clock.model_copy(update=clock_updates),
+        errors=document.errors
+        if error_sidecar is None
+        else document.errors.model_copy(update={"sidecar": error_sidecar}),
         transport=TransportSection(
             kind=environ.get("VENDORFAKE_TRANSPORT", "http"),
             port=8080 if port is None else port,

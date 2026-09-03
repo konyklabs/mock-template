@@ -32,6 +32,7 @@ these helpers and one written against the container.
 from __future__ import annotations
 
 import collections
+import os
 import queue
 import re
 import subprocess
@@ -41,6 +42,7 @@ import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -67,6 +69,7 @@ __all__ = [
     "LOG_LINES",
     "NO_SEED_HINT",
     "SERVE_COMMAND",
+    "ClockInfo",
     "CloverSeed",
     "Credentials",
     "Delivery",
@@ -138,6 +141,34 @@ exhausted -- settles in about fifteen seconds of real time."""
 _LISTENING = re.compile(r"listening on http://([^:\s]+):(\d+)")
 
 
+@dataclass(frozen=True, slots=True)
+class ClockInfo:
+    """The unit's clock, as :meth:`Driver.clock` reads it off ``/__unit/info``."""
+
+    now: datetime
+    mode: Literal["real", "virtual"]
+
+
+def _clock_start_env_value(clock_start: datetime | str) -> str:
+    """``VENDORFAKE_CLOCK_START``'s value, from either spelling :func:`unit`
+    and :func:`served` accept.
+
+    A naive ``datetime`` raises rather than being read as local time: a
+    ``clock_start`` two developers on two machines both wrote as
+    ``datetime(2026, 1, 1)`` must pin the same instant, and reading it as
+    local time would make it pin a different one on each machine -- silently,
+    since nothing about a naive ``datetime`` says which machine wrote it.
+    """
+    if isinstance(clock_start, str):
+        return clock_start
+    if clock_start.tzinfo is None:
+        raise ValueError(
+            f"clock_start={clock_start!r} has no timezone. A naive datetime has no defined instant across "
+            "machines; pass a timezone-aware one (e.g. datetime(..., tzinfo=UTC)) or an RFC 3339 string."
+        )
+    return clock_start.isoformat()
+
+
 @dataclass
 class Driver(Generic[SeedT]):
     """A unit you can talk to, however it was started.
@@ -165,6 +196,16 @@ class Driver(Generic[SeedT]):
 
     def info(self) -> dict[str, Any]:
         return self._json(self.client.get("/__unit/info"))
+
+    def clock(self) -> ClockInfo:
+        """The unit's clock right now: its mode, and its current instant.
+
+        Reads ``/__unit/info``, so this is another request against the unit
+        like :meth:`health` and :meth:`deliveries` -- it advances nothing,
+        real or virtual.
+        """
+        payload = self.info()["clock"]
+        return ClockInfo(now=datetime.fromisoformat(str(payload["now"])), mode=payload["mode"])
 
     def deliveries(self) -> list[dict[str, Any]]:
         """Every webhook delivery attempt the unit made, oldest first."""
@@ -500,6 +541,7 @@ def unit(
     logger: Logger | None = ...,
     seed: int | None = ...,
     unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[StartedUnit[SquareSeed]]: ...
 
 
@@ -513,6 +555,7 @@ def unit(
     logger: Logger | None = ...,
     seed: int | None = ...,
     unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[StartedUnit[CloverSeed]]: ...
 
 
@@ -526,6 +569,7 @@ def unit(
     logger: Logger | None = ...,
     seed: int | None = ...,
     unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[StartedUnit[ToastSeed]]: ...
 
 
@@ -539,6 +583,7 @@ def unit(
     logger: Logger | None = ...,
     seed: int | None = ...,
     unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[StartedUnit[Seed]]: ...
 
 
@@ -551,6 +596,7 @@ def unit(
     logger: Logger | None = None,
     seed: int | None = None,
     unmatched: UnmatchedPolicy | None = None,
+    clock_start: datetime | str | None = None,
 ) -> AbstractContextManager[StartedUnit[Any]]:
     """A unit in this process, stopped however the block ends.
 
@@ -569,7 +615,9 @@ def unit(
     ``contextlib`` context manager it always was; only its declared type is
     ``AbstractContextManager``.
     """
-    return _unit(vendor, profile, sink=sink, env=env, logger=logger, seed=seed, unmatched=unmatched)
+    return _unit(
+        vendor, profile, sink=sink, env=env, logger=logger, seed=seed, unmatched=unmatched, clock_start=clock_start
+    )
 
 
 @contextmanager
@@ -582,6 +630,7 @@ def _unit(
     logger: Logger | None = None,
     seed: int | None = None,
     unmatched: UnmatchedPolicy | None = None,
+    clock_start: datetime | str | None = None,
 ) -> Iterator[StartedUnit[Seed]]:
     """The body of :func:`unit`. See that function for the contract.
 
@@ -614,8 +663,19 @@ def _unit(
     stands in for the vendor, and there is no caller stack across a socket to
     raise into. Either way the diagnosis is on the response, in
     ``Vendorfake-Near-Miss``.
+
+    ``clock_start`` (a timezone-aware ``datetime``, or an RFC 3339 string) is
+    ``VENDORFAKE_CLOCK_START``: the instant a virtual clock starts at, so two
+    units built from it agree on every expiry down to the second -- see
+    :meth:`Driver.clock`. It requires ``clock.mode="virtual"`` and raises
+    rather than switching modes for you: set ``env={"VENDORFAKE_CLOCK":
+    "virtual"}`` (or ``VENDORFAKE_CLOCK=virtual`` for :func:`served`)
+    yourself, so a test that forgot it fails loudly instead of silently
+    running on a real clock the pinned start never touches.
     """
     environ: dict[str, str] = {} if seed is None else {"VENDORFAKE_CHAOS_SEED": str(seed)}
+    if clock_start is not None:
+        environ["VENDORFAKE_CLOCK_START"] = _clock_start_env_value(clock_start)
     environ.update(env or {})
     # This import brings the web framework in (FrameworkTripwire lives in
     # vendorfake.asgi), and it is paid deliberately: `framework_answered` must
@@ -696,6 +756,7 @@ def served(
     host: str = ...,
     log_level: str = ...,
     timeout_s: float = ...,
+    clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[ServedUnit[SquareSeed]]: ...
 
 
@@ -708,6 +769,7 @@ def served(
     host: str = ...,
     log_level: str = ...,
     timeout_s: float = ...,
+    clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[ServedUnit[CloverSeed]]: ...
 
 
@@ -720,6 +782,7 @@ def served(
     host: str = ...,
     log_level: str = ...,
     timeout_s: float = ...,
+    clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[ServedUnit[ToastSeed]]: ...
 
 
@@ -732,6 +795,7 @@ def served(
     host: str = ...,
     log_level: str = ...,
     timeout_s: float = ...,
+    clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[ServedUnit[Seed]]: ...
 
 
@@ -743,6 +807,7 @@ def served(
     host: str = "127.0.0.1",
     log_level: str = "error",
     timeout_s: float = STARTUP_TIMEOUT_S,
+    clock_start: datetime | str | None = None,
 ) -> AbstractContextManager[ServedUnit[Any]]:
     """``vendorfake serve`` in a child process, with its URL.
 
@@ -751,7 +816,9 @@ def served(
     the call site and there is no reason to make a consumer prove it with an
     ``isinstance``. Delegates to a private generator; see :func:`unit`.
     """
-    return _served(vendor, profile, port=port, host=host, log_level=log_level, timeout_s=timeout_s)
+    return _served(
+        vendor, profile, port=port, host=host, log_level=log_level, timeout_s=timeout_s, clock_start=clock_start
+    )
 
 
 @contextmanager
@@ -763,6 +830,7 @@ def _served(
     host: str = "127.0.0.1",
     log_level: str = "error",
     timeout_s: float = STARTUP_TIMEOUT_S,
+    clock_start: datetime | str | None = None,
 ) -> Iterator[ServedUnit[Seed]]:
     """The body of :func:`served`. See that function for the contract.
 
@@ -777,6 +845,15 @@ def _served(
     ``timeout_s`` is a real deadline: a child that never announces -- wedged,
     or not vendorfake at all -- is stopped and reported rather than waited
     on forever.
+
+    ``clock_start`` is :func:`unit`'s ``VENDORFAKE_CLOCK_START`` control,
+    layered onto this process's own environment for the child -- ``served``
+    has no general ``env`` parameter, so every other ``VENDORFAKE_*`` variable
+    still goes through your own ``os.environ`` before calling this, the way
+    the module docstring above describes. It requires ``VENDORFAKE_CLOCK=virtual``
+    already set there; the child raises the same loud refusal :func:`unit`
+    does rather than switching modes for you, and a refusal here surfaces as
+    the child exiting before it announces a port.
     """
     # Resolved and refused before the child is spawned: `seed_for` is a pure
     # branch on the vendor's canonical name, and `resolve_vendor` is the same
@@ -804,7 +881,21 @@ def _served(
         "--log-level",
         log_level,
     ]
-    process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # `cli.py` is documented as the only module that *reads* `os.environ` to
+    # resolve a unit's own config, so that a stray shell variable cannot
+    # silently change which profile a unit in *this* process resolves to.
+    # This reads it too, but for a different reason with the opposite
+    # failure mode: `Popen(argv)` with no `env=` already inherits the whole
+    # of `os.environ` for the child implicitly (that is plain subprocess
+    # behaviour, unrelated to this project), and `Popen`'s `env=` replaces
+    # rather than layers -- so naming one more variable for the child without
+    # dropping the rest of its inherited environment has no path that avoids
+    # this dict read. `None` (the exact prior behaviour) is used whenever
+    # `clock_start` is not given.
+    child_env = (
+        None if clock_start is None else {**os.environ, "VENDORFAKE_CLOCK_START": _clock_start_env_value(clock_start)}
+    )
+    process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=child_env)
     output = _ChildOutput(process)
     try:
         base_url = _wait_for_announcement(process, output, timeout_s)
