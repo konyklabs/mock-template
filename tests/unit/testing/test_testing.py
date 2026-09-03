@@ -945,6 +945,30 @@ def test_served_refuses_a_seedless_vendor_before_spawning_a_child(monkeypatch: p
     assert NO_SEED_HINT in message
 
 
+def test_served_refuses_a_nonexistent_profile_before_spawning_a_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Loading the profile in the parent (round 1's fix for the vendor-config
+    finding above) changed ``served()``'s failure mode for a bad profile name
+    too, and not just for a seedless vendor: it used to spawn a child that
+    then failed through its own startup/health-check path, and now raises
+    ``UnitError`` -- the same exception :func:`unit` raises for the identical
+    mistake -- from ``load_profile`` in the parent, before ``subprocess.Popen``
+    ever runs. Pinned here, with a real shipped vendor and no fixture needed,
+    so a refactor cannot silently reintroduce the slow-fail path or change the
+    exception type with nothing red.
+    """
+
+    def refuse_to_spawn(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+        pytest.fail(f"subprocess.Popen called with args={args!r} kwargs={kwargs!r}")
+
+    monkeypatch.setattr(subprocess, "Popen", refuse_to_spawn)
+
+    with pytest.raises(UnitError) as refused:  # noqa: SIM117 - the `with served(...)` is the subject
+        with served("square", "nosuchprofile") as driver:
+            pytest.fail(f"served() yielded {driver!r} for a nonexistent profile")
+
+    assert "nosuchprofile" in str(refused.value)
+
+
 def test_served_keeps_the_child_output_readable_and_never_blocks_on_it() -> None:
     with served("square", "no-faults", log_level="debug") as child:
         # Debug logging for the life of the child. Whatever it writes, the

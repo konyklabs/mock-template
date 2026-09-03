@@ -52,6 +52,18 @@ variable; and the tuning constants `CLIENT_TIMEOUT_S`, `DRAIN_TIMEOUT_S`,
 `vendorfake.testing.seeds` publishes the same seed types and `seed_for`
 directly, for a caller who wants a seed without building a unit.
 
+**`served()`'s startup failures are eager, in the parent process.** An
+unknown vendor, a nonexistent or malformed profile, and a vendor with no seed
+are all refused with `ValueError`, `UnitError` or `LookupError` before
+`served()` ever spawns a child — the vendor is resolved and the profile is
+loaded to build the seed exactly as `unit()` builds it, and both failures
+surface there. This is a behaviour change for a bad profile name specifically:
+before this release, `served()` did no profile resolution of its own, so a
+typo reached the caller only as whatever the spawned child's own startup or
+health-check path produced. A caller written against that older, slower
+failure mode — catching a connection or startup-timeout error around
+`with served(...)` — now sees an unhandled `UnitError` instead.
+
 ### `vendorfake.registry` — discovery and construction
 
 The five names above, plus `ProfileInfo`, `RouteInfo`, `ROLE_NAMES`,

@@ -1190,6 +1190,17 @@ def _served(
     already set there; the child raises the same loud refusal :func:`unit`
     does rather than switching modes for you, and a refusal here surfaces as
     the child exiting before it announces a port.
+
+    A nonexistent (or otherwise malformed) ``profile`` is refused with
+    ``UnitError`` -- the same exception :func:`unit` raises for the identical
+    mistake -- before ``subprocess.Popen`` ever runs, because the profile is
+    now loaded in this process to resolve the seed hook's ``vendor_config``
+    before the seed check below. Before that, a bad profile name reached
+    ``served()`` only as whatever failure the spawned child's own
+    startup/health-check path produced; a caller relying on that older,
+    slower failure mode -- catching a connection or startup-timeout error
+    around the ``with served(...)`` block -- now sees an unhandled
+    ``UnitError`` instead.
     """
     # Resolved and refused before the child is spawned: `registry.resolve_vendor`
     # is the same registry lookup `create_unit` pays for internally, and

@@ -257,8 +257,8 @@ in full under the heading named beside it.
 * **vendorfake:** `docs/api-contract.md` states the public API contract: which
   modules and surfaces are public, which are internal and may change in any
   release, the stability of the white-box handles (`started.unit`,
-  `started.unit.store` — documented, may change between minors), and the
-  deprecation policy the Deprecations heading above follows.
+  `started.unit.context.store` — documented, may change between minors), and
+  the deprecation policy the Deprecations heading above follows.
   `tests/unit/test_public_api.py` pins the exported names of every public
   module against a checked-in list, so widening or narrowing the surface is an
   edit a reviewer sees (konyklabs/roadmap#74)
