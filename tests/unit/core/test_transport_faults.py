@@ -188,6 +188,38 @@ def test_body_mutation_retype_honours_an_explicit_target() -> None:
     assert json.loads(answered.body)["access_token_expiration"] is None
 
 
+def test_body_mutation_retype_of_a_boolean_defaults_to_null() -> None:
+    """JUDGMENT pinned: a boolean with no ``as`` becomes ``null`` -- not the
+    string ``"true"`` and not ``1`` (see ``_default_retype_target``)."""
+    body = json.dumps({"short_lived": True}).encode("utf-8")
+    answered = apply_response_fault(
+        _decision("body_mutation", ops=[{"op": "retype", "pointer": "/short_lived"}]),
+        _response(body=body),
+        log=LOG,
+    )
+    assert json.loads(answered.body)["short_lived"] is None
+
+
+def test_body_mutation_retype_of_a_boolean_to_a_number_is_refused() -> None:
+    body = json.dumps({"short_lived": True}).encode("utf-8")
+    with pytest.raises(UnitError, match="cannot retype to a number"):
+        apply_response_fault(
+            _decision("body_mutation", ops=[{"op": "retype", "pointer": "/short_lived", "as": "number"}]),
+            _response(body=body),
+            log=LOG,
+        )
+
+
+def test_body_mutation_retype_of_a_boolean_to_a_string_gives_the_json_spelling() -> None:
+    body = json.dumps({"short_lived": True}).encode("utf-8")
+    answered = apply_response_fault(
+        _decision("body_mutation", ops=[{"op": "retype", "pointer": "/short_lived", "as": "string"}]),
+        _response(body=body),
+        log=LOG,
+    )
+    assert json.loads(answered.body)["short_lived"] == "true"
+
+
 def test_body_mutation_requires_a_non_empty_ops_list() -> None:
     with pytest.raises(UnitError):
         _apply("body_mutation", ops=[])

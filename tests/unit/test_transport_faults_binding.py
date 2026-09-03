@@ -138,6 +138,33 @@ async def test_slow_body_past_the_read_timeout_raises_read_timeout_without_waiti
             assert elapsed_ms < 100, f"the binding waited {elapsed_ms:.1f}ms; it should not have waited at all"
 
 
+def test_a_body_that_fits_in_one_chunk_has_no_gap_to_race_and_never_raises_sync() -> None:
+    """A single chunk means a served unit writes the body in one go and a
+    patient client never waits, however large ``chunk_delay_ms`` is. The
+    in-process binding must agree, or a test green here fails against a
+    served unit -- the parity break review round 2 of konyklabs/roadmap#73
+    reproduced (ReadTimeout in 0.3 ms in process, 200 in 1.6 ms served)."""
+    with unit("square") as started:
+        started.add_chaos_rule(_slow_rule(chunk_bytes=100_000, chunk_delay_ms=5_000))
+        started_at = time.monotonic()
+        response = started.client.post("/oauth2/token", json=_token_body(started.seed), timeout=0.2)
+        elapsed_ms = (time.monotonic() - started_at) * 1000
+        assert response.status_code == 200
+        assert response.headers["vendorfake-fault"] == "slow_body"
+        assert elapsed_ms < 100, f"one chunk owes no wait, yet the binding held the answer {elapsed_ms:.1f}ms"
+
+
+@pytest.mark.anyio
+async def test_a_body_that_fits_in_one_chunk_has_no_gap_to_race_and_never_raises_async() -> None:
+    with unit("square") as started:
+        started.add_chaos_rule(_slow_rule(chunk_bytes=100_000, chunk_delay_ms=5_000))
+        assert started._transport is not None
+        async with httpx.AsyncClient(transport=started._transport, base_url=started.base_url, timeout=0.2) as client:
+            response = await client.post("/oauth2/token", json=_token_body(started.seed))
+            assert response.status_code == 200
+            assert response.headers["vendorfake-fault"] == "slow_body"
+
+
 def test_many_small_gaps_under_the_timeout_never_raise_even_though_their_sum_would() -> None:
     """The other half of the race: each gap individually fits inside the read
     timeout, so nothing raises, however long the aggregate comes to -- proved

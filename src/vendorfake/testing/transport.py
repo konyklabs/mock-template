@@ -223,10 +223,19 @@ def _wait_owed_ms(answered: UnitResponse) -> int:
     """
     directive = answered.transport
     if directive is not None and directive.kind == "slow_body":
-        chunk_bytes = directive.chunk_bytes if directive.chunk_bytes > 0 else 64
-        chunks = max(1, math.ceil(len(answered.body) / chunk_bytes))
-        return max(0, chunks - 1) * directive.chunk_delay_ms
+        return max(0, _slow_body_chunks(answered) - 1) * directive.chunk_delay_ms
     return answered.delay_ms
+
+
+def _slow_body_chunks(answered: UnitResponse) -> int:
+    """How many chunks a ``slow_body`` directive splits this body into -- the
+    one number both the aggregate wait and the per-gap race derive from, so
+    they cannot disagree about whether a gap exists at all."""
+    directive = answered.transport
+    if directive is None or directive.kind != "slow_body":
+        return 1
+    chunk_bytes = directive.chunk_bytes if directive.chunk_bytes > 0 else 64
+    return max(1, math.ceil(len(answered.body) / chunk_bytes))
 
 
 def _would_exhaust_read_timeout_ms(answered: UnitResponse) -> int:
@@ -245,6 +254,13 @@ def _would_exhaust_read_timeout_ms(answered: UnitResponse) -> int:
     """
     directive = answered.transport
     if directive is not None and directive.kind == "slow_body":
+        # A body that fits in one chunk has no gap to race: a served unit
+        # writes it in one go and a patient client never waits, so raising
+        # here would fail in process a test that passes served -- the exact
+        # parity break this function exists to prevent (found by review round
+        # 2 of konyklabs/roadmap#73).
+        if _slow_body_chunks(answered) <= 1:
+            return 0
         return directive.chunk_delay_ms
     return answered.delay_ms
 

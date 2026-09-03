@@ -588,6 +588,17 @@ def _retype(current: Any, as_type: object, *, pointer: str, rule: str) -> Any:
 
 
 def _default_retype_target(current: Any) -> Literal["string", "number", "null"]:
+    """The target ``retype`` picks when ``as`` is absent.
+
+    JUDGMENT: a boolean goes to ``null``, not to ``"true"``/``"false"`` and not
+    to ``1``/``0``. JSON booleans are the one scalar consumers parse with the
+    least defensiveness, and a vendor that turns one into a *string* is a
+    documented case nowhere; ``null`` is the corruption a real "field went
+    missing in a refactor" produces, so it is the one worth rehearsing by
+    default. An explicit ``as: "number"`` on a boolean is refused rather than
+    coerced (``True`` is not "a number" a consumer's parser would accept from a
+    vendor), and ``as: "string"`` gives the JSON spelling.
+    """
     if isinstance(current, bool):
         return "null"
     if isinstance(current, int | float):
