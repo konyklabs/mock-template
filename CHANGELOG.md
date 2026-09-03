@@ -8,8 +8,16 @@
   overloaded on the vendor literal, so `unit("clover")` yields a
   `StartedUnit[CloverSeed]` rather than a union a consumer had to unpick with
   an `isinstance` per vendor. `Driver`, `StartedUnit` and `ServedUnit` are
-  generic in their seed; written bare they are `[Any]`, which is what a
-  v0.1.0 fixture annotation already meant.
+  generic in their seed; written bare they are `[Any]` under mypy's default
+  settings and under pyright/basedpyright in standard mode, which is what a
+  v0.1.0 fixture annotation already meant. **Migration for a consumer running
+  `mypy --strict`:** `disallow_any_generics` turns a bare annotation into a
+  hard error -- `def f(s: StartedUnit) -> None` now fails with `Missing type
+  arguments for generic type "StartedUnit"  [type-arg]` -- on a fixture the
+  consumer did not change. Parameterise it (`Iterator[StartedUnit[SquareSeed]]`)
+  or write `StartedUnit[Any]` to keep the old, unnarrowed meaning explicitly;
+  either way nothing about the object handed back at runtime changes, only
+  what a strict checker will accept as its declared type.
 * **testing:** `seed.credentials` reports the application credential under
   neutral names (`app_id`, `app_secret`) plus the token lifecycle the vendor
   runs (`grant`: `refresh_token` for Square and Clover, `client_credentials`

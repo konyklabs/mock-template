@@ -130,7 +130,16 @@ def test_a_toast_seed_rejects_a_field_that_belongs_to_another_vendor() -> None:
     the ordinary ``uv run mypy`` must stay green -- and mypy's ``exclude``
     does not apply to a path passed explicitly, which is what makes this
     arrangement possible at all.
+
+    ``mypy`` is a dev dependency, present under ``uv run pytest`` but not
+    necessarily wherever else this suite runs -- a consumer running the
+    packaged tests, or a CI job installing only a test extra. Without the
+    guard below, the subprocess would exit nonzero on ``No module named
+    mypy``, which happens to satisfy the returncode assertion for the wrong
+    reason before failing loudly one assertion later on a stdout that never
+    contained a type error.
     """
+    pytest.importorskip("mypy", reason="shells out to `python -m mypy`; not installed outside the dev group")
     completed = subprocess.run(
         [sys.executable, "-m", "mypy", "--strict", "--no-error-summary", str(NEGATIVE_MODULE)],
         cwd=REPO_ROOT,

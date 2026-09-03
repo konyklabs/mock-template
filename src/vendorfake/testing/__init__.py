@@ -53,7 +53,7 @@ from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.logging import JsonLogger
 from vendorfake.core.webhooks.models import matches_event_type
 from vendorfake.core.webhooks.sink import DeliverySink
-from vendorfake.registry import create_unit
+from vendorfake.registry import create_unit, resolve_vendor
 from vendorfake.testing.receiver import Delivery, WebhookReceiver, webhook_receiver
 from vendorfake.testing.seeds import CloverSeed, Credentials, Seed, SquareSeed, ToastSeed, seed_for
 from vendorfake.testing.transport import UnitTransport
@@ -100,10 +100,16 @@ common.
 and with an invariant parameter the narrow overload's return type is not
 assignable to the broad one's, which pyright reports as an overlapping
 overload with an incompatible return. Covariance is technically unsound for a
-mutable attribute; ``seed`` is written once, at construction, and read
-everywhere else, so the unsoundness has no reachable case here. The name
-keeps no ``_co`` suffix because it is public API and the variance is a
-property of the driver, not something a consumer spells.
+mutable attribute, and the hole is real, not theoretical: a checker accepts
+``def reassign(d: Driver[Seed], other: Seed) -> None: d.seed = other`` called
+with a ``StartedUnit[SquareSeed]`` and a ``ToastSeed``, and afterwards
+``square.seed.merchant_id`` still type-checks and raises ``AttributeError`` at
+runtime. Nothing in vendorfake reassigns ``seed`` -- it is written once, at
+construction, and read everywhere else -- but ``Driver`` is a plain mutable
+``@dataclass`` handed to consumers, so avoiding the reassignment is *their*
+responsibility, not a guarantee this module makes. The name keeps no ``_co``
+suffix because it is public API and the variance is a property of the
+driver, not something a consumer spells.
 """
 
 IN_PROCESS_BASE_URL = "http://vendorfake.local"
@@ -490,8 +496,15 @@ def _unit(
     try:
         # Before the client, so a vendor with no seed is refused with the unit
         # already stopped by the `finally` rather than left running behind a
-        # half-built driver.
-        resolved_seed = _require_seed(vendor, profile, seed_for(built.name, built.context.config.vendor_config))
+        # half-built driver. Named with `built.name` and the config's own
+        # `profile`, not the raw arguments above: `seed_for` is keyed on the
+        # resolved vendor, and a registry alias or a profile default (from
+        # `env`) can make the resolved values differ from what the caller
+        # spelled, in which case the refusal should name what was actually
+        # looked up.
+        resolved_seed = _require_seed(
+            built.name, built.context.config.profile, seed_for(built.name, built.context.config.vendor_config)
+        )
         with httpx.Client(transport=UnitTransport(built), base_url=IN_PROCESS_BASE_URL) as client:
             yield StartedUnit(
                 vendor=built.name,
@@ -624,6 +637,19 @@ def _served(
     or not vendorfake at all -- is stopped and reported rather than waited
     on forever.
     """
+    # Resolved and refused before the child is spawned: `seed_for` is a pure
+    # branch on the vendor's canonical name, and `resolve_vendor` is the same
+    # registry lookup `create_unit` pays for internally, so neither needs a
+    # running unit. Paying for a subprocess that boots, announces its port and
+    # answers a health check only to be told the vendor has no seed wastes the
+    # startup on every call in a suite that does this per test, and points the
+    # traceback at a line inside a connected client rather than at the vendor
+    # argument that is actually wrong. `profile` has nothing left to resolve
+    # here -- unlike `unit()`, `served()` has no `env` layer that could move it
+    # away from what the caller spelled, so the argument already is the
+    # resolved value.
+    resolved_name = resolve_vendor(vendor).name
+    resolved_seed = _require_seed(resolved_name, profile, seed_for(resolved_name, {}))
     argv = [
         *SERVE_COMMAND,
         "--vendor",
@@ -652,7 +678,7 @@ def _served(
                 # application credentials are the vendor's defaults -- what
                 # every shipped profile sets. A custom profile that overrides
                 # them is a case for `unit()`, where the seed reads the config.
-                seed=_require_seed(vendor, profile, seed_for(str(health["vendor"]), {})),
+                seed=resolved_seed,
                 process=process,
                 _output=output,
             )
