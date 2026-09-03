@@ -2,9 +2,10 @@
 
 Installing vendorfake registers exactly one `pytest11` entry point,
 `vendorfake` (module `vendorfake.pytest`). It gives a consumer suite a marker
-and two fixtures, and does nothing else: no `--conformance-*` options, no
-session hook, no autouse fixture. A suite that never uses either fixture runs
-identically whether the plugin is loaded or disabled with `-p no:vendorfake`.
+and three fixtures, and does nothing else: no `--conformance-*` options, no
+session hook, no autouse fixture. A suite that never uses any of the three
+fixtures runs identically whether the plugin is loaded or disabled with
+`-p no:vendorfake`.
 
 This is the second, smaller half of what installing the wheel used to
 auto-load. Before 0.2, `vendorfake_conformance` was the `pytest11` entry
@@ -12,8 +13,9 @@ point, and it carried five `--conformance-*` options and a
 `pytest_sessionfinish` hook into every pytest run that happened to have
 vendorfake installed — whether or not that suite had ever heard of the
 conformance registry. The conformance suite's pytest form still exists; it is
-loaded explicitly now, with `-p vendorfake.conformance.plugin`. See "Running
-the conformance suite against your unit" in the [README](../README.md).
+loaded explicitly now, with `-p vendorfake.conformance.plugin`. See
+[the CLI reference](reference/cli.md) for `vendorfake conformance` /
+`vendorfake-conformance`.
 
 ## The marker
 
@@ -21,7 +23,7 @@ the conformance suite against your unit" in the [README](../README.md).
 @pytest.mark.vendorfake(vendor, profile=None, env=None, seed=None, clock_start=None, unmatched=None, capabilities=None)
 ```
 
-Every keyword matches [`vendorfake.testing.unit`](../README.md#pytest)'s own:
+Every argument matches [`vendorfake.testing.unit`](start/bindings.md#in-process-sync)'s own:
 `vendor` is required and positional (`"square"`, `"clover"` or `"toast"`);
 `profile`, `env`, `seed`, `clock_start`, `unmatched` and `capabilities` are the
 same keyword arguments `unit()` takes, with the same defaults and the same
@@ -41,7 +43,7 @@ def test_a_token_expires_on_schedule(vendorfake_unit): ...
 ## The fixtures
 
 `vendorfake_unit` is function-scoped and yields the
-[`StartedUnit`](../README.md#pytest) the marker describes — built fresh per
+[`StartedUnit`](concepts/driver.md) the marker describes — built fresh per
 test, the same grain as calling `unit()` directly. Requesting it without the
 marker is a test author's mistake, not a missing precondition, so it fails
 loudly and names the fix rather than skipping:
@@ -67,6 +69,31 @@ def test_an_order_is_created(vendorfake_unit):
     assert created.status_code == 200
 ```
 
+`vendorfake_async_unit` yields the same kind of
+[`StartedUnit`](concepts/driver.md) as `vendorfake_unit`, for a test that
+drives it through `async_client` instead of `client`:
+
+```python
+import pytest
+
+
+@pytest.mark.vendorfake("clover")
+async def test_items_are_readable(vendorfake_async_unit):
+    seed = vendorfake_async_unit.seed
+    answered = await vendorfake_async_unit.async_client.get(seed.path("/items"), headers=seed.auth)
+    assert answered.status_code == 200
+```
+
+The fixture function itself is a plain, synchronous `def`, not `async def` —
+it yields an object that owns an `httpx.AsyncClient` rather than being a
+coroutine itself. That is what lets it work under `pytest-asyncio` (strict or
+auto mode) and under `anyio`'s plugin without this package depending on
+either or guessing which one is installed; an `async def` fixture would need
+each runner's own decorator, and the two are not interchangeable. See
+[Recipes → Async pytest](async-consumers.md) for the full picture, including
+the `@pytest.mark.anyio` (or `pytest-asyncio`) marker the test function itself
+still needs.
+
 `vendorfake_webhook_receiver` is function-scoped and yields the same
 `WebhookReceiver` object `vendorfake.testing.webhook_receiver()` does — a real
 HTTP endpoint on loopback, for the other half of a webhook test:
@@ -86,6 +113,7 @@ Either is a complete way to hold a unit; nothing about the fixtures is more
 capable than the function. Reach for the marker when a test needs exactly one
 unit and no fixture composition of your own — it is one line instead of a
 `with` block. Reach for `unit()` directly (typically from your own fixture,
-the way [`examples/pytest-consumer`](../examples/pytest-consumer) does) when a
+the way [`examples/pytest-consumer`](https://github.com/konyklabs/vendorfake/tree/main/examples/pytest-consumer)
+does) when a
 test needs two units, a non-default sink, or to hold the unit across more than
 one test via a fixture you control the scope of.

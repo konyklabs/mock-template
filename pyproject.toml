@@ -32,9 +32,10 @@ dependencies = [
   "pydantic>=2.7",
   "httpx>=0.27",
   # Declared because vendorfake.testing.transport imports it directly, for the
-  # async half of the in-process seam: an `httpx.AsyncClient` is usable under
-  # trio as well as asyncio, so the deliberate `delay_ms` wait is
-  # `anyio.sleep`. Nothing new is installed by this line -- httpx has depended
+  # async half of the in-process seam: an `httpx.AsyncClient` is meant to be
+  # usable under any anyio backend, so the deliberate `delay_ms` wait is
+  # `anyio.sleep` (exercised on asyncio in this suite). Nothing new is
+  # installed by this line -- httpx has depended
   # on anyio unconditionally since 0.23 -- but an import we make ourselves is
   # named here rather than inherited, so a future httpx that drops it fails
   # resolution instead of failing at a consumer's first async request.
@@ -79,6 +80,17 @@ dev = [
   # other half. Without this the claim would be reasoning, not evidence.
   "pytest-asyncio>=0.23",
 ]
+# The docs site. Kept out of `dev` deliberately: `uv sync` (no group flags,
+# what CI's non-docs jobs and a plain contributor checkout run, including
+# `uv sync --frozen` in .github/workflows/self-test.yml) has never needed to
+# resolve or install a static-site generator to run the tests, and this group
+# not existing in that closure is the proof. `tools/self-test.sh`'s docs step
+# runs `uv run --group docs mkdocs build --strict`, not plain `uv run`, so
+# that one step syncs this group itself regardless of how the caller synced.
+docs = [
+  "mkdocs>=1.6",
+  "mkdocs-material>=9.5",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -88,7 +100,7 @@ build-backend = "hatchling.build"
 packages = ["src/vendorfake"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/", "tests/", "tools/", "README.md", "LICENSE"]
+include = ["src/", "tests/", "tools/", "docs/", "README.md", "LICENSE"]
 
 # ---------------------------------------------------------------------------
 # ruff

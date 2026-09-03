@@ -1,10 +1,10 @@
 # Async consumers
 
 For a service that takes an `httpx.AsyncClient` — a FastAPI-style application,
-an async worker, anything whose fixtures are `async def`. The README's
-[Async consumers](../README.md#async-consumers) subsection is the short
-version; this is the whole surface, plus what a deliberate delay does on each
-binding.
+an async worker, anything whose fixtures are `async def`.
+[Which binding to use → In-process, async](start/bindings.md#in-process-async)
+is the short version; this is the whole surface, plus what a deliberate delay
+does on each binding.
 
 Nothing here needs `vendorfake.asgi`. That package is where the web framework
 lives, its shape exists to keep the core framework-free, and it is internal:
