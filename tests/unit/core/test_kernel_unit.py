@@ -372,7 +372,7 @@ def test_a_response_phase_fault_records_the_handlers_clean_answer() -> None:
     handler's real body untouched and attaches a ``UnitResponse.transport``
     directive plus the ``vendorfake-fault`` header (``core/chaos/faults.py``'s
     ``_directive``). Unlike a request-scope fault, which raises before
-    ``route.handler(args)`` ever runs, this one fires at step 8 with the
+    ``route.handler(args)`` ever runs, this one fires at step 9 with the
     entity already created and journalled -- and the store has no rollback.
     So the record written against the key is the handler's pre-fault answer:
     the retry replays it, the handler does not run twice, and no

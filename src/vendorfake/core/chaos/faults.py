@@ -82,10 +82,11 @@ RESPONSE-SCOPE FAULTS ARE A THIRD PHASE, NOT A THIRD CALL SITE HERE. The five
 faults in :data:`RESPONSE_PHASE_FAULTS` -- ``malformed_body``,
 ``body_mutation``, ``connection_reset``, ``empty_response``, ``slow_body`` --
 do not raise a ``UnitError`` at all: a fault that corrupts "the vendor
-returned garbage" needs the vendor's *real* answer to corrupt, so it has to
-run after the handler, not before or after auth. :func:`apply_response_fault`
-is that third call site, in ``kernel/unit.py`` where the handler's result is
-in scope; this module still owns the vocabulary, so ``apply_request_fault``
+returned garbage" needs an answer to corrupt, so it runs once the pipeline has
+one rather than before or after auth. :func:`apply_response_fault` is that
+third call site, in ``kernel/unit.py`` where an answer is in scope -- and the
+answer is not always the handler's: it may be a replay, or an error the
+pipeline raised. This module still owns the vocabulary, so ``apply_request_fault``
 recognises the five names and does nothing for them at either phase, rather
 than falling through to "unknown fault ignored" -- which is a real warning for
 a fault this core has genuinely never heard of, and would be a false one here.
@@ -363,14 +364,23 @@ def is_transport_fault(response: UnitResponse) -> bool:
 
 
 def apply_response_fault(decision: ChaosDecision, response: UnitResponse, *, log: Logger) -> UnitResponse:
-    """Corrupt a handler's real response for a response-scope fault, or hand
-    it back unchanged.
+    """Corrupt the answer the pipeline produced for a response-scope fault, or
+    hand it back unchanged.
 
-    Called once per request, after the handler ran and before idempotency
-    storage, with whatever :class:`ChaosDecision` fault selection armed for
-    this request -- the same decision :func:`apply_request_fault` already saw
-    twice and did nothing with, because a fault in :data:`RESPONSE_PHASE_FAULTS`
-    is this function's alone.
+    Called once per request, on whatever answer that is, with the
+    :class:`ChaosDecision` fault selection armed for this request -- the same
+    decision :func:`apply_request_fault` already saw twice and did nothing
+    with, because a fault in :data:`RESPONSE_PHASE_FAULTS` is this function's
+    alone. Three answers reach it:
+
+    * a fresh one, after the handler ran *and* after its clean response was
+      stored against the idempotency key, so no fault can enter the store;
+    * a replayed one, where the handler did not run on this request at all;
+    * a shaped error, raised anywhere after the decision was drawn.
+
+    So a fault here must not assume this request produced any handler state,
+    nor that the response was freshly built. Read ``response`` and the
+    decision's params; reach for nothing else.
 
     ``log`` is accepted for symmetry with :func:`apply_request_fault` and
     because a future fault kind may want it; none of today's five do.

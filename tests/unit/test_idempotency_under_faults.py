@@ -21,11 +21,14 @@ same claim is ``tests/unit/core/test_kernel_unit.py``'s
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
 import pytest
 
+from vendorfake.core.state.store import IdempotencyRecord
+from vendorfake.core.util.b64 import b64url_decode
 from vendorfake.testing import StartedUnit, unit
 
 IDEMPOTENCY_KEY = "pay-1"
@@ -47,6 +50,14 @@ GARBAGE_RULE: dict[str, Any] = {
     "when": {"times": 1},
 }
 
+RESET_TWICE_RULE: dict[str, Any] = {
+    "id": "drop",
+    "scope": "request",
+    "fault": "connection_reset",
+    "match": {"route": "POST /v2/payments"},
+    "when": {"times": 2},
+}
+
 SERVER_ERROR_RULE: dict[str, Any] = {
     "id": "five-hundred",
     "scope": "request",
@@ -60,17 +71,24 @@ def _auth(started: StartedUnit[Any]) -> dict[str, str]:
     return {"authorization": f"Bearer {started.seed.access_token}"}
 
 
-def _payment_body(amount: int = 500) -> dict[str, Any]:
+def _payment_body(amount: int = 500, key: str = IDEMPOTENCY_KEY) -> dict[str, Any]:
     return {
-        "idempotency_key": IDEMPOTENCY_KEY,
+        "idempotency_key": key,
         "source_id": "EXTERNAL",
         "amount_money": {"amount": amount},
         "external_details": {"type": "OTHER", "source": "Food Delivery Service"},
     }
 
 
-def _pay(started: StartedUnit[Any]) -> httpx.Response:
-    return started.client.post("/v2/payments", json=_payment_body(), headers=_auth(started))
+def _pay(started: StartedUnit[Any], key: str = IDEMPOTENCY_KEY) -> httpx.Response:
+    return started.client.post("/v2/payments", json=_payment_body(key=key), headers=_auth(started))
+
+
+def _stored(started: StartedUnit[Any], key: str = IDEMPOTENCY_KEY) -> IdempotencyRecord | None:
+    """The idempotency record the kernel holds for ``key`` -- read straight
+    from the store, because what a replay *carries* and what the store *holds*
+    are the two different things this file has to keep apart."""
+    return started.unit.context.store.get_idempotent("payments.create", key)
 
 
 def _payments_held(started: StartedUnit[Any]) -> int:
@@ -133,6 +151,107 @@ def test_a_garbage_body_replays_the_clean_committed_payment() -> None:
         assert _payments_held(started) == 1
         held = started.client.get(f"/v2/payments/{payment['id']}", headers=_auth(started))
         assert held.json()["payment"]["id"] == payment["id"]
+
+
+# ---------------------------------------------------------------------------
+# The armed decision is paid out on whatever answer the pipeline produces --
+# a replay included, because a vendor's network cannot tell a retry from a
+# first attempt.
+# ---------------------------------------------------------------------------
+
+
+def test_a_response_fault_budget_counts_only_faults_the_caller_observed() -> None:
+    """``times: 2`` means two dropped connections the caller has to survive,
+    not "two requests, one of which quietly replayed".
+
+    The fault is chosen before the idempotency lookup and is applied after it,
+    so the replay is reset just as the first answer was. The budget is spent
+    only on answers that reached the caller as faults, which is why the third
+    call -- the one the rule no longer covers -- is a clean replay and a call
+    on a fresh key afterwards is a clean creation."""
+    with unit("square") as started:
+        started.add_chaos_rule(RESET_TWICE_RULE)
+
+        with pytest.raises(httpx.RemoteProtocolError):
+            _pay(started)
+        with pytest.raises(httpx.RemoteProtocolError):
+            _pay(started)
+
+        replay = _pay(started)
+        assert replay.status_code == 200, replay.text
+        assert replay.headers.get("x-unit-idempotent-replay") == "true"
+        assert "vendorfake-fault" not in replay.headers
+        assert "vendorfake-rule" not in replay.headers
+
+        payment = replay.json()["payment"]
+        assert payment["status"] == "COMPLETED"
+        # Three calls on one key, one payment: the two faulted answers were the
+        # same commit as this clean one.
+        assert _payments_held(started) == 1
+        held = started.client.get(f"/v2/payments/{payment['id']}", headers=_auth(started))
+        assert held.status_code == 200, held.text
+        assert held.json()["payment"]["id"] == payment["id"]
+
+        fresh = _pay(started, key="pay-2")
+        assert fresh.status_code == 200, fresh.text
+        assert "vendorfake-fault" not in fresh.headers
+        assert "x-unit-idempotent-replay" not in fresh.headers
+        assert fresh.json()["payment"]["id"] != payment["id"]
+        assert _payments_held(started) == 2
+
+
+def test_the_request_log_fault_column_matches_the_response_on_a_replay() -> None:
+    """A row claiming ``fault: connection_reset`` for a call the caller got a
+    clean 200 on is the request log lying about the one thing it exists to
+    answer. The two faulted calls carry the fault and the rule that armed it;
+    the clean replay carries neither."""
+    with unit("square") as started:
+        started.add_chaos_rule(RESET_TWICE_RULE)
+
+        with pytest.raises(httpx.RemoteProtocolError):
+            _pay(started)
+        with pytest.raises(httpx.RemoteProtocolError):
+            _pay(started)
+        replay = _pay(started)
+        assert replay.status_code == 200, replay.text
+
+        rows = started.requests(route="POST /v2/payments")
+        assert len(rows) == 3, rows
+        newest, second, first = rows  # newest first
+        assert (first["fault"], first["rule_id"]) == ("connection_reset", "drop")
+        assert (second["fault"], second["rule_id"]) == ("connection_reset", "drop")
+        # ``as_json`` drops nulls, so "no fault" is an absent key, not a
+        # present ``None`` -- asserted through ``get`` for exactly that reason.
+        assert (newest.get("fault"), newest.get("rule_id"), newest["status"]) == (None, None, 200)
+
+
+def test_a_faulted_replay_never_rewrites_the_stored_answer() -> None:
+    """Faulting a replay must not feed the fault back into the store. Step 8 --
+    handler plus ``put_idempotent`` -- does not run at all on a replay, so the
+    record stays the clean answer the first call committed: no
+    ``vendorfake-fault``/``vendorfake-rule`` header, and no transport directive
+    (:class:`IdempotencyRecord` has nowhere to put one, which is the defect
+    storing a faulted response would re-create)."""
+    with unit("square") as started:
+        started.add_chaos_rule(RESET_TWICE_RULE)
+
+        with pytest.raises(httpx.RemoteProtocolError):
+            _pay(started)
+        committed = _stored(started)
+        assert committed is not None
+
+        with pytest.raises(httpx.RemoteProtocolError):
+            _pay(started)
+        after_replay = _stored(started)
+        assert after_replay == committed
+
+        assert after_replay is not None
+        assert after_replay.status == 200
+        assert "vendorfake-fault" not in after_replay.headers
+        assert "vendorfake-rule" not in after_replay.headers
+        assert "x-unit-idempotent-replay" not in after_replay.headers
+        body = json.loads(b64url_decode(after_replay.body_b64))
+        assert body["payment"]["status"] == "COMPLETED"
 
 
 # ---------------------------------------------------------------------------

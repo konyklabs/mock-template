@@ -1,4 +1,4 @@
-"""The unit: composition root, and the eight-step request pipeline.
+"""The unit: composition root, and the nine-step request pipeline.
 
 FOR: assembling a vendor definition and a resolved profile into the one object
 that answers requests, and running every request through the same ordered
@@ -7,7 +7,9 @@ file rather than of each vendor's handlers.
 
 INVARIANT: **the order below is the specification.** It is ported from
 ``packages/core/src/kernel/unit.ts`` and the steps carry numbered comments so a
-reviewer can diff eight against eight rather than re-deriving them. Each
+reviewer can diff them against the reference rather than re-deriving them --
+the reference's eight, with its step 8 split in two here so that the
+response-phase fault is applied to a replayed answer as well. Each
 boundary is observable, and each is pinned by a test that would pass under a
 plausible wrong order:
 
@@ -37,14 +39,22 @@ plausible wrong order:
    authenticated routes would be a second, divergent copy of that rule.
 7. **idempotency** -- lookup and replay, *after* auth, so a stored response is
    never handed to an unauthenticated caller who guessed a key, and after the
-   fault phases, so an injected 500 does not consume a key.
-8. **handler, idempotency store, finish and decorate** -- the handler runs, a
-   2xx response is stored against the key, and then ``finish()`` stamps
-   ``x-unit-request-id`` and gives the vendor its last chance to decorate.
+   fault phases, so an injected 500 does not consume a key. A hit *binds* the
+   replay rather than returning it, so step 9 still runs.
+8. **handler and idempotency store** -- on a miss only: the handler runs and
+   its clean 2xx response is stored against the key.
+9. **response-phase fault** -- applied to whichever answer step 8 left,
+   handler's or replay's, so a decision drawn at step 3 is paid out on every
+   answer the *vendor* produced, errors included: ``handle``'s error-shaping
+   block applies it to the answer a raise produced. A framework crash is not
+   a vendor answer and is never faulted -- the ``except Exception`` block
+   answers a 500 untouched. The caller's ``when.times`` budget therefore buys
+   only faults they observed.
 
 The router match happens **before** step 1 and produces both the ``no_route``
-404 and the ``method_not_allowed`` 405; ``finish()`` and ``decorate`` happen
-after step 8 on the success path *and on every error path*. Both live outside
+404 and the ``method_not_allowed`` 405; ``finish()`` stamps
+``x-unit-request-id`` and ``decorate`` gives the vendor its last chance, both
+after step 9 on the success path *and on every error path*. They live outside
 the numbering, where the reference puts them.
 
 ``decorate`` runs on shaped errors too, for any matched non-internal route --
@@ -104,7 +114,7 @@ from urllib.parse import parse_qsl
 
 from vendorfake.core.capability.gates import CoreCapability, assert_capability_declarations
 from vendorfake.core.capability.registry import CapabilityRegistry
-from vendorfake.core.chaos.engine import ChaosEngine, ChaosSubject
+from vendorfake.core.chaos.engine import ChaosDecision, ChaosEngine, ChaosSubject
 from vendorfake.core.chaos.faults import (
     RESPONSE_PHASE_FAULTS,
     apply_request_fault,
@@ -453,10 +463,25 @@ class _Trace:
     usually leaves through ``apply_request_fault``, and a near-miss list is
     computed where no route exists to return anything. A return value would be
     lost in exactly the cases worth recording.
+
+    The armed :class:`ChaosDecision` itself rides along for the same reason:
+    a request that leaves the pipeline by raising still owes the caller
+    whatever the decision promised, and ``handle``'s error-shaping block is
+    the only place left that can pay it out.
     """
 
     fault: str | None = None
     rule_id: str | None = None
+    #: The decision drawn at step 3, whole -- ``fault``/``rule_id`` above are
+    #: the two fields the request log wants, kept as they were because other
+    #: code reads them.
+    decision: ChaosDecision | None = None
+    #: Whether the payout has already been *tried* on this request. Set before
+    #: the attempt, not after, because the attempt itself can raise: two of the
+    #: five response-phase faults reject bad params with a ``UnitError``, and
+    #: without this the error path would call them again and raise from inside
+    #: the ``except`` clause, escaping ``handle`` entirely.
+    response_fault_attempted: bool = False
     near_misses: tuple[NearMiss, ...] = ()
 
 
@@ -872,6 +897,38 @@ class Unit:
                 fault=err.fault,
                 rule_id=err.rule_id,
             )
+            # An error that left the pipeline by *raising* -- a 401, a missing
+            # scope, a missing idempotency key, an idempotency conflict -- is
+            # still the answer this caller gets, so a response-phase fault
+            # armed at step 3 applies to it exactly as step 9 applies it to a
+            # handler's answer or to a replay. Without this the fault is drawn
+            # and counted and nothing is delivered: the rule's ``when.times``
+            # budget is spent on a clean 401 and the request log claims a
+            # fault the caller never saw.
+            #
+            # Nothing is applied twice. A request-phase fault raises its own
+            # ``UnitError`` at step 4 or 6 and is not in
+            # ``RESPONSE_PHASE_FAULTS``, so this branch skips it and its
+            # ``fault``/``rule_id`` reach the response through ``_shape``
+            # above. Response-phase faults need the flag instead, because two
+            # of the five *do* raise: ``body_mutation`` with no ``params.ops``
+            # and ``malformed_body`` with an unknown ``params.mode`` are
+            # rejected here rather than at rule-add time, where no route table
+            # exists to check them against. Step 9 sets the flag before it
+            # tries, so a payout that raised is not attempted a second time --
+            # which would raise again from inside this ``except`` clause and
+            # take the exception straight out of ``handle``, costing the caller
+            # the 400 that names the bad rule.
+            # provenance: judgment -- a vendor's edge does not know which of
+            # its own answers is an error, and this project decided the
+            # decision is honoured on whatever the caller is handed.
+            if (
+                trace.decision is not None
+                and not trace.response_fault_attempted
+                and trace.decision.fault in RESPONSE_PHASE_FAULTS
+            ):
+                trace.response_fault_attempted = True
+                shaped_error = apply_response_fault(trace.decision, shaped_error, log=self._log)
             return self._finish(req, shaped_error, route, started, trace)
         except Exception as exc:
             # Not a UnitError, so nothing in the core meant this: it is a defect
@@ -928,6 +985,7 @@ class Unit:
             # would be exactly the 429 a consumer cannot explain.
             trace.fault = decision.fault
             trace.rule_id = decision.rule_id
+            trace.decision = decision
 
         # 4. pre-auth faults -------------------------------------------------
         if decision is not None:
@@ -954,6 +1012,7 @@ class Unit:
         idem = route.idempotency
         idem_key: str | None = None
         request_digest = ""
+        replayed: UnitResponse | None = None
         if idem is not None:
             body = args.body()
             raw = dot_get(body, idem.key_path)
@@ -962,7 +1021,12 @@ class Unit:
                 request_digest = digest_of(dict(body))
                 stored = self._store.get_idempotent(idem.scope, idem_key)
                 if stored is not None:
-                    return self._replay(idem.scope, idem.key_path, idem.on_mismatch, idem_key, request_digest, stored)
+                    # Bound, not returned: a response-phase fault armed at step
+                    # 3 still owes this caller its answer, and step 9 applies it
+                    # to the replay exactly as it would to a fresh one.
+                    replayed = self._replay(
+                        idem.scope, idem.key_path, idem.on_mismatch, idem_key, request_digest, stored
+                    )
             elif idem.required:
                 raise UnitError(
                     UnitErrorKind.MISSING_FIELD,
@@ -971,65 +1035,98 @@ class Unit:
                 )
 
         # 8. handler, then store the response against the idempotency key ----
-        res = normalize(route.handler(args))
-        # WHAT GETS RECORDED IS THE HANDLER'S CLEAN ANSWER, RECORDED BEFORE
-        # ANY RESPONSE-PHASE FAULT TOUCHES IT.
-        #
-        # The handler has already run: it created the entity and journalled
-        # it. That commit is exactly what an idempotency key exists to make
-        # safe to retry, and this store has no transaction to undo it with
-        # (``core/state/store.py`` has no rollback and no savepoint). So the
-        # record is written here, between the handler and the fault, and the
-        # retry replays the answer the vendor really committed.
-        #
-        # Two earlier shapes were both wrong, and the reasons are worth
-        # keeping. First this stored whatever the handler-plus-fault pipeline
-        # produced, on the theory that "a replay gets exactly what the caller
-        # got the first time, faulted or not" -- but ``IdempotencyRecord``
-        # has nowhere to put a ``UnitResponse.transport`` directive, so a
-        # stored ``connection_reset`` or ``slow_body`` replayed as a clean
-        # 200 that still carried the ``vendorfake-fault`` header the real
-        # fault stamped, silently switching off any validator that trusts
-        # :func:`is_transport_fault` (``core/chaos/faults.py``) on every
-        # later replay of that key. Then it skipped the record entirely for a
-        # faulted response, by analogy with a request-scope fault. That
-        # analogy is false: a request-scope fault raises at step 4 or 6,
-        # *before* ``route.handler(args)`` ever runs, so nothing was
-        # committed and re-running is correct -- while a response-phase fault
-        # runs at step 8, *after* the commit, so skipping the record
-        # discards the only trace of it and a retry with the same key
-        # charges the caller twice. That is the single guarantee an
-        # idempotency key carries, modelled backwards, on precisely the
-        # fault (``connection_reset``) whose whole purpose is to rehearse a
-        # retry across a dropped connection.
-        #
-        # Recording the pre-fault ``res`` gets both: no ``TransportDirective``
-        # and no ``vendorfake-fault``/``vendorfake-rule`` header can reach
-        # ``IdempotencyRecord``, because the fault has not been applied yet,
-        # and the retry answers with the payment the handler really made.
-        # provenance: judgment -- no vendor documents what its idempotency
-        # store does when the response never reaches the caller; committing
-        # first and replaying the commit is what a real store's ordering
-        # gives you.
-        if idem is not None and idem_key is not None and 200 <= res.status < 300:
-            self._store.put_idempotent(
-                IdempotencyRecord(
-                    scope=idem.scope,
-                    key=idem_key,
-                    request_digest=request_digest,
-                    status=res.status,
-                    headers=dict(res.headers),
-                    body_b64=b64url_encode(res.body),
-                    stored_at=self._clock.iso_ms(),
+        # Skipped whole on a replay: the vendor committed once, and step 7
+        # already has the answer that commit produced.
+        if replayed is not None:
+            res = replayed
+        else:
+            res = normalize(route.handler(args))
+            # WHAT GETS RECORDED IS THE HANDLER'S CLEAN ANSWER, RECORDED BEFORE
+            # ANY RESPONSE-PHASE FAULT TOUCHES IT.
+            #
+            # The handler has already run: it created the entity and journalled
+            # it. That commit is exactly what an idempotency key exists to make
+            # safe to retry, and this store has no transaction to undo it with
+            # (``core/state/store.py`` has no rollback and no savepoint). So the
+            # record is written here, between the handler and the fault, and the
+            # retry replays the answer the vendor really committed.
+            #
+            # Two earlier shapes were both wrong, and the reasons are worth
+            # keeping. First this stored whatever the handler-plus-fault pipeline
+            # produced, on the theory that "a replay gets exactly what the caller
+            # got the first time, faulted or not" -- but ``IdempotencyRecord``
+            # has nowhere to put a ``UnitResponse.transport`` directive, so a
+            # stored ``connection_reset`` or ``slow_body`` replayed as a clean
+            # 200 that still carried the ``vendorfake-fault`` header the real
+            # fault stamped, silently switching off any validator that trusts
+            # :func:`is_transport_fault` (``core/chaos/faults.py``) on every
+            # later replay of that key. Then it skipped the record entirely for a
+            # faulted response, by analogy with a request-scope fault. That
+            # analogy is false: a request-scope fault raises at step 4 or 6,
+            # *before* ``route.handler(args)`` ever runs, so nothing was
+            # committed and re-running is correct -- while a response-phase fault
+            # runs at step 9, *after* the commit, so skipping the record
+            # discards the only trace of it and a retry with the same key
+            # charges the caller twice. That is the single guarantee an
+            # idempotency key carries, modelled backwards, on precisely the
+            # fault (``connection_reset``) whose whole purpose is to rehearse a
+            # retry across a dropped connection.
+            #
+            # Recording the pre-fault ``res`` gets both: no ``TransportDirective``
+            # and no ``vendorfake-fault``/``vendorfake-rule`` header can reach
+            # ``IdempotencyRecord``, because the fault has not been applied yet,
+            # and the retry answers with the payment the handler really made.
+            # provenance: judgment -- no vendor documents what its idempotency
+            # store does when the response never reaches the caller; committing
+            # first and replaying the commit is what a real store's ordering
+            # gives you.
+            #
+            # A third shape was wrong too, and it is why this block sits under
+            # an ``else`` and the fault moved to step 9. Step 7 used to
+            # *return* the replay, which skipped the fault the decision at
+            # step 3 had already armed and already counted: the rule's
+            # ``when.times`` budget was spent on a request the caller saw no
+            # fault on, and the request log claimed a ``connection_reset`` for
+            # a clean 200. A vendor's network does not know a request is a
+            # retry, so a response-phase fault applies to a replayed answer
+            # exactly as it does to a fresh one -- the "second dropped
+            # connection" a robust client has to survive. ``state.fires`` then
+            # counts only faults the caller observed, and the log's ``fault``
+            # matches the response. The stored record is still untouched by
+            # any fault, because a replay does not store.
+            # provenance: judgment -- no vendor documents whether its edge
+            # would corrupt a replayed answer; honouring the armed decision on
+            # whatever the pipeline produces is the only rule that keeps the
+            # budget and the log honest.
+            if idem is not None and idem_key is not None and 200 <= res.status < 300:
+                self._store.put_idempotent(
+                    IdempotencyRecord(
+                        scope=idem.scope,
+                        key=idem_key,
+                        request_digest=request_digest,
+                        status=res.status,
+                        headers=dict(res.headers),
+                        body_b64=b64url_encode(res.body),
+                        stored_at=self._clock.iso_ms(),
+                    )
                 )
-            )
+        # 9. response-phase fault, on whichever answer step 8 produced -------
         # A response-scope fault ("the vendor returned garbage") corrupts a
         # REAL answer, so it can only run after the handler produced one --
         # unlike every fault above, which fires instead of the handler ever
         # running. It never touches ``ctx``, so it cannot journal anything on
         # its own; DELAYS LEAVE AS DATA applies here too, via
         # ``UnitResponse.transport``.
+        #
+        # "Whichever answer" is the point: a replay from step 7 is faulted the
+        # same as a fresh one, so the decision drawn at step 3 is paid out on
+        # every answer the vendor produced -- including on the paths that never
+        # reach here, where ``handle``'s ``except UnitError`` block applies it
+        # to the shaped error instead. A framework crash is not a vendor
+        # answer: the ``except Exception`` block's 500 is never faulted. See
+        # the step 8 comment for why.
         if decision is not None and decision.fault in RESPONSE_PHASE_FAULTS:
+            trace.response_fault_attempted = True
             res = apply_response_fault(decision, res, log=self._log)
         return res
 

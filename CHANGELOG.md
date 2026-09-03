@@ -129,12 +129,22 @@ in full under the heading named beside it.
   keyword-only with a default of `"vendor"`, so it is purely additive: a
   fork's existing three- or four-positional `FaultSpec(...)` construction
   (`name, scope, summary[, params]`) keeps its v0.1.0 meaning rather than
-  silently binding its `params` prose to `provenance`. `Vendorfake-Fault` and `Vendorfake-Rule` headers. `slow_body` races a
+  silently binding its `params` prose to `provenance`. `slow_body` races a
   client's read timeout on the single gap between two chunks, not their sum,
   because that is what httpx's read timeout actually measures — a client that
   tolerates each gap never times out however long the whole transfer takes,
   and the in-process transport matches the served one so a test green in one
-  is green in the other.
+  is green in the other. When a response-phase fault hits an idempotent
+  request, the key stores the handler's clean answer, recorded before the
+  fault touches it, so a retry replays the payment the vendor already took
+  instead of taking a second one. A response-phase fault armed for a request applies to
+  the replay of an idempotent key too, exactly as it does to a fresh answer: a
+  vendor's network does not know a request is a retry, and a second dropped
+  connection is what a robust client has to survive. So a rule's `times`
+  budget counts only the faults the caller actually observed, and the request
+  log's `fault` column matches the response the caller got rather than the
+  decision the pipeline drew. The stored idempotency record is still never
+  touched by a fault, because a replay does not store.
 * **vendorfake:** discover profiles and routes by code — `registry.available_profiles`, `registry.routes`, `Driver.route_for`/`path_for`, and a per-vendor `paths` module of hand-written path constants kept honest against the router by `tests/unit/test_paths_drift.py` (konyklabs/roadmap#70)
 * **vendorfake:** add `VendorDefinition.roles`, the neutral capability-role vocabulary (`auth`, `orders`, `webhooks`, `chaos`) every vendor maps to its own capability names, published at `GET /__unit/info` under `vendor.roles`. It is a required member
   of the `VendorDefinition` protocol, so it is also a **breaking change for a
