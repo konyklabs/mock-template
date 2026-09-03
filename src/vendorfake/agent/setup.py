@@ -62,7 +62,17 @@ def _mcp_entry() -> dict[str, object]:
 
 def _merge_mcp(existing: dict[str, object]) -> dict[str, object]:
     """Add or replace the ``vendorfake`` entry under ``mcpServers``, preserving
-    every other key and every other server the document already holds."""
+    every other key and every other server the document already holds.
+
+    Assumes ``existing["mcpServers"]``, when present, is already a ``dict`` --
+    :func:`_load_and_merge_mcp` is this function's only caller, and it refuses
+    a non-object ``mcpServers`` before ever reaching here. The
+    ``isinstance(servers_raw, dict)`` check below is what makes an *absent*
+    ``mcpServers`` key ``{}`` rather than a ``KeyError``; it is not, on its
+    own, the validation -- a non-object value must never reach this function
+    silently coerced into an empty dict, which is why the check lives one
+    layer up, where there is a path to name in the refusal.
+    """
     merged = dict(existing)
     servers_raw = merged.get("mcpServers")
     servers = dict(servers_raw) if isinstance(servers_raw, dict) else {}
@@ -83,6 +93,14 @@ def _load_and_merge_mcp(mcp_path: Path) -> dict[str, object]:
     array, a string, a number, or text that is not valid JSON at all) is a
     ``ValueError`` naming the file and the problem, not a silently discarded
     document and not a bare ``json.JSONDecodeError`` traceback.
+
+    A present ``mcpServers`` key is checked too, the same way: it must be a
+    JSON object, because that is the only shape a server name can be a key
+    of. Anything else (most plausibly an array, from a document authored
+    with a different MCP client's schema in mind) is refused by name rather
+    than silently replaced with ``{}`` -- which is what unconditionally
+    trusting ``isinstance(servers_raw, dict)`` inside :func:`_merge_mcp`
+    would do, discarding every server the document already named.
     """
     if not mcp_path.exists():
         return _merge_mcp({})
@@ -96,6 +114,11 @@ def _load_and_merge_mcp(mcp_path: Path) -> dict[str, object]:
         raise ValueError(
             f"{mcp_path} must contain a JSON object at the top level (got {type(parsed).__name__}); "
             "refusing to merge into it."
+        )
+    if "mcpServers" in parsed and not isinstance(parsed["mcpServers"], dict):
+        raise ValueError(
+            f'{mcp_path}\'s "mcpServers" must be a JSON object '
+            f"(got {type(parsed['mcpServers']).__name__}); refusing to merge into it."
         )
     return _merge_mcp(parsed)
 

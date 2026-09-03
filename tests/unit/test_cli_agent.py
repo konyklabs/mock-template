@@ -166,6 +166,25 @@ def test_agent_setup_mcp_refuses_invalid_json_and_writes_nothing(tmp_path: Path)
     assert not (tmp_path / ".claude" / "rules" / "vendorfake.md").exists()
 
 
+def test_agent_setup_mcp_refuses_a_non_object_mcp_servers_block(tmp_path: Path) -> None:
+    """``mcpServers`` itself must be a JSON object. A document with it as an
+    array (a plausible mistake carried over from a different MCP client's
+    schema) must be a named refusal, not a silent replacement of every
+    server it already named with ``{"vendorfake": ...}`` -- which is what
+    ``_merge_mcp``'s own ``isinstance(servers_raw, dict) else {}`` fallback
+    would otherwise do unnoticed."""
+    mcp_path = tmp_path / ".mcp.json"
+    original = json.dumps({"mcpServers": ["not", "an", "object"]})
+    mcp_path.write_text(original, encoding="utf-8")
+
+    with pytest.raises(SystemExit) as raised:
+        run("agent-setup", "--dir", str(tmp_path), "--mcp", "--allow-future")
+    assert str(mcp_path) in str(raised.value)
+    assert "mcpServers" in str(raised.value)
+    assert mcp_path.read_text(encoding="utf-8") == original  # untouched
+    assert not (tmp_path / ".claude" / "rules" / "vendorfake.md").exists()
+
+
 # ---------------------------------------------------------------------------
 # explain: route
 # ---------------------------------------------------------------------------
