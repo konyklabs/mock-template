@@ -1,6 +1,6 @@
 [project]
 name = "vendorfake"
-version = "0.2.0"
+version = "0.3.0"
 description = "High-fidelity fakes of third-party vendor APIs: stateful flows, signed webhooks, deterministic fault injection."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -108,6 +108,14 @@ the 0.2 gate approval (konyklabs/roadmap#99).
   `docs/pytest-plugin.md` — narrowing the marker fixtures' `Seed` under a
   type checker (#101, item 16).
 
+## [0.3.0](https://github.com/konyklabs/vendorfake/compare/v0.2.0...v0.3.0) (2026-09-03)
+
+
+### Features
+
+* **testing:** consumer feedback round 2 — fault phase, seed.token, timeout on a virtual clock, rule-error header (konyklabs/roadmap[#101](https://github.com/konyklabs/vendorfake/issues/101)) ([#36](https://github.com/konyklabs/vendorfake/issues/36)) ([45a55e4](https://github.com/konyklabs/vendorfake/commit/45a55e4de0fbcac73e1a741a7d0b40d525577c3b))
+* **testing:** served(env=) and the shared-unit reset recipe (konyklabs/roadmap[#102](https://github.com/konyklabs/vendorfake/issues/102)) ([#38](https://github.com/konyklabs/vendorfake/issues/38)) ([efa8f6d](https://github.com/konyklabs/vendorfake/commit/efa8f6d73de806fd06f7ac5fcfd62be701e49145))
+
 ## [0.2.0](https://github.com/konyklabs/vendorfake/compare/v0.1.0...v0.2.0) (2026-09-03)
 
 The 0.2.0 notes, hand-written because a release this size needs more than its
