@@ -1,11 +1,11 @@
-"""C01 and C24 -- the unit describes itself, and says so when nothing answered.
+"""C01 and C33 -- the unit describes itself, and says so when nothing answered.
 
 Every other contract reads the control plane to aim itself, so C01 runs first
 and states the minimum: the unit is alive, it says what it is, and it publishes
 its own surface. A unit that fails C01 cannot be examined at all, and every
 later failure would be a consequence rather than a finding.
 
-C24 is the other direction: what the unit says about a request it could not
+C33 is the other direction: what the unit says about a request it could not
 answer. A vendor's own 404 names nothing -- it cannot, because the vendor has
 no idea what surface this fake models -- so the diagnosis rides in a header and
 the request itself is recorded as unmatched. Both halves are asserted here
@@ -108,7 +108,7 @@ def control_plane_describes_the_unit(env: CheckEnv) -> str:
 
 
 @check(
-    id="C24",
+    id="C33",
     name="control plane: an unmatched request is named and recorded",
     asserts=(
         "A request no route matches answers with a Vendorfake-Near-Miss header carrying a ranked, "

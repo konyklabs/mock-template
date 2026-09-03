@@ -106,6 +106,13 @@ def _unmatched_message(unit: Unit, method: str, path: str, header: str) -> str:
             lines.append(f"  {miss.get('route', '')!s:<{width}}  {operation:<24} {float(miss.get('score', 0)):.2f}")
     else:
         lines.append("This profile enables no route at all to compare against.")
+    # DEVIATION from the spec's closing line ("Use vendorfake.square.paths or
+    # driver.path_for(...)"): neither `vendorfake.<vendor>.paths` nor
+    # `driver.path_for` exists on this branch -- they are stream C's
+    # discovery helpers. Pointing at them here would name an API a reader
+    # cannot import yet, so this points at the one discovery surface that
+    # does exist instead. TODO(stream C, roadmap#72): once those helpers
+    # land, swap this line for the spec's.
     lines.append(
         "GET /__unit/routes lists every route this profile serves; "
         'pass unmatched="vendor-404" to unit() to receive the vendor\'s own 404 instead.'

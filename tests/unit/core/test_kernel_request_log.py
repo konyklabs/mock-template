@@ -159,6 +159,28 @@ def test_a_control_plane_request_is_never_recorded() -> None:
     assert [row.path for row in unit.requests.records()] == ["/v2/orders"]
 
 
+def test_a_mistyped_control_plane_path_is_still_never_recorded() -> None:
+    """Excluded by path prefix, not only by matched route: a request under
+    `/__unit/*` that matches no route -- a fixture's typo, a stray preflight
+    -- is still the observer's own traffic. Recording it would let a
+    consumer's polling mistake masquerade as the vendor call under test, and
+    would evict real traffic out from under a small `requests.capacity`."""
+    api, unit = _api()
+    api.get("/v2/orders")
+    api.get("/__unit/reqests")
+    assert [row.path for row in unit.requests.records()] == ["/v2/orders"]
+
+
+def test_a_wrong_verb_on_a_real_control_route_is_still_never_recorded() -> None:
+    """Same exclusion, reached through a 405 rather than a 404: the path is a
+    real control route, only the verb is wrong, and it is still control-plane
+    traffic that must stay absent from the log."""
+    api, unit = _api()
+    api.get("/v2/orders")
+    api.put("/__unit/health")
+    assert [row.path for row in unit.requests.records()] == ["/v2/orders"]
+
+
 def test_an_unmatched_request_is_recorded_with_its_near_misses() -> None:
     api, unit = _api()
     api.get("/v2/order")

@@ -24,7 +24,7 @@
     "C21": "webhooks: the declared retry schedule is the schedule actually followed",
     "C22": "state: the seed scenario is deterministic across two OPERATING-SYSTEM PROCESSES",
     "C23": "transport: a repeated query parameter reaches the handler whole",
-    "C24": "control plane: an unmatched request is named and recorded"
+    "C33": "control plane: an unmatched request is named and recorded"
   },
   "expected_skips": {
     "C07": [

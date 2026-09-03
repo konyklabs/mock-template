@@ -1247,9 +1247,10 @@ def _flag(raw: str | None, *, field: str) -> bool | None:
 
     ``?unmatched=false`` must mean "only the matched ones" and not "no filter",
     so absence and ``false`` are different answers. The accepted spellings are
-    the two JSON ones plus a bare key (``?unmatched``), which is what a caller
-    types and which every binding delivers as an empty value; anything else is
-    refused rather than guessed, because JavaScript-style truthiness would make
+    ``true``, ``1`` or ``yes`` for true -- plus a bare key (``?unmatched``),
+    which is what a caller types and which every binding delivers as an empty
+    value -- and ``false``, ``0`` or ``no`` for false; anything else is refused
+    rather than guessed, because JavaScript-style truthiness would make
     ``?unmatched=false`` select exactly the wrong half.
     """
     if raw is None:

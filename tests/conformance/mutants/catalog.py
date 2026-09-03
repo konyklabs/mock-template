@@ -1125,7 +1125,7 @@ Python startup assertion in front of it.
 
 
 # ---------------------------------------------------------------------------
-# C24 -- an unmatched request is named and recorded.
+# C33 -- an unmatched request is named and recorded.
 # ---------------------------------------------------------------------------
 
 
@@ -1147,11 +1147,11 @@ def _near_miss_stripping_binding(transport: str, client: ConformanceClient) -> C
 
 register(
     Mutant(
-        id="M32",
+        id="M54",
         name="near-miss-header-stripped",
         defect="The binding drops Vendorfake-Near-Miss, so an unmatched request answers 404 and names nothing.",
         provenance=Provenance.HYPOTHETICAL,
-        trips=frozenset({"C24"}),
+        trips=frozenset({"C33"}),
         client=_near_miss_stripping_binding,
     )
 )
@@ -1160,7 +1160,7 @@ register(
 A vendor's 404 is a correct 404 with or without it, so every other contract
 stays green and a consumer's mis-targeted test goes on failing several
 assertions later with no explanation. That is exactly the state this feature
-was added to leave behind, and it is why C24 asserts the header's presence
+was added to leave behind, and it is why C33 asserts the header's presence
 rather than only the request log's contents: the log is read deliberately, the
 header arrives whether or not anyone thought to look.
 """
