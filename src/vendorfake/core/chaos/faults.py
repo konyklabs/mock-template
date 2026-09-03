@@ -412,11 +412,13 @@ def _stamp(headers: dict[str, str], fault: str, rule: str) -> None:
 def _malformed_body(response: UnitResponse, params: Mapping[str, Any], *, fault: str, rule: str) -> UnitResponse:
     """``mode: invalid_json | html | empty | truncate``.
 
-    ``status`` is the fault's own parameter, not the real response's status:
-    the real response is always a success (nothing here runs otherwise -- see
-    the module docstring), and "the vendor answered 200 with garbage" is
-    exactly as real a case as "the vendor answered 502 with an HTML page", so
-    the fault states which one it is rather than inheriting one.
+    The answer keeps its own status unless the rule says otherwise. An
+    explicit ``params.status`` always wins, and ``html`` defaults to 502
+    because a proxy's HTML error page is plausible in front of any answer;
+    every other mode inherits ``response.status``, which is 200 on a success
+    exactly as before and the real status on a shaped error. Substituting 200
+    there would turn a 401 into a success and tell a consumer's code the
+    opposite of what happened.
     """
     mode = params.get("mode")
     if mode not in ("invalid_json", "html", "empty", "truncate"):
@@ -428,7 +430,7 @@ def _malformed_body(response: UnitResponse, params: Mapping[str, Any], *, fault:
             ),
             field="params.mode",
         )
-    default_status = 502 if mode == "html" else 200
+    default_status = 502 if mode == "html" else response.status
     status = as_int(params.get("status"), default_status)
     headers = dict(response.headers)
     if mode == "html":

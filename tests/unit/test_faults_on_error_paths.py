@@ -226,3 +226,122 @@ def test_a_malformed_body_with_an_unknown_mode_answers_the_diagnostic_too() -> N
         assert answered.status_code == 400, answered.text
         assert answered.headers["x-unit-error"] == "invalid_value"
         assert "mb" in answered.text
+
+
+# ---------------------------------------------------------------------------
+# The payout attempt on a shaped error can fail on its own terms. It answers
+# the diagnostic; it never escapes ``handle``.
+# ---------------------------------------------------------------------------
+
+BAD_POINTER_RULE: dict[str, Any] = {
+    "id": "bm",
+    "scope": "request",
+    "fault": "body_mutation",
+    "params": {"ops": [{"op": "replace", "pointer": "/status", "value": "CORRUPT"}]},
+    "match": {"route": "POST /v2/payments"},
+    "when": {"times": 1},
+}
+
+
+def test_a_pointer_that_the_error_envelope_lacks_answers_the_diagnostic() -> None:
+    """The first attempt is the one that raises here, so the
+    already-attempted flag cannot help.
+
+    ``/status`` exists in a payment and not in the 403 envelope the scope
+    check produced, so the payout fails inside ``handle``'s ``except
+    UnitError`` block. Without a nested ``try`` the raise escapes ``handle``
+    entirely -- a served unit answers a framework 500, which is the one
+    document this kernel promises no caller ever gets."""
+    with unit("square") as started:
+        started.add_chaos_rule(BAD_POINTER_RULE)
+
+        answered = _pay(started, headers=dict(started.seed.read_only_auth))
+        assert answered.status_code == 400, answered.text
+        assert answered.headers["x-unit-error"] == "invalid_value"
+        assert "bm" in answered.text
+        assert "/status" in answered.text
+
+        row = _rows(started)[0]
+        assert (row["status"], row.get("fault"), row.get("rule_id")) == (400, "body_mutation", "bm")
+
+
+def test_a_bad_mode_on_an_unauthorized_call_answers_the_diagnostic() -> None:
+    """The same shape on the 401 path, with the fault that rejects its own
+    ``params.mode``."""
+    with unit("square") as started:
+        started.add_chaos_rule(BAD_MODE_RULE)
+
+        answered = _pay(started, headers={"Authorization": "Bearer not-a-real-token"})
+        assert answered.status_code == 400, answered.text
+        assert answered.headers["x-unit-error"] == "invalid_value"
+        assert "mb" in answered.text
+
+
+# ---------------------------------------------------------------------------
+# A corrupted answer keeps the status it had.
+# ---------------------------------------------------------------------------
+
+
+def _malformed_rule(mode: str, *, status: int | None = None) -> dict[str, Any]:
+    params: dict[str, Any] = {"mode": mode}
+    if status is not None:
+        params["status"] = status
+    return {
+        "id": "mb",
+        "scope": "request",
+        "fault": "malformed_body",
+        "params": params,
+        "match": {"route": "POST /v2/payments"},
+        "when": {"times": 1},
+    }
+
+
+def test_a_truncated_error_body_keeps_the_errors_own_status() -> None:
+    """A 401 whose body is cut in half is still a 401. Reporting 200 would
+    tell a consumer's code the call succeeded, which is the opposite of what
+    happened -- and the caller cannot read the body to find out, because
+    truncating it is the point."""
+    with unit("square") as started:
+        started.add_chaos_rule(_malformed_rule("truncate"))
+
+        answered = _pay(started, headers={"Authorization": "Bearer not-a-real-token"})
+        assert answered.status_code == 401, answered.text
+        assert answered.headers["vendorfake-fault"] == "malformed_body"
+        with pytest.raises(ValueError):
+            answered.json()
+
+
+def test_a_truncated_success_body_still_answers_two_hundred() -> None:
+    """The success case is unchanged: it inherits its own 200."""
+    with unit("square") as started:
+        started.add_chaos_rule(_malformed_rule("truncate"))
+
+        answered = _pay(started)
+        assert answered.status_code == 200, answered.text
+        assert answered.headers["vendorfake-fault"] == "malformed_body"
+        with pytest.raises(ValueError):
+            answered.json()
+
+
+def test_an_html_error_page_still_defaults_to_five_hundred_and_two() -> None:
+    """``html`` keeps its own default whatever it is put in front of: a proxy
+    that answers an HTML page does not consult the origin's status."""
+    with unit("square") as started:
+        started.add_chaos_rule(_malformed_rule("html"))
+
+        answered = _pay(started, headers={"Authorization": "Bearer not-a-real-token"})
+        assert answered.status_code == 502, answered.text
+        assert answered.headers["content-type"] == "text/html"
+
+
+def test_an_explicit_status_wins_on_an_error_and_on_a_success() -> None:
+    """``params.status`` is still the last word either way."""
+    with unit("square") as started:
+        started.add_chaos_rule(_malformed_rule("truncate", status=503))
+        failed = _pay(started, headers={"Authorization": "Bearer not-a-real-token"})
+        assert failed.status_code == 503, failed.text
+
+    with unit("square") as started:
+        started.add_chaos_rule(_malformed_rule("truncate", status=503))
+        ok = _pay(started)
+        assert ok.status_code == 503, ok.text

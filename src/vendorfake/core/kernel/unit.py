@@ -49,7 +49,10 @@ plausible wrong order:
    block applies it to the answer a raise produced. A framework crash is not
    a vendor answer and is never faulted -- the ``except Exception`` block
    answers a 500 untouched. The caller's ``when.times`` budget therefore buys
-   only faults they observed.
+   only faults that were applied to an answer they received -- with two
+   named exceptions: a payout whose own params are invalid spends the budget
+   and answers the 400 diagnostic naming the rule instead, and a framework
+   crash spends it on the clean 500 above.
 
 The router match happens **before** step 1 and produces both the ``no_route``
 404 and the ``method_not_allowed`` 405; ``finish()`` stamps
@@ -919,6 +922,16 @@ class Unit:
             # which would raise again from inside this ``except`` clause and
             # take the exception straight out of ``handle``, costing the caller
             # the 400 that names the bad rule.
+            #
+            # The FIRST attempt can raise here too, and the flag cannot help
+            # with that one: an error raised before step 9 arrives with the
+            # payout still owed, and the shaped error is a different document
+            # from the handler's -- a ``body_mutation`` pointer that exists in
+            # a payment does not exist in a 403 envelope. So the attempt gets
+            # its own ``try``, and a payout that cannot be applied answers the
+            # same diagnostic it would have answered from step 9, whichever
+            # path reached it. Nothing leaves ``handle`` by raising except the
+            # framework path below.
             # provenance: judgment -- a vendor's edge does not know which of
             # its own answers is an error, and this project decided the
             # decision is honoured on whatever the caller is handed.
@@ -928,7 +941,16 @@ class Unit:
                 and trace.decision.fault in RESPONSE_PHASE_FAULTS
             ):
                 trace.response_fault_attempted = True
-                shaped_error = apply_response_fault(trace.decision, shaped_error, log=self._log)
+                try:
+                    shaped_error = apply_response_fault(trace.decision, shaped_error, log=self._log)
+                except UnitError as fault_err:
+                    shaped_error = self._shape(
+                        self._vendor.errors.shape(fault_err, self._ctx),
+                        fault_err.kind,
+                        delay_ms=fault_err.delay_ms,
+                        fault=fault_err.fault,
+                        rule_id=fault_err.rule_id,
+                    )
             return self._finish(req, shaped_error, route, started, trace)
         except Exception as exc:
             # Not a UnitError, so nothing in the core meant this: it is a defect
@@ -1123,8 +1145,10 @@ class Unit:
         # every answer the vendor produced -- including on the paths that never
         # reach here, where ``handle``'s ``except UnitError`` block applies it
         # to the shaped error instead. A framework crash is not a vendor
-        # answer: the ``except Exception`` block's 500 is never faulted. See
-        # the step 8 comment for why.
+        # answer: the ``except Exception`` block's 500 is never faulted. The
+        # budget, drawn at step 3, is spent either way -- including when the
+        # payout itself fails on bad params and the caller gets the 400
+        # diagnostic rather than the fault. See the step 8 comment for why.
         if decision is not None and decision.fault in RESPONSE_PHASE_FAULTS:
             trace.response_fault_attempted = True
             res = apply_response_fault(decision, res, log=self._log)
