@@ -527,13 +527,26 @@ def test_a_non_ascii_chaos_rule_id_survives_both_transports() -> None:
 
 
 def test_a_non_ascii_entity_id_survives_both_transports() -> None:
-    """A consumer-supplied entity id reaches `UnitError.info` verbatim --
-    `DELETE /__unit/chaos/rules/{id}` on a rule that was never added raises
-    the same `info={"id": entity_id}` shape as `core/state/store.py`'s
-    generic not-found (`chaos_rule_delete` in `core/control/plane.py`), from a
+    """A consumer-supplied entity id reaches `UnitError.info` verbatim from a
     URL path segment rather than a request body, which is the same failure
-    family as the chaos rule id above from a different consumer-supplied
-    string.
+    family as the chaos rule id above (a body field) from a different
+    consumer-supplied string: `DELETE /__unit/chaos/rules/{id}` on a rule
+    that was never added raises `chaos_rule_delete`'s own inline `UnitError`
+    (`core/control/plane.py`), `info={"id": entity_id}`.
+
+    CORRECTION (konyklabs/roadmap#71 review round 2): an earlier version of
+    this docstring claimed the `info` shape matched `core/state/store.py`'s
+    generic not-found -- `Collection.require` / `Collection.update`, which
+    carries a `collection` key alongside `id` (`info={"collection": ...,
+    "id": ...}`, pinned in isolation by
+    `tests/unit/core/test_state_store.py::test_require_raises_not_found_where_get_returns_none`).
+    That was wrong: `chaos_rule_delete` raises its own `UnitError` inline and
+    never reaches the store for this miss, so its `info` never carries a
+    `collection` key. What this test actually pins is narrower and still
+    real -- a non-ASCII id survives ASCII-safe header encoding when it
+    arrives as a *path segment* -- and
+    :func:`test_a_non_ascii_id_survives_both_transports_through_the_stores_own_not_found`
+    below is what proves the store's own two-key shape.
     """
     entity_id = "order-寿司-99"
     path = f"/__unit/chaos/rules/{quote(entity_id, safe='')}"
@@ -549,6 +562,45 @@ def test_a_non_ascii_entity_id_survives_both_transports() -> None:
         assert response.status_code == 404
         info = json.loads(response.headers[_INFO_HEADER])
         assert info["id"] == entity_id
+
+
+def test_a_non_ascii_id_survives_both_transports_through_the_stores_own_not_found() -> None:
+    """The *store's* own generic not-found -- `core/state/store.py`'s
+    `Collection.update` (`Collection.require`'s sibling; both build
+    `info={"collection": self.name, "id": entity_id}` the same way, and
+    `Collection.require`'s shape is pinned in isolation by
+    `tests/unit/core/test_state_store.py::test_require_raises_not_found_where_get_returns_none`)
+    -- carries a non-ASCII id through ASCII-safe header encoding, over both
+    transports.
+
+    No *vendor* business route reaches this shape: every vendor's own
+    not-found -- `_require_order`, `_require_item`, `_require_payment`, and
+    their siblings across Square, Clover and Toast -- raises its own
+    `UnitError` with the vendor's own wording, by design, so that a
+    consumer's test sees what the real vendor would say rather than this
+    fake's internal bookkeeping. `POST /__unit/state/update` is the one
+    route that reaches the store's generic shape directly, and
+    `core/control/schemas.py::StateUpdateBody` says why it exists at all:
+    "a check that could only reach it through whichever endpoint a
+    particular vendor happens to expose... would be a contract about that
+    vendor instead." Run against Square and Clover, so the shape is shown to
+    be generic to the store and not a coincidence of one vendor's plumbing.
+    """
+    entity_id = "order-寿司-99"
+    body = {"collection": "orders", "id": entity_id, "patch": {}}
+
+    for vendor in ("square", "clover"):
+        with unit(vendor) as driver:
+            response = driver.client.post("/__unit/state/update", json=body)
+            assert response.status_code == 404
+            info = json.loads(response.headers[_INFO_HEADER])
+            assert info == {"collection": "orders", "id": entity_id}
+
+        with unit(vendor) as driver, serve_in_thread(driver) as over_http:
+            response = over_http.client.post("/__unit/state/update", json=body)
+            assert response.status_code == 404
+            info = json.loads(response.headers[_INFO_HEADER])
+            assert info == {"collection": "orders", "id": entity_id}
 
 
 def test_a_non_ascii_field_name_survives_both_transports() -> None:
