@@ -308,6 +308,18 @@ in full under the heading named beside it.
   edit a reviewer sees (konyklabs/roadmap#74)
 * **vendorfake:** the profile-name contract, as it actually holds across all three shipped vendors: `orders-only` does NOT enable role `auth` (every shipped profile of that name promises "no OAuth dance, authenticate with a seeded token", pinned by each vendor's own tests) and `no-chaos` keeps role `chaos` enabled, switching off only `webhooks.chaos` (`no-faults` is the profile that switches off both). Documented in `src/vendorfake/conformance/checks/discovery.py` and the README's new "Discovering profiles and routes" section (konyklabs/roadmap#70)
 
+## [0.2.0](https://github.com/konyklabs/vendorfake/compare/v0.1.0...v0.2.0) (2026-09-03)
+
+
+### Features
+
+* **testing:** the 0.2 consumer-experience batch — async seam, typed seeds, discovery, hygiene, strict mode, transport faults (konyklabs/roadmap[#67](https://github.com/konyklabs/vendorfake/issues/67)) ([#35](https://github.com/konyklabs/vendorfake/issues/35)) ([be0f6aa](https://github.com/konyklabs/vendorfake/commit/be0f6aad681880e96cca9b748c54698a13e81c8a))
+
+
+### Documentation
+
+* **readme:** a first screen that starts in sixty seconds; seeded matrix moved to docs (konyklabs/roadmap[#59](https://github.com/konyklabs/vendorfake/issues/59)) ([#33](https://github.com/konyklabs/vendorfake/issues/33)) ([50c5efa](https://github.com/konyklabs/vendorfake/commit/50c5efaae9f388ae78774abe949f4668eb0483d1))
+
 ## 0.1.0 (2026-09-01)
 
 
