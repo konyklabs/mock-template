@@ -158,14 +158,19 @@ describe("toast", () => {
     // the real API: it is not an authentication failure, so logging in again
     // cannot fix it. Send the header. (The exact status and message are the
     // unit's, and are pinned in the unit's own tests, not in an example.)
-    const noHeader = await asPartner.get<{ unit_error: { reason: string } }>("/menus/v3/menus");
+    const noHeader = await asPartner.get<{ unit_error?: { reason: string } }>("/menus/v3/menus");
     expect(noHeader.status, noHeader.text).not.toBe(401);
     expect(noHeader.status).toBeGreaterThanOrEqual(400);
     expect(noHeader.status).toBeLessThan(500);
-    // Which refusal it is, keyed on the fake's own `unit_error` sidecar rather
-    // than on the sentence in `message`: the sidecar is a stable contract of
-    // this fake, the wording is not Toast's and not promised by anyone.
-    expect(noHeader.body.unit_error.reason).toBe("restaurant_header_missing");
+    // FAKE-ONLY. Which refusal it is: Toast's envelope does not say, and this
+    // unit's wording is not Toast's, so the distinction is read off the fake's
+    // `unit_error` sidecar -- a deliberate, namespaced deviation from the wire
+    // format, off under `{"error_sidecar": false}` and absent against the real
+    // API. Guarded on its presence so this file, copied, still passes there;
+    // it just proves less.
+    if (noHeader.body.unit_error !== undefined) {
+      expect(noHeader.body.unit_error.reason).toBe("restaurant_header_missing");
+    }
 
     // A missing bearer, though, is the documented 401.
     const named = api(inject("vendorfake").toast, { [toast.restaurantHeader]: restaurant });

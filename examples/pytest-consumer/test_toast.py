@@ -157,10 +157,14 @@ def test_a_bearer_without_the_restaurant_header_is_refused_but_not_as_bad_auth(t
     unscoped = toast.client.get("/menus/v3/menus", headers=seed.bearer_only)
     assert unscoped.status_code != 401, unscoped.text
     assert 400 <= unscoped.status_code < 500, unscoped.text
-    # Which refusal it is, keyed on the fake's own `unit_error` sidecar rather
-    # than on the sentence in `message`: the sidecar is a stable contract of
-    # this fake, the wording is not Toast's and not promised by anyone.
-    assert unscoped.json()["unit_error"]["reason"] == "restaurant_header_missing"
+    # FAKE-ONLY. Which refusal it is: Toast's envelope does not say, and this
+    # unit's wording is not Toast's, so the distinction is read off the fake's
+    # `unit_error` sidecar -- a deliberate, namespaced deviation from the wire
+    # format, off under `{"error_sidecar": false}` and absent against the real
+    # API. Guarded on its presence so this file, copied, still passes there;
+    # it just proves less.
+    if "unit_error" in unscoped.json():
+        assert unscoped.json()["unit_error"]["reason"] == "restaurant_header_missing"
 
     # A missing bearer, though, is the documented 401.
     nameless = toast.client.get("/menus/v3/menus", headers=seed.restaurant_header)
@@ -193,7 +197,8 @@ def test_a_single_payment_is_still_sent_as_an_array(toast: StartedUnit) -> None:
     # and that nothing was written -- not this unit's 400 or its wording.
     refused = toast.client.post(path, headers=seed.auth, json=payment)
     assert 400 <= refused.status_code < 500, refused.text
-    assert refused.json()["unit_error"]["field"] == "body"  # the sidecar again: it is the body's shape
+    if "unit_error" in refused.json():  # FAKE-ONLY, as above: it is the body's shape that was refused
+        assert refused.json()["unit_error"]["field"] == "body"
     still_open = toast.client.get(f"/orders/v2/orders/{seed.open_order_guid}", headers=seed.auth).json()
     assert still_open["checks"][0]["payments"] == []
 
