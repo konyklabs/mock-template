@@ -134,7 +134,18 @@ def test_every_declared_subcommand_has_a_dispatch_arm() -> None:
     parser = _build_parser()
     subparsers = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
     declared = set(subparsers[0].choices)
-    assert declared == {"serve", "info", "openapi", "vendors", "profiles", "routes", "faults", "conformance"}
+    assert declared == {
+        "serve",
+        "info",
+        "openapi",
+        "vendors",
+        "profiles",
+        "routes",
+        "faults",
+        "agent-setup",
+        "explain",
+        "conformance",
+    }
 
 
 def test_serve_without_a_vendor_refuses_and_lists_both(monkeypatch) -> None:  # type: ignore[no-untyped-def]

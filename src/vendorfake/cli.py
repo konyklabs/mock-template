@@ -191,6 +191,79 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subcommands.add_parser("faults", help="List the built-in fault catalogue.", parents=[_json_flag_parent()])
 
+    agent_setup = subcommands.add_parser(
+        "agent-setup",
+        help="Write a Claude Code rules file for a consumer repo (and optionally an .mcp.json entry).",
+    )
+    agent_setup.add_argument("--dir", default=".", help="Repo root to write into. Defaults to the current directory.")
+    agent_setup.add_argument(
+        "--tests-glob",
+        default=None,
+        help="Glob the rules file's `paths:` frontmatter is scoped to. Defaults to 'tests/**'.",
+    )
+    agent_setup.add_argument("--mcp", action="store_true", help="Also add a vendorfake entry to <dir>/.mcp.json.")
+    agent_setup.add_argument(
+        "--allow-future",
+        action="store_true",
+        help="Required together with --mcp to actually write the .mcp.json entry; `vendorfake mcp` does not "
+        "exist until 0.4. Without it, --mcp only prints a notice.",
+    )
+    agent_setup.add_argument("--force", action="store_true", help="Overwrite an existing rules file.")
+
+    explain = subcommands.add_parser(
+        "explain",
+        help="Explain one route, fault, profile, error kind, or Vendorfake-* header.",
+        parents=[_json_flag_parent()],
+    )
+    explain_kinds = explain.add_subparsers(dest="explain_kind", metavar="KIND")
+
+    explain_route = explain_kinds.add_parser("route", help="One route, by operation_id.", parents=[_json_flag_parent()])
+    explain_route.add_argument("target", metavar="OPERATION_ID")
+    explain_route.add_argument(
+        "--vendor",
+        default=None,
+        help="Vendor to describe. Defaults to $VENDORFAKE_VENDOR; with exactly one vendor installed that "
+        "one is used, otherwise the command refuses and lists them.",
+    )
+    explain_route.add_argument(
+        "--profile",
+        default=None,
+        help="Profile to build the table against. Defaults to $VENDORFAKE_PROFILE, then 'full'.",
+    )
+
+    explain_fault = explain_kinds.add_parser("fault", help="One fault, by name.", parents=[_json_flag_parent()])
+    explain_fault.add_argument("target", metavar="NAME")
+
+    explain_profile = explain_kinds.add_parser("profile", help="One profile, by name.", parents=[_json_flag_parent()])
+    explain_profile.add_argument("target", metavar="NAME")
+    explain_profile.add_argument(
+        "--vendor",
+        default=None,
+        help="Vendor to describe. Defaults to $VENDORFAKE_VENDOR; with exactly one vendor installed that "
+        "one is used, otherwise the command refuses and lists them.",
+    )
+
+    explain_error = explain_kinds.add_parser(
+        "error", help="One core error kind, by name.", parents=[_json_flag_parent()]
+    )
+    explain_error.add_argument("target", metavar="KIND")
+    explain_error.add_argument(
+        "--vendor",
+        default=None,
+        help="Vendor to describe. Defaults to $VENDORFAKE_VENDOR; with exactly one vendor installed that "
+        "one is used, otherwise the command refuses and lists them.",
+    )
+    explain_error.add_argument(
+        "--profile",
+        default=None,
+        help="Profile to build the unit against. Defaults to $VENDORFAKE_PROFILE, then 'full'.",
+    )
+
+    explain_header = explain_kinds.add_parser(
+        "header", help="One Vendorfake-* header, by name.", parents=[_json_flag_parent()]
+    )
+    explain_header.add_argument("target", metavar="NAME")
+
     conformance = subcommands.add_parser("conformance", help="Run the conformance contracts against a unit.")
     conformance.add_argument("rest", nargs=argparse.REMAINDER, help="Arguments forwarded to the conformance runner.")
 
@@ -547,6 +620,94 @@ def _faults(args: argparse.Namespace, out: TextIO) -> int:
     return 0
 
 
+def _agent_setup(args: argparse.Namespace, out: TextIO) -> int:
+    """Write a Claude Code rules file for a consumer repo, and its ``.mcp.json``
+    entry if asked.
+
+    Deferred imports throughout, matching every other subcommand body in this
+    module: nothing about ``agent-setup`` should cost anything until a
+    consumer actually types it. The mechanics live in
+    :mod:`vendorfake.agent.setup`; this only wires argparse onto it and
+    prints what it reports.
+
+    ``ValueError`` is caught alongside ``FileExistsError``: ``FileExistsError``
+    is an existing rules file without ``--force``; ``ValueError`` is a
+    ``.mcp.json`` that ``--mcp --allow-future`` cannot safely merge into (not
+    valid JSON, or not a JSON object at the top level) -- see
+    :func:`vendorfake.agent.setup.write_agent_setup`. Both are refusals with
+    nothing written, not crashes.
+    """
+    from pathlib import Path
+
+    from vendorfake.agent.rules_template import DEFAULT_TESTS_GLOB
+    from vendorfake.agent.setup import write_agent_setup
+
+    try:
+        result = write_agent_setup(
+            directory=Path(args.dir),
+            tests_glob=args.tests_glob or DEFAULT_TESTS_GLOB,
+            mcp=args.mcp,
+            allow_future=args.allow_future,
+            force=args.force,
+        )
+    except (FileExistsError, ValueError) as exc:
+        raise SystemExit(f"{PROG}: {exc}") from None
+
+    for path in result.written:
+        print(path, file=out)
+    if result.notice is not None:
+        print(f"{PROG}: {result.notice}", file=out)
+    return 0
+
+
+def _explain(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
+    """Look up one route, fault, profile, error kind or header, and print it.
+
+    Every lookup lives in :mod:`vendorfake.agent.explain`; this only picks
+    which one ``args.explain_kind`` named, resolves the vendor/profile flags
+    the same way every other describing subcommand does, and chooses text or
+    ``--json``.
+    """
+    from vendorfake.agent import explain as explainer
+    from vendorfake.core.util.json import dump_json
+
+    kind = args.explain_kind
+    if kind is None:
+        raise SystemExit(f"{PROG}: explain needs a kind: route, fault, profile, error, or header")
+
+    try:
+        if kind == "route":
+            vendor = _resolve_vendor_name(args, env)
+            profile = args.profile or _env_str(env, "VENDORFAKE_PROFILE") or "full"
+            data = explainer.explain_route(vendor, profile, args.target)
+            text = explainer.render_route(data)
+        elif kind == "fault":
+            data = explainer.explain_fault(args.target)
+            text = explainer.render_fault(data)
+        elif kind == "profile":
+            vendor = _resolve_vendor_name(args, env)
+            data = explainer.explain_profile(vendor, args.target)
+            text = explainer.render_profile(data)
+        elif kind == "error":
+            vendor = _resolve_vendor_name(args, env)
+            profile = args.profile or _env_str(env, "VENDORFAKE_PROFILE") or "full"
+            data = explainer.explain_error(vendor, profile, args.target)
+            text = explainer.render_error(data)
+        elif kind == "header":
+            data = explainer.explain_header(args.target)
+            text = explainer.render_header(data)
+        else:  # pragma: no cover - argparse restricts explain_kind to the five arms above
+            raise SystemExit(f"{PROG}: no handler for explain kind {kind!r}")
+    except ValueError as exc:
+        raise SystemExit(f"{PROG}: {exc}") from None
+
+    if _wants_json(args):
+        print(dump_json(data).decode("utf-8"), file=out)
+    else:
+        print(text, file=out)
+    return 0
+
+
 def _conformance(args: argparse.Namespace) -> int:
     """Hand off to the conformance runner, which owns its own arguments.
 
@@ -602,6 +763,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _routes_cmd(args, env, out)
     if args.command == "faults":
         return _faults(args, out)
+    if args.command == "agent-setup":
+        return _agent_setup(args, out)
+    if args.command == "explain":
+        return _explain(args, env, out)
     if args.command == "conformance":
         return _conformance(args)
 

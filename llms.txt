@@ -1,0 +1,39 @@
+# vendorfake
+
+> High-fidelity fakes of third-party vendor APIs for testing an integration
+> without a vendor sandbox: real state, webhooks signed and retried the way
+> the vendor does it, and deterministic fault injection.
+
+Unofficial. Not affiliated with, endorsed by, or connected to any vendor
+named here. Every behaviour is derived from publicly published API
+documentation. Three vendors ship today: Square (Connect v2), Clover
+(REST v3), Toast (REST v2/v3).
+
+## Docs
+
+- [README](https://github.com/konyklabs/vendorfake/blob/main/README.md):
+  install, the sixty-second quickstart, running as a container, the pytest
+  fixtures, and a quickstart per vendor.
+- [For agents](https://github.com/konyklabs/vendorfake/blob/main/docs/for-agents.md):
+  the working contract for a coding agent writing or fixing tests against an
+  installed vendorfake -- bindings, vocabulary, discovery commands, and the
+  evidence habit.
+- [Seeded scenario](https://github.com/konyklabs/vendorfake/blob/main/docs/seeded-scenario.md):
+  the exact ids, credentials and entities every profile starts with, per
+  vendor.
+- [Async consumers](https://github.com/konyklabs/vendorfake/blob/main/docs/async-consumers.md):
+  every async entry point (`async_client`, `async_unit`, the
+  `vendorfake_async_unit` fixture) and what a deliberate delay does on each
+  binding.
+- [The pytest plugin](https://github.com/konyklabs/vendorfake/blob/main/docs/pytest-plugin.md):
+  the `vendorfake` marker and its three fixtures (`vendorfake_unit`,
+  `vendorfake_async_unit`, `vendorfake_webhook_receiver`) -- the whole surface
+  installing the wheel registers.
+- [Changelog](https://github.com/konyklabs/vendorfake/blob/main/CHANGELOG.md):
+  what changed, release by release.
+
+## Optional
+
+- [AGENTS.md](https://github.com/konyklabs/vendorfake/blob/main/AGENTS.md):
+  for an agent working inside this repository itself (layout, the one
+  command, the boundary rules) -- not relevant to a consumer.
