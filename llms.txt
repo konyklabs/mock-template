@@ -12,8 +12,8 @@ documentation. Three vendors ship today: Square (Connect v2), Clover
 ## Docs
 
 - [README](https://github.com/konyklabs/vendorfake/blob/main/README.md):
-  install, the sixty-second quickstart, running as a container, the pytest
-  fixtures, and a quickstart per vendor.
+  what vendorfake is, the vendors it covers, the sixty-second quickstart, and
+  links into the docs site for everything else.
 - [For agents](https://github.com/konyklabs/vendorfake/blob/main/docs/for-agents.md):
   the working contract for a coding agent writing or fixing tests against an
   installed vendorfake -- bindings, vocabulary, discovery commands, and the

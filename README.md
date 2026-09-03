@@ -12,8 +12,9 @@ so a retry loop is rehearsed the same way every run.
 > module imitates.
 
 Covers **Square** (Connect v2), **Clover** (REST v3) and **Toast** (REST
-v2/v3) — see [the docs site](docs/index.md) for what each surface covers and
-a per-vendor walkthrough.
+v2/v3) — see [the docs site](docs/index.md) for what each surface covers;
+the route reference lists every route per vendor, and `vendorfake explain`
+describes one in place.
 
 ## Start in sixty seconds
 
