@@ -39,9 +39,9 @@ import sys
 import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from vendorfake.asgi import FrameworkTripwire
@@ -53,19 +53,23 @@ from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.logging import JsonLogger
 from vendorfake.core.webhooks.models import matches_event_type
 from vendorfake.core.webhooks.sink import DeliverySink
-from vendorfake.registry import create_unit
+from vendorfake.registry import create_unit, resolve_vendor
 from vendorfake.testing.receiver import Delivery, WebhookReceiver, webhook_receiver
-from vendorfake.testing.seeds import CloverSeed, SquareSeed, ToastSeed, seed_for
+from vendorfake.testing.seeds import CloverSeed, Credentials, Seed, SquareSeed, ToastSeed, seed_for
 from vendorfake.testing.transport import UnitTransport
 
 __all__ = [
     "CLIENT_TIMEOUT_S",
     "DRAIN_TIMEOUT_S",
     "LOG_LINES",
+    "NO_SEED_HINT",
     "SERVE_COMMAND",
     "CloverSeed",
+    "Credentials",
     "Delivery",
     "Driver",
+    "Seed",
+    "SeedT",
     "ServedUnit",
     "SquareSeed",
     "StartedUnit",
@@ -77,6 +81,36 @@ __all__ = [
     "unit",
     "webhook_receiver",
 ]
+
+SeedT = TypeVar("SeedT", bound=Seed, covariant=True)
+"""Which vendor's seed a driver carries.
+
+A type variable rather than a union because the union does not narrow: the
+vendor string tells a reader which seed is in hand, and before this it told a
+type checker nothing, so every typed consumer wrote an ``isinstance`` per
+vendor to get at a field. :func:`unit` and :func:`served` are overloaded on
+the vendor literal and bind this; a vendor that is a plain ``str`` -- a
+parametrized test, or a vendor from the entry-point group -- binds
+:class:`~vendorfake.testing.seeds.Seed`, which is what every seed has in
+common.
+
+**Covariant**, so that ``StartedUnit[SquareSeed]`` is a
+``StartedUnit[Seed]``. That is not decoration: the literal overloads and the
+``str`` fallback overlap -- every ``Literal["square"]`` is also a ``str`` --
+and with an invariant parameter the narrow overload's return type is not
+assignable to the broad one's, which pyright reports as an overlapping
+overload with an incompatible return. Covariance is technically unsound for a
+mutable attribute, and the hole is real, not theoretical: a checker accepts
+``def reassign(d: Driver[Seed], other: Seed) -> None: d.seed = other`` called
+with a ``StartedUnit[SquareSeed]`` and a ``ToastSeed``, and afterwards
+``square.seed.merchant_id`` still type-checks and raises ``AttributeError`` at
+runtime. Nothing in vendorfake reassigns ``seed`` -- it is written once, at
+construction, and read everywhere else -- but ``Driver`` is a plain mutable
+``@dataclass`` handed to consumers, so avoiding the reassignment is *their*
+responsibility, not a guarantee this module makes. The name keeps no ``_co``
+suffix because it is public API and the variance is a property of the
+driver, not something a consumer spells.
+"""
 
 IN_PROCESS_BASE_URL = "http://vendorfake.local"
 """The host an in-process client addresses. Never resolved: the transport
@@ -101,14 +135,24 @@ _LISTENING = re.compile(r"listening on http://([^:\s]+):(\d+)")
 
 
 @dataclass
-class Driver:
-    """A unit you can talk to, however it was started."""
+class Driver(Generic[SeedT]):
+    """A unit you can talk to, however it was started.
+
+    Generic in its seed. ``seed`` used to be
+    ``SquareSeed | CloverSeed | ToastSeed | None``, which meant that reading
+    one field of it took an ``isinstance`` ladder *and* a ``None`` guard --
+    per vendor, in every consumer, for a value that is never actually absent
+    and whose type the caller already named in ``unit("square")``. The
+    parameter carries that name through, and the ``None`` is gone: a vendor
+    with no seed is refused where the unit is built (:func:`unit`) rather
+    than handed back as an ``Optional`` for everyone downstream to guard.
+    """
 
     vendor: str
     profile: str
     base_url: str
     client: httpx.Client
-    seed: SquareSeed | CloverSeed | ToastSeed | None
+    seed: SeedT
 
     # -- reading ------------------------------------------------------------
 
@@ -139,25 +183,26 @@ class Driver:
         should not have to know which. ``signature_key`` is the HMAC key for
         Square and the ``X-Clover-Auth`` code for Clover.
 
-        ``event_types`` are checked against the vendor's vocabulary when the
-        seed publishes one: the control plane accepts any string, so a Square
-        type on a Clover unit would register fine and then never fire -- the
-        test passes its setup and fails much later, with nothing to say why.
-        Globs the dispatcher honours (``O:*``, ``*``) pass if they match at
-        least one published type.
+        ``event_types`` are checked against the vendor's vocabulary: the
+        control plane accepts any string, so a Square type on a Clover unit
+        would register fine and then never fire -- the test passes its setup
+        and fails much later, with nothing to say why. Globs the dispatcher
+        honours (``O:*``, ``*``) pass if they match at least one published
+        type.
+
+        The check used to be conditional on the seed being present. It is not
+        any more, because the seed is not optional any more; a driver with no
+        vocabulary to check against no longer exists.
         """
-        vocabulary = None if self.seed is None else self.seed.event_types
-        if vocabulary is not None:
-            unknown = [
-                pattern
-                for pattern in event_types
-                if not any(matches_event_type([pattern], known) for known in vocabulary)
-            ]
-            if unknown:
-                raise ValueError(
-                    f"{self.vendor!r} sends none of {unknown}; its event types are {list(vocabulary)} "
-                    "(a glob that matches at least one of them, or '*', is accepted)"
-                )
+        vocabulary = self.seed.event_types
+        unknown = [
+            pattern for pattern in event_types if not any(matches_event_type([pattern], known) for known in vocabulary)
+        ]
+        if unknown:
+            raise ValueError(
+                f"{self.vendor!r} sends none of {unknown}; its event types are {list(vocabulary)} "
+                "(a glob that matches at least one of them, or '*', is accepted)"
+            )
         body: dict[str, Any] = {
             "notification_url": notification_url,
             "event_types": list(event_types),
@@ -256,9 +301,14 @@ class Driver:
 
 
 @dataclass
-class StartedUnit(Driver):
+class StartedUnit(Driver[SeedT]):
     """From :func:`unit`: the unit itself is reachable for anything the
-    control plane does not cover."""
+    control plane does not cover.
+
+    ``StartedUnit[SquareSeed]`` is what ``unit("square")`` yields. Written
+    bare -- ``StartedUnit`` -- it is ``StartedUnit[Any]``, which is what a
+    v0.1.0 fixture annotation already says and keeps working.
+    """
 
     unit: Unit = field(kw_only=True)
     #: The counter behind ``framework_answered`` in ``/__unit/health``. Wired
@@ -269,7 +319,7 @@ class StartedUnit(Driver):
 
 
 @dataclass
-class ServedUnit(Driver):
+class ServedUnit(Driver[SeedT]):
     """From :func:`served`: a child process the block will stop."""
 
     process: subprocess.Popen[str] = field(kw_only=True)
@@ -291,11 +341,82 @@ class ServedUnit(Driver):
         return self._output.tail()
 
 
-def _seed_of(built: Unit) -> SquareSeed | CloverSeed | ToastSeed | None:
-    return seed_for(built.name, built.context.config.vendor_config)
+NO_SEED_HINT = (
+    "vendorfake ships a seed for square, clover and toast. A vendor from the "
+    "'vendorfake.vendors' entry-point group has none here, so its ids, tokens and "
+    "application credentials are not readable through .seed -- read them from that "
+    "distribution's own constants instead, and drive the unit with create_unit()."
+)
+"""What a caller can actually do about a vendor with no seed.
+
+Split out so the message is one string and a test can assert on it without
+copying the prose.
+"""
 
 
-@contextmanager
+def _require_seed(vendor: str, profile: str, found: SquareSeed | CloverSeed | ToastSeed | None) -> Seed:
+    """``found``, or a refusal that says why there is none.
+
+    ``seed`` used to be handed back as ``None`` for any vendor
+    :func:`~vendorfake.testing.seeds.seed_for` does not describe, and every
+    consumer paid for that with a guard on a value that is present for all
+    three shipped vendors. The absence is real but it is a property of the
+    *vendor*, not of a call -- so it is answered once, at the moment the unit
+    is started, where the vendor and profile are still in hand to name.
+    """
+    if found is None:
+        raise LookupError(f"vendor {vendor!r} (profile {profile!r}) publishes no seed. {NO_SEED_HINT}")
+    return found
+
+
+@overload
+def unit(
+    vendor: Literal["square"],
+    profile: str = ...,
+    *,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+) -> AbstractContextManager[StartedUnit[SquareSeed]]: ...
+
+
+@overload
+def unit(
+    vendor: Literal["clover"],
+    profile: str = ...,
+    *,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+) -> AbstractContextManager[StartedUnit[CloverSeed]]: ...
+
+
+@overload
+def unit(
+    vendor: Literal["toast"],
+    profile: str = ...,
+    *,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+) -> AbstractContextManager[StartedUnit[ToastSeed]]: ...
+
+
+@overload
+def unit(
+    vendor: str,
+    profile: str = ...,
+    *,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+) -> AbstractContextManager[StartedUnit[Seed]]: ...
+
+
 def unit(
     vendor: str,
     profile: str = "full",
@@ -304,8 +425,38 @@ def unit(
     env: Mapping[str, str] | None = None,
     logger: Logger | None = None,
     seed: int | None = None,
-) -> Iterator[StartedUnit]:
+) -> AbstractContextManager[StartedUnit[Any]]:
     """A unit in this process, stopped however the block ends.
+
+    The overloads above are the whole point of the vendor argument being a
+    literal: ``unit("clover")`` yields a ``StartedUnit[CloverSeed]``, so
+    ``started.seed.merchant_id`` type-checks and ``started.seed.tea_item_id``
+    does not. A vendor that is a plain ``str`` -- a parametrized test, or one
+    discovered through the entry-point group -- falls to the last overload
+    and yields ``StartedUnit[Seed]``: the fields every vendor has, and no
+    guessing.
+
+    There is one implementation; the overloads are declarations. It delegates
+    to a private generator rather than wearing ``@contextmanager`` itself,
+    because a decorated implementation and a set of overloads do not compose
+    in either checker. The object handed back is the same
+    ``contextlib`` context manager it always was; only its declared type is
+    ``AbstractContextManager``.
+    """
+    return _unit(vendor, profile, sink=sink, env=env, logger=logger, seed=seed)
+
+
+@contextmanager
+def _unit(
+    vendor: str,
+    profile: str = "full",
+    *,
+    sink: DeliverySink | None = None,
+    env: Mapping[str, str] | None = None,
+    logger: Logger | None = None,
+    seed: int | None = None,
+) -> Iterator[StartedUnit[Seed]]:
+    """The body of :func:`unit`. See that function for the contract.
 
     ``sink`` defaults to real HTTP delivery, so a subscribed
     :func:`webhook_receiver` sees signed bytes; pass
@@ -343,13 +494,24 @@ def unit(
         framework_answered=tripwire.get,
     )
     try:
+        # Before the client, so a vendor with no seed is refused with the unit
+        # already stopped by the `finally` rather than left running behind a
+        # half-built driver. Named with `built.name` and the config's own
+        # `profile`, not the raw arguments above: `seed_for` is keyed on the
+        # resolved vendor, and a registry alias or a profile default (from
+        # `env`) can make the resolved values differ from what the caller
+        # spelled, in which case the refusal should name what was actually
+        # looked up.
+        resolved_seed = _require_seed(
+            built.name, built.context.config.profile, seed_for(built.name, built.context.config.vendor_config)
+        )
         with httpx.Client(transport=UnitTransport(built), base_url=IN_PROCESS_BASE_URL) as client:
             yield StartedUnit(
                 vendor=built.name,
                 profile=built.context.config.profile,
                 base_url=IN_PROCESS_BASE_URL,
                 client=client,
-                seed=_seed_of(built),
+                seed=resolved_seed,
                 unit=built,
                 tripwire=tripwire,
             )
@@ -358,7 +520,7 @@ def unit(
 
 
 @contextmanager
-def serve_in_thread(started: StartedUnit, *, host: str = "127.0.0.1", port: int = 0) -> Iterator[Driver]:
+def serve_in_thread(started: StartedUnit[SeedT], *, host: str = "127.0.0.1", port: int = 0) -> Iterator[Driver[SeedT]]:
     """A real server in front of ``started``'s unit, on a background thread.
 
     Yields a second :class:`Driver` onto the *same* unit, so state written
@@ -384,7 +546,54 @@ def serve_in_thread(started: StartedUnit, *, host: str = "127.0.0.1", port: int 
         )
 
 
-@contextmanager
+@overload
+def served(
+    vendor: Literal["square"],
+    profile: str = ...,
+    *,
+    port: int = ...,
+    host: str = ...,
+    log_level: str = ...,
+    timeout_s: float = ...,
+) -> AbstractContextManager[ServedUnit[SquareSeed]]: ...
+
+
+@overload
+def served(
+    vendor: Literal["clover"],
+    profile: str = ...,
+    *,
+    port: int = ...,
+    host: str = ...,
+    log_level: str = ...,
+    timeout_s: float = ...,
+) -> AbstractContextManager[ServedUnit[CloverSeed]]: ...
+
+
+@overload
+def served(
+    vendor: Literal["toast"],
+    profile: str = ...,
+    *,
+    port: int = ...,
+    host: str = ...,
+    log_level: str = ...,
+    timeout_s: float = ...,
+) -> AbstractContextManager[ServedUnit[ToastSeed]]: ...
+
+
+@overload
+def served(
+    vendor: str,
+    profile: str = ...,
+    *,
+    port: int = ...,
+    host: str = ...,
+    log_level: str = ...,
+    timeout_s: float = ...,
+) -> AbstractContextManager[ServedUnit[Seed]]: ...
+
+
 def served(
     vendor: str,
     profile: str = "full",
@@ -393,8 +602,28 @@ def served(
     host: str = "127.0.0.1",
     log_level: str = "error",
     timeout_s: float = STARTUP_TIMEOUT_S,
-) -> Iterator[ServedUnit]:
+) -> AbstractContextManager[ServedUnit[Any]]:
     """``vendorfake serve`` in a child process, with its URL.
+
+    Overloaded on the vendor literal for the same reason :func:`unit` is: the
+    child serves the vendor it was told to, so the seed's type is knowable at
+    the call site and there is no reason to make a consumer prove it with an
+    ``isinstance``. Delegates to a private generator; see :func:`unit`.
+    """
+    return _served(vendor, profile, port=port, host=host, log_level=log_level, timeout_s=timeout_s)
+
+
+@contextmanager
+def _served(
+    vendor: str,
+    profile: str = "full",
+    *,
+    port: int = 0,
+    host: str = "127.0.0.1",
+    log_level: str = "error",
+    timeout_s: float = STARTUP_TIMEOUT_S,
+) -> Iterator[ServedUnit[Seed]]:
+    """The body of :func:`served`. See that function for the contract.
 
     Runs the interpreter this test runs under (``python -m vendorfake``), so
     whatever environment installed ``vendorfake`` serves it. ``port=0`` lets
@@ -408,6 +637,19 @@ def served(
     or not vendorfake at all -- is stopped and reported rather than waited
     on forever.
     """
+    # Resolved and refused before the child is spawned: `seed_for` is a pure
+    # branch on the vendor's canonical name, and `resolve_vendor` is the same
+    # registry lookup `create_unit` pays for internally, so neither needs a
+    # running unit. Paying for a subprocess that boots, announces its port and
+    # answers a health check only to be told the vendor has no seed wastes the
+    # startup on every call in a suite that does this per test, and points the
+    # traceback at a line inside a connected client rather than at the vendor
+    # argument that is actually wrong. `profile` has nothing left to resolve
+    # here -- unlike `unit()`, `served()` has no `env` layer that could move it
+    # away from what the caller spelled, so the argument already is the
+    # resolved value.
+    resolved_name = resolve_vendor(vendor).name
+    resolved_seed = _require_seed(resolved_name, profile, seed_for(resolved_name, {}))
     argv = [
         *SERVE_COMMAND,
         "--vendor",
@@ -436,7 +678,7 @@ def served(
                 # application credentials are the vendor's defaults -- what
                 # every shipped profile sets. A custom profile that overrides
                 # them is a case for `unit()`, where the seed reads the config.
-                seed=seed_for(str(health["vendor"]), {}),
+                seed=resolved_seed,
                 process=process,
                 _output=output,
             )

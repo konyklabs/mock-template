@@ -11,14 +11,82 @@ secrets) come from the profile's ``vendor`` block rather than from a constant:
 a profile may override them, and a fixture that reported the default while the
 unit ran on an override would send a consumer chasing a 401 that the fixture
 caused.
+
+The three seeds also share one structural type, :class:`Seed`, and one neutral
+view of their application credentials, :class:`Credentials`. That exists
+because the vendor-faithful spellings are the whole difficulty for a consumer
+who parametrizes over vendors: ``application_id`` on Square and ``client_id``
+on Clover and Toast name the same thing, and a single test body cannot spell
+both. Nothing here renames or removes a vendor-faithful field; the neutral
+names are a second view of the same strings.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal, Protocol
 
-__all__ = ["CloverSeed", "SquareSeed", "ToastSeed", "seed_for"]
+__all__ = ["CloverSeed", "Credentials", "Seed", "SquareSeed", "ToastSeed", "seed_for"]
+
+
+@dataclass(frozen=True, slots=True)
+class Credentials:
+    """The application credential a consumer authenticates with, under names
+    that mean the same thing on every vendor.
+
+    JUDGMENT: the names are invented. No vendor calls it ``app_id``; Square
+    calls it ``application_id`` and Clover and Toast call it ``client_id``.
+    The point is a call site that does not have to know which -- a test
+    parametrized over three vendors reads ``seed.credentials.app_id`` once
+    instead of branching on the vendor to pick a spelling.
+    """
+
+    app_id: str
+    app_secret: str
+    grant: Literal["refresh_token", "client_credentials"]
+    """Which token lifecycle the vendor runs.
+
+    This is the difference a consumer's session handling genuinely has to
+    care about, so it is on the neutral view rather than hidden behind a
+    field that only two of the three seeds carry: ``refresh_token`` means a
+    long-lived grant is rotated (there is a ``refresh_token`` on the seed),
+    ``client_credentials`` means there is no refresh and the client logs in
+    again when the token expires.
+
+    JUDGMENT for the *spelling*: ``client_credentials`` is OAuth's word for
+    the shape, and Toast's login is not literally an OAuth grant. The
+    lifecycle it names is DOCUMENTED per vendor at each seed's
+    :attr:`~SquareSeed.credentials`.
+    """
+
+
+class Seed(Protocol):
+    """What every vendor's seed has, whichever vendor it is.
+
+    FOR: a consumer parametrized over vendors, and for
+    :class:`~vendorfake.testing.StartedUnit`'s fallback type when the vendor
+    is a plain ``str`` rather than a literal. Reading a field through this
+    protocol needs no ``isinstance`` and no per-vendor helper.
+
+    Deliberately small, and deliberately without ``refresh_token``: Square
+    and Clover have one and Toast does not, so putting it here would either
+    lie about Toast or force a fake value onto it. A consumer that needs the
+    refresh branch reads :attr:`Credentials.grant`, which is the real vendor
+    difference rather than an artefact of this package.
+    """
+
+    @property
+    def credentials(self) -> Credentials: ...
+
+    @property
+    def auth(self) -> Mapping[str, str]: ...
+
+    @property
+    def read_only_auth(self) -> Mapping[str, str]: ...
+
+    @property
+    def event_types(self) -> tuple[str, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +119,17 @@ class SquareSeed:
     #: Every event type the unit can send, as ``GET /v2/webhooks/event-types``
     #: lists them: ``order.created``, ``order.updated``, ``payment.*`` ...
     event_types: tuple[str, ...]
+
+    @property
+    def credentials(self) -> Credentials:
+        """The application credential, under the neutral names.
+
+        DOCUMENTED, the ``grant``: Square issues a refresh token alongside
+        the access token and a consumer rotates it -- "call ObtainToken with
+        the refresh token" -- rather than re-authorizing
+        (https://developer.squareup.com/docs/oauth-api/refresh-revoke-limit-scope).
+        """
+        return Credentials(app_id=self.application_id, app_secret=self.application_secret, grant="refresh_token")
 
     @property
     def auth(self) -> dict[str, str]:
@@ -98,6 +177,18 @@ class CloverSeed:
     #: Clover's vocabulary is ``<object key>:<change>`` -- ``O:CREATE``,
     #: ``P:UPDATE`` ... -- and a subscription may name a glob such as ``O:*``.
     event_types: tuple[str, ...]
+
+    @property
+    def credentials(self) -> Credentials:
+        """The application credential, under the neutral names.
+
+        DOCUMENTED, the ``grant``: Clover's expiring-token apps rotate a
+        single-use refresh token -- "refresh token is for single use and
+        becomes invalid immediately after a new access_token and
+        refresh_token pair is generated"
+        (https://docs.clover.com/dev/docs/refresh-access-tokens).
+        """
+        return Credentials(app_id=self.client_id, app_secret=self.client_secret, grant="refresh_token")
 
     @property
     def auth(self) -> dict[str, str]:
@@ -152,6 +243,19 @@ class ToastSeed:
     #: ``Toast-Restaurant-External-ID``, spelled as the vendor spells it.
     restaurant_header_name: str
     event_types: tuple[str, ...]
+
+    @property
+    def credentials(self) -> Credentials:
+        """The application credential, under the neutral names.
+
+        DOCUMENTED, the ``grant``: Toast's authentication endpoint takes the
+        client id and secret and answers a bearer token, and there is no
+        refresh -- a client logs in again when the token expires
+        (https://doc.toasttab.com/doc/devguide/authentication.html). That is
+        why :class:`ToastSeed` has no ``refresh_token`` field and why
+        :class:`Seed` does not promise one.
+        """
+        return Credentials(app_id=self.client_id, app_secret=self.client_secret, grant="client_credentials")
 
     @property
     def restaurant_header(self) -> dict[str, str]:

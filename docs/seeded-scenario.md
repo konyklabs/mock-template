@@ -3,7 +3,38 @@
 Every profile ships the same scenario, so a fresh unit needs no setup. The
 values are readable and obviously fake by design. In Python they are
 `.seed.*` attributes on a started unit (`vendorfake.testing.SquareSeed`,
-`CloverSeed`, `ToastSeed`), which is the form to use in a test.
+`CloverSeed`, `ToastSeed`), which is the form to use in a test. The vendor
+name narrows the type: `unit("toast").seed` is a `ToastSeed` to a type
+checker, so a field belonging to another vendor is a type error rather than
+a runtime surprise.
+
+## The three fields every vendor has
+
+A test parametrized over vendors reads the seed through
+`vendorfake.testing.Seed`, which is what the three have in common:
+`credentials`, `auth`, `read_only_auth` and `event_types`. Everything else in
+the tables below is vendor-specific and reached through the vendor's own seed
+type.
+
+`credentials` is the app credential from the first row of each table, under
+names that do not change per vendor — Square spells it `application_id` and
+Clover and Toast spell it `client_id`:
+
+| | `app_id` | `app_secret` | `grant` |
+|---|---|---|---|
+| Square | `application_id` | `application_secret` | `refresh_token` |
+| Clover | `client_id` | `client_secret` | `refresh_token` |
+| Toast | `client_id` | `client_secret` | `client_credentials` |
+
+`grant` names the token lifecycle, which is the one difference a consumer's
+session handling genuinely has to branch on: Square and Clover issue a
+refresh token and rotate it, Toast issues a bearer with no refresh and
+expects a fresh login when it expires. That is also why `refresh_token` is
+not on the shared type — Toast has none.
+
+The values come from the profile's `vendor` block, so a profile that
+overrides the app credentials is reported as it actually ran rather than as
+the default below.
 
 ## Square
 

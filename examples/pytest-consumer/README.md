@@ -1,8 +1,8 @@
 # pytest consumer example
 
 A restaurant-ordering integration's test suite, written the way you would write
-it against the vendor sandboxes, run against `vendorfake` instead. Ten tests,
-about a second:
+it against the vendor sandboxes, run against `vendorfake` instead. Sixteen
+tests, about two seconds:
 
 ```sh
 cd examples/pytest-consumer
@@ -24,6 +24,7 @@ dependencies = ["vendorfake @ git+https://github.com/konyklabs/vendorfake"]
 | `conftest.py` | – | One in-process unit per test (`vendorfake.testing.unit`) and a loopback webhook receiver |
 | `test_square.py` | Square | OAuth exchange → create order → `POST /v2/payments` → read back COMPLETED; `GET /v2/catalog/list`; an `order.created` webhook verified with `verify_square_signature`; a 429 your retry loop survives with the idempotency key holding; a transient 401 that must not deactivate the connection |
 | `test_clover.py` | Clover | Token exchange → atomic order → payment → `locked`/`PAID`; `items?expand=modifierGroups`; an `O:CREATE` webhook verified with `verify_clover_auth`; the documented 429 with `X-RateLimit-*`; a transient 401 |
+| `test_cross_vendor.py` | all three | One parametrized body over Square, Clover and Toast: the app credentials read through `seed.credentials`, a token obtained, and the refresh-versus-relogin branch taken from `credentials.grant`. No `isinstance` anywhere |
 | `test_container.py` | both | The order-and-pay path against the image, via Testcontainers. Skipped unless `VENDORFAKE_IMAGE` is set |
 
 Against the container (needs Docker and a built image — `docker build -t vendorfake:verify ../..`):

@@ -270,6 +270,38 @@ In Python these are `.seed.*` attributes on a started unit
 `seed.auth` carries the bearer **and** the `Toast-Restaurant-External-ID`
 header together, because a restaurant-scoped call needs both.
 
+**The vendor name narrows the seed.** `unit("clover").seed` is a `CloverSeed`
+to a type checker, not a union, so `seed.merchant_id` type-checks and
+`seed.tea_item_id` does not — no `isinstance`, no cast, no per-vendor helper.
+`served()` narrows the same way. A vendor that is a plain `str` — a
+parametrized test, or one from the entry-point group — gets
+`vendorfake.testing.Seed`, the structural type every seed satisfies:
+`credentials`, `auth`, `read_only_auth`, `event_types`. The seed is never
+`None`; a vendor that publishes none is refused where the unit is built.
+
+**`seed.credentials` is the same two strings under names that do not change
+per vendor** — Square spells it `application_id` and Clover and Toast spell it
+`client_id`, and a test parametrized over vendors cannot spell both:
+
+```python
+@pytest.mark.parametrize("vendor", ["square", "clover", "toast"])
+def test_the_credentials_get_a_token(vendor: str) -> None:
+    with unit(vendor) as started:
+        app = started.seed.credentials  # Credentials(app_id, app_secret, grant)
+        if app.grant == "refresh_token":
+            ...  # Square, Clover: rotate
+        else:
+            ...  # Toast: no refresh, log in again
+```
+
+`grant` is the one difference worth branching on: Square and Clover issue a
+refresh token and rotate it, Toast issues a bearer with no refresh and expects
+a fresh login. `refresh_token` is deliberately *not* on the shared type —
+Toast has none, and faking one would be a lie the type system helped tell. The
+vendor-faithful field names are untouched; `credentials` is a second view of
+them. [`examples/pytest-consumer/test_cross_vendor.py`](examples/pytest-consumer/test_cross_vendor.py)
+is the whole pattern, running.
+
 **Clover has two hosts in your configuration** — the OAuth host
 (`sandbox.dev.clover.com`) and the API host (`apisandbox.dev.clover.com`). The
 unit serves both on one origin, so point both settings at it.
