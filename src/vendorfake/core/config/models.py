@@ -54,13 +54,17 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
 __all__ = [
+    "UNMATCHED_POLICIES",
     "ChaosSection",
     "ClockSection",
     "ProfileDocument",
+    "RequestsSection",
     "ResolvedConfig",
     "RetryPolicy",
     "SubscriberConfig",
     "TransportSection",
+    "UnmatchedPolicy",
+    "UnmatchedSection",
     "WebhooksSection",
     "merged_over",
     "parse_profile_document",
@@ -68,6 +72,27 @@ __all__ = [
 ]
 
 _MODEL = ConfigDict(extra="forbid", frozen=True)
+
+UnmatchedPolicy = Literal["vendor-404", "error"]
+"""What a binding does with a request no route matched.
+
+``vendor-404``
+    Answer exactly as the vendor would, with the diagnosis in the
+    ``Vendorfake-Near-Miss`` header. Fidelity: a consumer rehearsing what their
+    code does with a real 404 gets a real 404.
+``error``
+    Fail the caller where it stands. A test double that quietly answers 404 to
+    a path nobody serves lets a mis-targeted test go green against a unit it
+    never reached, which is the complaint this exists to close.
+
+The kernel implements neither: it always answers the vendor's 404 and attaches
+the header, and the *binding* decides whether to turn that into a failure.
+That split is what keeps a served unit incapable of raising into a socket.
+"""
+
+UNMATCHED_POLICIES: tuple[UnmatchedPolicy, ...] = ("vendor-404", "error")
+"""The two policies, enumerable -- for an error message that lists them and for
+the environment layer, which must reject a third."""
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -165,6 +190,36 @@ class ClockSection(BaseModel):
     start: str | None = None
 
 
+class RequestsSection(BaseModel):
+    """The profile's ``requests`` block: the request log's bound."""
+
+    model_config = _MODEL
+
+    #: How many records the ring buffer holds before it evicts the oldest.
+    #:
+    #: Ten thousand because the log is unbounded in nothing else -- a fake
+    #: driven by a long suite handles a request per assertion, and a buffer
+    #: sized for a test file would silently lose the very first call while a
+    #: consumer was asking why it never arrived. A record is a dozen small
+    #: fields with no body and no headers, so ten thousand of them is a
+    #: megabyte or so; a consumer who wants a whole soak run keeps more.
+    capacity: int = Field(default=10_000, ge=0)
+
+
+class UnmatchedSection(BaseModel):
+    """The profile's ``unmatched`` block: what a request nothing serves gets."""
+
+    model_config = _MODEL
+
+    #: ``None`` means "the binding decides", which is not the same as either
+    #: value. An in-process unit is a test double and defaults to failing the
+    #: test that mis-targets it; a served unit stands in for the vendor and
+    #: answers as the vendor would. A profile that states a policy overrides
+    #: whichever default the binding would have used -- see
+    #: ``vendorfake.testing.unit``, which owns the caller-facing behaviour.
+    policy: UnmatchedPolicy | None = None
+
+
 class TransportSection(BaseModel):
     """Which binding the CLI should stand up, and where.
 
@@ -203,6 +258,8 @@ class ProfileDocument(BaseModel):
     webhooks: WebhooksSection = Field(default_factory=WebhooksSection)
     chaos: ChaosSection = Field(default_factory=ChaosSection)
     clock: ClockSection = Field(default_factory=ClockSection)
+    requests: RequestsSection = Field(default_factory=RequestsSection)
+    unmatched: UnmatchedSection = Field(default_factory=UnmatchedSection)
 
 
 class ResolvedWebhooks(BaseModel):
@@ -241,6 +298,12 @@ class ResolvedConfig(BaseModel):
     chaos: ResolvedChaos
     clock: ClockSection
     transport: TransportSection
+    #: Defaulted rather than required, unlike the three above: a unit built
+    #: before this section existed logs requests at the default bound, and a
+    #: caller assembling a ``ResolvedConfig`` by hand -- every kernel test does
+    #: -- should not have to name a knob it is not exercising.
+    requests: RequestsSection = Field(default_factory=RequestsSection)
+    unmatched: UnmatchedSection = Field(default_factory=UnmatchedSection)
     #: Read here rather than by the logger, so no module reaches for the
     #: process environment on its own. The reference's ``createLogger``
     #: defaulted straight from ``process.env``, which is the leak this closes.

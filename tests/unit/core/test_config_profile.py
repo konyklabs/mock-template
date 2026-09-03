@@ -161,9 +161,15 @@ def test_the_process_environment_is_never_read(tmp_path: Path, monkeypatch: pyte
 
 def test_the_table_carries_the_sixteen_reference_names_renamed() -> None:
     """Renaming is checkable rather than remembered: a variable lost in
-    translation shows up here as a failure."""
-    assert len(ENV_TABLE) == 16
-    assert [var.replaces for var in ENV_TABLE] == [
+    translation shows up here as a failure.
+
+    The table is allowed to GROW -- this build has variables the reference
+    never had, and they carry ``replaces=None`` -- but the sixteen it inherited
+    must all still be there, in order, mapped to a ``VENDORFAKE_`` name.
+    """
+    inherited = [var for var in ENV_TABLE if var.replaces is not None]
+    assert len(inherited) == 16
+    assert [var.replaces for var in inherited] == [
         "UNIT_PROFILE",
         "UNIT_CAPABILITIES",
         "UNIT_SEED",
@@ -183,6 +189,9 @@ def test_the_table_carries_the_sixteen_reference_names_renamed() -> None:
     ]
     assert all(name.startswith("VENDORFAKE_") for name in env_names())
     assert sum(1 for var in ENV_TABLE if var.is_prefix) == 1
+    # Every added variable states what it applies to, so `--help` and the
+    # README can be generated from the table rather than kept in step by hand.
+    assert all(var.applies_to and var.summary for var in ENV_TABLE)
 
 
 def test_no_unit_prefixed_alias_is_honoured() -> None:

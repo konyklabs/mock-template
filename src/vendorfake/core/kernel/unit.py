@@ -83,6 +83,7 @@ whether to take it at all.
 
 from __future__ import annotations
 
+import collections
 import threading
 import time
 import uuid
@@ -100,15 +101,18 @@ from vendorfake.core.chaos.rules import matched_routes
 from vendorfake.core.chaos.selector import FaultSelector
 from vendorfake.core.config.models import ResolvedConfig
 from vendorfake.core.kernel.magic import MagicExtraction, extract_magic
+from vendorfake.core.kernel.nearmiss import NEAR_MISS_HEADER, near_miss_header, near_misses
 from vendorfake.core.kernel.reply import normalize
-from vendorfake.core.kernel.router import Match, MethodNotAllowed, Router
+from vendorfake.core.kernel.router import INTERNAL_PATH_PREFIX, Match, MethodNotAllowed, Router
 from vendorfake.core.kernel.shaping import assert_error_table_total
 from vendorfake.core.kernel.types import (
     AuthResult,
     HandlerArgs,
     Logger,
     MutableResponse,
+    NearMiss,
     ReplyInit,
+    RequestRecord,
     Route,
     ShapedError,
     UnitContext,
@@ -132,6 +136,7 @@ __all__ = [
     "REQUEST_ID_HEADER",
     "ControlBinding",
     "DispatcherFactory",
+    "RequestLog",
     "RouteInfo",
     "Unit",
     "make_request",
@@ -301,19 +306,145 @@ class RouteInfo:
         return body
 
 
+class RequestLog:
+    """A bounded ring of :class:`RequestRecord`, newest last.
+
+    FOR: answering "what did my code call, and did anything answer it?". The
+    journal cannot: it records committed *mutations* by design, so a 4xx, a
+    read, and a request that matched no route at all leave no trace in it --
+    which is precisely the set of calls a consumer debugging an integration
+    wants to see.
+
+    BOUNDED, because a fake lives inside a test process and an unbounded log
+    would be a slow leak proportional to suite length. Oldest evicted first: a
+    consumer asking what just happened is nearly always asking about the end of
+    the run, and the alternative -- refusing to record once full -- loses the
+    part they wanted.
+
+    **Control-plane requests are not recorded**, and that is the caller's rule
+    to apply rather than this class's: ``/__unit/*`` is the observer, and a log
+    that recorded the reads of itself would grow by one row for every question
+    asked of it and bury the traffic under the instrumentation.
+
+    Its own lock, like the store's and the clock's. The kernel's request lock
+    is released for a route declaring ``serialized=False``, and two such
+    requests finishing at once must not interleave a deque append.
+    """
+
+    __slots__ = ("_capacity", "_lock", "_records")
+
+    def __init__(self, capacity: int) -> None:
+        if capacity < 0:
+            raise ValueError(f"request log capacity must be zero or more, got {capacity}")
+        self._capacity = capacity
+        # `maxlen` is the eviction, rather than a length check on append: one
+        # place for the bound means it cannot be enforced on one path and
+        # forgotten on another.
+        self._records: collections.deque[RequestRecord] = collections.deque(maxlen=capacity)
+        self._lock = threading.Lock()
+
+    @property
+    def capacity(self) -> int:
+        return self._capacity
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._records)
+
+    def record(self, entry: RequestRecord) -> None:
+        """Append, evicting the oldest when full. A capacity of zero records
+        nothing at all, which is how the log is switched off."""
+        if self._capacity == 0:
+            return
+        with self._lock:
+            self._records.append(entry)
+
+    def clear(self) -> int:
+        """Drop every record, returning how many there were."""
+        with self._lock:
+            count = len(self._records)
+            self._records.clear()
+            return count
+
+    def records(
+        self,
+        *,
+        operation_id: str | None = None,
+        route: str | None = None,
+        unmatched: bool | None = None,
+        limit: int | None = None,
+    ) -> tuple[RequestRecord, ...]:
+        """Matching records, **newest first**.
+
+        Newest first because the question is nearly always "what did my code
+        just do", and a consumer who wanted the other order has a list to
+        reverse. ``limit`` is applied after filtering, so
+        ``requests(operation_id=X, limit=1)`` is the most recent call to X and
+        not "the most recent call, if it happened to be X" -- the second
+        reading would answer ``None`` for a route that had definitely been
+        called, which is worse than useless in an assertion.
+
+        Every filter is a conjunction, and ``None`` means "do not filter":
+        ``unmatched=False`` is therefore "only the matched ones" rather than
+        "no filter", which is the distinction a boolean default of ``False``
+        would have thrown away.
+        """
+        with self._lock:
+            found = list(self._records)
+        found.reverse()
+        selected = [
+            entry
+            for entry in found
+            if (operation_id is None or entry.operation_id == operation_id)
+            and (route is None or entry.route == route)
+            and (unmatched is None or entry.matched is not unmatched)
+        ]
+        return tuple(selected if limit is None else selected[:limit])
+
+
 @dataclass(frozen=True, slots=True)
 class ControlBinding:
     """Unit internals the control plane needs and a route handler must not have.
 
-    Two callables rather than a reference to the unit, so the surface is
-    enumerable: this is the complete list of things ``/__unit/*`` can do that a
-    vendor handler cannot.
+    Two callables and one object rather than a reference to the unit, so the
+    surface is enumerable: this is the complete list of things ``/__unit/*``
+    can do that a vendor handler cannot.
     """
 
     #: Wipe state and re-apply the seed document.
     hydrate: Callable[[], None]
     #: Every registered route, control routes included.
     list_routes: Callable[[], tuple[RouteInfo, ...]]
+    #: The request log, read and cleared by ``/__unit/requests``.
+    #:
+    #: The object rather than two adapter callables: its own methods are
+    #: already the narrow surface, and wrapping them would only add a second
+    #: place for the filter semantics to be stated. It is emphatically NOT on
+    #: :class:`UnitContext`, for the same reason ``hydrate`` is not -- a vendor
+    #: handler that could read the log could branch on what the caller did
+    #: earlier, and a fake whose answers depend on the shape of a test run is
+    #: not reproducible.
+    #:
+    #: Required rather than defaulted to an empty log, which would let a
+    #: mis-wired plane answer ``{"count": 0}`` forever and read as "your code
+    #: called nothing".
+    requests: RequestLog
+
+
+@dataclass(slots=True)
+class _Trace:
+    """What one request picked up on its way through, for the request log.
+
+    Mutable and passed down rather than returned back up, because the two
+    facts it carries are learned on paths that then *raise*: an armed fault
+    usually leaves through ``apply_request_fault``, and a near-miss list is
+    computed where no route exists to return anything. A return value would be
+    lost in exactly the cases worth recording.
+    """
+
+    fault: str | None = None
+    rule_id: str | None = None
+    near_misses: tuple[NearMiss, ...] = ()
 
 
 class _Context:
@@ -397,6 +528,7 @@ class Unit:
         "_ctx",
         "_lock",
         "_log",
+        "_requests",
         "_rng",
         "_router",
         "_routes",
@@ -439,7 +571,13 @@ class Unit:
         self._store = Store(self._clock)
         self._chaos = ChaosEngine(self._rng, self._clock.iso_ms, config.chaos.rules)
 
-        self._control = ControlBinding(hydrate=self._hydrate, list_routes=self._list_routes)
+        self._requests = RequestLog(config.requests.capacity)
+
+        self._control = ControlBinding(
+            hydrate=self._hydrate,
+            list_routes=self._list_routes,
+            requests=self._requests,
+        )
         control = tuple(control_routes(self._control)) if control_routes is not None else ()
         self._routes: tuple[Route, ...] = tuple(vendor.routes) + control
         # Router.add is where a vendor route claiming the control-plane
@@ -596,6 +734,11 @@ class Unit:
         """The typed binding the control plane is built against."""
         return self._control
 
+    @property
+    def requests(self) -> RequestLog:
+        """Every request this unit has handled, control-plane calls excepted."""
+        return self._requests
+
     # -- lifecycle ----------------------------------------------------------
 
     def start(self) -> None:
@@ -644,11 +787,17 @@ class Unit:
         than spanning the one before it -- and note that the re-insertion above
         journals, which is exactly why the dispatcher ignores mutations to the
         subscription collection.
+
+        The request log is cleared with them, and for the same reason: a reset
+        says "this is the beginning", and a per-test ``reset()`` that left the
+        previous test's calls in the log would make ``assert_called(..., times=1)``
+        pass or fail on test order.
         """
         self._store.reset()
         self._vendor.hydrate(self._ctx, self._seed)
         self._webhooks.load_config_subscribers(self._config.webhooks.subscribers)
         self._webhooks.clear_log()
+        self._requests.clear()
 
     def _list_routes(self) -> tuple[RouteInfo, ...]:
         return tuple(RouteInfo.of(route) for route in self._router.routes())
@@ -661,9 +810,17 @@ class Unit:
         Synchronous by design. Every failure leaves through ``finish()`` with a
         vendor-shaped body and an ``x-unit-error`` header, so no caller ever
         receives a framework's own error document.
+
+        **The kernel never raises for an unmatched request.** It answers the
+        vendor's own 404 with the near-miss diagnosis in a header, and the
+        binding decides whether that is a failure -- see
+        ``config/models.py::UnmatchedPolicy``. Raising here would make a served
+        unit unable to honour the same profile as an in-process one, since
+        there is nothing to raise *into* across a socket.
         """
         started = time.monotonic()
         route: Route | None = None
+        trace = _Trace()
         try:
             outcome = self._router.match(req.method, req.path)
             if isinstance(outcome, MethodNotAllowed):
@@ -673,19 +830,30 @@ class Unit:
                     info={"allowed": list(outcome.allowed)},
                 )
             if not isinstance(outcome, Match):
+                trace.near_misses = self._near_misses(req)
                 shaped = self._vendor.errors.not_found(req, self._ctx)
-                return self._finish(req, self._shape(shaped, UnitErrorKind.NOT_FOUND), None, started)
+                answer = self._shape(shaped, UnitErrorKind.NOT_FOUND)
+                # The header rides on the response the vendor shaped; the BODY
+                # is untouched, because a consumer rehearsing what their code
+                # does with a real 404 must get the real one.
+                answer = UnitResponse(
+                    status=answer.status,
+                    headers={**answer.headers, NEAR_MISS_HEADER: near_miss_header(trace.near_misses)},
+                    body=answer.body,
+                )
+                return self._finish(req, answer, None, started, trace)
 
             route = outcome.route
             args = HandlerArgs(req=req, params=outcome.params, ctx=self._ctx, route=route)
             if route.serialized:
                 with self._lock:
-                    res = self._run_pipeline(req, route, args)
+                    res = self._run_pipeline(req, route, args, trace)
             else:
-                res = self._run_pipeline(req, route, args)
-            return self._finish(req, res, route, started)
+                res = self._run_pipeline(req, route, args, trace)
+            return self._finish(req, res, route, started, trace)
         except UnitError as err:
-            return self._finish(req, self._shape(self._vendor.errors.shape(err, self._ctx), err.kind), route, started)
+            shaped_error = self._shape(self._vendor.errors.shape(err, self._ctx), err.kind)
+            return self._finish(req, shaped_error, route, started, trace)
         except Exception as exc:
             # Not a UnitError, so nothing in the core meant this: it is a defect
             # in a handler or in this file. It is logged as one, then answered
@@ -694,11 +862,26 @@ class Unit:
             self._log.error("unhandled error", {"path": req.path, "error": _describe(exc)})
             internal = UnitError(UnitErrorKind.INTERNAL, detail=_describe(exc))
             shaped = self._vendor.errors.shape(internal, self._ctx)
-            return self._finish(req, self._shape(shaped, internal.kind), route, started)
+            return self._finish(req, self._shape(shaped, internal.kind), route, started, trace)
+
+    def _near_misses(self, req: UnitRequest) -> tuple[NearMiss, ...]:
+        """The closest routes among the ones this unit is *currently* serving.
+
+        Internal routes are excluded because the control plane is the observer
+        and is not what a consumer mistyped; a route behind a disabled
+        capability is excluded because it is not part of the surface right now,
+        and naming it would send a reader looking for a typo instead of for the
+        profile that switched it off.
+        """
+        return near_misses(
+            req.method,
+            req.path,
+            (route for route in self._routes if not route.internal and self._capabilities.is_enabled(route.capability)),
+        )
 
     # -- the pipeline -------------------------------------------------------
 
-    def _run_pipeline(self, req: UnitRequest, route: Route, args: HandlerArgs) -> UnitResponse:
+    def _run_pipeline(self, req: UnitRequest, route: Route, args: HandlerArgs, trace: _Trace) -> UnitResponse:
         # 1. internal short-circuit -----------------------------------------
         if route.internal:
             return normalize(route.handler(args))
@@ -720,6 +903,12 @@ class Unit:
             lambda: self._in_band(req, args),
         )
         decision = selection.decision
+        if decision is not None:
+            # Recorded before the fault is applied, not after: applying it can
+            # raise, and a rate limit that left no trace in the request log
+            # would be exactly the 429 a consumer cannot explain.
+            trace.fault = decision.fault
+            trace.rule_id = decision.rule_id
 
         # 4. pre-auth faults -------------------------------------------------
         if decision is not None:
@@ -845,11 +1034,19 @@ class Unit:
         headers["x-unit-error"] = kind.value
         return normalize(ReplyInit(status=shaped.status, json=shaped.body, headers=headers))
 
-    def _finish(self, req: UnitRequest, res: UnitResponse, route: Route | None, started: float) -> UnitResponse:
+    def _finish(
+        self,
+        req: UnitRequest,
+        res: UnitResponse,
+        route: Route | None,
+        started: float,
+        trace: _Trace,
+    ) -> UnitResponse:
         mutable = MutableResponse(status=res.status, headers=dict(res.headers), body=res.body)
         mutable.headers[REQUEST_ID_HEADER] = req.id
         if route is not None and not route.internal:
             self._vendor.decorate(mutable, self._ctx, req)
+        elapsed_ms = (time.monotonic() - started) * 1000
         self._log.debug(
             "request",
             {
@@ -857,9 +1054,36 @@ class Unit:
                 "path": req.path,
                 "status": mutable.status,
                 "route": route.key if route is not None else None,
-                "ms": round((time.monotonic() - started) * 1000, 3),
+                "ms": round(elapsed_ms, 3),
             },
         )
+        # Recorded here, on the one path every answer leaves through -- the
+        # success path, every shaped error and the catch-all 500 alike. A
+        # recording step in `handle` would have to be repeated four times and
+        # would be forgotten on the fifth.
+        #
+        # Excluded by path prefix, not only by matched route: an unmatched
+        # `/__unit/*` request (a mistyped control path, or a wrong verb on a
+        # real control route) is still the observer's own traffic, and must
+        # stay absent from the log by construction rather than merely when it
+        # happens to resolve to an internal route.
+        if (route is None or not route.internal) and not req.path.startswith(INTERNAL_PATH_PREFIX):
+            self._requests.record(
+                RequestRecord(
+                    id=req.id,
+                    received_at=req.received_at,
+                    method=req.method,
+                    path=req.path,
+                    route=None if route is None else route.key,
+                    operation_id=None if route is None else route.operation_id,
+                    status=mutable.status,
+                    matched=route is not None,
+                    fault=trace.fault,
+                    rule_id=trace.rule_id,
+                    duration_ms=round(elapsed_ms),
+                    near_misses=trace.near_misses,
+                )
+            )
         return UnitResponse(status=mutable.status, headers=mutable.headers, body=mutable.body)
 
 

@@ -1,4 +1,4 @@
-"""Thirty-one units, each broken in exactly one way, and the check each must trip.
+"""Thirty-two units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -1121,4 +1121,46 @@ none may be FAIL, and the report must be red. What C11 discriminates is a
 *document* -- which is honest, and is why C11's own prose now says so: its value
 is against a foreign implementation reached over ``--base-url``, which has no
 Python startup assertion in front of it.
+"""
+
+
+# ---------------------------------------------------------------------------
+# C33 -- an unmatched request is named and recorded.
+# ---------------------------------------------------------------------------
+
+
+def _near_miss_stripping_binding(transport: str, client: ConformanceClient) -> ConformanceClient:
+    def on_response(method: str, path: str, answered: ConformanceResponse) -> ConformanceResponse:
+        # A middleware with a header allow-list: everything the framework
+        # recognises survives, and the one header this project added does not.
+        # It is the shape of every "we only forward the standard headers"
+        # proxy, and it is invisible in every other contract -- the body, the
+        # status and the request id all still match byte for byte.
+        return ConformanceResponse(
+            status=answered.status,
+            headers={name: value for name, value in answered.headers.items() if name != "vendorfake-near-miss"},
+            body=answered.body,
+        )
+
+    return ClientOverlay(client, on_response=on_response)
+
+
+register(
+    Mutant(
+        id="M54",
+        name="near-miss-header-stripped",
+        defect="The binding drops Vendorfake-Near-Miss, so an unmatched request answers 404 and names nothing.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C33"}),
+        client=_near_miss_stripping_binding,
+    )
+)
+"""The header is the whole diagnosis, and losing it looks like nothing at all.
+
+A vendor's 404 is a correct 404 with or without it, so every other contract
+stays green and a consumer's mis-targeted test goes on failing several
+assertions later with no explanation. That is exactly the state this feature
+was added to leave behind, and it is why C33 asserts the header's presence
+rather than only the request log's contents: the log is read deliberately, the
+header arrives whether or not anyone thought to look.
 """

@@ -84,8 +84,10 @@ __all__ = [
     "MagicTriggerSpec",
     "MappedEvent",
     "MutableResponse",
+    "NearMiss",
     "PreparedEvent",
     "ReplyInit",
+    "RequestRecord",
     "Route",
     "ShapedError",
     "SignInput",
@@ -278,6 +280,115 @@ class ReplyInit:
     json: Any = None
     text: str | None = None
     raw: bytes | None = None
+
+
+# ---------------------------------------------------------------------------
+# What the unit observed about a request. Distinct from the journal, which
+# records committed *mutations* and therefore cannot answer "what did my code
+# call, and did anything answer it?".
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class NearMiss:
+    """One route the unit offers that a request nearly asked for.
+
+    Declared here rather than beside the scorer in ``kernel/nearmiss.py``
+    because :class:`RequestRecord` carries a tuple of these and that module
+    imports :class:`Route` from this one; a type living with the scorer would
+    make the two files a cycle. The *scoring* is the scorer's, and stays there.
+    """
+
+    #: ``"POST /v2/orders/{order_id}/pay"`` -- :attr:`Route.key`.
+    route: str
+    operation_id: str | None
+    #: 0.0 to 1.0. See ``kernel/nearmiss.py`` for how it is composed; it is
+    #: comparable only against other candidates for the same request.
+    score: float
+
+    def as_json(self) -> dict[str, Any]:
+        """Two decimal places on the wire.
+
+        The header this appears in is read by a person looking at a failing
+        test, and ``0.8333333333333334`` is noise in that setting. Full
+        precision is kept in memory, so an ordering is never decided by the
+        rounding.
+        """
+        body: dict[str, Any] = {"route": self.route, "score": round(self.score, 2)}
+        if self.operation_id is not None:
+            body["operation_id"] = self.operation_id
+        return body
+
+
+@dataclass(frozen=True, slots=True)
+class RequestRecord:
+    """One request the unit handled, whatever answered it.
+
+    FOR: the question the journal cannot be asked. A journal entry exists only
+    where a mutation committed -- by design, so that a transcript is a record
+    of what *changed* -- which means a consumer whose call never reached a
+    handler, or was refused, has nothing to look at. This is the other half:
+    every request, matched or not, with the route that took it and what it
+    answered.
+
+    **No body and no headers.** A request log that kept bodies would keep
+    tokens, signatures and card-shaped strings in a fake's memory for the life
+    of a test run, and would grow without bound on a suite that posts large
+    documents. The id is kept instead, which is echoed on the response as
+    ``x-unit-request-id`` and is how a row is tied back to a call.
+    """
+
+    #: :attr:`UnitRequest.id`, echoed on the response.
+    id: str
+    #: :attr:`UnitRequest.received_at` -- when a binding took delivery, not the
+    #: unit's (possibly virtual) clock.
+    received_at: str
+    method: str
+    path: str
+    #: :attr:`Route.key` when a route answered, else ``None``.
+    route: str | None
+    operation_id: str | None
+    status: int
+    #: Whether a route answered. ``False`` covers both "no such path" (a 404,
+    #: which carries :attr:`near_misses`) and "that path, wrong verb" (a 405,
+    #: which does not -- the answer already names the methods that are allowed).
+    matched: bool
+    #: The fault kind a chaos rule armed for this request, or ``None``.
+    fault: str | None
+    #: The id of the rule that armed it; ``magic`` for an in-band trigger.
+    rule_id: str | None
+    duration_ms: int
+    #: The closest routes, best first. Empty for anything that matched.
+    near_misses: tuple[NearMiss, ...] = ()
+
+    def as_json(self) -> dict[str, Any]:
+        """``matched`` and ``near_misses`` always present; nulls dropped.
+
+        The two that are always there are the two a caller filters on, and a
+        key that came and went with the value would make every reader write a
+        default. The rest follow the plane's usual rule -- an absent key rather
+        than an explicit ``null`` -- because "no route answered" is already
+        said by ``matched``.
+        """
+        body: dict[str, Any] = {
+            "id": self.id,
+            "received_at": self.received_at,
+            "method": self.method,
+            "path": self.path,
+            "status": self.status,
+            "matched": self.matched,
+            "duration_ms": self.duration_ms,
+            "near_misses": [miss.as_json() for miss in self.near_misses],
+        }
+        for key, value in (
+            ("route", self.route),
+            ("operation_id", self.operation_id),
+            ("fault", self.fault),
+            ("rule_id", self.rule_id),
+        ):
+            if value is not None:
+                body[key] = value
+        return body
 
 
 # ---------------------------------------------------------------------------

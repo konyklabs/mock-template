@@ -60,6 +60,7 @@ from typing import Any
 
 from vendorfake.core.capability.registry import apply_capability_delta
 from vendorfake.core.config.models import (
+    UNMATCHED_POLICIES,
     ProfileDocument,
     ResolvedChaos,
     ResolvedConfig,
@@ -67,6 +68,7 @@ from vendorfake.core.config.models import (
     RetryPolicy,
     SubscriberConfig,
     TransportSection,
+    UnmatchedPolicy,
     parse_profile_document,
 )
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
@@ -101,7 +103,11 @@ class EnvVar:
     """
 
     name: str
-    replaces: str
+    #: The reference's name for this variable, or ``None`` for one this build
+    #: added and the reference never had. Kept as a distinct value rather than
+    #: an empty string so the test asserting "all sixteen survived the rename"
+    #: still counts sixteen as the table grows.
+    replaces: str | None
     applies_to: str
     summary: str
     #: True for ``VENDORFAKE_VENDOR_``, which is a prefix rather than a name.
@@ -166,9 +172,21 @@ ENV_TABLE: tuple[EnvVar, ...] = (
         "Prefix: the remainder becomes a snake_case vendor-config key. The reference camel-cased it.",
         is_prefix=True,
     ),
+    EnvVar(
+        "VENDORFAKE_REQUEST_LOG_CAPACITY",
+        None,
+        "requests.capacity",
+        "How many requests the in-memory request log keeps before evicting the oldest.",
+    ),
+    EnvVar(
+        "VENDORFAKE_UNMATCHED",
+        None,
+        "unmatched.policy",
+        "'vendor-404' or 'error': what an in-process binding does with a request no route matched.",
+    ),
 )
-"""Every environment variable this loader reads. Sixteen entries, one of them a
-prefix -- the same sixteen the reference read, renamed.
+"""Every environment variable this loader reads: the sixteen the reference read,
+renamed, plus the ones this build added, which carry ``replaces=None``.
 
 ``VENDORFAKE_VENDOR`` (no trailing underscore) is deliberately absent: it
 selects which vendor module to load, which happens before a profile exists, and
@@ -269,6 +287,30 @@ def _env_float(env: Mapping[str, str], name: str) -> float | None:
     return value
 
 
+def _env_unmatched(env: Mapping[str, str]) -> UnmatchedPolicy | None:
+    """``VENDORFAKE_UNMATCHED``, checked against the two policies.
+
+    A typo here is the worst possible silent failure: ``VENDORFAKE_UNMATCHED=err``
+    would fall back to the binding's default, and a CI run configured to fail
+    loudly on a mis-targeted request would go on answering 404s. So it is an
+    ``invalid_value`` that names the variable and lists what it accepts,
+    exactly as ``VENDORFAKE_CLOCK`` is.
+    """
+    raw = env.get("VENDORFAKE_UNMATCHED")
+    if not raw:
+        return None
+    for policy in UNMATCHED_POLICIES:
+        # Compared one at a time rather than with `in`, so the value that comes
+        # back is the *literal* and no cast is needed to say so.
+        if raw == policy:
+            return policy
+    raise UnitError(
+        UnitErrorKind.INVALID_VALUE,
+        detail=f"VENDORFAKE_UNMATCHED={raw!r} is not one of {', '.join(UNMATCHED_POLICIES)}.",
+        field="VENDORFAKE_UNMATCHED",
+    )
+
+
 def _env_clock_mode(env: Mapping[str, str]) -> str | None:
     raw = env.get("VENDORFAKE_CLOCK")
     if not raw:
@@ -336,6 +378,14 @@ def resolve_config(
     chaos_seed = _env_int(environ, "VENDORFAKE_CHAOS_SEED")
     clock_mode = _env_clock_mode(environ)
     port = _env_int(environ, "VENDORFAKE_PORT")
+    capacity = _env_int(environ, "VENDORFAKE_REQUEST_LOG_CAPACITY")
+    if capacity is not None and capacity < 0:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"VENDORFAKE_REQUEST_LOG_CAPACITY={capacity} must be zero or more (zero switches the log off).",
+            field="VENDORFAKE_REQUEST_LOG_CAPACITY",
+        )
+    unmatched = _env_unmatched(environ)
 
     return ResolvedConfig(
         profile=document.name or name,
@@ -358,6 +408,12 @@ def resolve_config(
             port=8080 if port is None else port,
             host=environ.get("VENDORFAKE_HOST"),
             dir=environ.get("VENDORFAKE_TRANSPORT_DIR"),
+        ),
+        requests=(
+            document.requests if capacity is None else document.requests.model_copy(update={"capacity": capacity})
+        ),
+        unmatched=(
+            document.unmatched if unmatched is None else document.unmatched.model_copy(update={"policy": unmatched})
         ),
         log_level=environ.get("VENDORFAKE_LOG_LEVEL", "info"),
     )

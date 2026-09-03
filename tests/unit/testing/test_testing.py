@@ -367,7 +367,10 @@ def test_no_internal_marker_reaches_a_wire_body_from_any_vendor() -> None:
         return []
 
     for vendor in available_vendors():
-        with unit(vendor) as driver:
+        # `unmatched="vendor-404"`: this test's whole subject is the BODY of a
+        # real refusal, so it is one of the cases the strict default is not
+        # for -- it probes an unmodelled path deliberately.
+        with unit(vendor, unmatched="vendor-404") as driver:
             catalogue = driver.client.get("/__unit/errors")
             assert dunder_keys(catalogue.json()) == [], f"{vendor}: internal key in the error catalogue"
             # The sidecar has to be ON, or this proves nothing: the leak lived
