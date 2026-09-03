@@ -291,8 +291,9 @@ class TransportDirective:
 
     provenance: transport. No vendor documents any of the three; they are what
     any HTTP dependency can do to a caller, independent of which vendor is
-    behind it. See ``core/chaos/faults.py`` and the README's "Transport
-    faults" section.
+    behind it. See ``core/chaos/faults.py`` and
+    ``docs/concepts/chaos-rules-and-faults.md`` ("Transport faults"), which
+    tabulates the exception each binding raises for each of the three.
     """
 
     kind: Literal["connection_reset", "empty_response", "slow_body"]
@@ -448,15 +449,29 @@ class RequestRecord:
     duration_ms: int
     #: The closest routes, best first. Empty for anything that matched.
     near_misses: tuple[NearMiss, ...] = ()
+    #: The last journal ``seq`` this request committed, or ``None`` when it
+    #: committed nothing -- a refusal, a replay, a read, a request-phase
+    #: fault. Compare with ``GET /__unit/journal?since=`` to find the entries.
+    committed_journal_seq: int | None = None
+    #: ``True`` when the handler committed *and* the caller still did not get
+    #: its clean answer: a response-phase fault corrupted it, or the fault's
+    #: own params were bad and the caller got the 400 naming the rule instead.
+    #: The mutation is not discarded from the store -- it stands, and the
+    #: journal has it -- it is discarded from the *caller's* point of view,
+    #: which against a single-use rotation means the credential is spent by a
+    #: call that looked like it failed (konyklabs/roadmap#101, item 17).
+    discarded_mutation: bool = False
 
     def as_json(self) -> dict[str, Any]:
-        """``matched`` and ``near_misses`` always present; nulls dropped.
+        """``matched``, ``near_misses`` and ``discarded_mutation`` always
+        present; nulls dropped.
 
-        The two that are always there are the two a caller filters on, and a
-        key that came and went with the value would make every reader write a
-        default. The rest follow the plane's usual rule -- an absent key rather
-        than an explicit ``null`` -- because "no route answered" is already
-        said by ``matched``.
+        The three that are always there are the three a caller filters on,
+        and a key that came and went with the value would make every reader
+        write a default. The rest follow the plane's usual rule -- an absent
+        key rather than an explicit ``null`` -- because "no route answered" is
+        already said by ``matched`` and "committed nothing" by the absence of
+        ``committed_journal_seq``.
         """
         body: dict[str, Any] = {
             "id": self.id,
@@ -467,12 +482,14 @@ class RequestRecord:
             "matched": self.matched,
             "duration_ms": self.duration_ms,
             "near_misses": [miss.as_json() for miss in self.near_misses],
+            "discarded_mutation": self.discarded_mutation,
         }
         for key, value in (
             ("route", self.route),
             ("operation_id", self.operation_id),
             ("fault", self.fault),
             ("rule_id", self.rule_id),
+            ("committed_journal_seq", self.committed_journal_seq),
         ):
             if value is not None:
                 body[key] = value

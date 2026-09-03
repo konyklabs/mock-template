@@ -48,7 +48,7 @@ e.g. `"route": "POST /v3/merchants/{mId}/orders"`.
 ## The fault catalogue
 
 [The generated fault reference](../reference/faults.md) is the exact,
-current list — every fault's scope, provenance, parameters and
+current list — every fault's scope, provenance, **phase**, parameters and
 description, from the same tables the control plane reads. Three families:
 
 **Vendor faults** (`provenance: vendor`) reproduce something the vendor
@@ -71,6 +71,60 @@ distinction is published rather than left implicit. Every faulted
 response, all three families included, carries `Vendorfake-Fault` and
 `Vendorfake-Rule` headers, so a test can tell a faulted answer from a real
 one without parsing the body.
+
+## Phase: does the handler commit?
+
+Provenance says where a fault's behaviour comes from; **phase** says *when*
+it fires, and the two are independent axes. Every fault publishes its
+phase (`GET /__unit/chaos`, `GET /__unit/info`, `vendorfake faults`,
+`vendorfake explain fault <name>`):
+
+- `phase: request` — fires **instead of** the handler. `rate_limit`,
+  `server_error`, `unavailable`, `timeout`, `token_expiry`. Nothing is
+  committed; a retry starts clean.
+- `phase: response` — fires **on the answer, after the handler ran and
+  committed**. All five transport faults. The store keeps the mutation and
+  the journal has it; only the caller never saw it succeed.
+- `phase: delivery` — a webhook delivery, not a request: the `webhook.*`
+  faults.
+
+The response phase is the one to know about before arming a rule against
+a write. **A response-phase fault against a single-use rotation strands the
+credential**: `malformed_body` on Clover's `POST /oauth/v2/refresh` rotates
+the refresh token, then hands the caller an HTML 502 — the next refresh with
+the stored token is a 401, exactly as it would be behind a real gateway that
+mangled the response after the write. That is a valuable rehearsal, and it
+is also a surprise the first time. Two things make it readable without
+opening the journal: the request-log entry for such a call carries
+`discarded_mutation: true` and `committed_journal_seq` (see
+[Journal and request log](journal-and-request-log.md)), and a rule that
+plays a fault sequence ending "clean" cannot end clean against a rotation —
+bound the response-phase rule with `when: {"nth": [1]}` and re-seed the
+token, or use a request-phase fault for the failure the retry ladder is
+meant to recover from.
+
+## Transport faults: what each binding raises
+
+The three transport faults that act on the connection rather than the body
+have no single wire form — a socket and an in-process call cannot fail the
+same way — so each binding raises the exception a real client would see in
+its position. What to catch:
+
+| Fault | In process (`unit()`, `async_unit()`, the pytest fixtures) | Served (`served()`, `serve_in_thread()`, a container) |
+| --- | --- | --- |
+| `connection_reset` | `httpx.RemoteProtocolError`, raised without waiting | the server closes mid-body; httpx raises `httpx.RemoteProtocolError` (a `TransportError`) |
+| `empty_response` | `httpx.ReadError`, raised without waiting | the server closes before any byte the framework lets it withhold; httpx raises a `TransportError` (`ReadError` or `RemoteProtocolError`, by server version) |
+| `slow_body` | delivered whole after the aggregate gap; `httpx.ReadTimeout` without waiting if one gap exceeds the read timeout | streamed in chunks; the client's own read timeout applies per chunk |
+
+`malformed_body` and `body_mutation` are ordinary responses with a bad body,
+on both. Catch `httpx.TransportError` to cover the first two on either
+binding; the in-process choice of subclass mirrors what httpx itself raises
+for the same event on a socket. A rule-authoring mistake in a
+`body_mutation` or `malformed_body` rule (a pointer that is not in *this*
+answer, a mode that does not exist) is not a fault at all: it answers a
+400 carrying `Vendorfake-Rule-Error: <rule id>` and no `Vendorfake-Fault`
+header, so a consumer that reads status codes and headers can tell "your
+rule did not apply" from "the vendor failed".
 
 ## Rehearsing a timeout without waiting
 

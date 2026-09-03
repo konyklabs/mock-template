@@ -151,6 +151,7 @@ def render_fault(data: Mapping[str, Any]) -> str:
         str(data["name"]),
         f"  scope      : {data['scope']}",
         f"  provenance : {data['provenance']}",
+        f"  phase      : {data['phase']}",
         f"  summary    : {data['summary']}",
     ]
     if data.get("params"):

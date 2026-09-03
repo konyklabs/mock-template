@@ -43,7 +43,11 @@ virtual mode
     virtual-mode test is measuring. An elapsed-wall-time assertion is
     meaningless on this branch and is not made; what a virtual-mode test
     asserts instead is that the response is a ``timeout`` and that ``now()``
-    moved.
+    moved. The delay the rule asked for still travels out, in ``info`` and
+    as the ``Vendorfake-Delay-Ms`` header ``kernel/unit.py`` stamps from it,
+    so the in-process transport can still race it against the caller's read
+    timeout: past the threshold the caller gets ``ReadTimeout`` on this
+    branch exactly as on the real one (konyklabs/roadmap#101, item 18).
 
 SECOND REVERSAL: on a real clock this module no longer sleeps. It used to call
 :func:`time.sleep` here, exactly as the reference does (``await
@@ -91,7 +95,7 @@ recognises the five names and does nothing for them at either phase, rather
 than falling through to "unknown fault ignored" -- which is a real warning for
 a fault this core has genuinely never heard of, and would be a false one here.
 See ``core/kernel/types.py`` (:class:`~vendorfake.core.kernel.types.TransportDirective`)
-and the README's "Transport faults" section.
+and ``docs/concepts/chaos-rules-and-faults.md`` ("Transport faults").
 """
 
 from __future__ import annotations
@@ -102,7 +106,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 from vendorfake.core.chaos.engine import ChaosDecision
-from vendorfake.core.chaos.rules import BUILTIN_FAULTS, FaultProvenance
+from vendorfake.core.chaos.rules import BUILTIN_FAULTS, FaultPhase, FaultProvenance
 from vendorfake.core.kernel.shaping import header_text
 from vendorfake.core.kernel.types import (
     Logger,
@@ -121,29 +125,42 @@ __all__ = [
     "DEFAULT_TIMEOUT_DELAY_MS",
     "FAULT_DESCRIPTIONS",
     "FAULT_PARAM_KEYS",
+    "FAULT_PHASE",
     "FAULT_PROVENANCE",
     "RESPONSE_PHASE_FAULTS",
-    "FaultPhase",
+    "RequestMoment",
     "apply_request_fault",
     "apply_response_fault",
     "is_transport_fault",
 ]
 
-FaultPhase = Literal["pre", "post_auth"]
-"""The two moments the pipeline offers a request-scope fault. Response-scope
-faults (:data:`RESPONSE_PHASE_FAULTS`) are a third moment with no phase
-argument of their own -- see :func:`apply_response_fault`."""
+RequestMoment = Literal["pre", "post_auth"]
+"""The two moments the pipeline offers a request-phase fault. Response-phase
+faults (:data:`RESPONSE_PHASE_FAULTS`) are a third moment with no argument of
+their own -- see :func:`apply_response_fault`. Named ``moment`` rather than
+``phase`` because *phase* is the published word
+(:data:`~vendorfake.core.chaos.rules.FaultPhase`: ``request`` / ``response``
+/ ``delivery``) and both of these moments are inside the ``request`` phase."""
 
 AUTH_PHASE_FAULTS: frozenset[str] = frozenset({"token_expiry"})
 """Faults that fire after authentication. Exactly one today; a set rather than
 an equality test so a second one is a data change, not a rewritten condition."""
 
-RESPONSE_PHASE_FAULTS: frozenset[str] = frozenset(
-    {"malformed_body", "body_mutation", "connection_reset", "empty_response", "slow_body"}
-)
+FAULT_PHASE: Mapping[str, FaultPhase] = {spec.name: spec.phase for spec in BUILTIN_FAULTS}
+""":attr:`~vendorfake.core.chaos.rules.FaultSpec.phase` per fault, keyed by
+name exactly as :data:`FAULT_PARAM_KEYS` -- derived from the catalogue for the
+same reason :data:`FAULT_PROVENANCE` is, and what ``vendorfake faults`` reads
+for its ``phase`` column."""
+
+RESPONSE_PHASE_FAULTS: frozenset[str] = frozenset(name for name, phase in FAULT_PHASE.items() if phase == "response")
 """Faults applied to a successful handler response, after it returns -- see
 :func:`apply_response_fault`. ``apply_request_fault`` checks membership here
-first so it can skip these silently instead of warning "unknown fault"."""
+first so it can skip these silently instead of warning "unknown fault".
+
+Derived from the catalogue's ``phase`` rather than written out, so the set the
+pipeline acts on and the phase ``GET /__unit/chaos`` publishes for a fault are
+one fact: a fault cannot be ``phase: "request"`` in the listing and be applied
+after the handler here."""
 
 #: Reference defaults, ported: ``Number(d.params.delayMs ?? 100)`` and
 #: ``Number(d.params.retryAfterSeconds ?? 1)``.
@@ -219,7 +236,7 @@ def _delay_owed(clock: Clock, delay_ms: float) -> int:
 
 def apply_request_fault(
     decision: ChaosDecision,
-    phase: FaultPhase,
+    phase: RequestMoment,
     *,
     clock: Clock,
     log: Logger,
@@ -429,6 +446,7 @@ def _malformed_body(response: UnitResponse, params: Mapping[str, Any], *, fault:
                 f"got {mode!r}."
             ),
             field="params.mode",
+            rule_id=rule,
         )
     default_status = 502 if mode == "html" else response.status
     status = as_int(params.get("status"), default_status)
@@ -465,6 +483,7 @@ def _body_mutation(response: UnitResponse, params: Mapping[str, Any], *, fault: 
             UnitErrorKind.INVALID_VALUE,
             detail=f"body_mutation rule {rule!r}: params.ops must be a non-empty list of pointer operations.",
             field="params.ops",
+            rule_id=rule,
         )
     try:
         document = json.loads(response.body)
@@ -476,6 +495,7 @@ def _body_mutation(response: UnitResponse, params: Mapping[str, Any], *, fault: 
                 f"operation can apply ({exc})."
             ),
             field="params.ops",
+            rule_id=rule,
         ) from exc
     for raw_op in raw_ops:
         document = _apply_pointer_op(document, raw_op, rule=rule)
@@ -518,6 +538,7 @@ def _pointer_segments(pointer: str, *, rule: str) -> list[str]:
             UnitErrorKind.INVALID_VALUE,
             detail=f"body_mutation rule {rule!r}: pointer must be an RFC 6901 pointer starting with '/'; got {pointer!r}.",
             field="params.ops",
+            rule_id=rule,
         )
     return [segment.replace("~1", "/").replace("~0", "~") for segment in pointer.split("/")[1:]]
 
@@ -529,6 +550,7 @@ def _pointer_step(node: Any, segment: str, *, pointer: str, rule: str) -> Any:
                 UnitErrorKind.INVALID_VALUE,
                 detail=f"body_mutation rule {rule!r}: {pointer!r} does not exist in the response body.",
                 field="params.ops",
+                rule_id=rule,
             )
         return node[segment]
     if isinstance(node, list):
@@ -537,6 +559,7 @@ def _pointer_step(node: Any, segment: str, *, pointer: str, rule: str) -> Any:
         UnitErrorKind.INVALID_VALUE,
         detail=f"body_mutation rule {rule!r}: {pointer!r} walks into a scalar value.",
         field="params.ops",
+        rule_id=rule,
     )
 
 
@@ -546,6 +569,7 @@ def _pointer_index(node: list[Any], segment: str, *, pointer: str, rule: str) ->
             UnitErrorKind.INVALID_VALUE,
             detail=f"body_mutation rule {rule!r}: {pointer!r} is not a valid index into a {len(node)}-element array.",
             field="params.ops",
+            rule_id=rule,
         )
     return int(segment)
 
@@ -556,6 +580,7 @@ def _pointer_parent(document: Any, segments: Sequence[str], *, pointer: str, rul
             UnitErrorKind.INVALID_VALUE,
             detail=f"body_mutation rule {rule!r}: pointer {pointer!r} must not name the whole document.",
             field="params.ops",
+            rule_id=rule,
         )
     node = document
     for segment in segments[:-1]:
@@ -568,6 +593,7 @@ def _pointer_parent(document: Any, segments: Sequence[str], *, pointer: str, rul
             UnitErrorKind.INVALID_VALUE,
             detail=f"body_mutation rule {rule!r}: {pointer!r} does not exist in the response body.",
             field="params.ops",
+            rule_id=rule,
         )
     return node, last
 
@@ -578,6 +604,7 @@ def _apply_pointer_op(document: Any, raw_op: object, *, rule: str) -> Any:
             UnitErrorKind.INVALID_VALUE,
             detail=f"body_mutation rule {rule!r}: each entry in params.ops must be an object.",
             field="params.ops",
+            rule_id=rule,
         )
     op = raw_op.get("op")
     if op not in ("remove", "replace", "retype"):
@@ -585,6 +612,7 @@ def _apply_pointer_op(document: Any, raw_op: object, *, rule: str) -> Any:
             UnitErrorKind.INVALID_VALUE,
             detail=f"body_mutation rule {rule!r}: op must be remove, replace or retype; got {op!r}.",
             field="params.ops",
+            rule_id=rule,
         )
     pointer = raw_op.get("pointer")
     if not isinstance(pointer, str):
@@ -592,6 +620,7 @@ def _apply_pointer_op(document: Any, raw_op: object, *, rule: str) -> Any:
             UnitErrorKind.INVALID_VALUE,
             detail=f"body_mutation rule {rule!r}: each entry in params.ops needs a string 'pointer'; got {pointer!r}.",
             field="params.ops",
+            rule_id=rule,
         )
     segments = _pointer_segments(pointer, rule=rule)
     parent, key = _pointer_parent(document, segments, pointer=pointer, rule=rule)
@@ -604,6 +633,7 @@ def _apply_pointer_op(document: Any, raw_op: object, *, rule: str) -> Any:
                 UnitErrorKind.INVALID_VALUE,
                 detail=f"body_mutation rule {rule!r}: op 'replace' on {pointer!r} requires a value.",
                 field="params.ops",
+                rule_id=rule,
             )
         parent[key] = raw_op["value"]
         return document
@@ -632,6 +662,7 @@ def _retype(current: Any, as_type: object, *, pointer: str, rule: str) -> Any:
             UnitErrorKind.INVALID_VALUE,
             detail=f"body_mutation rule {rule!r}: {pointer!r} ({current!r}) cannot retype to a number.",
             field="params.ops",
+            rule_id=rule,
         )
     return None
 

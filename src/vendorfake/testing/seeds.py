@@ -34,7 +34,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     # registry and the whole kernel in behind it for every such session.
     from vendorfake.core.kernel.types import VendorDefinition
 
-__all__ = ["CloverSeed", "Credentials", "Seed", "SquareSeed", "ToastSeed", "seed_for"]
+__all__ = ["CloverSeed", "Credentials", "Seed", "SquareSeed", "ToastSeed", "Token", "seed_for"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +68,34 @@ class Credentials:
     """
 
 
+@dataclass(frozen=True, slots=True)
+class Token:
+    """The seeded credential a consumer *stores* per tenant, under names that
+    mean the same thing on every vendor -- the other half of
+    :class:`Credentials`, which is what the application authenticates *as*.
+
+    JUDGMENT: the names are invented, for the same reason ``app_id`` is. A
+    consumer's stored-credential row is an access token, maybe a refresh
+    token, and the vendor's own id for the tenant the token is scoped to;
+    each vendor spells the third one differently, and a test parametrized
+    over vendors wants to read all three without branching.
+
+    ``tenant_id`` is the id the *token* is scoped to, which is not always the
+    narrowest id a vendor has: Clover's ``merchant_id``, Toast's
+    ``restaurant_guid``, and Square's ``merchant_id`` rather than its
+    ``location_id`` -- a Square OAuth token belongs to a seller (the
+    ``merchant_id`` the token response itself carries) and a seller has
+    several locations, so the location is a parameter of a call, not of the
+    credential. ``refresh_token`` is ``None`` exactly when
+    :attr:`Credentials.grant` is ``client_credentials``: the two agree by
+    construction, and a consumer may branch on either.
+    """
+
+    access_token: str
+    refresh_token: str | None
+    tenant_id: str
+
+
 class Seed(Protocol):
     """What every vendor's seed has, whichever vendor it is.
 
@@ -76,15 +104,20 @@ class Seed(Protocol):
     is a plain ``str`` rather than a literal. Reading a field through this
     protocol needs no ``isinstance`` and no per-vendor helper.
 
-    Deliberately small, and deliberately without ``refresh_token``: Square
-    and Clover have one and Toast does not, so putting it here would either
-    lie about Toast or force a fake value onto it. A consumer that needs the
-    refresh branch reads :attr:`Credentials.grant`, which is the real vendor
-    difference rather than an artefact of this package.
+    Deliberately small, and deliberately without a bare ``refresh_token``
+    field: Square and Clover have one and Toast does not, so putting it here
+    would either lie about Toast or force a fake value onto it. The seeded
+    token is reached through :attr:`token` instead, whose ``refresh_token``
+    is honestly ``str | None``; a consumer that needs the refresh branch
+    reads :attr:`Credentials.grant`, which is the real vendor difference
+    rather than an artefact of this package.
     """
 
     @property
     def credentials(self) -> Credentials: ...
+
+    @property
+    def token(self) -> Token: ...
 
     @property
     def auth(self) -> Mapping[str, str]: ...
@@ -137,6 +170,13 @@ class SquareSeed:
         (https://developer.squareup.com/docs/oauth-api/refresh-revoke-limit-scope).
         """
         return Credentials(app_id=self.application_id, app_secret=self.application_secret, grant="refresh_token")
+
+    @property
+    def token(self) -> Token:
+        """The seeded full-scope token, under the neutral names. The tenant is
+        the seller -- ``merchant_id``, as the token response spells it -- not
+        a location; see :class:`Token`."""
+        return Token(access_token=self.access_token, refresh_token=self.refresh_token, tenant_id=self.merchant_id)
 
     @property
     def auth(self) -> dict[str, str]:
@@ -196,6 +236,12 @@ class CloverSeed:
         (https://docs.clover.com/dev/docs/refresh-access-tokens).
         """
         return Credentials(app_id=self.client_id, app_secret=self.client_secret, grant="refresh_token")
+
+    @property
+    def token(self) -> Token:
+        """The seeded full-permission token, under the neutral names; the
+        tenant is the merchant."""
+        return Token(access_token=self.access_token, refresh_token=self.refresh_token, tenant_id=self.merchant_id)
 
     @property
     def auth(self) -> dict[str, str]:
@@ -263,6 +309,13 @@ class ToastSeed:
         :class:`Seed` does not promise one.
         """
         return Credentials(app_id=self.client_id, app_secret=self.client_secret, grant="client_credentials")
+
+    @property
+    def token(self) -> Token:
+        """The seeded full-scope token, under the neutral names. No refresh
+        token -- ``None``, matching ``credentials.grant`` -- and the tenant is
+        the restaurant."""
+        return Token(access_token=self.access_token, refresh_token=None, tenant_id=self.restaurant_guid)
 
     @property
     def restaurant_header(self) -> dict[str, str]:
@@ -391,8 +444,13 @@ def _toast(vendor_config: Mapping[str, object]) -> ToastSeed:
     )
 
 
-_SEED_MEMBERS = ("credentials", "auth", "read_only_auth", "event_types")
-"""The four names :class:`Seed` requires, as data, for the hook's shape check.
+_SEED_MEMBERS = ("credentials", "token", "auth", "read_only_auth", "event_types")
+"""The five names :class:`Seed` requires, as data, for the hook's shape check.
+
+``token`` joined the list with :class:`Token` (konyklabs/roadmap#101). A
+third-party vendor's seed that predates it is refused here, by name, rather
+than failing later on ``started.seed.token`` -- the same reasoning as the
+other four, and the reason the check is data rather than ``isinstance``.
 
 Written out rather than derived from ``Seed.__protocol_attrs__``: that
 attribute is an implementation detail of ``typing`` with no compatibility

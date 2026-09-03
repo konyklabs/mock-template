@@ -2,10 +2,95 @@
 
 ## Unreleased
 
-The 0.2.0 notes. `Unreleased` is a placeholder heading for release-please to
-fold into the release; the entries below are hand-written because a release
-this size needs more than its commit subjects, and because six of them are
-migrations a consumer has to act on rather than facts they can skim.
+Consumer feedback round 2 (konyklabs/roadmap#101, items 15–19) and the four
+non-blocking findings from the 0.2 gate approval (konyklabs/roadmap#99).
+
+### Features
+
+* **testing:** `seed.token` — the seeded credential a consumer *stores* per
+  tenant, under neutral names on every vendor: `Token(access_token,
+  refresh_token, tenant_id)`, with `refresh_token` `None` exactly when
+  `credentials.grant` is `client_credentials`. `tenant_id` is Clover's
+  `merchant_id`, Toast's `restaurant_guid` and Square's `merchant_id` (the
+  seller the token belongs to; a location is a parameter of a call, not of
+  the credential). On the `Seed` protocol, so a parametrized cross-vendor
+  test needs no `Any` escape to build a stored-credential row. **Migration
+  for a third-party `SeedingVendor`:** a published seed must now carry
+  `token` as well; the hook check names the missing member at unit build
+  (#101, item 16).
+* **chaos:** every fault publishes its `phase` — `request` (fires instead of
+  the handler; nothing commits), `response` (fires on the answer after the
+  handler committed; the five transport faults) or `delivery` (the
+  `webhook.*` faults) — at `GET /__unit/chaos`, `GET /__unit/info`,
+  `vendorfake faults` and `vendorfake explain fault`. The set the pipeline
+  applies after the handler is now derived from the catalogue's phase rather
+  than written out beside it, so the two cannot disagree (#101, item 17a).
+* **kernel:** the request log ties a row back to the journal.
+  `committed_journal_seq` is the last journal seq the request committed
+  (absent when it committed nothing); `discarded_mutation` (always present)
+  is `true` when the handler committed and the caller still did not receive
+  its clean answer — a response-phase fault corrupted it, or the fault's own
+  params were bad and the caller got the 400 naming the rule. This is how a
+  test sees that a `malformed_body` against Clover's refresh spent the
+  single-use rotation, without diffing journal sequence numbers (#101, item
+  17b).
+* **kernel:** a rule-authoring refusal a fault payout raises (a
+  `body_mutation` pointer that is not in *this* answer, a `malformed_body`
+  mode that does not exist) answers its 400 with `Vendorfake-Rule-Error:
+  <rule id>` and, as before, no `Vendorfake-Fault` header — so a consumer
+  that ignores bodies can tell "your rule did not apply" from "the vendor
+  failed" (#101, item 19).
+* **testing:** `unmatched=` on `unit()` / `async_unit()` and on
+  `@pytest.mark.vendorfake(...)` is validated against the two policies at
+  the call, refusing with a message naming both. Before, any other value —
+  `"raise"`, or `True` (a likely slip: `Driver.requests()` has a boolean
+  keyword of the same name) — was stored verbatim and silently meant
+  `vendor-404`, turning strict mode *off* while the caller believed they had
+  turned it on. `vendorfake.testing.checked_unmatched` is the check (#99,
+  item 1).
+
+### Behaviour changes
+
+* **testing:** the `timeout` fault means one thing on both clocks. A
+  `timeout`-faulted answer carries `Vendorfake-Delay-Ms`, the delay the rule
+  asked for, on either clock, and the in-process transport races it against
+  the client's read timeout. So `delay_ms: 120000` against a 10 s client
+  raises `httpx.ReadTimeout` on a **virtual** clock now, where before it
+  answered the 504 the real clock never produced — and a consumer's
+  "network error" assertion failed naming an HTTP status. Under the
+  threshold a virtual clock still answers at once; a *served* unit on a
+  virtual clock still answers the 504, because only a real wait can time a
+  client out over a socket (#101, item 18). A virtual-clock test that armed
+  a `timeout` past its client's read timeout and asserted a 504 now sees
+  `ReadTimeout` — which is what the same test asserted on a real clock.
+
+### Documentation
+
+* **vendorfake:** "Transport faults: what each binding raises" in
+  `docs/concepts/chaos-rules-and-faults.md` — the table of the exception each
+  binding surfaces for `connection_reset`, `empty_response` and `slow_body`,
+  in process and served; the four source comments that cited a README
+  "Transport faults" section that never existed now point there (#99, item 2).
+  "Phase: does the handler commit?" on the same page, with the single-use
+  rotation hazard stated once (#101, item 17c).
+* **vendorfake:** the conformance package docstring shows the `-p
+  vendorfake.conformance.plugin` flag beside `--pyargs vendorfake.conformance`,
+  as every other site already did; `tests/unit/test_docs_claims.py` fails if
+  any file names the selection without the flag (#99, item 3).
+* **vendorfake:** `AGENTS.md` records the conformance-id allocation — C24
+  held by `fix/46`, C25–C32 margin, next free id C36 (#99, item 4).
+* **vendorfake:** `docs/start/install.md` — pin tags, not commits, and why a
+  commit pin reports the previous release's version (#101, item 15).
+  `docs/pytest-plugin.md` — narrowing the marker fixtures' `Seed` under a
+  type checker (#101, item 16).
+
+## [0.2.0](https://github.com/konyklabs/vendorfake/compare/v0.1.0...v0.2.0) (2026-09-03)
+
+The 0.2.0 notes, hand-written because a release this size needs more than its
+commit subjects, and because six of them are migrations a consumer has to act
+on rather than facts they can skim. (They sat under an `Unreleased` heading
+until 0.2.0 was cut; release-please appended its own 0.2.0 section below them
+rather than folding them in, so they were moved here by hand.)
 
 **If you are upgrading from 0.1.0, read these six first.** Each is written out
 in full under the heading named beside it.
@@ -308,15 +393,14 @@ in full under the heading named beside it.
   edit a reviewer sees (konyklabs/roadmap#74)
 * **vendorfake:** the profile-name contract, as it actually holds across all three shipped vendors: `orders-only` does NOT enable role `auth` (every shipped profile of that name promises "no OAuth dance, authenticate with a seeded token", pinned by each vendor's own tests) and `no-chaos` keeps role `chaos` enabled, switching off only `webhooks.chaos` (`no-faults` is the profile that switches off both). Documented in `src/vendorfake/conformance/checks/discovery.py` and the README's new "Discovering profiles and routes" section (konyklabs/roadmap#70)
 
-## [0.2.0](https://github.com/konyklabs/vendorfake/compare/v0.1.0...v0.2.0) (2026-09-03)
+### Commits (release-please)
 
-
-### Features
+#### Features
 
 * **testing:** the 0.2 consumer-experience batch — async seam, typed seeds, discovery, hygiene, strict mode, transport faults (konyklabs/roadmap[#67](https://github.com/konyklabs/vendorfake/issues/67)) ([#35](https://github.com/konyklabs/vendorfake/issues/35)) ([be0f6aa](https://github.com/konyklabs/vendorfake/commit/be0f6aad681880e96cca9b748c54698a13e81c8a))
 
 
-### Documentation
+#### Documentation
 
 * **readme:** a first screen that starts in sixty seconds; seeded matrix moved to docs (konyklabs/roadmap[#59](https://github.com/konyklabs/vendorfake/issues/59)) ([#33](https://github.com/konyklabs/vendorfake/issues/33)) ([50c5efa](https://github.com/konyklabs/vendorfake/commit/50c5efaae9f388ae78774abe949f4668eb0483d1))
 

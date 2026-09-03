@@ -60,7 +60,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 import httpx
 
 from vendorfake import registry
-from vendorfake.core.config.models import UnmatchedPolicy
+from vendorfake.core.config.models import UNMATCHED_POLICIES, UnmatchedPolicy
 from vendorfake.core.config.profile import ENV_VENDOR_PREFIX, load_profile
 from vendorfake.core.control.plane import DEFAULT_REQUEST_LIMIT
 from vendorfake.core.kernel.types import Logger
@@ -70,7 +70,7 @@ from vendorfake.core.webhooks.models import matches_event_type
 from vendorfake.core.webhooks.sink import DeliverySink
 from vendorfake.registry import RouteInfo, create_unit
 from vendorfake.testing.receiver import Delivery, WebhookReceiver, webhook_receiver
-from vendorfake.testing.seeds import CloverSeed, Credentials, Seed, SquareSeed, ToastSeed, seed_for
+from vendorfake.testing.seeds import CloverSeed, Credentials, Seed, SquareSeed, ToastSeed, Token, seed_for
 from vendorfake.testing.transport import UnitTransport, UnmatchedRequest
 
 __all__ = [
@@ -92,10 +92,12 @@ __all__ = [
     "SquareSeed",
     "StartedUnit",
     "ToastSeed",
+    "Token",
     "UnitTransport",
     "UnmatchedRequest",
     "WebhookReceiver",
     "async_unit",
+    "checked_unmatched",
     "serve_in_thread",
     "served",
     "unit",
@@ -759,8 +761,32 @@ def unit(
         env=env,
         logger=logger,
         seed=seed,
-        unmatched=unmatched,
+        unmatched=checked_unmatched(unmatched),
         clock_start=clock_start,
+    )
+
+
+def checked_unmatched(value: object) -> UnmatchedPolicy | None:
+    """``value`` as an :data:`UnmatchedPolicy`, or a refusal naming the two.
+
+    The Python argument used to be stored verbatim and compared only against
+    ``"error"``, so ``unit("square", unmatched="raise")`` -- or
+    ``unmatched=True``, a likely slip given :meth:`Driver.requests` has a
+    boolean keyword of the same name -- silently turned strict mode *off*
+    while the caller believed they had turned it on. The environment spelling
+    (``VENDORFAKE_UNMATCHED``) was already refused one layer down; this is
+    the same refusal for the argument, at the call, before a unit is built
+    (konyklabs/roadmap#99, item 1).
+    """
+    if value is None:
+        return None
+    for policy in UNMATCHED_POLICIES:
+        if value == policy:
+            return policy
+    raise ValueError(
+        f"unmatched={value!r} is not one of {', '.join(repr(p) for p in UNMATCHED_POLICIES)}. "
+        f'"error" raises UnmatchedRequest for a request no route matched; "vendor-404" answers '
+        f"the vendor's own 404 with the diagnosis in the Vendorfake-Near-Miss header."
     )
 
 
@@ -1033,7 +1059,10 @@ def async_unit(
         env=env,
         logger=logger,
         seed=seed,
-        unmatched=unmatched,
+        # Checked here, at the call, and not only inside ``unit()`` on
+        # ``__aenter__``: the refusal should land on the line that spelled
+        # the value, before an ``async with`` is entered.
+        unmatched=checked_unmatched(unmatched),
         clock_start=clock_start,
     )
 

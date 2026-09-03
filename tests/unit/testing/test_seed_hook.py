@@ -63,6 +63,13 @@ class AcmeSeed:
         return Credentials(app_id=self.app_id, app_secret=self.app_secret, grant="client_credentials")
 
     @property
+    def token(self) -> object:
+        """The neutral stored-token view; no refresh token on a client-credentials grant."""
+        from vendorfake.testing import Token
+
+        return Token(access_token="acme-token", refresh_token=None, tenant_id="acme-tenant")
+
+    @property
     def auth(self) -> Mapping[str, str]:
         """Headers that authenticate as the seeded principal."""
         return {"authorization": "Bearer acme-token"}

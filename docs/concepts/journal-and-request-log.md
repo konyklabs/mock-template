@@ -45,6 +45,24 @@ with unit("square") as square:
     square.clear_requests()  # draw a line under setup
 ```
 
+Two fields tie a row back to the journal. `committed_journal_seq` is the
+last journal `seq` this request committed, present only when it committed
+something — a refusal, a replay, a read or a request-phase fault has none.
+`discarded_mutation` (always present) is `true` when the handler committed
+*and* the caller still did not get its clean answer: a response-phase fault
+corrupted it, or the fault's own params were bad and the caller got the 400
+naming the rule instead. The mutation stands in the store; it is discarded
+only from the caller's point of view — which, against a single-use
+rotation, means a credential spent by a call that looked like it failed.
+See [Chaos rules and faults → Phase](chaos-rules-and-faults.md#phase-does-the-handler-commit).
+
+```python
+(call,) = clover.requests(route="POST /oauth/v2/refresh")
+if call["discarded_mutation"]:
+    since = call["committed_journal_seq"] - 1
+    committed = clover.client.get("/__unit/journal", params={"since": since}).json()
+```
+
 The log is a ring holding the last 10,000 requests by default
 (`requests: {"capacity": N}` in a profile, or
 `VENDORFAKE_REQUEST_LOG_CAPACITY`; zero switches it off). It records no
