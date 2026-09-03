@@ -268,7 +268,23 @@ def _make_unit(
     to shape an error with. At this boundary that becomes a message and a
     non-zero exit, which is what a typo in a container's environment should
     look like -- not a server that starts and 404s everything.
+
+    ``UnitError`` is caught for the same reason, and it was not before: a bad
+    ``--vendor`` was a one-line refusal while a bad ``--profile`` -- the
+    adjacent flag, the same kind of typo -- was a raw traceback out of the
+    profile loader. Both now read the same way. The loader's message already
+    names every profile the vendor ships, so nothing is reformatted here; what
+    changes is only that a startup failure stops presenting as a crash. Any
+    other ``UnitError`` raised while a unit is being built is a startup
+    failure too -- a profile that fails validation, a vendor declaring
+    ``webhooks`` with an empty retry schedule -- and each is a thing the
+    caller can fix from the message.
+
+    The import is inside the function because module level here is standard
+    library only (see this module's second invariant); ``UnitError`` lives in
+    the kernel, which ``create_unit`` is about to import anyway.
     """
+    from vendorfake.core.kernel.types import UnitError
     from vendorfake.registry import create_unit
 
     try:
@@ -278,7 +294,7 @@ def _make_unit(
             env=env,
             framework_answered=framework_answered,
         )
-    except ValueError as exc:
+    except (ValueError, UnitError) as exc:
         raise SystemExit(f"{PROG}: {exc}") from None
 
 
@@ -392,14 +408,21 @@ def _vendors(args: argparse.Namespace, out: TextIO) -> int:
 def _profiles(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
     """List the profiles a vendor ships: ``vendorfake.registry.available_profiles``,
     over the command line, so a consumer never has to list a package's
-    ``profiles/`` directory in a scratch clone to find a name."""
+    ``profiles/`` directory in a scratch clone to find a name.
+
+    ``UnitError`` is caught alongside ``ValueError`` for the reason
+    :func:`_make_unit` gives: reading a vendor's profiles can fail on a
+    profile document rather than on the vendor's name, and a caller who
+    mistyped one flag should not get a refusal for the other and a traceback
+    for this."""
+    from vendorfake.core.kernel.types import UnitError
     from vendorfake.core.util.json import dump_json
     from vendorfake.registry import available_profiles
 
     name = _resolve_vendor_name(args, env)
     try:
         found = available_profiles(name)
-    except ValueError as exc:
+    except (ValueError, UnitError) as exc:
         raise SystemExit(f"{PROG}: {exc}") from None
     if _wants_json(args):
         payload = [
@@ -427,7 +450,14 @@ def _profiles(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> 
 def _routes_cmd(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
     """List a vendor's route table: ``vendorfake.registry.routes``, over the
     command line. Internal (``/__unit/*``) routes are omitted unless
-    ``--internal`` is given -- this describes the vendor surface by default."""
+    ``--internal`` is given -- this describes the vendor surface by default.
+
+    ``UnitError`` is caught alongside ``ValueError`` for the reason
+    :func:`_make_unit` gives: this subcommand takes ``--profile``, so a
+    nonexistent profile reaches it just as often as a nonexistent vendor
+    does, and the loader's refusal already names every profile the vendor
+    ships."""
+    from vendorfake.core.kernel.types import UnitError
     from vendorfake.core.util.json import dump_json
     from vendorfake.registry import routes as list_routes
 
@@ -435,7 +465,7 @@ def _routes_cmd(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -
     profile = args.profile or _env_str(env, "VENDORFAKE_PROFILE") or "full"
     try:
         found = list_routes(name, profile)
-    except ValueError as exc:
+    except (ValueError, UnitError) as exc:
         raise SystemExit(f"{PROG}: {exc}") from None
     if not args.internal:
         found = tuple(row for row in found if not row.internal)

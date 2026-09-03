@@ -603,18 +603,25 @@ class ServedUnit(Driver[SeedT]):
 
 NO_SEED_HINT = (
     "vendorfake ships a seed for square, clover and toast. A vendor from the "
-    "'vendorfake.vendors' entry-point group has none here, so its ids, tokens and "
-    "application credentials are not readable through .seed -- read them from that "
-    "distribution's own constants instead, and drive the unit with create_unit()."
+    "'vendorfake.vendors' entry-point group publishes its own by implementing "
+    "vendorfake.core.kernel.types.SeedingVendor -- a seed(vendor_config) method "
+    "returning an object with credentials, auth, read_only_auth and event_types. "
+    "This one does not, so read its ids and tokens from that distribution's own "
+    "constants instead, and drive the unit with create_unit()."
 )
 """What a caller can actually do about a vendor with no seed.
 
 Split out so the message is one string and a test can assert on it without
 copying the prose.
+
+It names the hook first because that is the fix the vendor's author can make
+once, for everyone; ``create_unit()`` is what a consumer of a vendor they do
+not control has to fall back to. The earlier wording offered only the second,
+which was the whole of the answer before the hook existed.
 """
 
 
-def _require_seed(vendor: str, profile: str, found: SquareSeed | CloverSeed | ToastSeed | None) -> Seed:
+def _require_seed(vendor: str, profile: str, found: Seed | None) -> Seed:
     """``found``, or a refusal that says why there is none.
 
     ``seed`` used to be handed back as ``None`` for any vendor
@@ -623,6 +630,14 @@ def _require_seed(vendor: str, profile: str, found: SquareSeed | CloverSeed | To
     three shipped vendors. The absence is real but it is a property of the
     *vendor*, not of a call -- so it is answered once, at the moment the unit
     is started, where the vendor and profile are still in hand to name.
+
+    ``found`` is typed :class:`~vendorfake.testing.seeds.Seed`, not the union
+    of the three built-in seed types, because ``seed_for`` now also answers
+    from a vendor's own
+    :class:`~vendorfake.core.kernel.types.SeedingVendor` hook and a
+    third-party seed is not one of those three. The per-vendor narrowing a
+    consumer sees is unaffected: it comes from ``unit()``'s overloads on the
+    vendor literal, not from this helper.
     """
     if found is None:
         raise LookupError(f"vendor {vendor!r} (profile {profile!r}) publishes no seed. {NO_SEED_HINT}")
