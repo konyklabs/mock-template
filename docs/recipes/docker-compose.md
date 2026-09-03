@@ -52,7 +52,7 @@ container restart — cheaper than tearing the stack down between suites:
 
 ```sh
 curl -s -X POST http://localhost:8080/__unit/state/reset -H 'Content-Type: application/json' -d '{}'
-# -> {"entities": {"orders": 2, "tokens": 2, ...}, "digest": "594a6c28..."}
+# -> {"entities": {..., "orders": 2, "tokens": 2}, "journal_seq": 17, "digest": "3fafd03a5ffa1120..."}
 ```
 
 See [Concepts → Journal and request log](../concepts/journal-and-request-log.md)

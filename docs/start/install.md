@@ -25,7 +25,8 @@ docker build -t vendorfake .
 
 docker run --rm -p 127.0.0.1:8080:8080 -e VENDORFAKE_VENDOR=square vendorfake
 docker run --rm -p 127.0.0.1:8081:8080 -e VENDORFAKE_VENDOR=clover -e VENDORFAKE_PROFILE=chaos-demo vendorfake
-# equivalent: docker run --rm -p 127.0.0.1:8080:8080 vendorfake serve --vendor square --profile no-faults
+# same unit as the first line, as CLI arguments instead of environment:
+docker run --rm -p 127.0.0.1:8080:8080 vendorfake serve --vendor square
 
 curl -s http://localhost:8080/__unit/health
 # -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"framework_answered":0}

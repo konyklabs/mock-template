@@ -76,7 +76,7 @@ step "docs"              _docs_step
 # `-p vendorfake.conformance.plugin` loads the conformance plugin explicitly:
 # since konyklabs/roadmap#71 it is no longer a `pytest11` entry point that
 # installing the wheel auto-loads into every consumer's pytest run -- only
-# `vendorfake.pytest` (the `vendorfake` marker and its two fixtures) is.
+# `vendorfake.pytest` (the `vendorfake` marker and its three fixtures) is.
 for entry in "${TARGETS[@]}"; do
   vendor="${entry%%=*}"
   TARGET="${entry#*=}"
