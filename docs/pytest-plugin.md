@@ -12,8 +12,9 @@ point, and it carried five `--conformance-*` options and a
 `pytest_sessionfinish` hook into every pytest run that happened to have
 vendorfake installed — whether or not that suite had ever heard of the
 conformance registry. The conformance suite's pytest form still exists; it is
-loaded explicitly now, with `-p vendorfake.conformance.plugin`. See "Running
-the conformance suite against your unit" in the [README](../README.md).
+loaded explicitly now, with `-p vendorfake.conformance.plugin`. See
+[the CLI reference](reference/cli.md) for `vendorfake conformance` /
+`vendorfake-conformance`.
 
 ## The marker
 
@@ -21,7 +22,7 @@ the conformance suite against your unit" in the [README](../README.md).
 @pytest.mark.vendorfake(vendor, profile="full", env=None, seed=None, clock_start=None)
 ```
 
-Every argument matches [`vendorfake.testing.unit`](../README.md#pytest)'s own:
+Every argument matches [`vendorfake.testing.unit`](start/bindings.md#in-process-sync)'s own:
 `vendor` is required and positional (`"square"`, `"clover"` or `"toast"`);
 `profile`, `env`, `seed` and `clock_start` are the same keyword arguments
 `unit()` takes, with the same defaults.
@@ -38,7 +39,7 @@ def test_a_token_expires_on_schedule(vendorfake_unit): ...
 ## The fixtures
 
 `vendorfake_unit` is function-scoped and yields the
-[`StartedUnit`](../README.md#pytest) the marker describes — built fresh per
+[`StartedUnit`](concepts/driver.md) the marker describes — built fresh per
 test, the same grain as calling `unit()` directly. Requesting it without the
 marker is a test author's mistake, not a missing precondition, so it fails
 loudly and names the fix rather than skipping:

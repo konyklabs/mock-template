@@ -22,6 +22,30 @@ step() {
   return 0
 }
 
+# The docs site, in one step: (1) regenerate docs/reference/*.md and fail if
+# that changes the working tree -- the pattern konyklabs/.github's arch/
+# uses for arch/generated/VIEWS.md, so a route or a fault added without
+# re-running the generator is a red self-test rather than a stale page; (2)
+# `mkdocs build --strict`, which fails on a broken nav entry or a dead
+# internal link. `git status --porcelain`, not `git diff`, so a *new* vendor
+# whose routes-<vendor>.md was never generated at all (untracked, not
+# modified) fails the same way a stale one does. `uv run --group docs`
+# (not plain `uv run`): CI's own `Sync` step runs `uv sync --frozen` with no
+# group flags, which -- like a plain `uv sync` anywhere -- installs the
+# `dev` group by default but not `docs`, so this step syncs its own
+# dependency rather than depending on how the caller synced.
+_docs_step() {
+  uv run python tools/gen_reference.py || return 1
+  local dirty
+  dirty="$(git status --porcelain -- docs/reference)"
+  if [ -n "$dirty" ]; then
+    printf 'docs/reference is stale: `uv run python tools/gen_reference.py` changed the working tree.\n' >&2
+    printf 'Re-run it and commit the diff:\n%s\n' "$dirty" >&2
+    return 1
+  fi
+  uv run --group docs mkdocs build --strict
+}
+
 # The targets the conformance steps below drive, one per built-in vendor. They
 # live on the test side of the tree because the `http` transport needs a real
 # server and the suite may never import one; see tests/conformance/harness.py.
@@ -39,6 +63,7 @@ step "import-linter"     uv run lint-imports
 step "boundary check"    uv run python tools/boundary_check.py -v
 step "pytest"            uv run pytest
 step "wheel data"        uv run python tools/check_wheel_data.py
+step "docs"              _docs_step
 
 # The conformance suite through its own entry points, which pytest does not
 # exercise: the framework-free CLI a container healthcheck calls, and the
