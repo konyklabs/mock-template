@@ -9,6 +9,13 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
 
+# `--quick` is what a pull request runs in CI (konyklabs/roadmap#103): every
+# static check, the unit suite, the wheel and the docs -- under two minutes --
+# and none of the nine conformance runs below, which the full script keeps for
+# a push to main, a dispatch, and a laptop before a push.
+QUICK=0
+if [ "${1:-}" = "--quick" ]; then QUICK=1; fi
+
 names=()
 codes=()
 
@@ -78,6 +85,7 @@ step "docs"              _docs_step
 # installing the wheel auto-loads into every consumer's pytest run -- only
 # `vendorfake.pytest` (the `vendorfake` marker and its three fixtures) is.
 for entry in "${TARGETS[@]}"; do
+  if [ "$QUICK" -eq 1 ]; then break; fi
   vendor="${entry%%=*}"
   TARGET="${entry#*=}"
   step "matrix ($vendor)" \
