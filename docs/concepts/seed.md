@@ -33,7 +33,7 @@ unit is built, not discovered later as a missing attribute.
 
 ## What every seed has in common
 
-Four fields on `vendorfake.testing.Seed`, useful for a test parametrized
+Five fields on `vendorfake.testing.Seed`, useful for a test parametrized
 across vendors:
 
 - `token` — the seeded credential a consumer *stores* per tenant, under
@@ -46,9 +46,10 @@ across vendors:
   though the vendor's own field names do (Square: `application_id`; Clover
   and Toast: `client_id`). `grant` names the token lifecycle worth
   branching on: Square and Clover issue a refresh token and rotate it,
-  Toast issues a bearer with no refresh and expects a fresh login —
-  `refresh_token` is deliberately *not* on the shared type, because Toast
-  has none and faking one would be a lie the type system helped tell.
+  Toast issues a bearer with no refresh and expects a fresh login — a bare
+  `refresh_token` field is deliberately *not* on the shared type, because
+  Toast has none and faking one would be a lie the type system helped tell;
+  `token.refresh_token` is where it lives, honestly typed `str | None`.
 - `auth` — headers for the full-scope seeded bearer, ready to pass to a
   client. For Toast this carries the bearer **and** the
   `Toast-Restaurant-External-ID` header together, because a

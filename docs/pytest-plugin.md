@@ -101,6 +101,7 @@ marker. Three ways out, in order of preference:
   ```python
   from vendorfake.testing import CloverSeed
 
+
   @pytest.mark.vendorfake("clover")
   def test_the_merchant_is_seeded(vendorfake_unit):
       seed = vendorfake_unit.seed

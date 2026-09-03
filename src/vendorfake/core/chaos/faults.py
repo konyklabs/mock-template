@@ -106,7 +106,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 from vendorfake.core.chaos.engine import ChaosDecision
-from vendorfake.core.chaos.rules import BUILTIN_FAULTS, FaultPhase, FaultProvenance
+from vendorfake.core.chaos.rules import BUILTIN_FAULTS, FaultProvenance
+from vendorfake.core.chaos.rules import FaultPhase as _PublishedPhase
 from vendorfake.core.kernel.shaping import header_text
 from vendorfake.core.kernel.types import (
     Logger,
@@ -127,6 +128,7 @@ __all__ = [
     "FAULT_PARAM_KEYS",
     "FAULT_PHASE",
     "FAULT_PROVENANCE",
+    "INTACT_RESPONSE_FAULTS",
     "RESPONSE_PHASE_FAULTS",
     "RequestMoment",
     "apply_request_fault",
@@ -140,13 +142,17 @@ faults (:data:`RESPONSE_PHASE_FAULTS`) are a third moment with no argument of
 their own -- see :func:`apply_response_fault`. Named ``moment`` rather than
 ``phase`` because *phase* is the published word
 (:data:`~vendorfake.core.chaos.rules.FaultPhase`: ``request`` / ``response``
-/ ``delivery``) and both of these moments are inside the ``request`` phase."""
+/ ``delivery``) and both of these moments are inside the ``request`` phase.
+This module used to export ``FaultPhase`` for the two moments; the name is
+gone from here on purpose (imported privately as ``_PublishedPhase``), so an
+old ``from ...faults import FaultPhase`` fails loudly rather than binding a
+different Literal."""
 
 AUTH_PHASE_FAULTS: frozenset[str] = frozenset({"token_expiry"})
 """Faults that fire after authentication. Exactly one today; a set rather than
 an equality test so a second one is a data change, not a rewritten condition."""
 
-FAULT_PHASE: Mapping[str, FaultPhase] = {spec.name: spec.phase for spec in BUILTIN_FAULTS}
+FAULT_PHASE: Mapping[str, _PublishedPhase] = {spec.name: spec.phase for spec in BUILTIN_FAULTS}
 """:attr:`~vendorfake.core.chaos.rules.FaultSpec.phase` per fault, keyed by
 name exactly as :data:`FAULT_PARAM_KEYS` -- derived from the catalogue for the
 same reason :data:`FAULT_PROVENANCE` is, and what ``vendorfake faults`` reads
@@ -161,6 +167,16 @@ Derived from the catalogue's ``phase`` rather than written out, so the set the
 pipeline acts on and the phase ``GET /__unit/chaos`` publishes for a fault are
 one fact: a fault cannot be ``phase: "request"`` in the listing and be applied
 after the handler here."""
+
+INTACT_RESPONSE_FAULTS: frozenset[str] = frozenset({"slow_body"})
+"""The response-phase faults that hand the caller the handler's answer
+*unchanged* -- status, headers and body -- and only shape how it travels.
+``slow_body`` is the one today: both bindings deliver the whole body, just
+late. So a committed mutation under it is not "discarded" from the caller's
+view, and ``kernel/unit.py`` leaves ``RequestRecord.discarded_mutation`` false
+for it (found by review of konyklabs/roadmap#101). A client whose read
+timeout gives up between chunks did not get the answer -- but that is the
+binding's doing, after the kernel answered, and the kernel cannot see it."""
 
 #: Reference defaults, ported: ``Number(d.params.delayMs ?? 100)`` and
 #: ``Number(d.params.retryAfterSeconds ?? 1)``.

@@ -119,6 +119,7 @@ from vendorfake.core.capability.gates import CoreCapability, assert_capability_d
 from vendorfake.core.capability.registry import CapabilityRegistry
 from vendorfake.core.chaos.engine import ChaosDecision, ChaosEngine, ChaosSubject
 from vendorfake.core.chaos.faults import (
+    INTACT_RESPONSE_FAULTS,
     RESPONSE_PHASE_FAULTS,
     apply_request_fault,
     apply_response_fault,
@@ -479,11 +480,17 @@ class _Trace:
 
     fault: str | None = None
     rule_id: str | None = None
-    #: ``store.journal_seq()`` as the request came in; ``_finish`` compares it
-    #: with the seq on the way out to learn whether this request committed
-    #: anything, and pairs that with ``response_fault_attempted`` to mark a
-    #: committed mutation the caller never saw succeed.
+    #: ``store.journal_seq`` immediately before and after the handler ran --
+    #: read inside ``_run_pipeline`` step 8, so on a ``serialized`` route
+    #: (every shipped route) both reads happen under the pipeline lock and no
+    #: other request's commit can land between them. Read at the top of
+    #: ``handle`` instead, before the lock, the ASGI threadpool could
+    #: attribute a concurrent request's commit to this one (found by review
+    #: of konyklabs/roadmap#101). A fork's ``serialized=False`` route gets a
+    #: best-effort window instead; a request that never reached the handler
+    #: leaves both at zero, which reads as "committed nothing".
     journal_seq_before: int = 0
+    journal_seq_after: int = 0
     #: The decision drawn at step 3, whole -- ``fault``/``rule_id`` above are
     #: the two fields the request log wants, kept as they were because other
     #: code reads them.
@@ -870,7 +877,7 @@ class Unit:
         """
         started = time.monotonic()
         route: Route | None = None
-        trace = _Trace(journal_seq_before=self._store.journal_seq)
+        trace = _Trace()
         try:
             outcome = self._router.match(req.method, req.path)
             if isinstance(outcome, MethodNotAllowed):
@@ -1072,7 +1079,15 @@ class Unit:
         if replayed is not None:
             res = replayed
         else:
-            res = normalize(route.handler(args))
+            trace.journal_seq_before = self._store.journal_seq
+            try:
+                res = normalize(route.handler(args))
+            finally:
+                # In a ``finally`` because a handler that committed and then
+                # raised has still committed: the shaped error the caller gets
+                # is exactly the "looked like it failed" case the request log
+                # exists to name.
+                trace.journal_seq_after = self._store.journal_seq
             # WHAT GETS RECORDED IS THE HANDLER'S CLEAN ANSWER, RECORDED BEFORE
             # ANY RESPONSE-PHASE FAULT TOUCHES IT.
             #
@@ -1314,15 +1329,20 @@ class Unit:
         # internal route. `is_control_path` is the one place that namespace is
         # defined, shared with `Router.add`'s reservation check.
         if (route is None or not route.internal) and not is_control_path(req.path):
-            # Read after the handler, on the same path everything else is
-            # recorded on. "Committed" is a seq that moved; "discarded" is a
-            # commit the caller was not handed cleanly -- the payout was
-            # attempted, whether it corrupted the answer or refused with the
-            # 400 naming the rule. Both are true of a real gateway mangling a
-            # response after the write, which is what a response-phase fault
-            # rehearses, and neither was readable anywhere but the journal.
-            journal_seq_after = self._store.journal_seq
-            committed = journal_seq_after > trace.journal_seq_before
+            # Recorded on the one path every answer leaves through, from the
+            # two reads step 8 took around the handler. "Committed" is a seq
+            # that moved; "discarded" is a commit the caller was not handed
+            # cleanly -- the payout was attempted, and it either corrupted the
+            # answer or refused with the 400 naming the rule. A fault in
+            # ``INTACT_RESPONSE_FAULTS`` did neither: the caller has the
+            # handler's answer, only later. All of this is what a real
+            # gateway mangling a response after the write does, which is what
+            # a response-phase fault rehearses, and none of it was readable
+            # anywhere but the journal.
+            committed = trace.journal_seq_after > trace.journal_seq_before
+            deprived = trace.response_fault_attempted and (
+                trace.decision is None or trace.decision.fault not in INTACT_RESPONSE_FAULTS
+            )
             self._requests.record(
                 RequestRecord(
                     id=req.id,
@@ -1337,8 +1357,8 @@ class Unit:
                     rule_id=trace.rule_id,
                     duration_ms=round(elapsed_ms),
                     near_misses=trace.near_misses,
-                    committed_journal_seq=journal_seq_after if committed else None,
-                    discarded_mutation=committed and trace.response_fault_attempted,
+                    committed_journal_seq=trace.journal_seq_after if committed else None,
+                    discarded_mutation=committed and deprived,
                 )
             )
         # ``delay_ms`` and ``transport`` are carried across rather than offered

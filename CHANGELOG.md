@@ -60,9 +60,12 @@ non-blocking findings from the 0.2 gate approval (konyklabs/roadmap#99).
   "network error" assertion failed naming an HTTP status. Under the
   threshold a virtual clock still answers at once; a *served* unit on a
   virtual clock still answers the 504, because only a real wait can time a
-  client out over a socket (#101, item 18). A virtual-clock test that armed
-  a `timeout` past its client's read timeout and asserted a 504 now sees
-  `ReadTimeout` — which is what the same test asserted on a real clock.
+  client out over a socket (#101, item 18). **Migration:** a virtual-clock
+  test that armed a `timeout` past its client's read timeout and asserted a
+  504 now sees `ReadTimeout` — which is what the same test asserted on a
+  real clock. That includes `started.client` with no `timeout=` of its own:
+  the bundled client's read timeout is `CLIENT_TIMEOUT_S` (30 s), so a
+  `delay_ms` above 30000 on a virtual clock now raises where it answered.
 
 ### Documentation
 

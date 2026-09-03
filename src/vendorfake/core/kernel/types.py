@@ -456,6 +456,8 @@ class RequestRecord:
     #: ``True`` when the handler committed *and* the caller still did not get
     #: its clean answer: a response-phase fault corrupted it, or the fault's
     #: own params were bad and the caller got the 400 naming the rule instead.
+    #: ``slow_body`` delivers the answer intact, only late, so it does not
+    #: count (``core/chaos/faults.py``'s ``INTACT_RESPONSE_FAULTS``).
     #: The mutation is not discarded from the store -- it stands, and the
     #: journal has it -- it is discarded from the *caller's* point of view,
     #: which against a single-use rotation means the credential is spent by a

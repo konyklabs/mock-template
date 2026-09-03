@@ -84,7 +84,8 @@ phase (`GET /__unit/chaos`, `GET /__unit/info`, `vendorfake faults`,
   committed; a retry starts clean.
 - `phase: response` — fires **on the answer, after the handler ran and
   committed**. All five transport faults. The store keeps the mutation and
-  the journal has it; only the caller never saw it succeed.
+  the journal has it; with four of the five the caller never saw it succeed
+  (`slow_body` delivers the answer intact, only late).
 - `phase: delivery` — a webhook delivery, not a request: the `webhook.*`
   faults.
 
@@ -112,7 +113,7 @@ its position. What to catch:
 
 | Fault | In process (`unit()`, `async_unit()`, the pytest fixtures) | Served (`served()`, `serve_in_thread()`, a container) |
 | --- | --- | --- |
-| `connection_reset` | `httpx.RemoteProtocolError`, raised without waiting | the server closes mid-body; httpx raises `httpx.RemoteProtocolError` (a `TransportError`) |
+| `connection_reset` | `httpx.RemoteProtocolError`, raised without waiting | the server closes mid-body; httpx raises a `TransportError` (`RemoteProtocolError` with the pinned uvicorn and Starlette — an observation, not a promise; the repository's own served tests catch `TransportError`) |
 | `empty_response` | `httpx.ReadError`, raised without waiting | the server closes before any byte the framework lets it withhold; httpx raises a `TransportError` (`ReadError` or `RemoteProtocolError`, by server version) |
 | `slow_body` | delivered whole after the aggregate gap; `httpx.ReadTimeout` without waiting if one gap exceeds the read timeout | streamed in chunks; the client's own read timeout applies per chunk |
 

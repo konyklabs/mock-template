@@ -111,19 +111,45 @@ from typing import Any
 import anyio
 import httpx
 
-from vendorfake.core.config.models import UnmatchedPolicy
+from vendorfake.core.config.models import UNMATCHED_POLICIES, UnmatchedPolicy
 from vendorfake.core.kernel.nearmiss import NEAR_MISS_HEADER
 from vendorfake.core.kernel.types import UnitResponse
 from vendorfake.core.kernel.unit import DELAY_ASKED_HEADER, Unit, make_request
 from vendorfake.core.transport.inprocess import TRANSPORT
 
-__all__ = ["DEFAULT_INPROCESS_POLICY", "UnitTransport", "UnmatchedRequest"]
+__all__ = ["DEFAULT_INPROCESS_POLICY", "UnitTransport", "UnmatchedRequest", "checked_unmatched"]
 
 DEFAULT_INPROCESS_POLICY: UnmatchedPolicy = "error"
 """What an in-process binding does when the profile does not say.
 
 Named rather than inlined because :func:`vendorfake.testing.unit` documents it
 and a test asserts the two agree."""
+
+
+def checked_unmatched(value: object) -> UnmatchedPolicy | None:
+    """``value`` as an :data:`UnmatchedPolicy`, or a refusal naming the two.
+
+    The Python argument used to be stored verbatim and compared only against
+    ``"error"``, so ``unit("square", unmatched="raise")`` -- or
+    ``unmatched=True``, a likely slip given ``Driver.requests`` has a boolean
+    keyword of the same name -- silently turned strict mode *off* while the
+    caller believed they had turned it on. The environment spelling
+    (``VENDORFAKE_UNMATCHED``) was already refused one layer down; this is
+    the same refusal for the argument, at the call, before a unit is built
+    (konyklabs/roadmap#99, item 1). Lives here, on the class that stores the
+    value, so :class:`UnitTransport` built directly is refused the same way
+    as :func:`vendorfake.testing.unit`; re-exported from ``vendorfake.testing``.
+    """
+    if value is None:
+        return None
+    for policy in UNMATCHED_POLICIES:
+        if value == policy:
+            return policy
+    raise ValueError(
+        f"unmatched={value!r} is not one of {', '.join(repr(p) for p in UNMATCHED_POLICIES)}. "
+        f'"error" raises UnmatchedRequest for a request no route matched; "vendor-404" answers '
+        f"the vendor's own 404 with the diagnosis in the Vendorfake-Near-Miss header."
+    )
 
 
 class UnmatchedRequest(AssertionError):
@@ -357,6 +383,7 @@ class UnitTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
     __slots__ = ("_unit", "_unmatched")
 
     def __init__(self, unit: Unit, *, unmatched: UnmatchedPolicy | None = None) -> None:
+        unmatched = checked_unmatched(unmatched)
         self._unit = unit
         declared = unit.context.config.unmatched.policy
         self._unmatched: UnmatchedPolicy = (

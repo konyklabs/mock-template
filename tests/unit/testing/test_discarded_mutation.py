@@ -62,6 +62,28 @@ def test_a_response_phase_fault_after_a_commit_is_marked_on_the_request_log(clov
     assert "committed_journal_seq" not in newest
 
 
+def test_slow_body_delivers_the_commit_intact_and_is_not_discarded(clover: StartedUnit[CloverSeed]) -> None:
+    """The one response-phase fault that leaves the answer alone: the caller
+    has the rotated token, only later, so nothing was discarded."""
+    clover.add_chaos_rule(
+        {
+            "id": "drip",
+            "scope": "request",
+            "fault": "slow_body",
+            "match": {"route": REFRESH},
+            "params": {"chunk_bytes": 4096, "chunk_delay_ms": 1},
+            "when": {"nth": [1]},
+        }
+    )
+    late = _refresh(clover, clover.seed.token.refresh_token or "")
+    assert late.status_code == 200  # type: ignore[attr-defined]
+    assert late.headers["vendorfake-fault"] == "slow_body"  # type: ignore[attr-defined]
+    (row,) = clover.requests(route=REFRESH)
+    assert row["fault"] == "slow_body"
+    assert row["discarded_mutation"] is False
+    assert isinstance(row["committed_journal_seq"], int)
+
+
 def test_a_request_phase_fault_commits_nothing_and_says_so(clover: StartedUnit[CloverSeed]) -> None:
     clover.add_chaos_rule(
         {"id": "outage", "scope": "request", "fault": "unavailable", "match": {"route": REFRESH}, "when": {"nth": [1]}}
@@ -88,6 +110,25 @@ def test_a_read_commits_nothing(clover: StartedUnit[CloverSeed]) -> None:
     (row,) = clover.requests(route="GET /v3/merchants/{mId}")
     assert row["discarded_mutation"] is False
     assert "committed_journal_seq" not in row
+
+
+def test_a_malformed_body_rule_with_a_bad_mode_is_refused_the_same_way(clover: StartedUnit[CloverSeed]) -> None:
+    clover.add_chaos_rule(
+        {
+            "id": "badmode",
+            "scope": "request",
+            "fault": "malformed_body",
+            "match": {"route": REFRESH},
+            "params": {"mode": "garbage"},
+        }
+    )
+    refused = _refresh(clover, clover.seed.token.refresh_token or "")
+    assert refused.status_code == 400, refused.text  # type: ignore[attr-defined]
+    assert refused.headers["vendorfake-rule-error"] == "badmode"  # type: ignore[attr-defined]
+    assert "vendorfake-fault" not in refused.headers  # type: ignore[attr-defined]
+    # The handler committed before the payout refused: the rotation is spent, and the log says so.
+    (row,) = clover.requests(route=REFRESH)
+    assert row["discarded_mutation"] is True
 
 
 def test_a_rule_authoring_refusal_names_the_rule_in_a_header(clover: StartedUnit[CloverSeed]) -> None:

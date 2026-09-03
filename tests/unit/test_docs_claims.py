@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SELECTION = "--pyargs vendorfake.conformance"
 FLAG = "-p vendorfake.conformance.plugin"
-SCOPE = ("src", "docs", "tools", "examples", "README.md", "AGENTS.md", "CHANGELOG.md")
+SCOPE = ("src", "tests", "docs", "tools", "examples", ".github", "README.md", "AGENTS.md", "CHANGELOG.md")
 
 
 def _files() -> list[Path]:
@@ -25,7 +25,7 @@ def _files() -> list[Path]:
             found.append(path)
         elif path.is_dir():
             found.extend(
-                p for p in path.rglob("*") if p.is_file() and p.suffix in {".py", ".md", ".sh", ".toml", ".txt"}
+                p for p in path.rglob("*") if p.is_file() and p.suffix in {".py", ".md", ".sh", ".toml", ".txt", ".yml"}
             )
     return found
 

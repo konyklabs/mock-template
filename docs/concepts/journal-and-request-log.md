@@ -51,8 +51,9 @@ something — a refusal, a replay, a read or a request-phase fault has none.
 `discarded_mutation` (always present) is `true` when the handler committed
 *and* the caller still did not get its clean answer: a response-phase fault
 corrupted it, or the fault's own params were bad and the caller got the 400
-naming the rule instead. The mutation stands in the store; it is discarded
-only from the caller's point of view — which, against a single-use
+naming the rule instead (`slow_body` delivers the answer intact, only
+late, so it does not count). The mutation stands in the store; it is
+discarded only from the caller's point of view — which, against a single-use
 rotation, means a credential spent by a call that looked like it failed.
 See [Chaos rules and faults → Phase](chaos-rules-and-faults.md#phase-does-the-handler-commit).
 

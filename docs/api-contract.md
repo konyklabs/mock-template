@@ -44,9 +44,10 @@ function.
 The binding layer: `unit()`, `async_unit()`, `served()`, `serve_in_thread()`
 and `webhook_receiver()`; the `Driver`, `StartedUnit`, `ServedUnit`,
 `WebhookReceiver` and `Delivery` handles; `UnitTransport`; the
-`UnmatchedRequest` assertion error; `ClockInfo` and `RouteInfo`; the `Seed`
-protocol, the three per-vendor seed types and `Credentials`; the `SeedT` type
-variable; and the tuning constants `CLIENT_TIMEOUT_S`, `DRAIN_TIMEOUT_S`,
+`UnmatchedRequest` assertion error and `checked_unmatched`, the validation
+`unit()` applies to its `unmatched=` argument; `ClockInfo` and `RouteInfo`;
+the `Seed` protocol, the three per-vendor seed types, `Credentials` and
+`Token`; the `SeedT` type variable; and the tuning constants `CLIENT_TIMEOUT_S`, `DRAIN_TIMEOUT_S`,
 `DEFAULT_REQUEST_LIMIT`, `LOG_LINES`, `SERVE_COMMAND` and `NO_SEED_HINT`.
 
 `vendorfake.testing.seeds` publishes the same seed types and `seed_for`
@@ -142,6 +143,8 @@ resolved result.
 | `Vendorfake-Error-Info` | The error's structured detail, as ASCII-safe JSON |
 | `Vendorfake-Fault` | The chaos fault kind that shaped this response |
 | `Vendorfake-Rule` | The id of the chaos rule that fired |
+| `Vendorfake-Rule-Error` | The id of a chaos rule whose fault payout refused its own params (a 400; no `Vendorfake-Fault`, because no fault fired) |
+| `Vendorfake-Delay-Ms` | On a `timeout`-faulted answer, the delay the rule asked for, on either clock |
 
 Header names are case-insensitive on the wire, and the package is not
 consistent about the case it sets: the four error-sidecar headers

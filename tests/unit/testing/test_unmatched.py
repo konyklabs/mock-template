@@ -171,3 +171,12 @@ def test_checked_unmatched_passes_the_two_policies_and_none() -> None:
     assert checked_unmatched(None) is None
     assert checked_unmatched("error") == "error"
     assert checked_unmatched("vendor-404") == "vendor-404"
+
+
+def test_the_transport_constructor_refuses_the_same_values() -> None:
+    """The publicly exported constructor stores the value; it must not be the
+    one door the check misses."""
+    from vendorfake.testing import UnitTransport, unit
+
+    with unit("square") as started, pytest.raises(ValueError, match="unmatched=True"):
+        UnitTransport(started.unit, unmatched=True)  # type: ignore[arg-type]
