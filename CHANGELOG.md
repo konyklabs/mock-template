@@ -1,5 +1,313 @@
 # Changelog
 
+## Unreleased
+
+The 0.2.0 notes. `Unreleased` is a placeholder heading for release-please to
+fold into the release; the entries below are hand-written because a release
+this size needs more than its commit subjects, and because six of them are
+migrations a consumer has to act on rather than facts they can skim.
+
+**If you are upgrading from 0.1.0, read these six first.** Each is written out
+in full under the heading named beside it.
+
+| What changed | Where |
+| --- | --- |
+| A bare `StartedUnit` annotation now fails `mypy --strict` | Features, typed seeds |
+| A `timeout` fault past the client's read timeout raises instead of answering 504 | Behaviour changes |
+| `unit()` now honours `VENDORFAKE_PROFILE` in the `env=` you pass it | Behaviour changes |
+| The `unit_error` sidecar moved from the response body to headers | Breaking changes |
+| An unmatched in-process request now raises instead of returning the vendor's 404 | Breaking changes |
+| The conformance plugin is no longer auto-loaded into your pytest run | Breaking changes |
+
+### Features
+
+* **testing:** the vendor name narrows the seed. `unit()` and `served()` are
+  overloaded on the vendor literal, so `unit("clover")` yields a
+  `StartedUnit[CloverSeed]` rather than a union a consumer had to unpick with
+  an `isinstance` per vendor. `Driver`, `StartedUnit` and `ServedUnit` are
+  generic in their seed; written bare they are `[Any]` under mypy's default
+  settings and under pyright/basedpyright in standard mode, which is what a
+  v0.1.0 fixture annotation already meant. **Migration for a consumer running
+  `mypy --strict`:** `disallow_any_generics` turns a bare annotation into a
+  hard error -- `def f(s: StartedUnit) -> None` now fails with `Missing type
+  arguments for generic type "StartedUnit"  [type-arg]` -- on a fixture the
+  consumer did not change. Parameterise it (`Iterator[StartedUnit[SquareSeed]]`)
+  or write `StartedUnit[Any]` to keep the old, unnarrowed meaning explicitly;
+  either way nothing about the object handed back at runtime changes, only
+  what a strict checker will accept as its declared type.
+* **testing:** `seed.credentials` reports the application credential under
+  neutral names (`app_id`, `app_secret`) plus the token lifecycle the vendor
+  runs (`grant`: `refresh_token` for Square and Clover, `client_credentials`
+  for Toast), so one parametrized test can authenticate against all three. No
+  existing seed field was renamed or removed.
+* **testing:** `vendorfake.testing.Seed` is the structural type all three
+  seeds satisfy — `credentials`, `auth`, `read_only_auth`, `event_types` —
+  and the seed type a vendor that is a plain `str` yields.
+* **testing:** a vendor from the `vendorfake.vendors` entry-point group can
+  publish its own seed. Implement `seed(vendor_config)` — the optional
+  `vendorfake.core.kernel.types.SeedingVendor` protocol, discovered
+  structurally, so no existing `VendorDefinition` has to change — and
+  `unit("<its name>").seed` hands back that object instead of raising
+  `LookupError`. It must satisfy `vendorfake.testing.Seed`; one that does not
+  is refused by name when the unit is built, rather than surfacing as an
+  `AttributeError` inside a consumer's test. `seed_for` takes an optional
+  `definition=` for a caller that already holds one (konyklabs/roadmap#74)
+* **core:** record every request in a bounded in-memory log, distinct from the
+  journal, and publish it at `GET /__unit/requests` (filters: `operation_id`,
+  `route`, `unmatched`, `limit`), `DELETE /__unit/requests` and
+  `GET /__unit/requests/unmatched/near-misses`. The journal records committed
+  mutations by design, so a read, a 4xx or a call that matched no route left no
+  trace anywhere. Capacity comes from the profile (`requests: {capacity: N}`,
+  default 10,000) or `VENDORFAKE_REQUEST_LOG_CAPACITY`; bodies and headers are
+  not stored; control-plane requests are not recorded; `reset()` clears it.
+* **core:** answer an unmatched request with a `Vendorfake-Near-Miss` header
+  naming the three closest routes of the active capability set, ranked
+  deterministically. The vendor-shaped 404 body is unchanged.
+* **testing:** `Driver.requests()`, `Driver.assert_called(operation_id, times=,
+  at_least=)` — whose failure lists every operation that *was* called, with
+  counts — and `Driver.clear_requests()`.
+* **testing:** `VENDORFAKE_CLOCK_START` and `unit()`/`served()`'s `clock_start=`
+  pin the virtual clock's start instant, so two units built from the same
+  `clock_start` agree on every expiry to the second (konyklabs/roadmap#71).
+  Requires `clock.mode="virtual"`; setting it against a real clock is now a
+  loud refusal rather than a silent no-op, and the value must carry a timezone
+  — a naive instant or a bare date is refused, because neither names the same
+  moment on two machines. `Driver.clock() -> ClockInfo` reads a unit's current
+  mode and instant off `/__unit/info`.
+* **core:** the `unit_error` sidecar now defaults to riding as response
+  headers (`Vendorfake-Error-Kind`, `Vendorfake-Status-Provenance`,
+  `Vendorfake-Error-Field`, `Vendorfake-Error-Info`) instead of a
+  `unit_error` body key, so a vendor's default-profile body is byte-for-byte
+  what the real vendor would send (konyklabs/roadmap#71). `errors.sidecar`
+  (profile) / `VENDORFAKE_ERROR_SIDECAR` (env) selects `"headers"` (default),
+  `"body"` or `"both"`. Header values are ASCII-safe: `Vendorfake-Error-Info`
+  escapes non-ASCII, `Vendorfake-Error-Field` is percent-encoded. See
+  **Breaking changes** for what a consumer reading the body must do.
+* **testing:** a new, minimal `pytest11` entry point, `vendorfake` (module
+  `vendorfake.pytest`), replaces `vendorfake_conformance` as what installing
+  the wheel auto-loads into a consumer's pytest run. It exposes only the
+  `vendorfake` marker and the `vendorfake_unit`, `vendorfake_async_unit` and
+  `vendorfake_webhook_receiver` fixtures -- no `--conformance-*` options, no
+  session hook. The marker takes `vendor`, `profile`, `env`, `seed`,
+  `clock_start`, `unmatched` and `capabilities`. The conformance suite's
+  pytest form still exists, and now needs both flags together:
+  `pytest --pyargs vendorfake.conformance -p vendorfake.conformance.plugin`.
+  The two are not alternatives — `-p` is what loads the plugin (and so
+  registers `--conformance-target` and the rest), while `--pyargs
+  vendorfake.conformance` only selects the tests, which without the plugin
+  fail at fixture resolution. This is the form README and `tools/self-test.sh`
+  both use (konyklabs/roadmap#71).
+* **pytest:** the `vendorfake_async_unit` fixture, driven by the same
+  `@pytest.mark.vendorfake(vendor, ...)` marker. It is a *synchronous* fixture
+  yielding an object that owns an async client, which is what makes it work
+  under pytest-asyncio (strict and auto) and under anyio's plugin without
+  vendorfake depending on either: an `async def` fixture would need each
+  runner's own decorator, and picking one would break the other's users at
+  collection time.
+* **testing:** `UnitTransport` now implements both `httpx.BaseTransport` and
+  `httpx.AsyncBaseTransport`, so one instance drives an `httpx.Client` and an
+  `httpx.AsyncClient` over the same unit. `StartedUnit.async_client` is that
+  client, built on first access; `vendorfake.testing.async_unit()` is `unit()`
+  as an async context manager, with the same four overloads. An async consumer
+  no longer writes ASGI wiring per vendor against the internal
+  `vendorfake.asgi`.
+* **core:** `UnitResponse` gains `delay_ms` (default `0`, additive).
+* **core:** five transport-fidelity faults -- `malformed_body`,
+  `body_mutation`, `connection_reset`, `empty_response`, `slow_body` -- for
+  "the vendor returned garbage", which no vendor documents and no other fault
+  can produce: an HTML error page behind a 502, invalid JSON, a 200 missing
+  its token, a documented field retyped to something else, a connection that
+  drops mid-response, a body that streams in slowly. `UnitResponse` gains
+  `transport: TransportDirective | None` (default `None`, additive) for the
+  three that are not a response at all; the in-process transport and the ASGI
+  binding each interpret it in the terms of the caller they hold.
+  `core/chaos/rules.py`'s `FaultSpec` gains `provenance: "vendor" | "transport"`,
+  published at `GET /__unit/chaos` and `GET /__unit/info` (and so in
+  `vendorfake info`'s output), distinguishing these five from every fault that
+  came before them. Every faulted response, old kinds included, now carries
+  `Vendorfake-Fault` and `Vendorfake-Rule` headers. `provenance` is
+  keyword-only with a default of `"vendor"`, so it is purely additive: a
+  fork's existing three- or four-positional `FaultSpec(...)` construction
+  (`name, scope, summary[, params]`) keeps its v0.1.0 meaning rather than
+  silently binding its `params` prose to `provenance`. `slow_body` races a
+  client's read timeout on the single gap between two chunks, not their sum,
+  because that is what httpx's read timeout actually measures — a client that
+  tolerates each gap never times out however long the whole transfer takes,
+  and the in-process transport matches the served one so a test green in one
+  is green in the other. When a response-phase fault hits an idempotent
+  request, the key stores the handler's clean answer, recorded before the
+  fault touches it, so a retry replays the payment the vendor already took
+  instead of taking a second one. A response-phase fault armed for a request applies to
+  the replay of an idempotent key too, exactly as it does to a fresh answer: a
+  vendor's network does not know a request is a retry, and a second dropped
+  connection is what a robust client has to survive. So a rule's `times`
+  budget counts only the faults the caller actually observed, and the request
+  log's `fault` column matches the response the caller got rather than the
+  decision the pipeline drew. The stored idempotency record is still never
+  touched by a fault, because a replay does not store.
+* **vendorfake:** discover profiles and routes by code — `registry.available_profiles`, `registry.routes`, `Driver.route_for`/`path_for`, and a per-vendor `paths` module of hand-written path constants kept honest against the router by `tests/unit/test_paths_drift.py` (konyklabs/roadmap#70)
+* **vendorfake:** add `VendorDefinition.roles`, the neutral capability-role vocabulary (`auth`, `orders`, `webhooks`, `chaos`) every vendor maps to its own capability names, published at `GET /__unit/info` under `vendor.roles`. It is a required member
+  of the `VendorDefinition` protocol, so it is also a **breaking change for a
+  third-party entry-point vendor built against 0.1.0** — see **Breaking
+  changes** (konyklabs/roadmap#70)
+* **vendorfake:** `create_unit`/`unit()` accept `capabilities=[...]` — role names or a vendor's own capability names — and resolve to the narrowest shipped profile that is a superset, or `full` plus an absolute list when none qualifies; passing `profile=` and `capabilities=` together, or an empty `capabilities=[]`, is a `ValueError`. `GET /__unit/info` echoes the request back under `requested_capabilities` (konyklabs/roadmap#70)
+* **vendorfake:** the package root re-exports `available_profiles` and
+  `routes` alongside `available_vendors`, `create_unit` and `resolve_vendor`,
+  so discovering what a vendor ships and building a unit from it are one
+  import. `from vendorfake.registry import ...` is unchanged and is not
+  deprecated (konyklabs/roadmap#74)
+* **cli:** add `--json`, accepted both before and after the subcommand (`vendorfake --json profiles` and `vendorfake profiles --json` are the same request; a no-op where a subcommand already prints JSON) and three subcommands — `vendorfake profiles`, `vendorfake routes`, `vendorfake faults` — plus `vendorfake vendors --json` (konyklabs/roadmap#70)
+* **cli:** add `vendorfake agent-setup`, which writes a Claude Code rules file (`<dir>/.claude/rules/vendorfake.md`, scoped by `paths:` to `--tests-glob`, default `tests/**`) naming how to start a unit, the pytest fixtures, and the vocabulary an agent writing or fixing a consumer's tests needs — `--dir`, `--force`, and `--mcp`/`--allow-future` to also merge a `vendorfake` entry into `<dir>/.mcp.json` (a notice only, until the `vendorfake mcp` server itself ships in 0.4). See `docs/for-agents.md` for the same contract in full (konyklabs/roadmap#74)
+* **cli:** add `vendorfake explain <route|fault|profile|error|header> <name>`, which answers one question about a unit's surface — a route's method/path/auth by `operation_id`, a chaos fault's params and provenance, a profile's capabilities and seed, a core error kind's status and body, or a `Vendorfake-*` response header's meaning — through the same control-plane and catalogue lookups `vendorfake routes`/`faults`/`profiles` already use, with `--vendor`, `--profile` and `--json` (konyklabs/roadmap#74)
+* **conformance:** add C33 (an unmatched request is named and recorded), C34
+  (every vendor maps all four capability roles to a declared capability) and
+  C35 (the profile-name contract holds: every vendor ships all six of `full`,
+  `oauth-only`, `orders-only`, `no-chaos`, `no-faults`, `chaos-demo`,
+  published at `GET /__unit/info` under `vendor.profiles`, and the profile a
+  unit was built on honours what its name promises)
+  (konyklabs/roadmap#70, konyklabs/roadmap#72)
+
+### Behaviour changes
+
+* **testing:** `Driver.seed` is no longer `Optional`. It was `None` for any
+  vendor with no seed, which every consumer paid for with a guard on a value
+  that is present for all three shipped vendors. `unit()` and `served()` now
+  raise `LookupError` naming the vendor and profile instead. **Breaking for a
+  consumer relying on `seed is None`**: a vendor from the entry-point group
+  that publishes no seed can now publish one (see the `SeedingVendor` hook
+  under Features), and until it does, drive it with `create_unit()` rather
+  than `unit()`.
+* **core:** the `timeout` chaos fault no longer calls `time.sleep` inside the
+  kernel. On a real clock it reports the delay on the response and each
+  binding carries it out: the in-process transport raises `httpx.ReadTimeout`
+  **without waiting** when the delay exceeds the client's read timeout, and
+  waits for real when it does not; the ASGI application awaits it, so served
+  mode is unchanged from a client's point of view; the file-drop binding waits
+  before writing the response document. Virtual-clock mode is unchanged --
+  scenario time moves and the answer is immediate.
+
+  What a consumer gains is the case that was previously unreachable in
+  process: a client-side timeout, and therefore a rehearsal of their retry
+  path, without starting a server. What changes for an existing consumer,
+  stated plainly: a `timeout` fault whose `delay_ms` exceeds the client's read
+  timeout now raises `httpx.ReadTimeout` instead of answering a 504. For the
+  built-in client -- `StartedUnit.client` and `StartedUnit.async_client`, what
+  `unit()` and `async_unit()` hand back -- that threshold is
+  `vendorfake.testing.CLIENT_TIMEOUT_S` (30 s), now passed to both explicitly
+  rather than left to httpx's own 5 s default. A consumer who needs the 504
+  answer for a longer delay passes a client built with a longer timeout, or
+  arms a shorter `delay_ms`. The raw in-process seam
+  (`vendorfake.core.transport.inprocess.InProcessClient`) holds no caller and
+  so takes no delay at all; the delay is readable there on
+  `response.raw.delay_ms`. Status, body and headers are unchanged everywhere.
+* **testing:** `UnitTransport` now reads `request.extensions["timeout"]`. It
+  is still consulted for nothing except a deliberate `delay_ms`; an ordinary
+  in-process call still cannot be interrupted by a timeout.
+* **testing:** `unit()`'s `profile` argument now resolves the same three-step
+  precedence `create_unit` documents — an explicit `profile=` argument, then
+  `VENDORFAKE_PROFILE` in the `env=` mapping given to that call, then `full`
+  — where v0.1.0 passed the literal string `"full"` and so never read
+  `VENDORFAKE_PROFILE` from an `env=` mapping passed to `unit()` at all.
+  **Migration:** a caller who builds one `env` mapping for a whole test module
+  and passes it to both `served()` (a real environment) and `unit()` will now
+  see `unit()` honour `VENDORFAKE_PROFILE` in it too. If that mapping was
+  meant only for the served unit, pass `profile=` explicitly to `unit()` or
+  drop the key from the mapping it gets. `served()` is deliberately
+  asymmetric: it keeps `profile: str = "full"`, takes no `capabilities=`, and
+  does not read `VENDORFAKE_PROFILE` out of an `env=` mapping
+  (konyklabs/roadmap#70)
+* **cli:** a startup failure is now a one-line refusal rather than a
+  traceback, for every subcommand that builds a unit (`serve`, `info`,
+  `openapi`, `routes`, `profiles`). A nonexistent `--profile` raised a raw
+  `UnitError` out of the profile loader while the adjacent `--vendor` flag —
+  the same kind of typo — was already a clean message; both now read the same
+  way, and the loader's message already names every profile the vendor ships.
+  The exit code is 1, which is what every other refusal in the CLI already
+  uses (konyklabs/roadmap#74)
+
+### Breaking changes
+
+* **testing:** an in-process unit (`unit()`) now raises
+  `vendorfake.testing.UnmatchedRequest` — an `AssertionError` — for a request no
+  route matched, where v0.1.0 returned the vendor's 404. **Migration:** a test
+  that deliberately calls an unmodelled path opts out with
+  `unit(..., unmatched="vendor-404")`, with `VENDORFAKE_UNMATCHED=vendor-404`,
+  or with `unmatched: {"policy": "vendor-404"}` in its profile. Served units
+  (`served()`, `serve_in_thread()`, the container) are unaffected and never
+  raise: they stand in for the vendor and answer as the vendor would. A 404
+  from a route that did match — an id that does not exist — is unaffected on
+  every binding.
+* **core:** a consumer reading `unit_error` out of a vendor's response body
+  under the default profile no longer finds it there -- it is in the
+  `Vendorfake-*` headers instead. **Migration:** read
+  `response.headers["Vendorfake-Error-Kind"]` and its three siblings, or set
+  `"errors": {"sidecar": "body"}` in your profile or
+  `VENDORFAKE_ERROR_SIDECAR=body` to keep the v0.1 body key for this minor
+  release; `"both"` keeps both while you move. `Vendorfake-Error-Info` is
+  JSON, ASCII-escaped; `Vendorfake-Error-Field` is percent-encoded and needs
+  `urllib.parse.unquote`.
+* **testing:** a consumer whose pytest run relied on the `vendorfake_conformance`
+  `pytest11` entry point being auto-loaded (its `--conformance-*` options, or
+  its `pytest_sessionfinish` cross-profile check) must now load it explicitly:
+  **`-p vendorfake.conformance.plugin`**, in the command line or in
+  `addopts`. `vendorfake-conformance` (the CLI) and
+  `python -m vendorfake.conformance` are unaffected. What installing the wheel
+  auto-loads is now the small `vendorfake` plugin instead.
+* **core:** `VendorDefinition.roles` is a new **required** member of the
+  `VendorDefinition` protocol (see Features). **Breaking for a third-party
+  vendor registered through the `vendorfake.vendors` entry-point group and
+  written against v0.1.0**, which has no `roles` attribute at all. **How it
+  shows up:** `GET /__unit/info` now publishes `vendor.roles`, and the CLI's
+  `vendorfake info`, `Driver.clock()` and the conformance runner all call that
+  route as a matter of course; `create_unit(capabilities=[...])` translates
+  role names through the same mapping. **Migration:** implement `roles` on the
+  vendor definition — a `Mapping[str, str]` taking each of `auth`, `orders`,
+  `webhooks` and `chaos` to one of that vendor's own declared capability
+  names, as the three shipped vendors do (`square/vendor.py`,
+  `clover/vendor.py`, `toast/vendor.py`). Conformance C34 checks the mapping is
+  complete and that every value names a capability the vendor really declares.
+  Until then the two runtime read sites are tolerant rather than fatal:
+  `GET /__unit/info` publishes `vendor.roles` as `{}` (so C34 reports the real
+  defect against a unit that still answers) and `create_unit(capabilities=...)`
+  raises a `ValueError` naming the vendor and the role, instead of an
+  `AttributeError` from inside the registry. Vendors written against 0.2 are
+  unaffected, and no consumer-facing call signature changed.
+
+### Deprecations
+
+* **core:** the body-riding `unit_error` sidecar — `"errors": {"sidecar":
+  "body"}` and `VENDORFAKE_ERROR_SIDECAR=body`. It keeps working for this
+  minor release so a consumer has somewhere to stand while migrating, and may
+  be removed in a future one. The headers are the supported form; see
+  **Breaking changes** above for how to read them.
+* **toast:** `vendorfake.toast.surface.auth.LOGIN_PATH` is a deprecated alias
+  of `vendorfake.toast.paths.LOGIN`. The alias is a courtesy for v0.1.0 code
+  that imported it, and it emits no warning because a module-level constant
+  cannot; `vendorfake.toast.surface` is internal either way (see
+  `docs/api-contract.md`), and `vendorfake.toast.paths` is the public home for
+  path constants.
+
+### Dependencies
+
+* `anyio` is now declared directly (it was already installed as an
+  unconditional dependency of `httpx`); `vendorfake.testing.transport` imports
+  it so the async wait is meant to work under any anyio backend rather than
+  tying this transport to one of them; exercised on asyncio in this suite.
+* `pytest-asyncio` added to the dev group, used only to run a consumer's suite
+  under it inside `pytester`.
+
+### Documentation
+
+* **vendorfake:** `docs/api-contract.md` states the public API contract: which
+  modules and surfaces are public, which are internal and may change in any
+  release, the stability of the white-box handles (`started.unit`,
+  `started.unit.context.store` — documented, may change between minors), and
+  the deprecation policy the Deprecations heading above follows.
+  `tests/unit/test_public_api.py` pins the exported names of every public
+  module against a checked-in list, so widening or narrowing the surface is an
+  edit a reviewer sees (konyklabs/roadmap#74)
+* **vendorfake:** the profile-name contract, as it actually holds across all three shipped vendors: `orders-only` does NOT enable role `auth` (every shipped profile of that name promises "no OAuth dance, authenticate with a seeded token", pinned by each vendor's own tests) and `no-chaos` keeps role `chaos` enabled, switching off only `webhooks.chaos` (`no-faults` is the profile that switches off both). Documented in `src/vendorfake/conformance/checks/discovery.py` and the README's new "Discovering profiles and routes" section (konyklabs/roadmap#70)
+
 ## 0.1.0 (2026-09-01)
 
 

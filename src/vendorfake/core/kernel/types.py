@@ -46,7 +46,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from urllib.parse import parse_qsl
 
 from vendorfake.core.rand.rng import Rng
@@ -84,13 +84,17 @@ __all__ = [
     "MagicTriggerSpec",
     "MappedEvent",
     "MutableResponse",
+    "NearMiss",
     "PreparedEvent",
     "ReplyInit",
+    "RequestRecord",
     "Route",
+    "SeedingVendor",
     "ShapedError",
     "SignInput",
     "Signer",
     "SignerProperties",
+    "TransportDirective",
     "TransportKind",
     "UnitContext",
     "UnitError",
@@ -163,7 +167,7 @@ class UnitError(Exception):
     replaces the TypeScript compiler's checking of a literal union.
     """
 
-    __slots__ = ("detail", "field", "info", "kind")
+    __slots__ = ("delay_ms", "detail", "fault", "field", "info", "kind", "rule_id")
 
     def __init__(
         self,
@@ -172,6 +176,9 @@ class UnitError(Exception):
         detail: str | None = None,
         field: str | None = None,
         info: Mapping[str, Any] | None = None,
+        delay_ms: int = 0,
+        fault: str | None = None,
+        rule_id: str | None = None,
     ) -> None:
         resolved = UnitErrorKind(kind)
         super().__init__(detail if detail is not None else resolved.value)
@@ -181,6 +188,29 @@ class UnitError(Exception):
         self.field: str | None = field
         #: Machine-readable context surfaced under ``x-unit-error`` / the sidecar.
         self.info: Mapping[str, Any] | None = info
+        #: How long the caller should be made to wait before this refusal
+        #: reaches them, carried through to :attr:`UnitResponse.delay_ms`.
+        #:
+        #: A field on the error rather than a key in :attr:`info`, for the same
+        #: reason ``describing`` is an argument on :meth:`ErrorShaper.shape`:
+        #: ``info`` is published verbatim in the ``unit_error`` sidecar, so an
+        #: instruction to a binding routed through it would reach the wire and
+        #: become part of the vendor's response body. The ``timeout`` fault
+        #: separately puts its ``delay_ms`` in ``info`` because a consumer
+        #: reading that body is *documented* to see it; this is the copy the
+        #: binding acts on.
+        self.delay_ms: int = delay_ms
+        #: The chaos fault name and rule id that raised this error, or ``None``
+        #: for an ordinary refusal nothing armed. ``_shape`` stamps these as
+        #: the ``vendorfake-fault`` / ``vendorfake-rule`` headers so a test can
+        #: tell a faulted answer from a real one without parsing the body --
+        #: which is also why they are fields and not a second write into
+        #: :attr:`info`: ``info["chaos_rule"]`` already exists for the
+        #: pre-existing faults and changing its shape would change a body a
+        #: consumer may already be asserting against, where a header is new
+        #: surface nothing was reading before. See ``core/chaos/faults.py``.
+        self.fault: str | None = fault
+        self.rule_id: str | None = rule_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,12 +270,72 @@ class UnitRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class TransportDirective:
+    """An instruction to a binding about the *socket*, not the vendor's bytes.
+
+    FOR: the three faults no vendor's response schema can express because they
+    are not a response at all -- a connection that closes mid-stream, one that
+    closes before anything legible arrives, and a body that dribbles in over
+    real time. ``UnitResponse.body`` still carries whatever the handler
+    produced (or ``malformed_body``/``body_mutation`` produced); this is a
+    second, separate instruction that says what a binding holding a real
+    caller does with those bytes, exactly the way :attr:`UnitResponse.delay_ms`
+    is a separate instruction about *when* they arrive.
+
+    The kernel never touches sockets, so it builds this value and stops; each
+    binding that holds one interprets it in the terms of the caller it holds
+    (see ``testing/transport.py`` and ``asgi/app.py``). A binding with no
+    caller -- the file-drop binding, which writes a document rather than
+    answering a request -- has nothing to interpret this against and ignores
+    it, exactly as it already ignores a field it does not recognise.
+
+    provenance: transport. No vendor documents any of the three; they are what
+    any HTTP dependency can do to a caller, independent of which vendor is
+    behind it. See ``core/chaos/faults.py`` and the README's "Transport
+    faults" section.
+    """
+
+    kind: Literal["connection_reset", "empty_response", "slow_body"]
+    #: ``slow_body`` only: bytes per chunk before the next delay.
+    chunk_bytes: int = 0
+    #: ``slow_body`` only: milliseconds paused between chunks.
+    chunk_delay_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class UnitResponse:
     """Already-serialised. A transport adapter returns ``body`` untouched."""
 
     status: int
     headers: Mapping[str, str]
     body: bytes
+    #: How long this answer should be withheld from the caller, in milliseconds.
+    #:
+    #: **The kernel decides whether to delay; the binding decides how**, because
+    #: only the binding knows the caller's clock and the caller's timeout. An
+    #: in-process ``httpx`` transport can turn a delay longer than the client's
+    #: read timeout into an immediate ``httpx.ReadTimeout`` and never wait at
+    #: all; the ASGI application must ``await asyncio.sleep`` so it does not
+    #: block the event loop; a file-drop binding waits on its stop event so a
+    #: shutdown does not have to outlast the delay. Encoding "sleep here, on
+    #: this thread" in the kernel forces all three to be wrong in the same way.
+    #:
+    #: Earlier this did not exist and the fault engine called ``time.sleep``
+    #: itself. That produced no client-side timeout in process at all -- the
+    #: call simply took longer -- so a consumer could not exercise their retry
+    #: path without a real socket, which is the case the ``timeout`` fault is
+    #: for. See ``vendorfake.core.chaos.faults``.
+    #:
+    #: Additive with a default of 0, so every existing construction site and
+    #: every binding that ignores it keeps working unchanged.
+    #:
+    #: provenance: transport. No vendor documents it; it is how this
+    #: distribution's bindings agree about a delay the kernel asked for.
+    delay_ms: int = 0
+    #: A socket-level instruction alongside ``delay_ms``, or ``None`` for an
+    #: ordinary response. See :class:`TransportDirective`. Additive, default
+    #: ``None``, so every existing construction site keeps working unchanged.
+    transport: TransportDirective | None = None
 
 
 @dataclass(slots=True)
@@ -278,6 +368,115 @@ class ReplyInit:
     json: Any = None
     text: str | None = None
     raw: bytes | None = None
+
+
+# ---------------------------------------------------------------------------
+# What the unit observed about a request. Distinct from the journal, which
+# records committed *mutations* and therefore cannot answer "what did my code
+# call, and did anything answer it?".
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class NearMiss:
+    """One route the unit offers that a request nearly asked for.
+
+    Declared here rather than beside the scorer in ``kernel/nearmiss.py``
+    because :class:`RequestRecord` carries a tuple of these and that module
+    imports :class:`Route` from this one; a type living with the scorer would
+    make the two files a cycle. The *scoring* is the scorer's, and stays there.
+    """
+
+    #: ``"POST /v2/orders/{order_id}/pay"`` -- :attr:`Route.key`.
+    route: str
+    operation_id: str | None
+    #: 0.0 to 1.0. See ``kernel/nearmiss.py`` for how it is composed; it is
+    #: comparable only against other candidates for the same request.
+    score: float
+
+    def as_json(self) -> dict[str, Any]:
+        """Two decimal places on the wire.
+
+        The header this appears in is read by a person looking at a failing
+        test, and ``0.8333333333333334`` is noise in that setting. Full
+        precision is kept in memory, so an ordering is never decided by the
+        rounding.
+        """
+        body: dict[str, Any] = {"route": self.route, "score": round(self.score, 2)}
+        if self.operation_id is not None:
+            body["operation_id"] = self.operation_id
+        return body
+
+
+@dataclass(frozen=True, slots=True)
+class RequestRecord:
+    """One request the unit handled, whatever answered it.
+
+    FOR: the question the journal cannot be asked. A journal entry exists only
+    where a mutation committed -- by design, so that a transcript is a record
+    of what *changed* -- which means a consumer whose call never reached a
+    handler, or was refused, has nothing to look at. This is the other half:
+    every request, matched or not, with the route that took it and what it
+    answered.
+
+    **No body and no headers.** A request log that kept bodies would keep
+    tokens, signatures and card-shaped strings in a fake's memory for the life
+    of a test run, and would grow without bound on a suite that posts large
+    documents. The id is kept instead, which is echoed on the response as
+    ``x-unit-request-id`` and is how a row is tied back to a call.
+    """
+
+    #: :attr:`UnitRequest.id`, echoed on the response.
+    id: str
+    #: :attr:`UnitRequest.received_at` -- when a binding took delivery, not the
+    #: unit's (possibly virtual) clock.
+    received_at: str
+    method: str
+    path: str
+    #: :attr:`Route.key` when a route answered, else ``None``.
+    route: str | None
+    operation_id: str | None
+    status: int
+    #: Whether a route answered. ``False`` covers both "no such path" (a 404,
+    #: which carries :attr:`near_misses`) and "that path, wrong verb" (a 405,
+    #: which does not -- the answer already names the methods that are allowed).
+    matched: bool
+    #: The fault kind a chaos rule armed for this request, or ``None``.
+    fault: str | None
+    #: The id of the rule that armed it; ``magic`` for an in-band trigger.
+    rule_id: str | None
+    duration_ms: int
+    #: The closest routes, best first. Empty for anything that matched.
+    near_misses: tuple[NearMiss, ...] = ()
+
+    def as_json(self) -> dict[str, Any]:
+        """``matched`` and ``near_misses`` always present; nulls dropped.
+
+        The two that are always there are the two a caller filters on, and a
+        key that came and went with the value would make every reader write a
+        default. The rest follow the plane's usual rule -- an absent key rather
+        than an explicit ``null`` -- because "no route answered" is already
+        said by ``matched``.
+        """
+        body: dict[str, Any] = {
+            "id": self.id,
+            "received_at": self.received_at,
+            "method": self.method,
+            "path": self.path,
+            "status": self.status,
+            "matched": self.matched,
+            "duration_ms": self.duration_ms,
+            "near_misses": [miss.as_json() for miss in self.near_misses],
+        }
+        for key, value in (
+            ("route", self.route),
+            ("operation_id", self.operation_id),
+            ("fault", self.fault),
+            ("rule_id", self.rule_id),
+        ):
+            if value is not None:
+                body[key] = value
+        return body
 
 
 # ---------------------------------------------------------------------------
@@ -815,6 +1014,52 @@ class ErrorShaper(Protocol):
         ...
 
 
+@runtime_checkable
+class SeedingVendor(Protocol):
+    """A vendor that publishes its own seed object: the optional half of
+    :class:`VendorDefinition`.
+
+    FOR: a vendor from the ``vendorfake.vendors`` entry-point group, so that
+    ``unit("<its name>").seed`` hands back something real instead of refusing.
+
+    A SEPARATE PROTOCOL, NOT A MEMBER OF ``VendorDefinition``, and the reason
+    matters. Every member of ``VendorDefinition`` is required -- the class
+    docstring says so about ``hydrate``/``decorate``, and ``roles`` was added
+    on the same terms -- because a vendor with nothing to say writes an empty
+    method, which cannot be confused with "this vendor forgot". A seed is the
+    opposite case: absence is a legitimate, permanent answer, already given a
+    voice by the refusal ``vendorfake.testing`` raises. Declaring it here as a
+    required member would break every existing ``VendorDefinition``
+    implementation, in this distribution and outside it, to express something
+    the type system can express without breaking anything.
+
+    So the hook is discovered structurally. ``seed_for`` asks
+    ``isinstance(definition, SeedingVendor)``; a vendor that does not implement
+    it is exactly as valid as it was before this protocol existed.
+
+    THE RETURN TYPE IS ``object``, DELIBERATELY. What the hook must return is
+    an object satisfying ``vendorfake.testing.Seed`` -- ``credentials``,
+    ``auth``, ``read_only_auth``, ``event_types``. The core may not import
+    ``vendorfake.testing`` (``tools/boundary.toml``), and inventing a second
+    copy of that protocol here so the annotation could be narrower would put
+    the definition of "a seed" in two places, which is the drift this project
+    spends a conformance suite avoiding. ``seed_for`` is the one point where
+    the two layers meet, and it is where a hook returning the wrong shape is
+    caught and named.
+    """
+
+    def seed(self, vendor_config: Mapping[str, object]) -> object:
+        """This vendor's seed object for a unit built on ``vendor_config``.
+
+        ``vendor_config`` is the resolved profile's ``vendor`` block -- the
+        same mapping the built-in seeds read their application credentials
+        out of. Taking it rather than a built ``Unit`` keeps the hook usable
+        before a unit exists, which is what lets ``served()`` refuse a
+        seedless vendor without first spawning a child process.
+        """
+        ...
+
+
 class AuthAdapter(Protocol):
     """Resolves a presented credential into a principal and its scopes.
 
@@ -903,6 +1148,13 @@ class VendorDefinition(Protocol):
     reference marks both ``?``; here a vendor with nothing to do writes an
     empty method, which is one line and cannot be confused with "this vendor
     forgot".
+
+    Every member below is required for the same reason. The one genuinely
+    optional thing a vendor may publish -- a seed object, so that
+    ``unit("<its name>").seed`` answers rather than refuses -- is declared
+    separately as :class:`SeedingVendor` and discovered structurally, because
+    for a seed "there is none" is a real and permanent answer rather than a
+    forgotten one. See that class for the argument in full.
     """
 
     @property
@@ -920,6 +1172,30 @@ class VendorDefinition(Protocol):
 
     @property
     def capabilities(self) -> Sequence[CapabilityDecl]: ...
+
+    @property
+    def roles(self) -> Mapping[str, str]:
+        """The neutral role vocabulary -- ``auth``, ``orders``, ``webhooks``,
+        ``chaos`` -- mapped to *this* vendor's own capability names.
+
+        Vendors keep faithful capability names: Toast's login surface is
+        declared ``auth`` while Square's and Clover's is ``oauth``, and Square
+        calls its order surface ``order-lifecycle`` where Clover and Toast
+        just say ``orders``. ``profile="oauth-only"`` working the same way
+        across all three has, until this mapping existed, been a coincidence
+        of naming rather than a contract -- nothing stopped a fourth vendor
+        from calling its login capability ``login`` and breaking every
+        consumer who wrote ``capabilities=["auth"]`` expecting it to travel.
+
+        All four roles must be present; a conformance clause checks it, and
+        that every mapped value names a capability this vendor actually
+        declares. ``webhooks`` and ``chaos`` map to themselves for every
+        vendor shipped here, because those two names are the core's own gated
+        vocabulary (``core/capability/gates.py::CoreCapability``) and a vendor
+        has no capability of its own to rename them to; ``auth`` and
+        ``orders`` are the two a vendor genuinely renames.
+        """
+        ...
 
     @property
     def routes(self) -> Sequence[Route]: ...

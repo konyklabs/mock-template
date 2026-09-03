@@ -54,13 +54,18 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
 __all__ = [
+    "UNMATCHED_POLICIES",
     "ChaosSection",
     "ClockSection",
+    "ErrorsSection",
     "ProfileDocument",
+    "RequestsSection",
     "ResolvedConfig",
     "RetryPolicy",
     "SubscriberConfig",
     "TransportSection",
+    "UnmatchedPolicy",
+    "UnmatchedSection",
     "WebhooksSection",
     "merged_over",
     "parse_profile_document",
@@ -68,6 +73,27 @@ __all__ = [
 ]
 
 _MODEL = ConfigDict(extra="forbid", frozen=True)
+
+UnmatchedPolicy = Literal["vendor-404", "error"]
+"""What a binding does with a request no route matched.
+
+``vendor-404``
+    Answer exactly as the vendor would, with the diagnosis in the
+    ``Vendorfake-Near-Miss`` header. Fidelity: a consumer rehearsing what their
+    code does with a real 404 gets a real 404.
+``error``
+    Fail the caller where it stands. A test double that quietly answers 404 to
+    a path nobody serves lets a mis-targeted test go green against a unit it
+    never reached, which is the complaint this exists to close.
+
+The kernel implements neither: it always answers the vendor's 404 and attaches
+the header, and the *binding* decides whether to turn that into a failure.
+That split is what keeps a served unit incapable of raising into a socket.
+"""
+
+UNMATCHED_POLICIES: tuple[UnmatchedPolicy, ...] = ("vendor-404", "error")
+"""The two policies, enumerable -- for an error message that lists them and for
+the environment layer, which must reject a third."""
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -165,6 +191,57 @@ class ClockSection(BaseModel):
     start: str | None = None
 
 
+class RequestsSection(BaseModel):
+    """The profile's ``requests`` block: the request log's bound."""
+
+    model_config = _MODEL
+
+    #: How many records the ring buffer holds before it evicts the oldest.
+    #:
+    #: Ten thousand because the log is unbounded in nothing else -- a fake
+    #: driven by a long suite handles a request per assertion, and a buffer
+    #: sized for a test file would silently lose the very first call while a
+    #: consumer was asking why it never arrived. A record is a dozen small
+    #: fields with no body and no headers, so ten thousand of them is a
+    #: megabyte or so; a consumer who wants a whole soak run keeps more.
+    capacity: int = Field(default=10_000, ge=0)
+
+
+class UnmatchedSection(BaseModel):
+    """The profile's ``unmatched`` block: what a request nothing serves gets."""
+
+    model_config = _MODEL
+
+    #: ``None`` means "the binding decides", which is not the same as either
+    #: value. An in-process unit is a test double and defaults to failing the
+    #: test that mis-targets it; a served unit stands in for the vendor and
+    #: answers as the vendor would. A profile that states a policy overrides
+    #: whichever default the binding would have used -- see
+    #: ``vendorfake.testing.unit``, which owns the caller-facing behaviour.
+    policy: UnmatchedPolicy | None = None
+
+
+class ErrorsSection(BaseModel):
+    """The profile's ``errors`` block. Native to this project; the reference
+    has no equivalent, because it never emitted the ``unit_error`` sidecar
+    anywhere but the body.
+
+    ``sidecar`` says *where* the sidecar rides, not *whether* it exists at
+    all -- that switch is each vendor's own ``vendor.error_sidecar`` (e.g.
+    :attr:`~vendorfake.square.config.SquareConfig.error_sidecar`), unchanged.
+    ``"headers"`` (the default, since konyklabs/roadmap#71) keeps a vendor's
+    body byte-for-byte identical to a real, recorded response, which the body
+    key never was: a consumer substituting a recorded fixture for this fake's
+    answer would see an extra field the real vendor never sends. ``"body"``
+    restores the v0.1 behaviour for one minor release
+    (DEPRECATED -- see CHANGELOG.md) and ``"both"`` emits it in both places.
+    """
+
+    model_config = _MODEL
+
+    sidecar: Literal["headers", "body", "both"] = "headers"
+
+
 class TransportSection(BaseModel):
     """Which binding the CLI should stand up, and where.
 
@@ -203,6 +280,9 @@ class ProfileDocument(BaseModel):
     webhooks: WebhooksSection = Field(default_factory=WebhooksSection)
     chaos: ChaosSection = Field(default_factory=ChaosSection)
     clock: ClockSection = Field(default_factory=ClockSection)
+    requests: RequestsSection = Field(default_factory=RequestsSection)
+    unmatched: UnmatchedSection = Field(default_factory=UnmatchedSection)
+    errors: ErrorsSection = Field(default_factory=ErrorsSection)
 
 
 class ResolvedWebhooks(BaseModel):
@@ -240,11 +320,32 @@ class ResolvedConfig(BaseModel):
     webhooks: ResolvedWebhooks
     chaos: ResolvedChaos
     clock: ClockSection
+    #: Defaulted rather than required, like ``requests`` and ``unmatched``
+    #: below: ``ErrorsSection`` is a total default (``sidecar`` defaults to
+    #: ``"headers"``) and :func:`resolve_config` always supplies a value, so a
+    #: caller assembling a ``ResolvedConfig`` by hand -- every kernel test
+    #: does -- should not have to name a knob it is not exercising.
+    errors: ErrorsSection = Field(default_factory=ErrorsSection)
     transport: TransportSection
+    #: Defaulted rather than required, unlike the four above: a unit built
+    #: before this section existed logs requests at the default bound, and a
+    #: caller assembling a ``ResolvedConfig`` by hand -- every kernel test does
+    #: -- should not have to name a knob it is not exercising.
+    requests: RequestsSection = Field(default_factory=RequestsSection)
+    unmatched: UnmatchedSection = Field(default_factory=UnmatchedSection)
     #: Read here rather than by the logger, so no module reaches for the
     #: process environment on its own. The reference's ``createLogger``
     #: defaulted straight from ``process.env``, which is the leak this closes.
     log_level: str = "info"
+    #: What ``registry.create_unit(capabilities=[...])`` was asked for, before
+    #: role translation and profile selection -- ``None`` for a unit started
+    #: by ``profile=`` the ordinary way. Not set by :func:`resolve_config`;
+    #: the registry lays it over the resolved config after choosing a profile,
+    #: because the request is a fact about *how a unit was asked for* and this
+    #: module never sees a role name. Published at ``/__unit/info`` so a
+    #: consumer who resolved a profile from capabilities can confirm what was
+    #: actually requested, not just which profile it landed on.
+    requested_capabilities: tuple[str, ...] | None = None
 
 
 def unit_error_from_validation(exc: ValidationError, *, source: str | None = None) -> UnitError:

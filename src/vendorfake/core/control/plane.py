@@ -1,4 +1,4 @@
-"""The ``/__unit/*`` control plane: the same thirty routes for every vendor.
+"""The ``/__unit/*`` control plane: the same thirty-three routes for every vendor.
 
 FOR: making everything a consumer needs in order to *drive* a fake -- what it
 is, what it can do, what it has recorded, what it will do wrong next, and how
@@ -52,12 +52,16 @@ declared retry schedule. ``{"drain": false}`` advances by exactly what was
 asked, fires only what that made due, and settles the worker -- which is the
 only way to observe that a retry did NOT happen before its interval.
 
-NINE ROUTES THE REFERENCE DOES NOT HAVE
----------------------------------------
+TWELVE ROUTES THE REFERENCE DOES NOT HAVE
+-----------------------------------------
 ``GET /__unit/errors``
     The vendor's shaping of every one of the twenty core error kinds, read over
     the wire instead of by importing the vendor's table -- each row with the
-    provenance of its status, from ``ErrorShaper.describe``.
+    provenance of its status, from ``ErrorShaper.describe``. Each row's own
+    ``headers`` already shows where the ``unit_error`` sidecar rides under the
+    active ``errors.sidecar`` (``"headers"`` by default since
+    konyklabs/roadmap#71) -- there is no separate contract to document here,
+    only this route's existing ``body``/``headers`` split reflecting it.
 ``GET /__unit/machines`` and ``POST /__unit/machines/probe``
     Declared lifecycles, with ``terminal`` derived from ``to == []`` in the
     machine itself, and a way to evaluate a transition without mutating
@@ -83,6 +87,13 @@ NINE ROUTES THE REFERENCE DOES NOT HAVE
     Optimistic concurrency and the cursor's query fingerprint are rules of the
     CORE; asking them only through whichever endpoint a vendor happens to
     expose would make them contracts about that vendor.
+``GET /__unit/requests``, ``DELETE /__unit/requests`` and
+``GET /__unit/requests/unmatched/near-misses``
+    The request log: what was *called*, as against what the journal records,
+    which is what *changed*. Without it a consumer whose call was refused --
+    or matched no route at all -- has nothing to look at, because no 4xx ever
+    leaves a journal entry. The third is the same records narrowed to the
+    unmatched ones, with the routes each nearly asked for.
 
 WIRE CASING IS snake_case, HERE AS EVERYWHERE
 ---------------------------------------------
@@ -144,7 +155,7 @@ from vendorfake.core.util.json import compact, sha256_hex
 from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION, Subscription
 from vendorfake.core.webhooks.sink import MemorySink
 
-__all__ = ["CONTROL_PREFIX", "control_plane_routes"]
+__all__ = ["CONTROL_PREFIX", "DEFAULT_REQUEST_LIMIT", "control_plane_routes"]
 
 CONTROL_PREFIX = "/__unit/"
 """Every path below begins with this. Restated from ``kernel/router.py`` for a
@@ -228,9 +239,29 @@ def control_plane_routes(
                             "name": ctx.vendor.name,
                             "display_name": ctx.vendor.display_name,
                             "api_version": ctx.vendor.api_version,
+                            # ``getattr``, not the declared attribute: a third-party vendor
+                            # from the ``vendorfake.vendors`` entry-point group built against
+                            # v0.1.0 predates ``VendorDefinition.roles``, and a bare
+                            # ``ctx.vendor.roles`` would turn *every* GET /__unit/info for it
+                            # -- which the CLI's `info`, Driver.clock() and the conformance
+                            # runner all make as a matter of course -- into an AttributeError
+                            # from inside the control plane. Publishing ``{}`` instead means
+                            # conformance C34 reports the real defect ("add
+                            # VendorDefinition.roles") against a unit that still answers.
+                            "roles": dict(getattr(ctx.vendor, "roles", {})),
+                            # The profile-name contract (conformance C35) is a promise about
+                            # which *names* a vendor ships, not about the unit already running --
+                            # so the check needs the roster, not just this unit's own profile.
+                            # Read the same way registry._profiles_of does (glob profile_dir for
+                            # *.json, name by stem), duplicated rather than imported because the
+                            # core may not import vendorfake.registry (tools/boundary.toml).
+                            "profiles": sorted(path.stem for path in ctx.vendor.profile_dir.glob("*.json")),
                         }
                     ),
                     "profile": ctx.config.profile,
+                    "requested_capabilities": (
+                        None if ctx.config.requested_capabilities is None else list(ctx.config.requested_capabilities)
+                    ),
                     "capabilities": [view.as_json() for view in ctx.capabilities.view()],
                     "not_supported": dict(ctx.vendor.not_supported),
                     "auth": dict(ctx.vendor.auth.describe()),
@@ -274,6 +305,13 @@ def control_plane_routes(
         rather than from the vendor's table, so a vendor that has forgotten one
         answers with the shape it produces for an unknown kind -- or fails
         loudly here -- instead of simply not appearing in the report.
+
+        Each row's ``body`` and ``headers`` are the vendor's shaping under
+        whatever ``errors.sidecar`` this unit was started with, so under the
+        default (``"headers"``, since konyklabs/roadmap#71) the ``unit_error``
+        sidecar shows up in ``headers`` and nowhere in ``body`` -- this route
+        was never body-only, it just used to have nothing to put in
+        ``headers`` before the sidecar moved there.
         """
         ctx = args.ctx
         # Provenance comes from `describe()`, never from the shaped body: the
@@ -785,6 +823,76 @@ def control_plane_routes(
             )
         )
 
+    # -- the request log ---------------------------------------------------
+
+    def requests_get(args: HandlerArgs) -> ReplyInit:
+        """Every request the unit handled, newest first, filtered.
+
+        The journal's counterpart. ``GET /__unit/journal`` answers "what
+        changed"; this answers "what was called, and did anything answer it" --
+        including the calls that changed nothing, were refused, or matched no
+        route at all, which is the whole set a consumer debugging an
+        integration is looking for.
+
+        Control-plane requests are absent by construction (the kernel does not
+        record an internal route), so reading this route does not appear in
+        what it returns and a consumer polling it sees their own traffic rather
+        than their own polling.
+        """
+        capacity = binding.requests.capacity
+        limit = _limit(args.query("limit"), maximum=capacity)
+        records = binding.requests.records(
+            operation_id=args.query("operation_id"),
+            route=args.query("route"),
+            unmatched=_flag(args.query("unmatched"), field="unmatched"),
+            limit=limit,
+        )
+        return json_(
+            {
+                "count": len(records),
+                "recorded": len(binding.requests),
+                "capacity": capacity,
+                "limit": limit,
+                "requests": [record.as_json() for record in records],
+            }
+        )
+
+    def requests_delete(args: HandlerArgs) -> ReplyInit:
+        """Drop every record. State is untouched -- this forgets, it does not reset."""
+        return json_({"cleared": binding.requests.clear()})
+
+    def requests_near_misses(args: HandlerArgs) -> ReplyInit:
+        """The unmatched requests, each with the routes it nearly asked for.
+
+        A projection of the route above rather than a second source: the same
+        records, narrowed to ``matched=false``. It exists because "show me
+        every request that hit nothing, and what it should have hit" is the
+        question this whole feature was added for, and a consumer should not
+        have to know the filter spelling to ask it. The shape mirrors
+        WireMock's ``/__admin/requests/unmatched/near-misses`` so that anyone
+        who knows that tool recognises this one.
+        """
+        limit = _limit(args.query("limit"), maximum=binding.requests.capacity)
+        records = binding.requests.records(unmatched=True, limit=limit)
+        return json_(
+            {
+                "count": len(records),
+                "near_misses": [
+                    {
+                        "request": {
+                            "id": record.id,
+                            "method": record.method,
+                            "path": record.path,
+                            "received_at": record.received_at,
+                            "status": record.status,
+                        },
+                        "near_misses": [miss.as_json() for miss in record.near_misses],
+                    }
+                    for record in records
+                ],
+            }
+        )
+
     # -- transport ---------------------------------------------------------
 
     def echo(args: HandlerArgs) -> ReplyInit:
@@ -999,6 +1107,27 @@ def control_plane_routes(
             echo,
             operation_id="UnitEcho",
         ),
+        c(
+            "GET",
+            "/__unit/requests",
+            "Every request the unit handled, newest first.",
+            requests_get,
+            operation_id="UnitRequests",
+        ),
+        c(
+            "DELETE",
+            "/__unit/requests",
+            "Forget every recorded request. State is untouched.",
+            requests_delete,
+            operation_id="UnitClearRequests",
+        ),
+        c(
+            "GET",
+            "/__unit/requests/unmatched/near-misses",
+            "Unmatched requests, each with the routes it nearly asked for.",
+            requests_near_misses,
+            operation_id="UnitNearMisses",
+        ),
     )
 
 
@@ -1107,6 +1236,66 @@ def _since(raw: str | None) -> int:
             field="since",
         )
     return value
+
+
+DEFAULT_REQUEST_LIMIT = 100
+"""How many request records ``GET /__unit/requests`` returns when not asked.
+
+A hundred is what a person reads; the capacity is what a machine reads, and
+asking for it is one query parameter away."""
+
+
+def _limit(raw: str | None, *, maximum: int) -> int:
+    """``?limit=`` as an integer between 1 and the log's capacity.
+
+    Clamped rather than refused at the top end: a caller asking for more
+    records than the log can hold wants "all of them", and a 400 there would
+    be pedantry about a number they had no way to know. A limit that is not a
+    number, or is zero or negative, IS refused -- ``?limit=abc`` silently
+    meaning "the default" is the same defect ``?since=abc`` had.
+    """
+    if raw is None or raw == "":
+        return min(DEFAULT_REQUEST_LIMIT, maximum) if maximum else DEFAULT_REQUEST_LIMIT
+    try:
+        value = int(raw)
+    except ValueError:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail="limit must be a positive integer.",
+            field="limit",
+        ) from None
+    if value < 1:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail="limit must be a positive integer.",
+            field="limit",
+        )
+    return min(value, maximum) if maximum else value
+
+
+def _flag(raw: str | None, *, field: str) -> bool | None:
+    """A tri-state query flag: ``None`` when absent, else a strict boolean.
+
+    ``?unmatched=false`` must mean "only the matched ones" and not "no filter",
+    so absence and ``false`` are different answers. The accepted spellings are
+    ``true``, ``1`` or ``yes`` for true -- plus a bare key (``?unmatched``),
+    which is what a caller types and which every binding delivers as an empty
+    value -- and ``false``, ``0`` or ``no`` for false; anything else is refused
+    rather than guessed, because JavaScript-style truthiness would make
+    ``?unmatched=false`` select exactly the wrong half.
+    """
+    if raw is None:
+        return None
+    lowered = raw.strip().lower()
+    if lowered in ("", "true", "1", "yes"):
+        return True
+    if lowered in ("false", "0", "no"):
+        return False
+    raise UnitError(
+        UnitErrorKind.INVALID_VALUE,
+        detail=f"{field} must be 'true' or 'false' (a bare '?{field}' means true).",
+        field=field,
+    )
 
 
 def _timer_as_json(timer: PendingTimer) -> dict[str, Any]:

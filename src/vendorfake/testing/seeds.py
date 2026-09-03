@@ -11,14 +11,89 @@ secrets) come from the profile's ``vendor`` block rather than from a constant:
 a profile may override them, and a fixture that reported the default while the
 unit ran on an override would send a consumer chasing a 401 that the fixture
 caused.
+
+The three seeds also share one structural type, :class:`Seed`, and one neutral
+view of their application credentials, :class:`Credentials`. That exists
+because the vendor-faithful spellings are the whole difficulty for a consumer
+who parametrizes over vendors: ``application_id`` on Square and ``client_id``
+on Clover and Toast name the same thing, and a single test body cannot spell
+both. Nothing here renames or removes a vendor-faithful field; the neutral
+names are a second view of the same strings.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
-__all__ = ["CloverSeed", "SquareSeed", "ToastSeed", "seed_for"]
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    # Guarded because the runtime import belongs inside the two functions that
+    # need it: this module is reached through `vendorfake.testing`, which a
+    # consumer's conftest imports, and an unguarded import here would pull the
+    # registry and the whole kernel in behind it for every such session.
+    from vendorfake.core.kernel.types import VendorDefinition
+
+__all__ = ["CloverSeed", "Credentials", "Seed", "SquareSeed", "ToastSeed", "seed_for"]
+
+
+@dataclass(frozen=True, slots=True)
+class Credentials:
+    """The application credential a consumer authenticates with, under names
+    that mean the same thing on every vendor.
+
+    JUDGMENT: the names are invented. No vendor calls it ``app_id``; Square
+    calls it ``application_id`` and Clover and Toast call it ``client_id``.
+    The point is a call site that does not have to know which -- a test
+    parametrized over three vendors reads ``seed.credentials.app_id`` once
+    instead of branching on the vendor to pick a spelling.
+    """
+
+    app_id: str
+    app_secret: str
+    grant: Literal["refresh_token", "client_credentials"]
+    """Which token lifecycle the vendor runs.
+
+    This is the difference a consumer's session handling genuinely has to
+    care about, so it is on the neutral view rather than hidden behind a
+    field that only two of the three seeds carry: ``refresh_token`` means a
+    long-lived grant is rotated (there is a ``refresh_token`` on the seed),
+    ``client_credentials`` means there is no refresh and the client logs in
+    again when the token expires.
+
+    JUDGMENT for the *spelling*: ``client_credentials`` is OAuth's word for
+    the shape, and Toast's login is not literally an OAuth grant. The
+    lifecycle it names is DOCUMENTED per vendor at each seed's
+    :attr:`~SquareSeed.credentials`.
+    """
+
+
+class Seed(Protocol):
+    """What every vendor's seed has, whichever vendor it is.
+
+    FOR: a consumer parametrized over vendors, and for
+    :class:`~vendorfake.testing.StartedUnit`'s fallback type when the vendor
+    is a plain ``str`` rather than a literal. Reading a field through this
+    protocol needs no ``isinstance`` and no per-vendor helper.
+
+    Deliberately small, and deliberately without ``refresh_token``: Square
+    and Clover have one and Toast does not, so putting it here would either
+    lie about Toast or force a fake value onto it. A consumer that needs the
+    refresh branch reads :attr:`Credentials.grant`, which is the real vendor
+    difference rather than an artefact of this package.
+    """
+
+    @property
+    def credentials(self) -> Credentials: ...
+
+    @property
+    def auth(self) -> Mapping[str, str]: ...
+
+    @property
+    def read_only_auth(self) -> Mapping[str, str]: ...
+
+    @property
+    def event_types(self) -> tuple[str, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +126,17 @@ class SquareSeed:
     #: Every event type the unit can send, as ``GET /v2/webhooks/event-types``
     #: lists them: ``order.created``, ``order.updated``, ``payment.*`` ...
     event_types: tuple[str, ...]
+
+    @property
+    def credentials(self) -> Credentials:
+        """The application credential, under the neutral names.
+
+        DOCUMENTED, the ``grant``: Square issues a refresh token alongside
+        the access token and a consumer rotates it -- "call ObtainToken with
+        the refresh token" -- rather than re-authorizing
+        (https://developer.squareup.com/docs/oauth-api/refresh-revoke-limit-scope).
+        """
+        return Credentials(app_id=self.application_id, app_secret=self.application_secret, grant="refresh_token")
 
     @property
     def auth(self) -> dict[str, str]:
@@ -98,6 +184,18 @@ class CloverSeed:
     #: Clover's vocabulary is ``<object key>:<change>`` -- ``O:CREATE``,
     #: ``P:UPDATE`` ... -- and a subscription may name a glob such as ``O:*``.
     event_types: tuple[str, ...]
+
+    @property
+    def credentials(self) -> Credentials:
+        """The application credential, under the neutral names.
+
+        DOCUMENTED, the ``grant``: Clover's expiring-token apps rotate a
+        single-use refresh token -- "refresh token is for single use and
+        becomes invalid immediately after a new access_token and
+        refresh_token pair is generated"
+        (https://docs.clover.com/dev/docs/refresh-access-tokens).
+        """
+        return Credentials(app_id=self.client_id, app_secret=self.client_secret, grant="refresh_token")
 
     @property
     def auth(self) -> dict[str, str]:
@@ -152,6 +250,19 @@ class ToastSeed:
     #: ``Toast-Restaurant-External-ID``, spelled as the vendor spells it.
     restaurant_header_name: str
     event_types: tuple[str, ...]
+
+    @property
+    def credentials(self) -> Credentials:
+        """The application credential, under the neutral names.
+
+        DOCUMENTED, the ``grant``: Toast's authentication endpoint takes the
+        client id and secret and answers a bearer token, and there is no
+        refresh -- a client logs in again when the token expires
+        (https://doc.toasttab.com/doc/devguide/authentication.html). That is
+        why :class:`ToastSeed` has no ``refresh_token`` field and why
+        :class:`Seed` does not promise one.
+        """
+        return Credentials(app_id=self.client_id, app_secret=self.client_secret, grant="client_credentials")
 
     @property
     def restaurant_header(self) -> dict[str, str]:
@@ -280,9 +391,88 @@ def _toast(vendor_config: Mapping[str, object]) -> ToastSeed:
     )
 
 
-def seed_for(vendor: str, vendor_config: Mapping[str, object]) -> SquareSeed | CloverSeed | ToastSeed | None:
-    """The seed object for a built-in vendor, or ``None`` for one this module
-    does not describe -- a third-party vendor publishes its own."""
+_SEED_MEMBERS = ("credentials", "auth", "read_only_auth", "event_types")
+"""The four names :class:`Seed` requires, as data, for the hook's shape check.
+
+Written out rather than derived from ``Seed.__protocol_attrs__``: that
+attribute is an implementation detail of ``typing`` with no compatibility
+promise, and the error message wants a stable, readable list anyway.
+"""
+
+
+def _from_hook(definition: VendorDefinition, vendor: str, vendor_config: Mapping[str, object]) -> Seed | None:
+    """The vendor's own seed, if it publishes one, checked before it escapes.
+
+    ``SeedingVendor`` is declared in the core, which may not import this
+    module, so its ``seed`` hook is annotated as returning ``object`` -- the
+    narrowing to :class:`Seed` happens here, at the one point where the two
+    layers meet. A hook that returns the wrong shape is named as a hook
+    defect, on the vendor, at the moment the unit is built. Letting it
+    through would surface later as an ``AttributeError`` on
+    ``started.seed.credentials``, which reads like a bug in vendorfake.
+    """
+    from vendorfake.core.kernel.types import SeedingVendor
+
+    if not isinstance(definition, SeedingVendor):
+        return None
+    hook = definition.seed
+    if not callable(hook):
+        # `runtime_checkable` on a method-only Protocol checks attribute
+        # presence, not callability, so this is reachable: `seed` is a
+        # generic name and this package's own convention for seed *data*
+        # besides (every vendor ships a `seed/` subpackage; a profile
+        # document carries a `"seed"` key), so a `VendorDefinition` with a
+        # non-callable `seed` field is a realistic collision, not a
+        # theoretical one. Named here, at the vendor, as a hook defect --
+        # the same way a hook returning the wrong shape is below -- rather
+        # than left to surface as a bare `TypeError: '...' object is not
+        # callable` three frames inside this module, which reads like a
+        # vendorfake bug and names nothing a vendor author can act on.
+        raise TypeError(
+            f"vendor {vendor!r} has a SeedingVendor.seed attribute that is not callable "
+            f"(a {type(hook).__name__!r}). SeedingVendor.seed must be a method: "
+            f"seed(self, vendor_config) -> object."
+        )
+    published = hook(vendor_config)
+    missing = [name for name in _SEED_MEMBERS if not hasattr(published, name)]
+    if missing:
+        raise TypeError(
+            f"vendor {vendor!r} published a seed of type {type(published).__name__!r} that is not a "
+            f"vendorfake.testing.Seed: no {', '.join(missing)}. A seed must carry "
+            f"{', '.join(_SEED_MEMBERS)}."
+        )
+    return cast("Seed", published)
+
+
+def seed_for(
+    vendor: str,
+    vendor_config: Mapping[str, object],
+    *,
+    definition: VendorDefinition | None = None,
+) -> Seed | None:
+    """The seed object for ``vendor``, or ``None`` when it publishes none.
+
+    Resolution order, and why it is this way round. A vendor that implements
+    the :class:`~vendorfake.core.kernel.types.SeedingVendor` hook is asked
+    first, because that is the vendor's own statement about itself; the
+    three-way branch below is only *this module's* knowledge of the three
+    vendors shipped here. None of the three implements the hook, so the
+    ordering changes nothing for them -- a test pins that -- and it means a
+    third-party vendor is never shadowed by a name collision with a built-in.
+
+    ``definition`` is optional so the signature stays what v0.1.0 callers
+    passed. Given one, the lookup is free; without one the vendor is resolved
+    by name, and a name that resolves to nothing yields ``None`` exactly as it
+    did before the hook existed -- this function has never been the place a
+    typo is reported, and making it start would move that message away from
+    ``resolve_vendor``, which names the alternatives.
+    """
+    if definition is None:
+        definition = _resolve_quietly(vendor)
+    if definition is not None:
+        published = _from_hook(definition, vendor, vendor_config)
+        if published is not None:
+            return published
     if vendor == "square":
         return _square(vendor_config)
     if vendor == "clover":
@@ -290,3 +480,24 @@ def seed_for(vendor: str, vendor_config: Mapping[str, object]) -> SquareSeed | C
     if vendor == "toast":
         return _toast(vendor_config)
     return None
+
+
+def _resolve_quietly(vendor: str) -> VendorDefinition | None:
+    """``vendor``'s definition, or ``None`` if there is no such vendor.
+
+    The import is deferred: this module is imported by ``vendorfake.testing``,
+    which a consumer's ``conftest`` imports, and the registry pulls in the
+    control plane and the kernel behind it. Nothing here needs the registry
+    until a caller actually asks for a seed without one in hand.
+
+    ``resolve_vendor`` raises for an unknown name and that refusal is the
+    right one *at the edge* -- but ``seed_for('nope', {})`` answered ``None``
+    in v0.1.0 and callers rely on it, so the exception is swallowed rather
+    than re-raised here.
+    """
+    from vendorfake.registry import resolve_vendor
+
+    try:
+        return resolve_vendor(vendor)
+    except ValueError:
+        return None

@@ -23,7 +23,10 @@
     "C20": "state: a cursor belongs to the query that issued it",
     "C21": "webhooks: the declared retry schedule is the schedule actually followed",
     "C22": "state: the seed scenario is deterministic across two OPERATING-SYSTEM PROCESSES",
-    "C23": "transport: a repeated query parameter reaches the handler whole"
+    "C23": "transport: a repeated query parameter reaches the handler whole",
+    "C33": "control plane: an unmatched request is named and recorded",
+    "C34": "discovery: every vendor maps all four capability roles to a declared capability",
+    "C35": "discovery: the profile-name contract holds for the profile this unit was built on"
   },
   "expected_skips": {
     "C07": [

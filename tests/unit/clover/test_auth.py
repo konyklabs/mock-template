@@ -111,7 +111,12 @@ def _protected_unit(*, sidecar: bool) -> Harness:
     )
     inner = create_clover_vendor(vendor_config={"error_sidecar": sidecar})
     overlay = VendorOverlay(inner, routes=lambda routes: (*routes, guarded))
-    unit = create_unit(vendor=overlay, profile="full", logger=Silent())  # the shipped seed supplies the merchant
+    # errors.sidecar=both, not the default `headers` (konyklabs/roadmap#71):
+    # this test reads `unit_error` out of the body to assert on its content,
+    # a concern the sidecar's wire placement does not change.
+    unit = create_unit(
+        vendor=overlay, profile="full", logger=Silent(), env={"VENDORFAKE_ERROR_SIDECAR": "both"}
+    )  # the shipped seed supplies the merchant
     assert unit.context.store.collection(COL.merchants).get(MERCHANT_ID) is not None
     return Harness(unit=unit, api=in_process(unit), auth={})
 

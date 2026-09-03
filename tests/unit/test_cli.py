@@ -134,7 +134,18 @@ def test_every_declared_subcommand_has_a_dispatch_arm() -> None:
     parser = _build_parser()
     subparsers = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
     declared = set(subparsers[0].choices)
-    assert declared == {"serve", "info", "openapi", "vendors", "conformance"}
+    assert declared == {
+        "serve",
+        "info",
+        "openapi",
+        "vendors",
+        "profiles",
+        "routes",
+        "faults",
+        "agent-setup",
+        "explain",
+        "conformance",
+    }
 
 
 def test_serve_without_a_vendor_refuses_and_lists_both(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -287,6 +298,167 @@ def test_the_cli_can_drop_the_control_plane_from_the_document() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Discovery: `profiles`, `routes`, `faults`, and `--json` everywhere it applies.
+# ---------------------------------------------------------------------------
+
+#: Every subcommand `--json` is honoured by. `serve` and `conformance` are
+#: deliberately absent -- see `_json_flag_parent`'s docstring in cli.py.
+JSON_SUBCOMMANDS: tuple[tuple[str, ...], ...] = (
+    ("info", "--vendor", "square"),
+    ("openapi", "--vendor", "square"),
+    ("vendors",),
+    ("profiles", "--vendor", "square"),
+    ("routes", "--vendor", "square"),
+    ("faults",),
+)
+
+
+@pytest.mark.parametrize("argv", JSON_SUBCOMMANDS, ids=[row[0] for row in JSON_SUBCOMMANDS])
+def test_every_json_subcommand_produces_one_parseable_document_on_stdout(argv: tuple[str, ...]) -> None:
+    code, out = run(*argv, "--json")
+    assert code == 0
+    parsed = json.loads(out)  # raises if anything but valid JSON reached stdout
+    assert parsed is not None
+
+
+@pytest.mark.parametrize("argv", JSON_SUBCOMMANDS, ids=[row[0] for row in JSON_SUBCOMMANDS])
+def test_every_json_subcommand_also_accepts_json_before_the_subcommand(argv: tuple[str, ...]) -> None:
+    """``--json`` reads naturally on either side of the subcommand name:
+    ``vendorfake --json profiles --vendor square`` and
+    ``vendorfake profiles --vendor square --json`` are the same request.
+    Before this fix, only the trailing position worked: the global position
+    exited 2 with ``unrecognized arguments: --json``, which contradicted the
+    CHANGELOG's own description of the flag as global."""
+    code, out = run("--json", *argv)
+    assert code == 0
+    parsed = json.loads(out)
+    assert parsed is not None
+
+
+def test_json_before_and_after_the_subcommand_produce_the_identical_document() -> None:
+    global_code, global_out = run("--json", "profiles", "--vendor", "square")
+    trailing_code, trailing_out = run("profiles", "--vendor", "square", "--json")
+    assert global_code == trailing_code == 0
+    assert json.loads(global_out) == json.loads(trailing_out)
+
+
+def test_a_json_flag_repeated_on_both_sides_of_the_subcommand_is_accepted() -> None:
+    code, out = run("--json", "profiles", "--vendor", "square", "--json")
+    assert code == 0
+    assert json.loads(out)
+
+
+def test_profiles_lists_the_six_shipped_profiles() -> None:
+    code, out = run("profiles", "--vendor", "square", "--json")
+    assert code == 0
+    rows = json.loads(out)
+    assert sorted(row["name"] for row in rows) == [
+        "chaos-demo",
+        "full",
+        "no-chaos",
+        "no-faults",
+        "oauth-only",
+        "orders-only",
+    ]
+    for row in rows:
+        assert row["vendor"] == "square"
+        assert isinstance(row["capabilities"], list) and row["capabilities"]
+        assert row["summary"]
+
+
+def test_profiles_table_form_lists_the_same_names() -> None:
+    code, out = run("profiles", "--vendor", "square")
+    assert code == 0
+    for name in ("chaos-demo", "full", "no-chaos", "no-faults", "oauth-only", "orders-only"):
+        assert name in out
+
+
+def test_routes_excludes_internal_routes_unless_asked() -> None:
+    code, out = run("routes", "--vendor", "square", "--json")
+    assert code == 0
+    rows = json.loads(out)
+    assert rows  # the vendor surface is not empty
+    assert not any(row["internal"] for row in rows)
+    assert any(row["operation_id"] == "ObtainToken" and row["path"] == "/oauth2/token" for row in rows)
+
+    code, out = run("routes", "--vendor", "square", "--internal", "--json")
+    assert code == 0
+    with_internal = json.loads(out)
+    assert any(row["internal"] and row["path"] == "/__unit/info" for row in with_internal)
+    assert len(with_internal) > len(rows)
+
+
+def test_faults_lists_every_key_of_the_fault_param_table() -> None:
+    from vendorfake.core.chaos.faults import FAULT_DESCRIPTIONS, FAULT_PARAM_KEYS, FAULT_PROVENANCE
+
+    code, out = run("faults", "--json")
+    assert code == 0
+    rows = json.loads(out)
+    assert {row["name"] for row in rows} == set(FAULT_PARAM_KEYS)
+    for row in rows:
+        assert row["params"] == list(FAULT_PARAM_KEYS[row["name"]])
+        assert row["description"] == FAULT_DESCRIPTIONS[row["name"]]
+        assert row["provenance"] == FAULT_PROVENANCE[row["name"]]
+
+
+def test_faults_json_names_transport_provenance_for_exactly_the_five_transport_faults() -> None:
+    """E-transport-faults.md's definition of done item 5: provenance appears
+    in the ``faults`` CLI output, not only in the control-plane listings."""
+    from vendorfake.core.chaos.faults import RESPONSE_PHASE_FAULTS
+
+    code, out = run("faults", "--json")
+    assert code == 0
+    rows = {row["name"]: row["provenance"] for row in json.loads(out)}
+    assert {name for name, provenance in rows.items() if provenance == "transport"} == RESPONSE_PHASE_FAULTS
+    assert rows["rate_limit"] == "vendor"
+
+
+def test_faults_table_form_has_a_provenance_column() -> None:
+    code, out = run("faults")
+    assert code == 0
+    header, *rows = out.splitlines()
+    assert "provenance" in header
+    assert any("transport" in row for row in rows)
+    assert any("vendor" in row for row in rows)
+
+
+def test_fault_descriptions_names_exactly_the_fault_param_keys_names() -> None:
+    """The drift the CLI would otherwise reproduce silently: a fault with
+    parameters and no prose, or prose for a fault the engine does not have."""
+    from vendorfake.core.chaos.faults import FAULT_DESCRIPTIONS, FAULT_PARAM_KEYS
+
+    assert set(FAULT_DESCRIPTIONS) == set(FAULT_PARAM_KEYS)
+
+
+def test_vendors_json_is_the_same_list_the_text_form_prints() -> None:
+    from vendorfake.registry import available_vendors
+
+    code, out = run("vendors", "--json")
+    assert code == 0
+    assert json.loads(out) == list(available_vendors())
+
+
+def test_profiles_and_routes_refuse_an_unknown_vendor_by_name() -> None:
+    with pytest.raises(SystemExit) as raised:
+        run("profiles", "--vendor", "nosuchvendor")
+    assert "no vendor named 'nosuchvendor'" in str(raised.value)
+
+    with pytest.raises(SystemExit) as raised:
+        run("routes", "--vendor", "nosuchvendor")
+    assert "no vendor named 'nosuchvendor'" in str(raised.value)
+
+
+def test_routes_defaults_to_full_and_honours_an_explicit_profile() -> None:
+    """The route table does not vary by profile -- every declared route is
+    registered whether or not its capability is enabled -- so this asserts
+    the flag is accepted and produces the same table, not a different one."""
+    code, full_out = run("routes", "--vendor", "square", "--json")
+    code_named, named_out = run("routes", "--vendor", "square", "--profile", "oauth-only", "--json")
+    assert code == 0 and code_named == 0
+    assert json.loads(full_out) == json.loads(named_out)
+
+
+# ---------------------------------------------------------------------------
 # `serve`: the precedence rule, without binding a socket.
 # ---------------------------------------------------------------------------
 
@@ -390,3 +562,83 @@ def test_serve_wires_the_tripwire_into_the_unit_before_building_it(monkeypatch: 
     finally:
         for built in units:
             built.stop()  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Startup failures read as refusals, not as crashes (konyklabs/roadmap#74).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("subcommand", ["serve", "info", "openapi", "routes"])
+def test_a_nonexistent_profile_is_a_refusal_that_names_the_real_ones(subcommand: str) -> None:
+    """A mistyped ``--profile`` used to be a raw ``UnitError`` traceback out of
+    the profile loader, while the adjacent ``--vendor`` flag -- the same kind
+    of typo, one letter away -- was already a one-line refusal. The loader's
+    message always named every profile the vendor ships; nothing but the
+    ``except`` clause stood between it and the caller.
+    """
+    with pytest.raises(SystemExit) as raised:
+        run(subcommand, "--vendor", "square", "--profile", "nosuchprofile")
+
+    message = str(raised.value)
+    assert message.startswith("vendorfake: "), message
+    assert "nosuchprofile" in message
+    for shipped in ("full", "oauth-only", "orders-only", "no-chaos", "no-faults", "chaos-demo"):
+        assert shipped in message
+
+
+def test_the_refusal_carries_a_message_rather_than_a_bare_code() -> None:
+    """``SystemExit`` with a string prints it to stderr and exits 1, which is
+    the shape every other refusal in this module already has. Asserted so the
+    two kinds of startup failure cannot drift apart again.
+    """
+    with pytest.raises(SystemExit) as bad_profile:
+        run("info", "--vendor", "square", "--profile", "nosuchprofile")
+    with pytest.raises(SystemExit) as bad_vendor:
+        run("info", "--vendor", "nosuchvendor")
+
+    assert isinstance(bad_profile.value.code, str), repr(bad_profile.value.code)
+    assert isinstance(bad_vendor.value.code, str), repr(bad_vendor.value.code)
+
+
+def test_a_malformed_profile_document_is_a_refusal_too(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Not only a missing profile. Any ``UnitError`` raised while the unit is
+    being built is a startup failure the caller can act on, so all of them
+    leave through the same message rather than the first one leaving through a
+    traceback.
+    """
+    import vendorfake.registry as registry_module
+    from tests.fakes import FakeVendor
+
+    (tmp_path / "broken.json").write_text('{"name": "broken", "capabilities": "not-a-list"}', encoding="utf-8")
+    definition = FakeVendor(name="acme", profile_dir=tmp_path, base_dir=tmp_path)
+    monkeypatch.setattr(registry_module, "resolve_vendor", lambda name: definition)
+
+    with pytest.raises(SystemExit) as raised:
+        run("info", "--vendor", "acme", "--profile", "broken")
+
+    assert str(raised.value).startswith("vendorfake: "), str(raised.value)
+
+
+def test_the_profiles_subcommand_refuses_a_malformed_profile_document_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same widened ``except (ValueError, UnitError)`` in ``_profiles`` as
+    the test above exercises for ``info``, and not the same code path:
+    ``profiles`` takes no ``--profile`` flag, so its ``UnitError`` can only
+    come from ``available_profiles``'s own scan of every document in the
+    vendor's profile directory, not from loading one named document. Reverting
+    the clause in ``_profiles`` back to ``except ValueError`` leaves this test
+    -- and only this one -- red.
+    """
+    import vendorfake.registry as registry_module
+    from tests.fakes import FakeVendor
+
+    (tmp_path / "broken.json").write_text('{"name": "broken", "capabilities": "not-a-list"}', encoding="utf-8")
+    definition = FakeVendor(name="acme", profile_dir=tmp_path, base_dir=tmp_path)
+    monkeypatch.setattr(registry_module, "resolve_vendor", lambda name: definition)
+
+    with pytest.raises(SystemExit) as raised:
+        run("profiles", "--vendor", "acme")
+
+    assert str(raised.value).startswith("vendorfake: "), str(raised.value)

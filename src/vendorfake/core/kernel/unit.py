@@ -1,4 +1,4 @@
-"""The unit: composition root, and the eight-step request pipeline.
+"""The unit: composition root, and the nine-step request pipeline.
 
 FOR: assembling a vendor definition and a resolved profile into the one object
 that answers requests, and running every request through the same ordered
@@ -7,7 +7,9 @@ file rather than of each vendor's handlers.
 
 INVARIANT: **the order below is the specification.** It is ported from
 ``packages/core/src/kernel/unit.ts`` and the steps carry numbered comments so a
-reviewer can diff eight against eight rather than re-deriving them. Each
+reviewer can diff them against the reference rather than re-deriving them --
+the reference's eight, with its step 8 split in two here so that the
+response-phase fault is applied to a replayed answer as well. Each
 boundary is observable, and each is pinned by a test that would pass under a
 plausible wrong order:
 
@@ -37,14 +39,25 @@ plausible wrong order:
    authenticated routes would be a second, divergent copy of that rule.
 7. **idempotency** -- lookup and replay, *after* auth, so a stored response is
    never handed to an unauthenticated caller who guessed a key, and after the
-   fault phases, so an injected 500 does not consume a key.
-8. **handler, idempotency store, finish and decorate** -- the handler runs, a
-   2xx response is stored against the key, and then ``finish()`` stamps
-   ``x-unit-request-id`` and gives the vendor its last chance to decorate.
+   fault phases, so an injected 500 does not consume a key. A hit *binds* the
+   replay rather than returning it, so step 9 still runs.
+8. **handler and idempotency store** -- on a miss only: the handler runs and
+   its clean 2xx response is stored against the key.
+9. **response-phase fault** -- applied to whichever answer step 8 left,
+   handler's or replay's, so a decision drawn at step 3 is paid out on every
+   answer the *vendor* produced, errors included: ``handle``'s error-shaping
+   block applies it to the answer a raise produced. A framework crash is not
+   a vendor answer and is never faulted -- the ``except Exception`` block
+   answers a 500 untouched. The caller's ``when.times`` budget therefore buys
+   only faults that were applied to an answer they received -- with two
+   named exceptions: a payout whose own params are invalid spends the budget
+   and answers the 400 diagnostic naming the rule instead, and a framework
+   crash spends it on the clean 500 above.
 
 The router match happens **before** step 1 and produces both the ``no_route``
-404 and the ``method_not_allowed`` 405; ``finish()`` and ``decorate`` happen
-after step 8 on the success path *and on every error path*. Both live outside
+404 and the ``method_not_allowed`` 405; ``finish()`` stamps
+``x-unit-request-id`` and ``decorate`` gives the vendor its last chance, both
+after step 9 on the success path *and on every error path*. They live outside
 the numbering, where the reference puts them.
 
 ``decorate`` runs on shaped errors too, for any matched non-internal route --
@@ -72,6 +85,15 @@ The forward-declared ``let ctx`` closure
     :attr:`ResolvedConfig.log_level`, which the profile loader resolved from a
     mapping its caller passed -- ``{}`` unless the CLI passed the real one.
 
+DELAYS LEAVE AS DATA. A fault that wants the caller made to wait sets
+``UnitError.delay_ms``; ``_shape`` copies it onto ``UnitResponse.delay_ms`` and
+``_finish`` carries it through. Nothing in this file, or anywhere below the
+seam, sleeps for it. The kernel decides *whether* to delay and the binding
+decides *how*, because only the binding knows the caller's clock and the
+caller's timeout -- and because a ``time.sleep`` here would block a request
+thread, an event loop and a file-drop poller with the same line. See
+``core/chaos/faults.py`` for the reversal that produced this.
+
 THE REQUEST LOCK. ``handle`` is synchronous and takes one re-entrant lock for
 the whole pipeline, unless the matched route declares ``serialized=False``.
 The lock is what makes id minting and journal ordering deterministic, so that
@@ -83,6 +105,7 @@ whether to take it at all.
 
 from __future__ import annotations
 
+import collections
 import threading
 import time
 import uuid
@@ -94,21 +117,28 @@ from urllib.parse import parse_qsl
 
 from vendorfake.core.capability.gates import CoreCapability, assert_capability_declarations
 from vendorfake.core.capability.registry import CapabilityRegistry
-from vendorfake.core.chaos.engine import ChaosEngine, ChaosSubject
-from vendorfake.core.chaos.faults import apply_request_fault
+from vendorfake.core.chaos.engine import ChaosDecision, ChaosEngine, ChaosSubject
+from vendorfake.core.chaos.faults import (
+    RESPONSE_PHASE_FAULTS,
+    apply_request_fault,
+    apply_response_fault,
+)
 from vendorfake.core.chaos.rules import matched_routes
 from vendorfake.core.chaos.selector import FaultSelector
 from vendorfake.core.config.models import ResolvedConfig
 from vendorfake.core.kernel.magic import MagicExtraction, extract_magic
+from vendorfake.core.kernel.nearmiss import NEAR_MISS_HEADER, near_miss_header, near_misses
 from vendorfake.core.kernel.reply import normalize
-from vendorfake.core.kernel.router import Match, MethodNotAllowed, Router
-from vendorfake.core.kernel.shaping import assert_error_table_total
+from vendorfake.core.kernel.router import Match, MethodNotAllowed, Router, is_control_path
+from vendorfake.core.kernel.shaping import assert_error_table_total, header_text
 from vendorfake.core.kernel.types import (
     AuthResult,
     HandlerArgs,
     Logger,
     MutableResponse,
+    NearMiss,
     ReplyInit,
+    RequestRecord,
     Route,
     ShapedError,
     UnitContext,
@@ -132,6 +162,7 @@ __all__ = [
     "REQUEST_ID_HEADER",
     "ControlBinding",
     "DispatcherFactory",
+    "RequestLog",
     "RouteInfo",
     "Unit",
     "make_request",
@@ -301,19 +332,160 @@ class RouteInfo:
         return body
 
 
+class RequestLog:
+    """A bounded ring of :class:`RequestRecord`, newest last.
+
+    FOR: answering "what did my code call, and did anything answer it?". The
+    journal cannot: it records committed *mutations* by design, so a 4xx, a
+    read, and a request that matched no route at all leave no trace in it --
+    which is precisely the set of calls a consumer debugging an integration
+    wants to see.
+
+    BOUNDED, because a fake lives inside a test process and an unbounded log
+    would be a slow leak proportional to suite length. Oldest evicted first: a
+    consumer asking what just happened is nearly always asking about the end of
+    the run, and the alternative -- refusing to record once full -- loses the
+    part they wanted.
+
+    **Control-plane requests are not recorded**, and that is the caller's rule
+    to apply rather than this class's: ``/__unit/*`` is the observer, and a log
+    that recorded the reads of itself would grow by one row for every question
+    asked of it and bury the traffic under the instrumentation.
+
+    Its own lock, like the store's and the clock's. The kernel's request lock
+    is released for a route declaring ``serialized=False``, and two such
+    requests finishing at once must not interleave a deque append.
+    """
+
+    __slots__ = ("_capacity", "_lock", "_records")
+
+    def __init__(self, capacity: int) -> None:
+        if capacity < 0:
+            raise ValueError(f"request log capacity must be zero or more, got {capacity}")
+        self._capacity = capacity
+        # `maxlen` is the eviction, rather than a length check on append: one
+        # place for the bound means it cannot be enforced on one path and
+        # forgotten on another.
+        self._records: collections.deque[RequestRecord] = collections.deque(maxlen=capacity)
+        self._lock = threading.Lock()
+
+    @property
+    def capacity(self) -> int:
+        return self._capacity
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._records)
+
+    def record(self, entry: RequestRecord) -> None:
+        """Append, evicting the oldest when full. A capacity of zero records
+        nothing at all, which is how the log is switched off."""
+        if self._capacity == 0:
+            return
+        with self._lock:
+            self._records.append(entry)
+
+    def clear(self) -> int:
+        """Drop every record, returning how many there were."""
+        with self._lock:
+            count = len(self._records)
+            self._records.clear()
+            return count
+
+    def records(
+        self,
+        *,
+        operation_id: str | None = None,
+        route: str | None = None,
+        unmatched: bool | None = None,
+        limit: int | None = None,
+    ) -> tuple[RequestRecord, ...]:
+        """Matching records, **newest first**.
+
+        Newest first because the question is nearly always "what did my code
+        just do", and a consumer who wanted the other order has a list to
+        reverse. ``limit`` is applied after filtering, so
+        ``requests(operation_id=X, limit=1)`` is the most recent call to X and
+        not "the most recent call, if it happened to be X" -- the second
+        reading would answer ``None`` for a route that had definitely been
+        called, which is worse than useless in an assertion.
+
+        Every filter is a conjunction, and ``None`` means "do not filter":
+        ``unmatched=False`` is therefore "only the matched ones" rather than
+        "no filter", which is the distinction a boolean default of ``False``
+        would have thrown away.
+        """
+        with self._lock:
+            found = list(self._records)
+        found.reverse()
+        selected = [
+            entry
+            for entry in found
+            if (operation_id is None or entry.operation_id == operation_id)
+            and (route is None or entry.route == route)
+            and (unmatched is None or entry.matched is not unmatched)
+        ]
+        return tuple(selected if limit is None else selected[:limit])
+
+
 @dataclass(frozen=True, slots=True)
 class ControlBinding:
     """Unit internals the control plane needs and a route handler must not have.
 
-    Two callables rather than a reference to the unit, so the surface is
-    enumerable: this is the complete list of things ``/__unit/*`` can do that a
-    vendor handler cannot.
+    Two callables and one object rather than a reference to the unit, so the
+    surface is enumerable: this is the complete list of things ``/__unit/*``
+    can do that a vendor handler cannot.
     """
 
     #: Wipe state and re-apply the seed document.
     hydrate: Callable[[], None]
     #: Every registered route, control routes included.
     list_routes: Callable[[], tuple[RouteInfo, ...]]
+    #: The request log, read and cleared by ``/__unit/requests``.
+    #:
+    #: The object rather than two adapter callables: its own methods are
+    #: already the narrow surface, and wrapping them would only add a second
+    #: place for the filter semantics to be stated. It is emphatically NOT on
+    #: :class:`UnitContext`, for the same reason ``hydrate`` is not -- a vendor
+    #: handler that could read the log could branch on what the caller did
+    #: earlier, and a fake whose answers depend on the shape of a test run is
+    #: not reproducible.
+    #:
+    #: Required rather than defaulted to an empty log, which would let a
+    #: mis-wired plane answer ``{"count": 0}`` forever and read as "your code
+    #: called nothing".
+    requests: RequestLog
+
+
+@dataclass(slots=True)
+class _Trace:
+    """What one request picked up on its way through, for the request log.
+
+    Mutable and passed down rather than returned back up, because the two
+    facts it carries are learned on paths that then *raise*: an armed fault
+    usually leaves through ``apply_request_fault``, and a near-miss list is
+    computed where no route exists to return anything. A return value would be
+    lost in exactly the cases worth recording.
+
+    The armed :class:`ChaosDecision` itself rides along for the same reason:
+    a request that leaves the pipeline by raising still owes the caller
+    whatever the decision promised, and ``handle``'s error-shaping block is
+    the only place left that can pay it out.
+    """
+
+    fault: str | None = None
+    rule_id: str | None = None
+    #: The decision drawn at step 3, whole -- ``fault``/``rule_id`` above are
+    #: the two fields the request log wants, kept as they were because other
+    #: code reads them.
+    decision: ChaosDecision | None = None
+    #: Whether the payout has already been *tried* on this request. Set before
+    #: the attempt, not after, because the attempt itself can raise: two of the
+    #: five response-phase faults reject bad params with a ``UnitError``, and
+    #: without this the error path would call them again and raise from inside
+    #: the ``except`` clause, escaping ``handle`` entirely.
+    response_fault_attempted: bool = False
+    near_misses: tuple[NearMiss, ...] = ()
 
 
 class _Context:
@@ -397,6 +569,7 @@ class Unit:
         "_ctx",
         "_lock",
         "_log",
+        "_requests",
         "_rng",
         "_router",
         "_routes",
@@ -439,7 +612,13 @@ class Unit:
         self._store = Store(self._clock)
         self._chaos = ChaosEngine(self._rng, self._clock.iso_ms, config.chaos.rules)
 
-        self._control = ControlBinding(hydrate=self._hydrate, list_routes=self._list_routes)
+        self._requests = RequestLog(config.requests.capacity)
+
+        self._control = ControlBinding(
+            hydrate=self._hydrate,
+            list_routes=self._list_routes,
+            requests=self._requests,
+        )
         control = tuple(control_routes(self._control)) if control_routes is not None else ()
         self._routes: tuple[Route, ...] = tuple(vendor.routes) + control
         # Router.add is where a vendor route claiming the control-plane
@@ -596,6 +775,11 @@ class Unit:
         """The typed binding the control plane is built against."""
         return self._control
 
+    @property
+    def requests(self) -> RequestLog:
+        """Every request this unit has handled, control-plane calls excepted."""
+        return self._requests
+
     # -- lifecycle ----------------------------------------------------------
 
     def start(self) -> None:
@@ -644,11 +828,17 @@ class Unit:
         than spanning the one before it -- and note that the re-insertion above
         journals, which is exactly why the dispatcher ignores mutations to the
         subscription collection.
+
+        The request log is cleared with them, and for the same reason: a reset
+        says "this is the beginning", and a per-test ``reset()`` that left the
+        previous test's calls in the log would make ``assert_called(..., times=1)``
+        pass or fail on test order.
         """
         self._store.reset()
         self._vendor.hydrate(self._ctx, self._seed)
         self._webhooks.load_config_subscribers(self._config.webhooks.subscribers)
         self._webhooks.clear_log()
+        self._requests.clear()
 
     def _list_routes(self) -> tuple[RouteInfo, ...]:
         return tuple(RouteInfo.of(route) for route in self._router.routes())
@@ -661,9 +851,17 @@ class Unit:
         Synchronous by design. Every failure leaves through ``finish()`` with a
         vendor-shaped body and an ``x-unit-error`` header, so no caller ever
         receives a framework's own error document.
+
+        **The kernel never raises for an unmatched request.** It answers the
+        vendor's own 404 with the near-miss diagnosis in a header, and the
+        binding decides whether that is a failure -- see
+        ``config/models.py::UnmatchedPolicy``. Raising here would make a served
+        unit unable to honour the same profile as an in-process one, since
+        there is nothing to raise *into* across a socket.
         """
         started = time.monotonic()
         route: Route | None = None
+        trace = _Trace()
         try:
             outcome = self._router.match(req.method, req.path)
             if isinstance(outcome, MethodNotAllowed):
@@ -673,19 +871,87 @@ class Unit:
                     info={"allowed": list(outcome.allowed)},
                 )
             if not isinstance(outcome, Match):
+                trace.near_misses = self._near_misses(req)
                 shaped = self._vendor.errors.not_found(req, self._ctx)
-                return self._finish(req, self._shape(shaped, UnitErrorKind.NOT_FOUND), None, started)
+                answer = self._shape(shaped, UnitErrorKind.NOT_FOUND)
+                # The header rides on the response the vendor shaped; the BODY
+                # is untouched, because a consumer rehearsing what their code
+                # does with a real 404 must get the real one.
+                answer = UnitResponse(
+                    status=answer.status,
+                    headers={**answer.headers, NEAR_MISS_HEADER: near_miss_header(trace.near_misses)},
+                    body=answer.body,
+                )
+                return self._finish(req, answer, None, started, trace)
 
             route = outcome.route
             args = HandlerArgs(req=req, params=outcome.params, ctx=self._ctx, route=route)
             if route.serialized:
                 with self._lock:
-                    res = self._run_pipeline(req, route, args)
+                    res = self._run_pipeline(req, route, args, trace)
             else:
-                res = self._run_pipeline(req, route, args)
-            return self._finish(req, res, route, started)
+                res = self._run_pipeline(req, route, args, trace)
+            return self._finish(req, res, route, started, trace)
         except UnitError as err:
-            return self._finish(req, self._shape(self._vendor.errors.shape(err, self._ctx), err.kind), route, started)
+            shaped_error = self._shape(
+                self._vendor.errors.shape(err, self._ctx),
+                err.kind,
+                delay_ms=err.delay_ms,
+                fault=err.fault,
+                rule_id=err.rule_id,
+            )
+            # An error that left the pipeline by *raising* -- a 401, a missing
+            # scope, a missing idempotency key, an idempotency conflict -- is
+            # still the answer this caller gets, so a response-phase fault
+            # armed at step 3 applies to it exactly as step 9 applies it to a
+            # handler's answer or to a replay. Without this the fault is drawn
+            # and counted and nothing is delivered: the rule's ``when.times``
+            # budget is spent on a clean 401 and the request log claims a
+            # fault the caller never saw.
+            #
+            # Nothing is applied twice. A request-phase fault raises its own
+            # ``UnitError`` at step 4 or 6 and is not in
+            # ``RESPONSE_PHASE_FAULTS``, so this branch skips it and its
+            # ``fault``/``rule_id`` reach the response through ``_shape``
+            # above. Response-phase faults need the flag instead, because two
+            # of the five *do* raise: ``body_mutation`` with no ``params.ops``
+            # and ``malformed_body`` with an unknown ``params.mode`` are
+            # rejected here rather than at rule-add time, where no route table
+            # exists to check them against. Step 9 sets the flag before it
+            # tries, so a payout that raised is not attempted a second time --
+            # which would raise again from inside this ``except`` clause and
+            # take the exception straight out of ``handle``, costing the caller
+            # the 400 that names the bad rule.
+            #
+            # The FIRST attempt can raise here too, and the flag cannot help
+            # with that one: an error raised before step 9 arrives with the
+            # payout still owed, and the shaped error is a different document
+            # from the handler's -- a ``body_mutation`` pointer that exists in
+            # a payment does not exist in a 403 envelope. So the attempt gets
+            # its own ``try``, and a payout that cannot be applied answers the
+            # same diagnostic it would have answered from step 9, whichever
+            # path reached it. Nothing leaves ``handle`` by raising except the
+            # framework path below.
+            # provenance: judgment -- a vendor's edge does not know which of
+            # its own answers is an error, and this project decided the
+            # decision is honoured on whatever the caller is handed.
+            if (
+                trace.decision is not None
+                and not trace.response_fault_attempted
+                and trace.decision.fault in RESPONSE_PHASE_FAULTS
+            ):
+                trace.response_fault_attempted = True
+                try:
+                    shaped_error = apply_response_fault(trace.decision, shaped_error, log=self._log)
+                except UnitError as fault_err:
+                    shaped_error = self._shape(
+                        self._vendor.errors.shape(fault_err, self._ctx),
+                        fault_err.kind,
+                        delay_ms=fault_err.delay_ms,
+                        fault=fault_err.fault,
+                        rule_id=fault_err.rule_id,
+                    )
+            return self._finish(req, shaped_error, route, started, trace)
         except Exception as exc:
             # Not a UnitError, so nothing in the core meant this: it is a defect
             # in a handler or in this file. It is logged as one, then answered
@@ -694,11 +960,26 @@ class Unit:
             self._log.error("unhandled error", {"path": req.path, "error": _describe(exc)})
             internal = UnitError(UnitErrorKind.INTERNAL, detail=_describe(exc))
             shaped = self._vendor.errors.shape(internal, self._ctx)
-            return self._finish(req, self._shape(shaped, internal.kind), route, started)
+            return self._finish(req, self._shape(shaped, internal.kind), route, started, trace)
+
+    def _near_misses(self, req: UnitRequest) -> tuple[NearMiss, ...]:
+        """The closest routes among the ones this unit is *currently* serving.
+
+        Internal routes are excluded because the control plane is the observer
+        and is not what a consumer mistyped; a route behind a disabled
+        capability is excluded because it is not part of the surface right now,
+        and naming it would send a reader looking for a typo instead of for the
+        profile that switched it off.
+        """
+        return near_misses(
+            req.method,
+            req.path,
+            (route for route in self._routes if not route.internal and self._capabilities.is_enabled(route.capability)),
+        )
 
     # -- the pipeline -------------------------------------------------------
 
-    def _run_pipeline(self, req: UnitRequest, route: Route, args: HandlerArgs) -> UnitResponse:
+    def _run_pipeline(self, req: UnitRequest, route: Route, args: HandlerArgs, trace: _Trace) -> UnitResponse:
         # 1. internal short-circuit -----------------------------------------
         if route.internal:
             return normalize(route.handler(args))
@@ -720,6 +1001,13 @@ class Unit:
             lambda: self._in_band(req, args),
         )
         decision = selection.decision
+        if decision is not None:
+            # Recorded before the fault is applied, not after: applying it can
+            # raise, and a rate limit that left no trace in the request log
+            # would be exactly the 429 a consumer cannot explain.
+            trace.fault = decision.fault
+            trace.rule_id = decision.rule_id
+            trace.decision = decision
 
         # 4. pre-auth faults -------------------------------------------------
         if decision is not None:
@@ -746,6 +1034,7 @@ class Unit:
         idem = route.idempotency
         idem_key: str | None = None
         request_digest = ""
+        replayed: UnitResponse | None = None
         if idem is not None:
             body = args.body()
             raw = dot_get(body, idem.key_path)
@@ -754,7 +1043,12 @@ class Unit:
                 request_digest = digest_of(dict(body))
                 stored = self._store.get_idempotent(idem.scope, idem_key)
                 if stored is not None:
-                    return self._replay(idem.scope, idem.key_path, idem.on_mismatch, idem_key, request_digest, stored)
+                    # Bound, not returned: a response-phase fault armed at step
+                    # 3 still owes this caller its answer, and step 9 applies it
+                    # to the replay exactly as it would to a fresh one.
+                    replayed = self._replay(
+                        idem.scope, idem.key_path, idem.on_mismatch, idem_key, request_digest, stored
+                    )
             elif idem.required:
                 raise UnitError(
                     UnitErrorKind.MISSING_FIELD,
@@ -763,19 +1057,101 @@ class Unit:
                 )
 
         # 8. handler, then store the response against the idempotency key ----
-        res = normalize(route.handler(args))
-        if idem is not None and idem_key is not None and 200 <= res.status < 300:
-            self._store.put_idempotent(
-                IdempotencyRecord(
-                    scope=idem.scope,
-                    key=idem_key,
-                    request_digest=request_digest,
-                    status=res.status,
-                    headers=dict(res.headers),
-                    body_b64=b64url_encode(res.body),
-                    stored_at=self._clock.iso_ms(),
+        # Skipped whole on a replay: the vendor committed once, and step 7
+        # already has the answer that commit produced.
+        if replayed is not None:
+            res = replayed
+        else:
+            res = normalize(route.handler(args))
+            # WHAT GETS RECORDED IS THE HANDLER'S CLEAN ANSWER, RECORDED BEFORE
+            # ANY RESPONSE-PHASE FAULT TOUCHES IT.
+            #
+            # The handler has already run: it created the entity and journalled
+            # it. That commit is exactly what an idempotency key exists to make
+            # safe to retry, and this store has no transaction to undo it with
+            # (``core/state/store.py`` has no rollback and no savepoint). So the
+            # record is written here, between the handler and the fault, and the
+            # retry replays the answer the vendor really committed.
+            #
+            # Two earlier shapes were both wrong, and the reasons are worth
+            # keeping. First this stored whatever the handler-plus-fault pipeline
+            # produced, on the theory that "a replay gets exactly what the caller
+            # got the first time, faulted or not" -- but ``IdempotencyRecord``
+            # has nowhere to put a ``UnitResponse.transport`` directive, so a
+            # stored ``connection_reset`` or ``slow_body`` replayed as a clean
+            # 200 that still carried the ``vendorfake-fault`` header the real
+            # fault stamped, silently switching off any validator that trusts
+            # :func:`is_transport_fault` (``core/chaos/faults.py``) on every
+            # later replay of that key. Then it skipped the record entirely for a
+            # faulted response, by analogy with a request-scope fault. That
+            # analogy is false: a request-scope fault raises at step 4 or 6,
+            # *before* ``route.handler(args)`` ever runs, so nothing was
+            # committed and re-running is correct -- while a response-phase fault
+            # runs at step 9, *after* the commit, so skipping the record
+            # discards the only trace of it and a retry with the same key
+            # charges the caller twice. That is the single guarantee an
+            # idempotency key carries, modelled backwards, on precisely the
+            # fault (``connection_reset``) whose whole purpose is to rehearse a
+            # retry across a dropped connection.
+            #
+            # Recording the pre-fault ``res`` gets both: no ``TransportDirective``
+            # and no ``vendorfake-fault``/``vendorfake-rule`` header can reach
+            # ``IdempotencyRecord``, because the fault has not been applied yet,
+            # and the retry answers with the payment the handler really made.
+            # provenance: judgment -- no vendor documents what its idempotency
+            # store does when the response never reaches the caller; committing
+            # first and replaying the commit is what a real store's ordering
+            # gives you.
+            #
+            # A third shape was wrong too, and it is why this block sits under
+            # an ``else`` and the fault moved to step 9. Step 7 used to
+            # *return* the replay, which skipped the fault the decision at
+            # step 3 had already armed and already counted: the rule's
+            # ``when.times`` budget was spent on a request the caller saw no
+            # fault on, and the request log claimed a ``connection_reset`` for
+            # a clean 200. A vendor's network does not know a request is a
+            # retry, so a response-phase fault applies to a replayed answer
+            # exactly as it does to a fresh one -- the "second dropped
+            # connection" a robust client has to survive. ``state.fires`` then
+            # counts only faults the caller observed, and the log's ``fault``
+            # matches the response. The stored record is still untouched by
+            # any fault, because a replay does not store.
+            # provenance: judgment -- no vendor documents whether its edge
+            # would corrupt a replayed answer; honouring the armed decision on
+            # whatever the pipeline produces is the only rule that keeps the
+            # budget and the log honest.
+            if idem is not None and idem_key is not None and 200 <= res.status < 300:
+                self._store.put_idempotent(
+                    IdempotencyRecord(
+                        scope=idem.scope,
+                        key=idem_key,
+                        request_digest=request_digest,
+                        status=res.status,
+                        headers=dict(res.headers),
+                        body_b64=b64url_encode(res.body),
+                        stored_at=self._clock.iso_ms(),
+                    )
                 )
-            )
+        # 9. response-phase fault, on whichever answer step 8 produced -------
+        # A response-scope fault ("the vendor returned garbage") corrupts a
+        # REAL answer, so it can only run after the handler produced one --
+        # unlike every fault above, which fires instead of the handler ever
+        # running. It never touches ``ctx``, so it cannot journal anything on
+        # its own; DELAYS LEAVE AS DATA applies here too, via
+        # ``UnitResponse.transport``.
+        #
+        # "Whichever answer" is the point: a replay from step 7 is faulted the
+        # same as a fresh one, so the decision drawn at step 3 is paid out on
+        # every answer the vendor produced -- including on the paths that never
+        # reach here, where ``handle``'s ``except UnitError`` block applies it
+        # to the shaped error instead. A framework crash is not a vendor
+        # answer: the ``except Exception`` block's 500 is never faulted. The
+        # budget, drawn at step 3, is spent either way -- including when the
+        # payout itself fails on bad params and the caller gets the 400
+        # diagnostic rather than the fault. See the step 8 comment for why.
+        if decision is not None and decision.fault in RESPONSE_PHASE_FAULTS:
+            trace.response_fault_attempted = True
+            res = apply_response_fault(decision, res, log=self._log)
         return res
 
     # -- pipeline helpers ---------------------------------------------------
@@ -835,21 +1211,55 @@ class Unit:
 
     # -- response shaping ---------------------------------------------------
 
-    def _shape(self, shaped: ShapedError, kind: UnitErrorKind) -> UnitResponse:
+    def _shape(
+        self,
+        shaped: ShapedError,
+        kind: UnitErrorKind,
+        *,
+        delay_ms: int = 0,
+        fault: str | None = None,
+        rule_id: str | None = None,
+    ) -> UnitResponse:
         """The vendor's error body, plus the machine-readable ``x-unit-error``.
 
         The header is what lets a conformance check assert "this failed, and it
         failed for *this* reason" across vendors whose bodies share no field.
+
+        ``delay_ms`` comes from :attr:`UnitError.delay_ms` and is the only way a
+        refusal can ask its binding to hold the answer back -- today, the
+        ``timeout`` fault on a real clock. It is a keyword with a default so
+        every other call site here reads exactly as it did.
+
+        ``fault``/``rule_id`` come from the same error, when a chaos decision
+        raised it, and become the ``vendorfake-fault``/``vendorfake-rule``
+        headers -- the same two stamped on a successful response a
+        response-scope fault corrupted (``core/chaos/faults.py``), so a test
+        can tell any faulted answer from a real one without parsing the body,
+        whichever of the two mechanisms produced it.
         """
         headers = dict(shaped.headers)
         headers["x-unit-error"] = kind.value
-        return normalize(ReplyInit(status=shaped.status, json=shaped.body, headers=headers))
+        if fault is not None and rule_id is not None:
+            headers["vendorfake-fault"] = fault
+            headers["vendorfake-rule"] = header_text(rule_id)
+        answered = normalize(ReplyInit(status=shaped.status, json=shaped.body, headers=headers))
+        if delay_ms <= 0:
+            return answered
+        return UnitResponse(status=answered.status, headers=answered.headers, body=answered.body, delay_ms=delay_ms)
 
-    def _finish(self, req: UnitRequest, res: UnitResponse, route: Route | None, started: float) -> UnitResponse:
+    def _finish(
+        self,
+        req: UnitRequest,
+        res: UnitResponse,
+        route: Route | None,
+        started: float,
+        trace: _Trace,
+    ) -> UnitResponse:
         mutable = MutableResponse(status=res.status, headers=dict(res.headers), body=res.body)
         mutable.headers[REQUEST_ID_HEADER] = req.id
         if route is not None and not route.internal:
             self._vendor.decorate(mutable, self._ctx, req)
+        elapsed_ms = (time.monotonic() - started) * 1000
         self._log.debug(
             "request",
             {
@@ -857,10 +1267,51 @@ class Unit:
                 "path": req.path,
                 "status": mutable.status,
                 "route": route.key if route is not None else None,
-                "ms": round((time.monotonic() - started) * 1000, 3),
+                "ms": round(elapsed_ms, 3),
             },
         )
-        return UnitResponse(status=mutable.status, headers=mutable.headers, body=mutable.body)
+        # Recorded here, on the one path every answer leaves through -- the
+        # success path, every shaped error and the catch-all 500 alike. A
+        # recording step in `handle` would have to be repeated four times and
+        # would be forgotten on the fifth.
+        #
+        # Excluded by path, not only by matched route: an unmatched control-
+        # plane request (a mistyped control path, a wrong verb on a real
+        # control route, or the bare `/__unit` with no trailing slash) is
+        # still the observer's own traffic, and must stay absent from the log
+        # by construction rather than merely when it happens to resolve to an
+        # internal route. `is_control_path` is the one place that namespace is
+        # defined, shared with `Router.add`'s reservation check.
+        if (route is None or not route.internal) and not is_control_path(req.path):
+            self._requests.record(
+                RequestRecord(
+                    id=req.id,
+                    received_at=req.received_at,
+                    method=req.method,
+                    path=req.path,
+                    route=None if route is None else route.key,
+                    operation_id=None if route is None else route.operation_id,
+                    status=mutable.status,
+                    matched=route is not None,
+                    fault=trace.fault,
+                    rule_id=trace.rule_id,
+                    duration_ms=round(elapsed_ms),
+                    near_misses=trace.near_misses,
+                )
+            )
+        # ``delay_ms`` and ``transport`` are carried across rather than offered
+        # to ``decorate``. ``MutableResponse`` is the vendor's last chance to
+        # shape what goes on the *wire*; how long a binding holds the answer
+        # back, and what it does to the connection while doing it, are not
+        # vendor opinions, and putting either in reach of one would make the
+        # same fault behave differently per vendor for no stated reason.
+        return UnitResponse(
+            status=mutable.status,
+            headers=mutable.headers,
+            body=mutable.body,
+            delay_ms=res.delay_ms,
+            transport=res.transport,
+        )
 
 
 def _describe(exc: BaseException) -> str:

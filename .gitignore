@@ -15,6 +15,9 @@ venv/
 .coverage
 htmlcov/
 
+# mkdocs build output (`uv run mkdocs build`); the source lives in docs/
+site/
+
 # Local working notes — never committed (see workspace CLAUDE.md)
 .local/
 

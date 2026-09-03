@@ -52,7 +52,7 @@ from vendorfake.clover.surface.oauth import FAILED_CODE_MESSAGE, oauth_routes
 from vendorfake.clover.surface.orders import order_routes
 from vendorfake.clover.surface.payments import payment_routes
 from vendorfake.clover.surface.webhooks import webhook_routes
-from vendorfake.clover.vendor import CLOVER_MAGIC, CloverVendor, create_clover_vendor
+from vendorfake.clover.vendor import CLOVER_MAGIC, CLOVER_ROLES, CloverVendor, create_clover_vendor
 from vendorfake.core.kernel.types import VendorDefinition
 
 __all__ = [
@@ -64,6 +64,7 @@ __all__ = [
     "CLOVER_NOT_MODELED",
     "CLOVER_NOT_SUPPORTED",
     "CLOVER_RETRY_SCHEDULE_MS",
+    "CLOVER_ROLES",
     "COL",
     "DEFAULT_PERMISSIONS",
     "FAILED_CODE_MESSAGE",
