@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+* **testing:** the vendor name narrows the seed. `unit()` and `served()` are
+  overloaded on the vendor literal, so `unit("clover")` yields a
+  `StartedUnit[CloverSeed]` rather than a union a consumer had to unpick with
+  an `isinstance` per vendor. `Driver`, `StartedUnit` and `ServedUnit` are
+  generic in their seed; written bare they are `[Any]`, which is what a
+  v0.1.0 fixture annotation already meant.
+* **testing:** `seed.credentials` reports the application credential under
+  neutral names (`app_id`, `app_secret`) plus the token lifecycle the vendor
+  runs (`grant`: `refresh_token` for Square and Clover, `client_credentials`
+  for Toast), so one parametrized test can authenticate against all three. No
+  existing seed field was renamed or removed.
+* **testing:** `vendorfake.testing.Seed` is the structural type all three
+  seeds satisfy — `credentials`, `auth`, `read_only_auth`, `event_types` —
+  and the seed type a vendor that is a plain `str` yields.
+
+### Bug Fixes
+
+* **testing:** `Driver.seed` is no longer `Optional`. It was `None` for any
+  vendor with no seed, which every consumer paid for with a guard on a value
+  that is present for all three shipped vendors. `unit()` and `served()` now
+  raise `LookupError` naming the vendor and profile instead. **Breaking for a
+  consumer relying on `seed is None`**: a vendor from the entry-point group
+  that publishes no seed must be driven with `create_unit()` rather than
+  `unit()`.
+
 ## 0.1.0 (2026-09-01)
 
 

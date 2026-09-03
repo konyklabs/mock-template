@@ -99,7 +99,15 @@ known-first-party = ["vendorfake"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["src", "tools"]
+# `tests/typing` is evidence, not tests: `assert_type` modules that only a type
+# checker executes, so they belong in the strict run rather than under the
+# `tests.*` override below. It is deliberately not a package (no __init__.py),
+# which keeps its modules out of `tests.*` and out of pytest collection.
+# `tests/typing/negative` is the half that must FAIL, so the ordinary run must
+# not see it; tests/unit/testing/test_seed_typing.py runs mypy on it and
+# asserts the error.
+files = ["src", "tools", "tests/typing"]
+exclude = ["^tests/typing/negative/"]
 warn_unreachable = true
 enable_error_code = ["redundant-expr", "possibly-undefined", "truthy-bool"]
 
