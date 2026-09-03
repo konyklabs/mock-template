@@ -54,7 +54,10 @@ top.
 - `driver.advance_clock(ms)` — move a [virtual clock](clock.md) forward.
 - `driver.reset()` — return to the seed scenario. This also drops every
   subscriber a test registered during the run — `subscribe()` again after a
-  reset, not before it.
+  reset, not before it. A unit shared across tests needs this per test
+  when the vendor keeps single-use state (Clover's refresh rotation) —
+  the fixture is in
+  [Chaos rules and faults → Sharing one unit across tests](chaos-rules-and-faults.md#sharing-one-unit-across-tests).
 
 ## Why a base class, not one class per binding
 

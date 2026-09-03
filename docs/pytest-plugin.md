@@ -44,7 +44,10 @@ def test_a_token_expires_on_schedule(vendorfake_unit): ...
 
 `vendorfake_unit` is function-scoped and yields the
 [`StartedUnit`](concepts/driver.md) the marker describes — built fresh per
-test, the same grain as calling `unit()` directly. Requesting it without the
+test, the same grain as calling `unit()` directly, which is what makes
+per-test `reset()` unnecessary here (a shared, session-scoped unit needs
+it — see
+[Sharing one unit across tests](concepts/chaos-rules-and-faults.md#sharing-one-unit-across-tests)). Requesting it without the
 marker is a test author's mistake, not a missing precondition, so it fails
 loudly and names the fix rather than skipping:
 
