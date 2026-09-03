@@ -30,7 +30,7 @@ function of the code alone, but ``cli.md`` is ``argparse``'s own ``--help``
 text, and ``argparse`` lays that text out differently across CPython minor
 versions (3.11 and 3.13 disagree on the column a subcommand's help starts
 in, so the same parser yields two byte-different pages). The page is
-therefore generated under the interpreter ``.python-version`` pins and left
+therefore generated under the interpreter ``CLI_PAGE_INTERPRETER`` names and left
 untouched -- with a note on stderr -- under any other, so a self-test on the
 ``requires-python`` floor still checks the seven code-derived pages without
 failing on a layout difference no code change caused. The wrap width is
@@ -296,11 +296,16 @@ def _cli_page() -> None:
     )
 
 
+# The one interpreter whose ``argparse`` layout ``cli.md`` records. A constant
+# here rather than a root ``.python-version`` file on purpose: ``uv run``
+# honours that file ahead of the environment it finds, so it would silently
+# re-resolve CI's ``requires-python`` floor row onto this version and the floor
+# would stop being tested. This constant reaches nothing but this generator.
+CLI_PAGE_INTERPRETER = "3.13"
+
+
 def _pinned_version() -> str:
-    """The ``major.minor`` that ``.python-version`` pins -- the one interpreter
-    whose ``argparse`` layout ``cli.md`` records."""
-    text = (REPO_ROOT / ".python-version").read_text(encoding="utf-8").strip()
-    return ".".join(text.split(".")[:2])
+    return CLI_PAGE_INTERPRETER
 
 
 def _is_pinned_interpreter() -> bool:
@@ -333,7 +338,7 @@ def main() -> int:
         print(
             f"{GENERATOR}: cli.md left as committed -- argparse help layout differs across "
             f"interpreters; that page is generated under Python {_pinned_version()} "
-            f"(.python-version), not {sys.version_info[0]}.{sys.version_info[1]}",
+            f"(CLI_PAGE_INTERPRETER), not {sys.version_info[0]}.{sys.version_info[1]}",
             file=sys.stderr,
         )
     return 0
