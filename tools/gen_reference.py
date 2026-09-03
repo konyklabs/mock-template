@@ -25,6 +25,18 @@ if the working tree then differs -- so a route added to a vendor's surface
 without re-running this script is a red self-test, not a page that quietly
 falls behind the code it describes.
 
+INVARIANT: **one interpreter, one width, writes ``cli.md``.** Every other page is a
+function of the code alone, but ``cli.md`` is ``argparse``'s own ``--help``
+text, and ``argparse`` lays that text out differently across CPython minor
+versions (3.11 and 3.13 disagree on the column a subcommand's help starts
+in, so the same parser yields two byte-different pages). The page is
+therefore generated under the interpreter ``.python-version`` pins and left
+untouched -- with a note on stderr -- under any other, so a self-test on the
+``requires-python`` floor still checks the seven code-derived pages without
+failing on a layout difference no code change caused. The wrap width is
+forced to 80 columns for the same reason: ``argparse`` otherwise reads the
+contributor's terminal width, and a 120-column window would rewrap the page.
+
 INVARIANT: **idempotent.** Running this script twice in a row with no code
 change between the two runs produces byte-identical output the second time.
 Every source this module reads is already deterministic (a route table, a
@@ -41,6 +53,7 @@ from the docs nav, still knows not to hand-edit it.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -263,6 +276,11 @@ def _subcommands(parser: argparse.ArgumentParser) -> dict[str, argparse.Argument
 def _cli_page() -> None:
     from vendorfake.cli import _build_parser
 
+    # ``argparse`` wraps help at ``shutil.get_terminal_size()``, which reads
+    # ``$COLUMNS`` first and the controlling terminal second, so the page
+    # would otherwise be a function of the contributor's window width, not of
+    # the code. 80 is the non-TTY fallback CI already gets.
+    os.environ["COLUMNS"] = "80"
     parser = _build_parser()
     sections = [f"## `vendorfake`\n\n```text\n{parser.format_help().rstrip()}\n```"]
 
@@ -276,6 +294,17 @@ def _cli_page() -> None:
         intro="Every subcommand's `--help`.",
         body="\n\n".join(sections),
     )
+
+
+def _pinned_version() -> str:
+    """The ``major.minor`` that ``.python-version`` pins -- the one interpreter
+    whose ``argparse`` layout ``cli.md`` records."""
+    text = (REPO_ROOT / ".python-version").read_text(encoding="utf-8").strip()
+    return ".".join(text.split(".")[:2])
+
+
+def _is_pinned_interpreter() -> bool:
+    return f"{sys.version_info[0]}.{sys.version_info[1]}" == _pinned_version()
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +327,15 @@ def main() -> int:
     _faults_page()
     _env_page()
     _control_plane_page(vendors[0])
-    _cli_page()
+    if _is_pinned_interpreter():
+        _cli_page()
+    else:
+        print(
+            f"{GENERATOR}: cli.md left as committed -- argparse help layout differs across "
+            f"interpreters; that page is generated under Python {_pinned_version()} "
+            f"(.python-version), not {sys.version_info[0]}.{sys.version_info[1]}",
+            file=sys.stderr,
+        )
     return 0
 
 
