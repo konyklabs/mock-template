@@ -356,3 +356,63 @@ def test_starting_twice_does_not_start_a_second_thread(tmp_path: Path) -> None:
 
 def test_stopping_a_binding_that_never_started_is_harmless(tmp_path: Path) -> None:
     _drop(tmp_path).stop()
+
+
+def test_a_delayed_response_is_waited_out_before_the_document_appears(tmp_path: Path) -> None:
+    """The kernel says *whether* to delay; each binding says how.
+
+    Here the caller is a collector polling ``out``, so the delay is the gap
+    before the response document exists -- which is what a partner integration
+    actually measures. Armed through the control plane rather than a profile,
+    because that is how a consumer would arm it.
+    """
+    import time
+
+    drop = _drop(tmp_path)
+    _write(
+        drop,
+        "00",
+        {
+            "method": "POST",
+            "path": "/__unit/chaos/rules",
+            "body": {"id": "slow", "scope": "request", "fault": "timeout", "params": {"delay_ms": 120}},
+        },
+    )
+    drop.poll()
+    assert _read(drop, "00")["status"] == 200
+
+    _write(drop, "01", {"method": "POST", "path": "/echo", "body": {}})
+    begun = time.monotonic()
+    drop.poll()
+    elapsed_ms = (time.monotonic() - begun) * 1000
+
+    assert _read(drop, "01")["status"] == 504
+    assert elapsed_ms >= 120, f"answered after {elapsed_ms:.1f}ms, short of the 120ms the fault declared"
+
+
+def test_a_stopped_binding_does_not_sit_out_a_delay(tmp_path: Path) -> None:
+    """The wait is on the stop event, not ``time.sleep``. ``stop()`` joins with
+    a five-second bound, so a longer delay taken as a bare sleep would make a
+    shutdown look like a hang."""
+    import time
+
+    drop = _drop(tmp_path)
+    _write(
+        drop,
+        "00",
+        {
+            "method": "POST",
+            "path": "/__unit/chaos/rules",
+            "body": {"id": "slow", "scope": "request", "fault": "timeout", "params": {"delay_ms": 30000}},
+        },
+    )
+    drop.poll()
+    drop.stop()  # sets the event; nothing was started, which is the cheap case
+
+    _write(drop, "01", {"method": "POST", "path": "/echo", "body": {}})
+    begun = time.monotonic()
+    drop.poll()
+    elapsed_s = time.monotonic() - begun
+
+    assert _read(drop, "01")["status"] == 504
+    assert elapsed_s < 1.0, f"waited {elapsed_s:.2f}s of a 30s delay after the binding was stopped"

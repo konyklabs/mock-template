@@ -180,6 +180,19 @@ class FileDrop:
             request_id=str(document["id"]) if isinstance(document.get("id"), str) else None,
         )
         response = self._unit.handle(request)
+        if response.delay_ms > 0:
+            # The kernel decides *whether* to delay; each binding decides how,
+            # in the terms of the caller it is holding. Here the caller is a
+            # collector polling the `out` directory, so the delay is the gap
+            # before the response document appears -- which is exactly what a
+            # partner integration measures.
+            #
+            # Waited on the stop event rather than with `time.sleep`, so the
+            # wait is interruptible: `stop()` joins with a five-second bound,
+            # and a bare sleep for a longer delay would make a shutdown look
+            # like a hang. Nothing here fires the event, so an uninterrupted
+            # wait lasts exactly `delay_ms`.
+            self._stop.wait(response.delay_ms / 1000.0)
         return self._answer(
             path,
             name,

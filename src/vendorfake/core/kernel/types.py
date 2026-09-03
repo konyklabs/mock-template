@@ -163,7 +163,7 @@ class UnitError(Exception):
     replaces the TypeScript compiler's checking of a literal union.
     """
 
-    __slots__ = ("detail", "field", "info", "kind")
+    __slots__ = ("delay_ms", "detail", "field", "info", "kind")
 
     def __init__(
         self,
@@ -172,6 +172,7 @@ class UnitError(Exception):
         detail: str | None = None,
         field: str | None = None,
         info: Mapping[str, Any] | None = None,
+        delay_ms: int = 0,
     ) -> None:
         resolved = UnitErrorKind(kind)
         super().__init__(detail if detail is not None else resolved.value)
@@ -181,6 +182,18 @@ class UnitError(Exception):
         self.field: str | None = field
         #: Machine-readable context surfaced under ``x-unit-error`` / the sidecar.
         self.info: Mapping[str, Any] | None = info
+        #: How long the caller should be made to wait before this refusal
+        #: reaches them, carried through to :attr:`UnitResponse.delay_ms`.
+        #:
+        #: A field on the error rather than a key in :attr:`info`, for the same
+        #: reason ``describing`` is an argument on :meth:`ErrorShaper.shape`:
+        #: ``info`` is published verbatim in the ``unit_error`` sidecar, so an
+        #: instruction to a binding routed through it would reach the wire and
+        #: become part of the vendor's response body. The ``timeout`` fault
+        #: separately puts its ``delay_ms`` in ``info`` because a consumer
+        #: reading that body is *documented* to see it; this is the copy the
+        #: binding acts on.
+        self.delay_ms: int = delay_ms
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,6 +259,29 @@ class UnitResponse:
     status: int
     headers: Mapping[str, str]
     body: bytes
+    #: How long this answer should be withheld from the caller, in milliseconds.
+    #:
+    #: **The kernel decides whether to delay; the binding decides how**, because
+    #: only the binding knows the caller's clock and the caller's timeout. An
+    #: in-process ``httpx`` transport can turn a delay longer than the client's
+    #: read timeout into an immediate ``httpx.ReadTimeout`` and never wait at
+    #: all; the ASGI application must ``await asyncio.sleep`` so it does not
+    #: block the event loop; a file-drop binding waits on its stop event so a
+    #: shutdown does not have to outlast the delay. Encoding "sleep here, on
+    #: this thread" in the kernel forces all three to be wrong in the same way.
+    #:
+    #: Earlier this did not exist and the fault engine called ``time.sleep``
+    #: itself. That produced no client-side timeout in process at all -- the
+    #: call simply took longer -- so a consumer could not exercise their retry
+    #: path without a real socket, which is the case the ``timeout`` fault is
+    #: for. See ``vendorfake.core.chaos.faults``.
+    #:
+    #: Additive with a default of 0, so every existing construction site and
+    #: every binding that ignores it keeps working unchanged.
+    #:
+    #: provenance: transport. No vendor documents it; it is how this
+    #: distribution's bindings agree about a delay the kernel asked for.
+    delay_ms: int = 0
 
 
 @dataclass(slots=True)

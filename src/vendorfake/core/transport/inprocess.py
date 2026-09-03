@@ -13,6 +13,16 @@ that re-serialised a parsed body would make the thing under test invisible: a
 webhook signature covers received bytes, and a byte-for-byte comparison
 between two bindings is only meaningful if neither of them touched the bytes.
 
+THAT IS ALSO WHY IT DOES NOT WAIT. A ``timeout`` chaos fault sets
+``UnitResponse.delay_ms``, and every binding that holds a *caller* -- the
+``httpx`` transport, the ASGI application, the file drop -- carries the delay
+out on that caller's clock. This one holds no caller: it is a function call, so
+there is nobody to make wait and nothing to time out. The delay is on
+``.raw.delay_ms`` for a test that wants to assert the fault asked for one, and
+elapsed wall time here stays a measurement of the unit rather than of a sleep
+the binding chose to take. A suite driving this client sees the fault's status
+and body exactly as a socket client does; what it does not see is the pause.
+
 ``json()`` raises on a body that is not JSON rather than returning ``None``.
 The reference's in-process client swallows the parse error and hands back the
 raw text in the same field, so a test asserting ``body["id"]`` against an HTML

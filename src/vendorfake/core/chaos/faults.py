@@ -16,34 +16,59 @@ decides which call does something. Both calls are unconditional on the
 pipeline's side, which is what stops "we only ran the post-auth phase for
 authenticated routes" from becoming a second, divergent rule.
 
-THE ``timeout`` FAULT AND THE CLOCK -- a reversal, recorded because the
-reasoning is not obvious.
+THE ``timeout`` FAULT AND THE CLOCK -- two reversals, recorded because neither
+piece of reasoning is obvious.
 
-An earlier design routed ``timeout`` through :class:`Clock` unconditionally, on
-the grounds that a fake should never really sleep. That is a deadlock. The
-pipeline holds one re-entrant lock for the duration of a serialized request; in
-virtual-clock mode the only thing that can fire a virtual timer is
-``POST /__unit/clock/advance``, which is itself a request. A request parked on
-a virtual timer would hold the unit while the one call that could release it
-waited for the same lock -- on the very profile the chaos demonstration runs
-on.
+FIRST REVERSAL: it does not park on a virtual timer. An earlier design routed
+``timeout`` through :class:`Clock` unconditionally, on the grounds that a fake
+should never really sleep. That is a deadlock. The pipeline holds one
+re-entrant lock for the duration of a serialized request; in virtual-clock mode
+the only thing that can fire a virtual timer is ``POST /__unit/clock/advance``,
+which is itself a request. A request parked on a virtual timer would hold the
+unit while the one call that could release it waited for the same lock -- on
+the very profile the chaos demonstration runs on.
 
 So the fault splits by clock mode, and neither half ever waits for another
 request:
 
 real mode
-    A real :func:`time.sleep`, exactly as the reference does it
-    (``await sleep(delayMs)``). The reference's own assertion --
-    ``Date.now() - started >= 20`` for ``delay_ms: 25`` -- runs on a profile
-    whose clock mode is ``real``, so this is the branch that assertion was
-    written against.
+    The delay is *reported*, on :attr:`UnitError.delay_ms`, and the binding
+    carries it out. See the second reversal below.
 
 virtual mode
     :meth:`Clock.advance` on the calling thread, which returns as soon as the
     timers that came due have fired. Time moves by ``delay_ms`` and the request
-    is answered immediately. An elapsed-wall-time assertion is meaningless on
-    this branch and is not made; what a virtual-mode test asserts instead is
-    that the response is a ``timeout`` and that ``now()`` moved.
+    is answered immediately, with ``delay_ms=0`` on the response because the
+    waiting has already happened -- in scenario time, which is the only clock a
+    virtual-mode test is measuring. An elapsed-wall-time assertion is
+    meaningless on this branch and is not made; what a virtual-mode test
+    asserts instead is that the response is a ``timeout`` and that ``now()``
+    moved.
+
+SECOND REVERSAL: on a real clock this module no longer sleeps. It used to call
+:func:`time.sleep` here, exactly as the reference does (``await
+sleep(delayMs)``), and the reference's own assertion -- ``Date.now() - started
+>= 20`` for ``delay_ms: 25`` -- was written against that branch. Two things
+were wrong with it.
+
+*It produced no timeout.* In process there is no socket, so a consumer's
+``httpx.Client(timeout=...)`` was not consulted by anything: the ``timeout``
+fault made the call slow and then answered 504, and the one thing a consumer
+wants to rehearse -- their client raising :class:`httpx.ReadTimeout` and their
+retry path running -- was unreachable without starting a real server.
+
+*It made the kernel choose a thread to block.* The ASGI binding must not block
+the event loop, the async in-process transport must yield to it, and a
+file-drop binding wants an interruptible wait so shutdown does not have to
+outlast the delay. One ``time.sleep`` in here forces every one of them to be
+wrong in the same way.
+
+So the kernel decides *whether* to delay and the binding decides *how*: the
+delay travels out on :attr:`UnitError.delay_ms`, the pipeline copies it onto
+:attr:`UnitResponse.delay_ms`, and each binding honours it in the terms of the
+caller it is holding. The in-process transport turns a delay longer than the
+client's read timeout into an immediate ``ReadTimeout``, which is why a
+consumer's retry test now runs in a millisecond instead of five seconds.
 
 PARAMETERS ARE COERCED, NEVER INDEXED. They arrive as strings on the in-band
 path (``chaos:timeout:delay_ms=250`` is split textually) and as arbitrary JSON
@@ -56,7 +81,6 @@ prose and the implementation cannot drift apart unnoticed.
 
 from __future__ import annotations
 
-import time
 from collections.abc import Mapping
 from typing import Literal
 
@@ -107,14 +131,25 @@ live with the dispatcher; their keys are declared here so the catalogue has one
 owner."""
 
 
-def _stall(clock: Clock, delay_ms: float) -> None:
-    """Wait ``delay_ms``, by the only means that cannot wedge the pipeline."""
+def _delay_owed(clock: Clock, delay_ms: float) -> int:
+    """Account for ``delay_ms`` without ever blocking on another request.
+
+    Returns what the binding still owes the caller in wall-clock milliseconds:
+    zero on a virtual clock, where the waiting has already happened by moving
+    scenario time; ``delay_ms`` on a real one, where only the binding knows
+    whose clock to spend it on. Nothing here sleeps -- see the module
+    docstring's second reversal.
+
+    Rounded to a whole millisecond because :attr:`UnitResponse.delay_ms` is an
+    ``int``, and rounded rather than truncated so a sub-millisecond delay does
+    not silently become no delay at all.
+    """
     if delay_ms <= 0:
-        return
+        return 0
     if clock.mode == "virtual":
         clock.advance(delay_ms)
-        return
-    time.sleep(delay_ms / 1000.0)
+        return 0
+    return max(0, round(delay_ms))
 
 
 def apply_request_fault(
@@ -166,12 +201,18 @@ def apply_request_fault(
         )
     if decision.fault == "timeout":
         delay_ms = as_float(params.get("delay_ms"), DEFAULT_TIMEOUT_DELAY_MS)
-        _stall(clock, delay_ms)
+        owed = _delay_owed(clock, delay_ms)
         shown = js_number(delay_ms)
         raise UnitError(
             UnitErrorKind.TIMEOUT,
             detail=f"Injected timeout after {shown}ms.",
+            # ``info`` is the consumer-visible copy, published in the sidecar
+            # and unchanged by this reversal: it still reports the delay the
+            # rule asked for, on either clock. ``delay_ms=`` is the instruction
+            # to the binding, and is zero in virtual mode because scenario time
+            # has already moved.
             info={"chaos_rule": rule, "delay_ms": shown},
+            delay_ms=owed,
         )
     if decision.fault == "token_expiry":
         raise UnitError(

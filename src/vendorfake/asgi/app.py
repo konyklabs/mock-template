@@ -41,6 +41,7 @@ on machinery another request has to feed.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -166,6 +167,20 @@ def create_app(
         """The one path from a socket to the unit and back."""
         unit_request = await to_unit_request(request)
         response = await run_in_threadpool(unit.handle, unit_request)
+        if response.delay_ms > 0:
+            # The kernel decided *whether* to delay; this binding decides how,
+            # and for a server holding a real socket that means awaiting rather
+            # than sleeping. `time.sleep` on the worker thread would be nearly
+            # as good -- it is not the event loop -- but the pool is finite, so
+            # a handful of concurrently delayed requests would stop answering
+            # everyone else, which is not what the fault is meant to rehearse.
+            #
+            # Nothing is short-circuited here the way the in-process transport
+            # short-circuits a delay longer than the caller's read timeout: over
+            # a socket the client's timeout is the client's business, and it
+            # will disconnect on its own. From the caller's point of view served
+            # mode behaves exactly as it did when the kernel slept.
+            await asyncio.sleep(response.delay_ms / 1000.0)
         return to_response(response)
 
     async def framework_answered(request: Request, exc: Exception) -> Response:

@@ -72,6 +72,15 @@ The forward-declared ``let ctx`` closure
     :attr:`ResolvedConfig.log_level`, which the profile loader resolved from a
     mapping its caller passed -- ``{}`` unless the CLI passed the real one.
 
+DELAYS LEAVE AS DATA. A fault that wants the caller made to wait sets
+``UnitError.delay_ms``; ``_shape`` copies it onto ``UnitResponse.delay_ms`` and
+``_finish`` carries it through. Nothing in this file, or anywhere below the
+seam, sleeps for it. The kernel decides *whether* to delay and the binding
+decides *how*, because only the binding knows the caller's clock and the
+caller's timeout -- and because a ``time.sleep`` here would block a request
+thread, an event loop and a file-drop poller with the same line. See
+``core/chaos/faults.py`` for the reversal that produced this.
+
 THE REQUEST LOCK. ``handle`` is synchronous and takes one re-entrant lock for
 the whole pipeline, unless the matched route declares ``serialized=False``.
 The lock is what makes id minting and journal ordering deterministic, so that
@@ -685,7 +694,8 @@ class Unit:
                 res = self._run_pipeline(req, route, args)
             return self._finish(req, res, route, started)
         except UnitError as err:
-            return self._finish(req, self._shape(self._vendor.errors.shape(err, self._ctx), err.kind), route, started)
+            shaped_error = self._shape(self._vendor.errors.shape(err, self._ctx), err.kind, delay_ms=err.delay_ms)
+            return self._finish(req, shaped_error, route, started)
         except Exception as exc:
             # Not a UnitError, so nothing in the core meant this: it is a defect
             # in a handler or in this file. It is logged as one, then answered
@@ -835,15 +845,23 @@ class Unit:
 
     # -- response shaping ---------------------------------------------------
 
-    def _shape(self, shaped: ShapedError, kind: UnitErrorKind) -> UnitResponse:
+    def _shape(self, shaped: ShapedError, kind: UnitErrorKind, *, delay_ms: int = 0) -> UnitResponse:
         """The vendor's error body, plus the machine-readable ``x-unit-error``.
 
         The header is what lets a conformance check assert "this failed, and it
         failed for *this* reason" across vendors whose bodies share no field.
+
+        ``delay_ms`` comes from :attr:`UnitError.delay_ms` and is the only way a
+        refusal can ask its binding to hold the answer back -- today, the
+        ``timeout`` fault on a real clock. It is a keyword with a default so
+        every other call site here reads exactly as it did.
         """
         headers = dict(shaped.headers)
         headers["x-unit-error"] = kind.value
-        return normalize(ReplyInit(status=shaped.status, json=shaped.body, headers=headers))
+        answered = normalize(ReplyInit(status=shaped.status, json=shaped.body, headers=headers))
+        if delay_ms <= 0:
+            return answered
+        return UnitResponse(status=answered.status, headers=answered.headers, body=answered.body, delay_ms=delay_ms)
 
     def _finish(self, req: UnitRequest, res: UnitResponse, route: Route | None, started: float) -> UnitResponse:
         mutable = MutableResponse(status=res.status, headers=dict(res.headers), body=res.body)
@@ -860,7 +878,12 @@ class Unit:
                 "ms": round((time.monotonic() - started) * 1000, 3),
             },
         )
-        return UnitResponse(status=mutable.status, headers=mutable.headers, body=mutable.body)
+        # ``delay_ms`` is carried across rather than offered to ``decorate``.
+        # ``MutableResponse`` is the vendor's last chance to shape what goes on
+        # the *wire*; how long a binding holds the answer back is not a vendor
+        # opinion, and putting it in reach of one would make the same fault
+        # behave differently per vendor for no stated reason.
+        return UnitResponse(status=mutable.status, headers=mutable.headers, body=mutable.body, delay_ms=res.delay_ms)
 
 
 def _describe(exc: BaseException) -> str:

@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased
+
+A placeholder heading for release-please to fold into the release notes; the
+entries below are hand-written because the behaviour change needs more than a
+commit subject.
+
+### Features
+
+* **testing:** `UnitTransport` now implements both `httpx.BaseTransport` and
+  `httpx.AsyncBaseTransport`, so one instance drives an `httpx.Client` and an
+  `httpx.AsyncClient` over the same unit. `StartedUnit.async_client` is that
+  client, built on first access; `vendorfake.testing.async_unit()` is `unit()`
+  as an async context manager. An async consumer no longer writes ASGI wiring
+  per vendor against the internal `vendorfake.asgi`.
+* **pytest:** a `vendorfake_async_unit` fixture, registered through the
+  `pytest11` entry point and driven by `@pytest.mark.vendorfake(vendor, ...)`.
+  It is a synchronous fixture yielding an object that owns an async client, so
+  it works under pytest-asyncio (strict and auto) and under anyio's plugin
+  without vendorfake depending on either.
+* **core:** `UnitResponse` gains `delay_ms` (default `0`, additive).
+
+### Behaviour changes
+
+* **core:** the `timeout` chaos fault no longer calls `time.sleep` inside the
+  kernel. On a real clock it reports the delay on the response and each
+  binding carries it out: the in-process transport raises `httpx.ReadTimeout`
+  **without waiting** when the delay exceeds the client's read timeout, and
+  waits for real when it does not; the ASGI application awaits it, so served
+  mode is unchanged from a client's point of view; the file-drop binding waits
+  before writing the response document. Virtual-clock mode is unchanged --
+  scenario time moves and the answer is immediate.
+
+  What a consumer gains is the case that was previously unreachable in
+  process: a client-side timeout, and therefore a rehearsal of their retry
+  path, without starting a server. What changes for an existing consumer is
+  elapsed wall time on the raw in-process seam
+  (`vendorfake.core.transport.inprocess.InProcessClient`), which holds no
+  caller and so takes no delay; the delay is readable there on
+  `response.raw.delay_ms`. Status, body and headers are unchanged everywhere.
+* **testing:** `UnitTransport` now reads `request.extensions["timeout"]`. It
+  is still consulted for nothing except a deliberate `delay_ms`; an ordinary
+  in-process call still cannot be interrupted by a timeout.
+
+### Dependencies
+
+* `anyio` is now declared directly (it was already installed as an
+  unconditional dependency of `httpx`); `vendorfake.testing.transport` imports
+  it so the async wait works under trio as well as asyncio.
+* `pytest-asyncio` added to the dev group, used only to run a consumer's suite
+  under it inside `pytester`.
+
 ## 0.1.0 (2026-09-01)
 
 

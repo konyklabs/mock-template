@@ -170,8 +170,21 @@ class TestTheSeam:
         with pytest.raises(ValueError, match="query_all"):
             a_request(query=query, query_all=query_all)
 
-    def test_the_three_response_fields_are_the_contract(self) -> None:
-        assert [f.name for f in dataclasses.fields(UnitResponse)] == ["status", "headers", "body"]
+    def test_the_response_fields_are_the_contract(self) -> None:
+        """``delay_ms`` joined the first three when the kernel stopped sleeping.
+
+        Order matters as much as membership: the three that were here are still
+        positional in every construction site in the distribution, so a field
+        inserted among them rather than after them would silently re-bind
+        `UnitResponse(status, headers, body)` arguments.
+        """
+        assert [f.name for f in dataclasses.fields(UnitResponse)] == ["status", "headers", "body", "delay_ms"]
+
+    def test_a_response_delays_by_nothing_unless_it_is_asked_to(self) -> None:
+        """The default is what keeps the field additive: every binding that has
+        never heard of it, and every construction site that predates it, keeps
+        behaving exactly as it did."""
+        assert UnitResponse(status=200, headers={}, body=b"{}").delay_ms == 0
 
 
 class TestRoute:
