@@ -151,3 +151,52 @@ curl -s -X POST http://localhost:8080/__unit/chaos/rules -H 'Content-Type: appli
 For a *permanent* revocation, use the vendor's own revoke endpoint instead;
 for an expiry a client's own clock would notice, advance a
 [virtual clock](clock.md) past `expires_at`.
+
+## Sharing one unit across tests
+
+A unit built once for a whole session — a session-scoped `served()` or
+`unit()` fixture, a container started in `globalSetup` — is cheap, and
+it is where the second test lies to you. **A vendor with single-use or
+rotating state needs an explicit `reset()` between tests.** Clover
+retires a refresh token the moment it is used, so the second test in a
+session to refresh gets Clover's real `401` for a reason unrelated to what
+it tests; every vendor's minted tokens, created orders and armed rules
+accumulate the same way, more quietly. Under `pytest-randomly` *which*
+test pays changes run to run, which reads as a flake and is not one.
+
+`POST /__unit/state/reset` — [`driver.reset()`](driver.md#chaos-and-reset)
+— re-hydrates the store from the seed document with no restart, putting
+the seeded single-use token back. The per-test fixture is three calls on
+the way in and one on the way out:
+
+```python
+import pytest
+from vendorfake.testing import served
+
+
+@pytest.fixture(scope="session")
+def clover():
+    with served("clover", "oauth-only") as child:
+        yield child
+
+
+@pytest.fixture(autouse=True)
+def fresh(clover):
+    clover.reset()  # the seed scenario again: the single-use token is back
+    clover.reset_chaos()  # no rule from a previous test, whatever order ran
+    clover.clear_requests()  # assert_called counts only this test's calls
+    yield
+    clover.reset_chaos()  # a rule this test leaked cannot blame the next one
+```
+
+The same three calls over HTTP, for a suite in another language or a
+container: `POST /__unit/state/reset`, `POST /__unit/chaos/reset`,
+`DELETE /__unit/requests`. `reset()` also drops every webhook subscriber a
+test registered — subscribe *after* the reset, not in a session fixture
+above it ([Driver → Chaos and reset](driver.md#chaos-and-reset)).
+
+The [pytest plugin](../pytest-plugin.md)'s `vendorfake_unit` is
+function-scoped for exactly this reason: a fresh in-process unit costs
+milliseconds, so it builds one per test and none of the above applies.
+Reach for the shared shape only when the unit is a process or a container
+and starting it per test is what costs.

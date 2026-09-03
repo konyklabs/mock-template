@@ -57,7 +57,10 @@ curl -s -X POST http://localhost:8080/__unit/state/reset -H 'Content-Type: appli
 
 See [Concepts → Journal and request log](../concepts/journal-and-request-log.md)
 for what `reset()` clears and what it does not (subscribers you registered
-during the run are dropped too — re-subscribe after a reset, not before it).
+during the run are dropped too — re-subscribe after a reset, not before it),
+and [Sharing one unit across tests](../concepts/chaos-rules-and-faults.md#sharing-one-unit-across-tests)
+for why one container shared across a suite needs it *between tests*, not
+only between runs.
 
 ## Testcontainers, as an alternative
 

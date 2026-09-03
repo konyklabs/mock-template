@@ -23,8 +23,8 @@ Four ways to hold one, described in full elsewhere -- linked, not repeated:
 |---|---|---|
 | `unit(vendor)` | the default: sync, in-process, no socket, milliseconds to build | [Seeded scenario](seeded-scenario.md) for what it starts with |
 | `async_unit(vendor)`, or `.async_client` on `unit(...)` | your test or fixture is `async def` | [Async consumers](async-consumers.md) |
-| `served(vendor)` | a service under test needs a real base URL | the README's "For consumers" section |
-| a container (`docker run ... vendorfake`) | the service under test runs out-of-process too, or in CI | the README's "Run it as a container" section |
+| `served(vendor, env={...})` | a service under test needs a real base URL; `env=` is that child's `VENDORFAKE_*` layer | [Which binding to use → Served](start/bindings.md#served) |
+| a container (`docker run ... vendorfake`) | the service under test runs out-of-process too, or in CI | [Which binding to use → Container](start/bindings.md#container) |
 
 `vendorfake.testing.serve_in_thread(started)` adds a real server on a
 background thread in front of a unit `unit()` already built, for a test that

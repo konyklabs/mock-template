@@ -53,6 +53,14 @@ the `Seed` protocol, the three per-vendor seed types, `Credentials` and
 `vendorfake.testing.seeds` publishes the same seed types and `seed_for`
 directly, for a caller who wants a seed without building a unit.
 
+**`served()` takes `env=`.** A `VENDORFAKE_*` mapping layered onto the
+child's inherited `os.environ` — an entry beats the ambient variable of the
+same name, `clock_start=` layers beneath it exactly as in `unit()`, and the
+parent-resolved `.seed` reads the same layer. Additive: a call without it
+behaves as before. `VENDORFAKE_PROFILE` in the mapping is never consulted,
+because `profile=` is passed to the child explicitly; there is still no
+`capabilities=`.
+
 **`served()`'s startup failures are eager, in the parent process.** An
 unknown vendor, a nonexistent or malformed profile, and a vendor with no seed
 are all refused with `ValueError`, `UnitError` or `LookupError` before

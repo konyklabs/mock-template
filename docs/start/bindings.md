@@ -65,6 +65,20 @@ they answer the vendor's own 404, the same as production would, because a
 served unit is standing in for the vendor rather than acting as a test
 double.
 
+`served(..., env={...})` is the `VENDORFAKE_*` layer for that one child,
+on top of the environment it inherits — `env={"VENDORFAKE_CLOCK":
+"virtual"}` with `clock_start=`, or a `VENDORFAKE_VENDOR_*` credential
+override for a second, deliberately misconfigured child — so two
+differently-seeded children can run in one process with nothing written to
+`os.environ`. The parent-resolved `.seed` sees the same layer, so its
+credentials agree with the child's. `VENDORFAKE_PROFILE` is the one
+variable the mapping does not reach: `profile=` is always passed to the
+child explicitly.
+
+A served child shared across tests needs `reset()` between them when the
+vendor keeps single-use state — see
+[Chaos rules and faults → Sharing one unit across tests](../concepts/chaos-rules-and-faults.md#sharing-one-unit-across-tests).
+
 ## Container
 
 ```sh

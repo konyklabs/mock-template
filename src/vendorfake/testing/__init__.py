@@ -481,6 +481,17 @@ class Driver(Generic[SeedT]):
     def reset(self) -> dict[str, Any]:
         """Back to the seed scenario -- and only the scenario.
 
+        **This is what makes one unit shareable across tests.** A vendor with
+        single-use or rotating state (Clover retires a refresh token the
+        moment it is used; every vendor's minted tokens and created orders
+        accumulate) hands the *second* test to touch that state a failure
+        unrelated to what it tests -- and under random ordering, which test
+        that is changes run to run. A session-scoped :func:`served` or
+        :func:`unit` therefore needs ``reset()`` in a per-test fixture, with
+        :meth:`reset_chaos` and :meth:`clear_requests` beside it; the recipe
+        is "Sharing one unit across tests" in
+        ``docs/concepts/chaos-rules-and-faults.md``.
+
         Everything a test created goes, **including subscribers registered
         through the control plane or the vendor API**: the store is cleared
         and re-hydrated, and only the seed document's and the profile's
@@ -788,13 +799,14 @@ def _unit(
     process environment is never read here, so one test's variables cannot
     change another test's profile.
 
-    **Asymmetric with** :func:`served`: ``served()`` keeps a plain
-    ``profile: str = "full"`` and has no ``capabilities=`` parameter, so a
-    ``VENDORFAKE_PROFILE`` entry in an ``env`` mapping never influences it
-    (it does not even accept one) and a capability request cannot be moved
-    from one to the other without first resolving it by hand. Spec-compliant
-    -- only ``unit()`` was asked to gain either -- but undocumented before
-    this paragraph.
+    **Asymmetric with** :func:`served` in two ways. ``served()``'s ``env=``
+    is a layer *over* the child's inherited ``os.environ`` rather than the
+    whole environment, because a child process has to be reachable from the
+    shell that spawned it. And ``served()`` keeps a plain ``profile: str =
+    "full"`` and has no ``capabilities=`` parameter, so a ``VENDORFAKE_PROFILE``
+    entry in a shared ``env`` mapping influences ``unit()`` and never
+    ``served()``, and a capability request cannot be moved from one to the
+    other without first resolving it to a profile name by hand.
 
     **Ids are deterministic per unit.** Two units on the same profile mint the
     same order ids, tokens and codes in the same order, because each starts
@@ -1110,6 +1122,7 @@ def served(
     host: str = ...,
     log_level: str = ...,
     timeout_s: float = ...,
+    env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[ServedUnit[SquareSeed]]: ...
 
@@ -1123,6 +1136,7 @@ def served(
     host: str = ...,
     log_level: str = ...,
     timeout_s: float = ...,
+    env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[ServedUnit[CloverSeed]]: ...
 
@@ -1136,6 +1150,7 @@ def served(
     host: str = ...,
     log_level: str = ...,
     timeout_s: float = ...,
+    env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[ServedUnit[ToastSeed]]: ...
 
@@ -1149,6 +1164,7 @@ def served(
     host: str = ...,
     log_level: str = ...,
     timeout_s: float = ...,
+    env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[ServedUnit[Seed]]: ...
 
@@ -1161,6 +1177,7 @@ def served(
     host: str = "127.0.0.1",
     log_level: str = "error",
     timeout_s: float = STARTUP_TIMEOUT_S,
+    env: Mapping[str, str] | None = None,
     clock_start: datetime | str | None = None,
 ) -> AbstractContextManager[ServedUnit[Any]]:
     """``vendorfake serve`` in a child process, with its URL.
@@ -1169,9 +1186,30 @@ def served(
     child serves the vendor it was told to, so the seed's type is knowable at
     the call site and there is no reason to make a consumer prove it with an
     ``isinstance``. Delegates to a private generator; see :func:`unit`.
+
+    ``env`` is the ``VENDORFAKE_*`` layer for this one child, on top of the
+    environment it inherits -- the served counterpart of :func:`unit`'s
+    ``env=``, so two differently-seeded children can run in one process
+    without either touching ``os.environ``. ``clock_start`` layers the same
+    way. See :func:`_served` for the precedence and the one variable the
+    mapping cannot reach.
+
+    **Sharing one child across tests:** a session-scoped ``served()`` against
+    a vendor with single-use or rotating state (Clover's refresh rotation)
+    needs :meth:`Driver.reset` between tests, or the second test to consume
+    that state fails for a reason unrelated to what it tests -- see
+    ``docs/concepts/chaos-rules-and-faults.md``, "Sharing one unit across
+    tests".
     """
     return _served(
-        vendor, profile, port=port, host=host, log_level=log_level, timeout_s=timeout_s, clock_start=clock_start
+        vendor,
+        profile,
+        port=port,
+        host=host,
+        log_level=log_level,
+        timeout_s=timeout_s,
+        env=env,
+        clock_start=clock_start,
     )
 
 
@@ -1184,6 +1222,7 @@ def _served(
     host: str = "127.0.0.1",
     log_level: str = "error",
     timeout_s: float = STARTUP_TIMEOUT_S,
+    env: Mapping[str, str] | None = None,
     clock_start: datetime | str | None = None,
 ) -> Iterator[ServedUnit[Seed]]:
     """The body of :func:`served`. See that function for the contract.
@@ -1194,16 +1233,22 @@ def _served(
     accepts a request. The child is asked to stop with ``SIGTERM`` -- uvicorn's
     graceful path -- and killed only if it ignores that.
 
-    ``profile`` is a plain ``str = "full"`` and there is no ``capabilities=``
-    parameter -- unlike :func:`unit`, which resolves ``VENDORFAKE_PROFILE``
-    out of the ``env=`` mapping it is given when ``profile`` is not passed,
-    and which accepts ``capabilities=``. This subcommand-launching helper
-    takes neither: the child inherits the real process environment rather
-    than an explicit mapping, so there is no ``env=`` argument here for a
-    variable to come from, and a capability request must be resolved to a
-    profile name by hand (or via :func:`unit`) before it can be passed to
-    ``profile=``. Spec-compliant -- only ``unit()`` was asked to gain
-    either -- but easy to trip on when moving a test from one to the other.
+    ``env`` is layered onto this process's environment for the child --
+    inherited ``os.environ`` first, then the mapping, entry by entry -- so an
+    entry in it beats an ambient variable of the same name and nothing in
+    ``os.environ`` is written. That is the whole difference from
+    :func:`unit`, whose ``env=`` is the *entire* layer over an empty mapping:
+    a served child stands in for a vendor and has to be reachable from
+    whatever ``PATH``, locale and proxy settings the shell provides, so
+    inheriting is the only sane default and the mapping is a delta on it.
+    Every ``VENDORFAKE_*`` variable the child's ``load_profile`` reads goes
+    through here -- ``VENDORFAKE_CLOCK=virtual``, ``VENDORFAKE_CAPABILITIES``
+    as a delta on the profile's list, a ``VENDORFAKE_VENDOR_*`` credential
+    override -- with one exception: ``VENDORFAKE_PROFILE`` is never consulted,
+    because ``profile`` is a plain ``str = "full"`` passed to the child as an
+    explicit ``--profile`` that wins over the variable. There is still no
+    ``capabilities=`` parameter; resolve a capability request to a profile
+    name by hand (or via :func:`unit`) before passing it as ``profile=``.
 
     Both pipes are read on a daemon thread for the life of the child, so a
     child that logs more than the pipe buffers cannot block mid-test, and
@@ -1212,21 +1257,21 @@ def _served(
     on forever.
 
     ``clock_start`` is :func:`unit`'s ``VENDORFAKE_CLOCK_START`` control,
-    layered onto this process's own environment for the child -- ``served``
-    has no general ``env`` parameter, so every other ``VENDORFAKE_*`` variable
-    still goes through your own ``os.environ`` before calling this, the way
-    the module docstring above describes. It requires ``VENDORFAKE_CLOCK=virtual``
-    already set there; the child raises the same loud refusal :func:`unit`
-    does rather than switching modes for you, and a refusal here surfaces as
-    the child exiting before it announces a port.
+    layered the same way ``env`` is and *below* it -- an explicit
+    ``VENDORFAKE_CLOCK_START`` entry in ``env`` wins, exactly as it does in
+    :func:`unit`, so one mapping built for a whole module means the same
+    thing to both. It requires ``VENDORFAKE_CLOCK=virtual``, from ``env`` or
+    from the shell; the child raises the same loud refusal :func:`unit` does
+    rather than switching modes for you, and a refusal here surfaces as the
+    child exiting before it announces a port.
 
-    One of those other ``VENDORFAKE_*`` variables does not stay purely the
-    child's concern: any ``VENDORFAKE_VENDOR_*`` entry in this process's
-    ``os.environ`` is read here too, and layered onto the profile's own
-    ``vendor`` block the same way ``resolve_config`` layers it for the child,
-    so the seed handed back agrees with the credentials the served unit
-    actually answers with. Every other variable is the child's alone, exactly
-    as the paragraph above says.
+    One family of those variables does not stay purely the child's concern:
+    every ``VENDORFAKE_VENDOR_*`` entry the child will see -- from
+    ``os.environ`` or from ``env``, with the same precedence -- is read here
+    too, and layered onto the profile's own ``vendor`` block the same way
+    ``resolve_config`` layers it for the child, so the seed handed back
+    agrees with the credentials the served unit actually answers with. Every
+    other variable is the child's alone.
 
     A nonexistent (or otherwise malformed) ``profile`` is refused with
     ``UnitError`` -- the same exception :func:`unit` raises for the identical
@@ -1307,7 +1352,15 @@ def _served(
     # test can patch.
     definition = registry.resolve_vendor(vendor)
     resolved_name = definition.name
-    vendor_env = {key: value for key, value in os.environ.items() if key.startswith(ENV_VENDOR_PREFIX)}
+    # The child's layer, in the order the child will see it: the convenience
+    # `clock_start` first, then the caller's mapping, so an explicit entry in
+    # `env` wins over the kwarg -- `_unit` applies its `env` last for the same
+    # reason, and the two must agree on what one shared mapping means.
+    layer: dict[str, str] = {}
+    if clock_start is not None:
+        layer["VENDORFAKE_CLOCK_START"] = _clock_start_env_value(clock_start)
+    layer.update(env or {})
+    vendor_env = {key: value for key, value in {**os.environ, **layer}.items() if key.startswith(ENV_VENDOR_PREFIX)}
     loaded = load_profile(
         profile_dir=definition.profile_dir,
         name=profile,
@@ -1342,11 +1395,9 @@ def _served(
     # project), and `Popen`'s `env=` replaces rather than layers -- so naming
     # one more variable for the child without dropping the rest of its
     # inherited environment has no path that avoids this dict read. `None`
-    # (the exact prior behaviour) is used whenever `clock_start` is not
-    # given.
-    child_env = (
-        None if clock_start is None else {**os.environ, "VENDORFAKE_CLOCK_START": _clock_start_env_value(clock_start)}
-    )
+    # (the exact prior behaviour) is used whenever there is nothing to layer:
+    # neither `env` nor `clock_start` was given.
+    child_env = None if not layer else {**os.environ, **layer}
     process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=child_env)
     output = _ChildOutput(process)
     try:

@@ -165,15 +165,81 @@ def test_clock_start_on_a_real_clock_refuses_rather_than_silently_switching_mode
 def test_served_s_clock_start_reaches_the_child_through_this_process_s_own_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`served` has no general ``env`` parameter (see its docstring): every
-    other ``VENDORFAKE_*`` variable already goes through this process's own
-    ``os.environ``, and ``clock_start`` is layered onto exactly that for the
-    child, so the mode still has to come from here."""
+    """The child inherits this process's ``os.environ`` (see ``served``'s
+    docstring), and ``clock_start`` is layered onto exactly that -- so a mode
+    set in the shell, with no ``env=`` at all, still reaches it. The mapping
+    form of the same test is the one below."""
     monkeypatch.setenv("VENDORFAKE_CLOCK", "virtual")
     with served("square", "no-faults", clock_start="2026-01-01T00:00:00Z") as child:
         info = child.clock()
         assert info.mode == "virtual"
         assert info.now == datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def test_served_s_env_is_a_layer_over_the_inherited_environment_that_beats_it_and_never_writes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Consumer feedback item 20 (konyklabs/roadmap#102): a suite that wants
+    two differently-configured children in one process had to mutate its own
+    ``os.environ`` between fixtures, which is unsafe under xdist. ``env=``
+    is the per-child layer instead, and this pins its three properties at
+    once: an entry beats the ambient variable of the same name, ``clock_start``
+    still layers beneath it, and this process's environment is untouched
+    after the call.
+    """
+    monkeypatch.setenv("VENDORFAKE_CLOCK", "real")
+    monkeypatch.delenv("VENDORFAKE_CLOCK_START", raising=False)
+    with served(
+        "square", "no-faults", env={"VENDORFAKE_CLOCK": "virtual"}, clock_start="2026-01-01T00:00:00Z"
+    ) as child:
+        info = child.clock()
+        assert info.mode == "virtual"
+        assert info.now == datetime(2026, 1, 1, tzinfo=UTC)
+    assert os.environ["VENDORFAKE_CLOCK"] == "real"
+    assert "VENDORFAKE_CLOCK_START" not in os.environ
+    # An explicit VENDORFAKE_CLOCK_START in the mapping wins over the kwarg,
+    # exactly as it does for unit() -- one mapping means one thing to both.
+    with served(
+        "square",
+        "no-faults",
+        env={"VENDORFAKE_CLOCK": "virtual", "VENDORFAKE_CLOCK_START": "2026-06-15T12:30:00Z"},
+        clock_start="2026-01-01T00:00:00Z",
+    ) as child:
+        assert child.clock().now == datetime(2026, 6, 15, 12, 30, tzinfo=UTC)
+
+
+def test_served_s_env_credential_override_reaches_the_child_and_the_seed_alike(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The example from the feedback: a second Square child with a deliberately
+    different application secret, to rehearse a misconfigured consumer without
+    a chaos rule. The override has to land in two places or the fixture lies:
+    the child's real config (what ``/__unit/auth`` offers, what
+    ``POST /oauth2/revoke`` checks) and the parent-resolved ``.seed`` handed
+    back -- the same drift the 0.2 review caught for the ambient case. Two
+    children in one process disagree only where told to.
+    """
+    monkeypatch.delenv("VENDORFAKE_VENDOR_APPLICATION_SECRET", raising=False)
+
+    def client_secret(child: ServedUnit[SquareSeed]) -> str:
+        offered = child.client.get("/__unit/auth").json()["credentials"]
+        (row,) = [credential for credential in offered if credential["label"] == "client-secret"]
+        return str(row["headers"]["authorization"])
+
+    with (
+        served("square", "no-faults") as stock,
+        served("square", "no-faults", env={"VENDORFAKE_VENDOR_APPLICATION_SECRET": "sandbox-sq0csb-from-env"}) as odd,
+    ):
+        assert odd.seed.credentials.app_secret == "sandbox-sq0csb-from-env"
+        assert client_secret(odd) == "Client sandbox-sq0csb-from-env"
+        assert stock.seed.credentials.app_secret != "sandbox-sq0csb-from-env"
+        assert client_secret(stock) == f"Client {stock.seed.credentials.app_secret}"
+        # The child really checks the overridden secret, not just reports it.
+        refused = odd.client.post(
+            "/oauth2/revoke", headers={"authorization": f"Client {stock.seed.credentials.app_secret}"}
+        )
+        assert refused.status_code == 401
+    assert "VENDORFAKE_VENDOR_APPLICATION_SECRET" not in os.environ
 
 
 def test_unit_resolves_profile_through_the_argument_then_env_then_the_default() -> None:

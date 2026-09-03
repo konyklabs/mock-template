@@ -91,4 +91,6 @@ control plane's `POST /__unit/chaos/rules`) before the browser test that
 needs to see a retry banner or a rate-limit toast — see
 [Concepts → Chaos rules and faults](../concepts/chaos-rules-and-faults.md).
 `POST /__unit/chaos/reset` between tests keeps one test's rule from leaking
-into the next.
+into the next, and `POST /__unit/state/reset` beside it puts single-use
+state (Clover's refresh token) back for the next test — see
+[Sharing one unit across tests](../concepts/chaos-rules-and-faults.md#sharing-one-unit-across-tests).
