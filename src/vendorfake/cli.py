@@ -472,20 +472,29 @@ def _routes_cmd(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -
 
 
 def _faults(args: argparse.Namespace, out: TextIO) -> int:
-    """List the built-in fault catalogue: name, parameters, one-line description.
+    """List the built-in fault catalogue: name, provenance, parameters,
+    one-line description.
 
-    Read from ``FAULT_PARAM_KEYS`` and ``FAULT_DESCRIPTIONS`` in
-    ``core/chaos/faults.py`` -- the same two mappings ``GET /__unit/chaos``
-    and ``GET /__unit/info`` publish each rule against, so this can never
-    name a fault the unit itself has never heard of.
+    Read from ``FAULT_PARAM_KEYS``, ``FAULT_PROVENANCE`` and
+    ``FAULT_DESCRIPTIONS`` in ``core/chaos/faults.py`` -- the same mappings
+    ``GET /__unit/chaos`` and ``GET /__unit/info`` publish each rule against,
+    so this can never name a fault the unit itself has never heard of, or
+    disagree with those two about which faults are ``provenance: "transport"``
+    (E-transport-faults.md's definition of done item 5: provenance appears in
+    the chaos listings *and in the ``faults`` CLI output*).
     """
-    from vendorfake.core.chaos.faults import FAULT_DESCRIPTIONS, FAULT_PARAM_KEYS
+    from vendorfake.core.chaos.faults import FAULT_DESCRIPTIONS, FAULT_PARAM_KEYS, FAULT_PROVENANCE
     from vendorfake.core.util.json import dump_json
 
     names = sorted(FAULT_PARAM_KEYS)
     if _wants_json(args):
         payload = [
-            {"name": name, "params": list(FAULT_PARAM_KEYS[name]), "description": FAULT_DESCRIPTIONS[name]}
+            {
+                "name": name,
+                "provenance": FAULT_PROVENANCE[name],
+                "params": list(FAULT_PARAM_KEYS[name]),
+                "description": FAULT_DESCRIPTIONS[name],
+            }
             for name in names
         ]
         print(dump_json(payload).decode("utf-8"), file=out)
@@ -493,10 +502,15 @@ def _faults(args: argparse.Namespace, out: TextIO) -> int:
     print(
         _table(
             [
-                {"name": name, "params": ", ".join(FAULT_PARAM_KEYS[name]), "description": FAULT_DESCRIPTIONS[name]}
+                {
+                    "name": name,
+                    "provenance": FAULT_PROVENANCE[name],
+                    "params": ", ".join(FAULT_PARAM_KEYS[name]),
+                    "description": FAULT_DESCRIPTIONS[name],
+                }
                 for name in names
             ],
-            ("name", "params", "description"),
+            ("name", "provenance", "params", "description"),
         ),
         file=out,
     )

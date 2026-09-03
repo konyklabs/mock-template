@@ -220,7 +220,7 @@ def sidecar_headers(sidecar: Mapping[str, Any]) -> dict[str, str]:
     Every value here is ASCII, by construction rather than by luck: see "the
     headers" in the module docstring for why a header cannot carry what a
     JSON body can. :data:`ERROR_FIELD_HEADER` goes through
-    :func:`_field_header_value` and :data:`ERROR_INFO_HEADER` through
+    :func:`header_text` and :data:`ERROR_INFO_HEADER` through
     :func:`_ascii_json`; :data:`ERROR_KIND_HEADER` and
     :data:`STATUS_PROVENANCE_HEADER` need neither, because a
     :class:`~vendorfake.core.kernel.types.UnitErrorKind` value and a

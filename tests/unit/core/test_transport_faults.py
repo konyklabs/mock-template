@@ -308,9 +308,46 @@ def test_every_directive_is_stamped(fault: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_is_transport_fault_reads_the_stamp() -> None:
-    assert is_transport_fault(_apply("malformed_body", mode="empty")) is True
+@pytest.mark.parametrize(
+    ("fault", "params"),
+    [
+        ("malformed_body", {"mode": "empty"}),
+        ("body_mutation", {"ops": [{"op": "replace", "pointer": "/merchant_id", "value": "M2"}]}),
+        ("connection_reset", {}),
+        ("empty_response", {}),
+        ("slow_body", {}),
+    ],
+)
+def test_is_transport_fault_is_true_for_each_of_the_five_transport_kinds(fault: str, params: dict[str, object]) -> None:
+    assert is_transport_fault(_apply(fault, **params)) is True
+
+
+@pytest.mark.parametrize("fault", ["rate_limit", "server_error", "unavailable", "timeout", "token_expiry"])
+def test_is_transport_fault_is_false_for_a_vendor_provenance_fault(fault: str) -> None:
+    """A request-scope fault never reaches ``apply_response_fault`` -- its
+    ``vendorfake-fault`` header comes from ``kernel/unit.py``'s ``_shape``
+    instead, on a body that is the vendor's own documented error envelope.
+    Built here by hand for the same shape rather than driving a whole unit,
+    the way ``_apply`` builds the five transport responses above: the fix
+    this test pins is that ``is_transport_fault`` decides by looking the
+    header's fault name up in :data:`~vendorfake.core.chaos.rules.BUILTIN_FAULTS`,
+    not by the header's mere presence -- these five carry it too and must
+    still answer ``False`` (found by review round 3 of konyklabs/roadmap#73;
+    every one of these five is a real, shipped ``BUILTIN_FAULTS`` name with
+    ``provenance="vendor"``, not an invented one)."""
+    response = _response(headers={"vendorfake-fault": fault, "vendorfake-rule": "r1"})
+    assert is_transport_fault(response) is False
+
+
+def test_is_transport_fault_is_false_with_no_header() -> None:
     assert is_transport_fault(_response()) is False
+
+
+def test_is_transport_fault_is_false_for_an_unrecognised_fault_name() -> None:
+    """A fork's own fault, or a stripped/renamed header: unknown is not
+    transport, not a `KeyError`."""
+    response = _response(headers={"vendorfake-fault": "a_forks_own_fault"})
+    assert is_transport_fault(response) is False
 
 
 # ---------------------------------------------------------------------------

@@ -133,3 +133,57 @@ def test_typo(vendorfake_unit):
     result = pytester.runpytest_subprocess()
     result.assert_outcomes(errors=1)
     assert "unmatchd" in result.stdout.str()
+
+
+def test_the_marker_refuses_a_third_positional_argument(pytester: pytest.Pytester) -> None:
+    """The same mistake as an unknown keyword, in positional syntax: only
+    ``vendor`` and ``profile`` are positional, and a consumer who drops the
+    keyword off a call like ``unit("square", "oauth-only",
+    unmatched="vendor-404")`` -- writing
+    ``@pytest.mark.vendorfake("square", "oauth-only", "vendor-404")`` instead
+    -- must not have the third argument silently discarded. Before this fix it
+    was: the unit started on the default ``unmatched="error"`` with no error
+    naming the argument that vanished (konyklabs/roadmap#73).
+    """
+    pytester.makepyfile(
+        test_extra_positional="""
+import pytest
+
+@pytest.mark.vendorfake("square", "oauth-only", "vendor-404")
+def test_extra_positional(vendorfake_unit):
+    assert False
+"""
+    )
+    result = pytester.runpytest_subprocess()
+    result.assert_outcomes(errors=1)
+    output = result.stdout.str()
+    assert "at most two positional" in output
+    assert "vendor" in output
+    assert "profile" in output
+
+
+def test_marker_arguments_fails_directly_on_a_third_positional_argument() -> None:
+    """The same refusal, asserted directly against :func:`_marker_arguments`
+    rather than through a subprocess -- ``pytest.fail`` raises ``Failed``
+    inside the function under test itself, which a real fixture call cannot
+    observe as cleanly as a direct call can. The ``Mark`` itself is built
+    through ``pytest.mark`` rather than by hand, so this does not pin the
+    internal shape of a pytest object this package does not own."""
+    from _pytest.outcomes import Failed
+
+    from vendorfake.pytest import _marker_arguments
+
+    mark = pytest.mark.vendorfake("square", "oauth-only", "vendor-404").mark
+
+    class _FakeNode:
+        nodeid = "test_module.py::test_thing"
+
+        def get_closest_marker(self, name: str) -> pytest.Mark:
+            assert name == mark.name
+            return mark
+
+    class _FakeRequest:
+        node = _FakeNode()
+
+    with pytest.raises(Failed, match="at most two positional"):
+        _marker_arguments(_FakeRequest(), "vendorfake_unit")  # type: ignore[arg-type]

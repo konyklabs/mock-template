@@ -134,6 +134,13 @@ def _marker_arguments(request: pytest.FixtureRequest, fixture: str) -> tuple[str
         )
     arguments = list(marker.args)
     options: dict[str, Any] = dict(marker.kwargs)
+    if len(arguments) > 2:
+        pytest.fail(
+            f"@pytest.mark.{MARKER}(...) on {request.node.nodeid} takes at most two positional "
+            f"arguments -- vendor, then profile -- and got {len(arguments)}. Pass the rest as "
+            f"keywords: @pytest.mark.{MARKER_LINE}",
+            pytrace=False,
+        )
     if arguments:
         vendor = str(arguments[0])
         if len(arguments) > 1:

@@ -1,4 +1,4 @@
-"""Thirty-two units, each broken in exactly one way, and the check each must trip.
+"""Thirty-four units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
