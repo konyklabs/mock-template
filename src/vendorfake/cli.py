@@ -585,6 +585,13 @@ def _agent_setup(args: argparse.Namespace, out: TextIO) -> int:
     consumer actually types it. The mechanics live in
     :mod:`vendorfake.agent.setup`; this only wires argparse onto it and
     prints what it reports.
+
+    ``ValueError`` is caught alongside ``FileExistsError``: ``FileExistsError``
+    is an existing rules file without ``--force``; ``ValueError`` is a
+    ``.mcp.json`` that ``--mcp --allow-future`` cannot safely merge into (not
+    valid JSON, or not a JSON object at the top level) -- see
+    :func:`vendorfake.agent.setup.write_agent_setup`. Both are refusals with
+    nothing written, not crashes.
     """
     from pathlib import Path
 
@@ -599,7 +606,7 @@ def _agent_setup(args: argparse.Namespace, out: TextIO) -> int:
             allow_future=args.allow_future,
             force=args.force,
         )
-    except FileExistsError as exc:
+    except (FileExistsError, ValueError) as exc:
         raise SystemExit(f"{PROG}: {exc}") from None
 
     for path in result.written:

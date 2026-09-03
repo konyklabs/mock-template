@@ -53,6 +53,10 @@ def test_agent_setup_writes_the_rules_file_to_a_fresh_dir(tmp_path: Path) -> Non
     assert text.startswith('---\npaths:\n  - "tests/**"\n---\n')
     assert "vendorfake.asgi" in text  # the internal-modules rule made it in
     assert "Vendorfake-Near-Miss" in text
+    assert "github.com/konyklabs/vendorfake" in text  # the escape hatch resolves for a consumer
+    assert "python -c" not in text  # no site-packages-hunting snippet
+    assert "@pytest.mark.vendorfake(" in text  # the marker form, beside unit()
+    assert "vendorfake_unit" in text
 
 
 def test_agent_setup_reflects_a_custom_tests_glob_in_the_frontmatter(tmp_path: Path) -> None:
@@ -132,6 +136,36 @@ def test_agent_setup_mcp_rerun_replaces_only_the_vendorfake_entry(tmp_path: Path
     assert document["mcpServers"] == {"vendorfake": {"command": "vendorfake", "args": ["mcp"]}}
 
 
+def test_agent_setup_mcp_refuses_a_non_object_document_and_writes_nothing(tmp_path: Path) -> None:
+    """A top-level JSON array is not a document ``_merge_mcp`` can add
+    ``mcpServers`` to. This must be a named refusal, not a silent
+    replacement of the whole file -- and, because validation runs before any
+    write, not even the rules file lands."""
+    mcp_path = tmp_path / ".mcp.json"
+    mcp_path.write_text("[]", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as raised:
+        run("agent-setup", "--dir", str(tmp_path), "--mcp", "--allow-future")
+    assert str(mcp_path) in str(raised.value)
+    assert mcp_path.read_text(encoding="utf-8") == "[]"  # untouched
+    assert not (tmp_path / ".claude" / "rules" / "vendorfake.md").exists()
+
+
+def test_agent_setup_mcp_refuses_invalid_json_and_writes_nothing(tmp_path: Path) -> None:
+    """Malformed JSON must be a message naming the file, not a bare
+    ``json.JSONDecodeError`` traceback -- and, since this is checked before
+    either file is written, never a half-applied run (a rules file written,
+    then a crash on ``.mcp.json``)."""
+    mcp_path = tmp_path / ".mcp.json"
+    mcp_path.write_text("not json{", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as raised:
+        run("agent-setup", "--dir", str(tmp_path), "--mcp", "--allow-future")
+    assert str(mcp_path) in str(raised.value)
+    assert mcp_path.read_text(encoding="utf-8") == "not json{"  # untouched
+    assert not (tmp_path / ".claude" / "rules" / "vendorfake.md").exists()
+
+
 # ---------------------------------------------------------------------------
 # explain: route
 # ---------------------------------------------------------------------------
@@ -161,6 +195,14 @@ def test_explain_route_unknown_operation_id_lists_valid_ones() -> None:
         run("explain", "route", "NoSuchOperation", "--vendor", "square")
     assert "NoSuchOperation" in str(raised.value)
     assert "CreateOrder" in str(raised.value)  # a real operation_id, proving the listing is real
+
+
+def test_explain_route_unknown_profile_is_a_clean_refusal() -> None:
+    with pytest.raises(SystemExit) as raised:
+        run("explain", "route", "CreateOrder", "--vendor", "square", "--profile", "nope")
+    assert "nope" in str(raised.value)
+    assert "square" in str(raised.value)
+    assert "full" in str(raised.value)  # a real profile name, proving the listing is real
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +308,14 @@ def test_explain_error_unknown_kind_lists_valid_ones() -> None:
         run("explain", "error", "no_such_kind", "--vendor", "square")
     assert "no_such_kind" in str(raised.value)
     assert "rate_limited" in str(raised.value)
+
+
+def test_explain_error_unknown_profile_is_a_clean_refusal() -> None:
+    with pytest.raises(SystemExit) as raised:
+        run("explain", "error", "rate_limited", "--vendor", "square", "--profile", "nope")
+    assert "nope" in str(raised.value)
+    assert "square" in str(raised.value)
+    assert "full" in str(raised.value)  # a real profile name, proving the listing is real
 
 
 # ---------------------------------------------------------------------------

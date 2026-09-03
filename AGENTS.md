@@ -3,7 +3,9 @@
 For an agent working *in this repository* -- building, fixing, or extending
 vendorfake itself. If instead you are writing tests **against** an installed
 vendorfake in a consumer repository, this is the wrong file: run `vendorfake
-agent-setup` there, or read `docs/for-agents.md` in the installed package.
+agent-setup` there (or `vendorfake explain <kind> <name>` for one answer at a
+time), or read
+https://github.com/konyklabs/vendorfake/blob/main/docs/for-agents.md.
 
 ## Layout
 

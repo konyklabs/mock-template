@@ -25,9 +25,10 @@ _BODY = """\
 
 This file loads only for paths under `{tests_glob}`. It is the compact
 version; `vendorfake explain <kind> <name>` answers a specific question
-without opening the source, and the full version lives in the installed
-package's `docs/for-agents.md` (`python -c "import vendorfake, pathlib; \\
-print(pathlib.Path(vendorfake.__file__).parent)"` finds the install).
+without opening the source, and the full contract is
+https://github.com/konyklabs/vendorfake/blob/main/docs/for-agents.md (see
+also https://github.com/konyklabs/vendorfake/blob/main/README.md for install
+and quickstarts).
 
 ## Start a unit, one of four ways
 
@@ -75,6 +76,27 @@ docker run --rm -p 127.0.0.1:8080:8080 -e VENDORFAKE_VENDOR=square vendorfake
 `vendorfake.testing.serve_in_thread(started)` puts a real server on a
 background thread in front of a unit `unit()` already built, for a test that
 needs both an in-process driver and a URL onto the *same* state.
+
+## Or via the pytest plugin
+
+Installing vendorfake also registers a marker and three fixtures --
+`vendorfake_unit`, `vendorfake_async_unit`, `vendorfake_webhook_receiver` --
+for a suite that would rather ask for a unit as a fixture than write a `with`
+block. Same arguments as `unit()`, read off the marker:
+
+```python
+import pytest
+
+
+@pytest.mark.vendorfake("square", profile="oauth-only")
+def test_something(vendorfake_unit):
+    resp = vendorfake_unit.client.post("/v2/orders", headers=vendorfake_unit.seed.auth, json={{...}})
+```
+
+`vendorfake_async_unit` is the same, for an `async def` test;
+`vendorfake_webhook_receiver` gives the other half of a webhook test, a real
+HTTP receiver on loopback. Requesting a fixture on a test with no
+`@pytest.mark.vendorfake(...)` is a loud failure at setup, not a skip.
 
 ## Vocabulary
 

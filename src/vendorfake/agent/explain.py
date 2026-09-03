@@ -39,6 +39,25 @@ __all__ = [
 ]
 
 
+def _check_profile(vendor: str, profile: str) -> None:
+    """Refuse an unknown ``profile`` before a unit is built from it.
+
+    ``create_unit`` would eventually raise ``vendorfake.core.kernel.types.UnitError``
+    for a bad profile -- naming an absolute filesystem path, not the vendor's
+    real profile names, and not a ``ValueError`` this module's callers (and
+    ``cli.py:_explain``) know how to turn into a clean refusal. Checked here,
+    the same way ``explain_error`` checks ``kind`` against
+    ``UnitErrorKind`` before calling ``create_unit`` at all, in the same
+    message shape :func:`explain_profile` already uses for a bad profile
+    name.
+    """
+    from vendorfake.registry import available_profiles
+
+    offered = sorted(row.name for row in available_profiles(vendor))
+    if profile not in offered:
+        raise ValueError(f"no profile named {profile!r} for vendor {vendor!r}. Available: {', '.join(offered)}")
+
+
 # ---------------------------------------------------------------------------
 # route
 # ---------------------------------------------------------------------------
@@ -61,6 +80,7 @@ def explain_route(vendor: str, profile: str, operation_id: str) -> dict[str, Any
     from vendorfake.core.transport.inprocess import in_process
     from vendorfake.registry import create_unit
 
+    _check_profile(vendor, profile)
     built = create_unit(vendor=vendor, profile=profile)
     try:
         response = in_process(built).get("/__unit/routes")
@@ -177,6 +197,7 @@ def explain_error(vendor: str, profile: str, kind: str) -> dict[str, Any]:
     ``kind`` is checked against :class:`~vendorfake.core.kernel.types.UnitErrorKind`
     before a unit is even built, so a typo is refused with the real twenty
     names rather than a route-shaped 404 from the control plane itself.
+    ``profile`` is checked the same way, by :func:`_check_profile`.
     """
     from vendorfake.core.kernel.types import UnitErrorKind
     from vendorfake.core.transport.inprocess import in_process
@@ -186,6 +207,7 @@ def explain_error(vendor: str, profile: str, kind: str) -> dict[str, Any]:
     if kind not in valid:
         raise ValueError(f"no error kind named {kind!r}. Available: {', '.join(sorted(valid))}")
 
+    _check_profile(vendor, profile)
     built = create_unit(vendor=vendor, profile=profile)
     try:
         response = in_process(built).get("/__unit/errors")

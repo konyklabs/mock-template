@@ -30,8 +30,9 @@ Four ways to hold one, described in full elsewhere -- linked, not repeated:
 background thread in front of a unit `unit()` already built, for a test that
 needs both an in-process driver and a URL onto the *same* state. The pytest
 plugin ([pytest plugin](pytest-plugin.md)) wraps the same four behind a
-marker and two fixtures, for a suite that would rather write `@pytest.mark.vendorfake`
-than a `with` block.
+marker and three fixtures (`vendorfake_unit`, `vendorfake_async_unit`,
+`vendorfake_webhook_receiver`), for a suite that would rather write
+`@pytest.mark.vendorfake` than a `with` block.
 
 ## Vocabulary
 
