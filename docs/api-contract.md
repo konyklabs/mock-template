@@ -182,6 +182,14 @@ upgrade may move them under you.
   `.config`, `.errors`, `.seed`, `.model`, and the names their `__init__`
   re-exports. What a vendor surface *does* is pinned by the conformance suite;
   where it lives is not.
+- **`vendorfake.agent`** — the machinery behind `vendorfake agent-setup` and
+  `vendorfake explain`: the rules-file template, the `.mcp.json` merge, and
+  the lookups `explain` renders. `vendorfake.agent.__init__` declares
+  `__all__ = []` and is reached only from `vendorfake.cli`'s two subcommand
+  bodies. The command line those two subcommands are part of is pinned — see
+  *The command line*, above — this package's internal shape is not; a test
+  or an agent reaches this surface through the `vendorfake` command, never by
+  importing `vendorfake.agent` directly.
 
 ## White-box handles
 

@@ -858,8 +858,32 @@ def _unit(
         # `env`) can make the resolved values differ from what the caller
         # spelled, in which case the refusal should name what was actually
         # looked up.
+        #
+        # `definition=built.context.vendor` -- the exact `VendorDefinition`
+        # instance `create_unit` built this unit from, off the running unit
+        # itself -- not omitted the way this call used to leave it. Omitting
+        # it sends `seed_for` to `registry.resolve_vendor(built.name)` for a
+        # SECOND, independent lookup, which is only ever safe if that second
+        # call is guaranteed to return the same object the unit is running
+        # on. It is not: `square/__init__.py`'s own module docstring states
+        # the opposite invariant in capitals -- a fresh `VendorDefinition` on
+        # every access, because a vendor owns a stateful, seeded id stream
+        # and two units (or, here, one unit and one orphaned lookup) sharing
+        # one would interleave their draws. A third-party `SeedingVendor`
+        # built the same way calls its hook on a definition that never saw
+        # this unit's requests, and hands back credentials or ids from a
+        # stream this unit's store never touched -- silently, since nothing
+        # here raises or warns; `started.seed` just carries the wrong
+        # instance's identity. `_served` already passes `definition=` for
+        # this exact reason (see its own call below); this is the primary
+        # binding, and the one the `SeedingVendor` hook exists for, so
+        # leaving it unfixed there was the more consequential half of the
+        # gap. `built.context.vendor` costs nothing extra: it is a `Unit`
+        # attribute, not a registry call.
         resolved_seed = _require_seed(
-            built.name, built.context.config.profile, seed_for(built.name, built.context.config.vendor_config)
+            built.name,
+            built.context.config.profile,
+            seed_for(built.name, built.context.config.vendor_config, definition=built.context.vendor),
         )
         with httpx.Client(transport=transport, base_url=IN_PROCESS_BASE_URL, timeout=CLIENT_TIMEOUT_S) as client:
             started = StartedUnit(

@@ -30,7 +30,7 @@ from pathlib import Path
 
 from vendorfake.agent.rules_template import DEFAULT_TESTS_GLOB, render_rules_file
 
-__all__ = ["MCP_FUTURE_NOTICE", "AgentSetupResult", "write_agent_setup"]
+__all__ = ["MCP_FUTURE_NOTICE", "MCP_FUTURE_WRITTEN_NOTICE", "AgentSetupResult", "write_agent_setup"]
 
 #: Relative to the consumer's ``--dir``.
 RULES_PATH = Path(".claude/rules/vendorfake.md")
@@ -40,6 +40,17 @@ MCP_SERVER_NAME = "vendorfake"
 MCP_FUTURE_NOTICE = (
     "`vendorfake mcp` does not exist yet (ships in 0.4). Pass --allow-future alongside --mcp to write "
     "the .mcp.json entry anyway, ready for when it does."
+)
+#: Printed instead of :data:`MCP_FUTURE_NOTICE` when ``--allow-future`` was
+#: already given: the instruction half of that message ("pass --allow-future")
+#: is already satisfied by the run that is about to print it, and telling a
+#: caller to do what they just did reads as the entry not having been
+#: written -- adversarial lens, F increment, konyklabs/roadmap#74. The "does
+#: not exist yet" half stays, because it is still true and still worth
+#: knowing.
+MCP_FUTURE_WRITTEN_NOTICE = (
+    "`vendorfake mcp` does not exist yet (ships in 0.4). The .mcp.json entry above is written and ready "
+    "for when it does."
 )
 
 
@@ -162,10 +173,12 @@ def write_agent_setup(
     notice: str | None = None
 
     if mcp:
-        notice = MCP_FUTURE_NOTICE
         if allow_future:
             assert merged_mcp is not None  # computed above, before any write
             mcp_path.write_text(json.dumps(merged_mcp, indent=2) + "\n", encoding="utf-8")
             written.append(mcp_path)
+            notice = MCP_FUTURE_WRITTEN_NOTICE
+        else:
+            notice = MCP_FUTURE_NOTICE
 
     return AgentSetupResult(written=tuple(written), notice=notice)

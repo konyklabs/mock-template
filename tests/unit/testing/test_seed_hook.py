@@ -153,6 +153,54 @@ def test_a_vendor_that_publishes_a_seed_is_not_refused(tmp_path: Path, monkeypat
     )
 
 
+def test_unit_hands_the_hook_the_same_definition_the_unit_is_running_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Adversarial lens, F increment, blocking (konyklabs/roadmap#74): a real
+    entry-point vendor hands back a FRESH ``VendorDefinition`` on every
+    ``resolve_vendor`` call -- ``square/__init__.py``'s own module docstring
+    states this in capitals, because a vendor owns a stateful, seeded id
+    stream and two units sharing one would interleave their draws. ``unit()``
+    used to call ``seed_for(built.name, ...)`` with no ``definition=``, so
+    ``seed_for`` resolved the vendor a SECOND, independent time and called
+    the hook on an orphaned instance the running unit never touched --
+    ``started.seed`` carried that orphan's identity, not the one behind
+    ``started.client``.
+
+    Every other test in this file uses :func:`_install`, whose
+    ``monkeypatch.setattr(..., lambda name: definition)`` returns one shared
+    instance for every call and therefore cannot see this: the shared
+    instance's ``seed_calls`` is right either way. This test hands back a
+    fresh instance per call instead, the way the three shipped vendors do,
+    so a second resolution is observable.
+    """
+    (tmp_path / "acme-full.json").write_text(
+        json.dumps({"name": "acme-full", "capabilities": ["orders", "chaos"], "vendor": VENDOR_BLOCK}),
+        encoding="utf-8",
+    )
+    instances: list[SeedingFakeVendor] = []
+
+    def fresh_definition(name: str) -> SeedingFakeVendor:
+        definition = SeedingFakeVendor(name="acme", profile_dir=tmp_path, base_dir=tmp_path)
+        instances.append(definition)
+        return definition
+
+    monkeypatch.setattr("vendorfake.registry.resolve_vendor", fresh_definition)
+
+    with unit("acme", "acme-full") as started:
+        assert isinstance(started.seed, AcmeSeed)
+        assert started.seed.credentials.app_id == "acme-app"  # type: ignore[attr-defined]
+        # The instance actually driving the running unit -- not a second,
+        # independently resolved one -- is the one the hook was called on.
+        running_definition = started.unit.context.vendor
+        assert isinstance(running_definition, SeedingFakeVendor)
+        assert running_definition.seed_calls == [VENDOR_BLOCK]
+
+    assert len(instances) == 1, (
+        f"resolve_vendor was called {len(instances)} times for one unit(); seed_for re-resolved the vendor"
+    )
+
+
 def test_the_hook_reads_the_resolved_profile_not_a_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The mapping handed to the hook is the profile's own ``vendor`` block.
 

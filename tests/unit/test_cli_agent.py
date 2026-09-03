@@ -111,6 +111,22 @@ def test_agent_setup_mcp_with_allow_future_writes_the_entry(tmp_path: Path) -> N
     assert document["mcpServers"]["vendorfake"] == {"command": "vendorfake", "args": ["mcp"]}
 
 
+def test_agent_setup_mcp_with_allow_future_does_not_ask_for_the_flag_it_was_just_given(tmp_path: Path) -> None:
+    """Adversarial lens, F increment (konyklabs/roadmap#74): the gated case
+    (no ``--allow-future``) prints "pass --allow-future ... to write the
+    entry anyway", which is correct there and asserted above. The same
+    sentence used to print unconditionally, including on a run that had
+    already written the entry -- telling a caller who just passed
+    ``--allow-future`` to pass it. It still says the server does not exist
+    until 0.4, which stays true.
+    """
+    code, out = run("agent-setup", "--dir", str(tmp_path), "--mcp", "--allow-future")
+    assert code == 0
+    assert "0.4" in out
+    assert "--allow-future" not in out
+    assert "written" in out.lower()
+
+
 def test_agent_setup_mcp_merge_preserves_an_existing_server(tmp_path: Path) -> None:
     mcp_path = tmp_path / ".mcp.json"
     mcp_path.write_text(

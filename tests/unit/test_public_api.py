@@ -336,25 +336,71 @@ def _documented_constants() -> frozenset[str]:
 def _is_documented(name: str, value: object) -> bool:
     """Whether ``name`` explains itself, by whichever of the two mechanisms applies.
 
-    ``value.__doc__`` is only its own when it is not the docstring of its own
-    type: ``paths.OBTAIN_TOKEN.__doc__`` is ``str.__doc__``, several
-    paragraphs about the ``str`` constructor, and reading that as "documented"
-    would have exempted every constant in the package. Anything that fails
-    that test falls through to the attribute-docstring index.
+    ``value.__doc__`` is only its own when it is not *equal to* the docstring
+    of its own type: ``paths.OBTAIN_TOKEN.__doc__`` is ``str.__doc__``,
+    several paragraphs about the ``str`` constructor, and reading that as
+    "documented" would exempt every constant in the package. Anything that
+    fails that test falls through to the attribute-docstring index.
 
-    The identity comparison also gets pytest's fixtures right for free. A
+    A value comparison (``!=``), not identity (``is not``): a builtin
+    immutable's ``__doc__`` is not a per-instance attribute at all -- it is
+    read off the type via the same getset descriptor every time -- and that
+    descriptor hands back a freshly built ``str`` on each access, so
+    ``(1).__doc__ is int.__doc__``, ``'x'.__doc__ is str.__doc__`` and
+    ``().__doc__ is tuple.__doc__`` are all ``False`` even though the two
+    sides are the identical generic text. An identity check here (what this
+    read before) is therefore true for every builtin constant regardless of
+    whether it carries a real docstring, which is exactly the "exempted
+    every constant" failure the paragraph above warns against -- adversarial
+    lens, F increment, konyklabs/roadmap#74, verified by mutation: deleting
+    an attribute docstring under a checked-in constant left this file's own
+    suite green.
+
+    The value comparison also gets pytest's fixtures right for free. A
     ``@pytest.fixture`` is not a function by the time it reaches ``__all__``
     -- it is a ``FixtureFunctionDefinition`` -- but it carries the decorated
-    function's own docstring, so no unwrapping is needed here.
+    function's own docstring, genuinely distinct from
+    ``FixtureFunctionDefinition.__doc__``, so no unwrapping is needed here.
     """
     own = getattr(value, "__doc__", None)
-    if own and own.strip() and own is not type(value).__doc__:
+    if own and own.strip() and own != type(value).__doc__:
         # A dataclass with no author docstring gets a generated one that is
         # just its own signature. That is not an explanation of anything.
         generated = own.startswith(f"{getattr(value, '__name__', chr(0))}(")
         if not generated:
             return True
     return name in _documented_constants()
+
+
+def test_is_documented_does_not_exempt_a_bare_constant_via_identity() -> None:
+    """Adversarial lens, F increment (konyklabs/roadmap#74): a bare builtin's
+    ``__doc__`` is read off its *type* through a getset descriptor that hands
+    back a freshly built ``str`` on every access, so ``own is
+    type(value).__doc__`` is ``False`` even when the two sides are the
+    identical generic text -- confirmed here for the three shapes the public
+    surface actually uses. An identity check in :func:`_is_documented` (what
+    this used to be, before this fix) therefore treated every bare
+    int/float/str/tuple constant as self-documenting regardless of whether it
+    carries a real docstring, which is exactly the "exempted every constant"
+    failure the function's own docstring warns against. A name no attribute
+    docstring anywhere in the tree will ever index must fall through and
+    answer ``False`` for each of these, not pass on its class's generic text.
+    """
+    for value in (30.0, "some string", (1, 2, 3), 5, True):
+        assert _is_documented("NOT_A_REAL_CONSTANT_NAME_ANYWHERE_IN_THE_TREE", value) is False
+
+
+def test_is_documented_recognizes_a_real_own_docstring() -> None:
+    """The positive case the fix must not break: a function's ``__doc__`` is
+    genuinely its own -- distinct in content from ``type(value).__doc__``,
+    ``function``'s generic description -- so it is documented without any
+    attribute-docstring lookup.
+    """
+
+    def helper() -> None:
+        """A real docstring, not shared with any type."""
+
+    assert _is_documented("NOT_A_REAL_CONSTANT_NAME_ANYWHERE_IN_THE_TREE", helper) is True
 
 
 # ---------------------------------------------------------------------------

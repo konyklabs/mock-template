@@ -18,6 +18,10 @@ documentation. Three vendors ship today: Square (Connect v2), Clover
   the working contract for a coding agent writing or fixing tests against an
   installed vendorfake -- bindings, vocabulary, discovery commands, and the
   evidence habit.
+- [API contract](https://github.com/konyklabs/vendorfake/blob/main/docs/api-contract.md):
+  what is public and covered by the deprecation policy, what is internal and
+  may move without notice -- the one page that answers "if I import it, will
+  it still be there next release?"
 - [Seeded scenario](https://github.com/konyklabs/vendorfake/blob/main/docs/seeded-scenario.md):
   the exact ids, credentials and entities every profile starts with, per
   vendor.
