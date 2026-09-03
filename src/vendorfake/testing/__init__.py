@@ -61,6 +61,7 @@ import httpx
 
 from vendorfake import registry
 from vendorfake.core.config.models import UnmatchedPolicy
+from vendorfake.core.config.profile import load_profile
 from vendorfake.core.control.plane import DEFAULT_REQUEST_LIMIT
 from vendorfake.core.kernel.types import Logger
 from vendorfake.core.kernel.unit import Unit
@@ -603,18 +604,25 @@ class ServedUnit(Driver[SeedT]):
 
 NO_SEED_HINT = (
     "vendorfake ships a seed for square, clover and toast. A vendor from the "
-    "'vendorfake.vendors' entry-point group has none here, so its ids, tokens and "
-    "application credentials are not readable through .seed -- read them from that "
-    "distribution's own constants instead, and drive the unit with create_unit()."
+    "'vendorfake.vendors' entry-point group publishes its own by implementing "
+    "vendorfake.core.kernel.types.SeedingVendor -- a seed(vendor_config) method "
+    "returning an object with credentials, auth, read_only_auth and event_types. "
+    "This one does not, so read its ids and tokens from that distribution's own "
+    "constants instead, and drive the unit with create_unit()."
 )
 """What a caller can actually do about a vendor with no seed.
 
 Split out so the message is one string and a test can assert on it without
 copying the prose.
+
+It names the hook first because that is the fix the vendor's author can make
+once, for everyone; ``create_unit()`` is what a consumer of a vendor they do
+not control has to fall back to. The earlier wording offered only the second,
+which was the whole of the answer before the hook existed.
 """
 
 
-def _require_seed(vendor: str, profile: str, found: SquareSeed | CloverSeed | ToastSeed | None) -> Seed:
+def _require_seed(vendor: str, profile: str, found: Seed | None) -> Seed:
     """``found``, or a refusal that says why there is none.
 
     ``seed`` used to be handed back as ``None`` for any vendor
@@ -623,6 +631,14 @@ def _require_seed(vendor: str, profile: str, found: SquareSeed | CloverSeed | To
     three shipped vendors. The absence is real but it is a property of the
     *vendor*, not of a call -- so it is answered once, at the moment the unit
     is started, where the vendor and profile are still in hand to name.
+
+    ``found`` is typed :class:`~vendorfake.testing.seeds.Seed`, not the union
+    of the three built-in seed types, because ``seed_for`` now also answers
+    from a vendor's own
+    :class:`~vendorfake.core.kernel.types.SeedingVendor` hook and a
+    third-party seed is not one of those three. The per-vendor narrowing a
+    consumer sees is unaffected: it comes from ``unit()``'s overloads on the
+    vendor literal, not from this helper.
     """
     if found is None:
         raise LookupError(f"vendor {vendor!r} (profile {profile!r}) publishes no seed. {NO_SEED_HINT}")
@@ -1174,18 +1190,45 @@ def _served(
     already set there; the child raises the same loud refusal :func:`unit`
     does rather than switching modes for you, and a refusal here surfaces as
     the child exiting before it announces a port.
+
+    A nonexistent (or otherwise malformed) ``profile`` is refused with
+    ``UnitError`` -- the same exception :func:`unit` raises for the identical
+    mistake -- before ``subprocess.Popen`` ever runs, because the profile is
+    now loaded in this process to resolve the seed hook's ``vendor_config``
+    before the seed check below. Before that, a bad profile name reached
+    ``served()`` only as whatever failure the spawned child's own
+    startup/health-check path produced; a caller relying on that older,
+    slower failure mode -- catching a connection or startup-timeout error
+    around the ``with served(...)`` block -- now sees an unhandled
+    ``UnitError`` instead.
     """
-    # Resolved and refused before the child is spawned: `seed_for` is a pure
-    # branch on the vendor's canonical name, and `registry.resolve_vendor` is
-    # the same registry lookup `create_unit` pays for internally, so neither
-    # needs a running unit. Paying for a subprocess that boots, announces its
-    # port and answers a health check only to be told the vendor has no seed
-    # wastes the startup on every call in a suite that does this per test, and
+    # Resolved and refused before the child is spawned: `registry.resolve_vendor`
+    # is the same registry lookup `create_unit` pays for internally, and
+    # `load_profile` below is the same profile loader `create_unit` calls too
+    # -- neither needs a running unit. Paying for a subprocess that boots,
+    # announces its port and answers a health check only to be told the
+    # vendor has no seed (or was seeded from the wrong vendor block) wastes
+    # the startup on every call in a suite that does this per test, and
     # points the traceback at a line inside a connected client rather than at
     # the vendor argument that is actually wrong. `profile` has nothing left
     # to resolve here -- unlike `unit()`, `served()` has no `env` layer that
     # could move it away from what the caller spelled, so the argument
-    # already is the resolved value.
+    # already is the resolved value; `load_profile` is called with no `env=`
+    # for the same reason -- and because this module is documented as never
+    # reading `os.environ` to resolve a unit's own config, which is `cli.py`'s
+    # job alone (see the child-spawning `env=` handling below, which is a
+    # different thing: passing the real environment *to the child*, not
+    # reading it to resolve *this* config).
+    #
+    # `seed_for` is handed the profile's real `vendor` block --
+    # `loaded.config.vendor_config` -- exactly as `unit()` hands it
+    # `built.context.config.vendor_config`. Review round 1 caught this
+    # passing `{}` instead: invisible for the three built-in vendors, whose
+    # config models default to exactly what the shipped profiles carry, and
+    # wrong for a third-party `SeedingVendor` hook the moment its profile
+    # overrides anything. `definition=` is passed too, which is what lets
+    # this cost only the one registry lookup already paid for above, rather
+    # than a second one inside `seed_for`.
     #
     # Called as `registry.resolve_vendor` -- an attribute lookup on the
     # module -- rather than through a name bound at import time: `unit()`
@@ -1199,8 +1242,17 @@ def _served(
     # believed the vendor had been substituted. The module reference is what
     # keeps `unit()` and `served()` resolving through the one indirection a
     # test can patch.
-    resolved_name = registry.resolve_vendor(vendor).name
-    resolved_seed = _require_seed(resolved_name, profile, seed_for(resolved_name, {}))
+    definition = registry.resolve_vendor(vendor)
+    resolved_name = definition.name
+    loaded = load_profile(
+        profile_dir=definition.profile_dir,
+        name=profile,
+        base_dir=definition.base_dir,
+        defaults=definition.retry_defaults,
+    )
+    resolved_seed = _require_seed(
+        resolved_name, profile, seed_for(resolved_name, loaded.config.vendor_config, definition=definition)
+    )
     argv = [
         *SERVE_COMMAND,
         "--vendor",

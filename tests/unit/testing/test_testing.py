@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
 
@@ -876,21 +877,28 @@ def test_served_enforces_its_startup_deadline_on_a_child_that_never_announces(mo
 
 
 @pytest.fixture
-def seedless_vendor(monkeypatch: pytest.MonkeyPatch) -> None:
+def seedless_vendor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A vendor named ``acme`` that ``registry.resolve_vendor`` reports, for
     the duration of one test. No seed describes ``acme``, so any caller that
     reaches :func:`~vendorfake.testing._require_seed` for it is refused.
 
-    ``served()`` never loads a profile before that refusal -- the resolved
-    vendor's name is all it needs -- so, unlike
-    ``tests/unit/testing/test_seed_typing.py``'s fixture of the same name,
-    this one does not need a real profile document on disk.
+    ``served()`` now loads the profile before that refusal, the same way
+    :func:`~vendorfake.testing.unit` always has -- resolving the vendor's real
+    config is what lets a ``SeedingVendor`` hook see it (see the seed-hook
+    tests below and ``tests/unit/testing/test_seed_hook.py``), and a seedless
+    vendor is refused only once that load succeeds and the hook still has
+    nothing to say. So, like ``tests/unit/testing/test_seed_typing.py``'s
+    fixture of the same name, this one needs a real profile document on disk.
 
     Patches the attribute on ``vendorfake.registry``, not a name imported
     into another module: that is the substitution :func:`served` must route
     through for a test to reach it at all (see the test below).
     """
-    monkeypatch.setattr("vendorfake.registry.resolve_vendor", lambda name: FakeVendor(name="acme"))
+    (tmp_path / "seedless.json").write_text(
+        json.dumps({"name": "seedless", "capabilities": ["orders", "chaos"]}), encoding="utf-8"
+    )
+    definition = FakeVendor(name="acme", profile_dir=tmp_path, base_dir=tmp_path)
+    monkeypatch.setattr("vendorfake.registry.resolve_vendor", lambda name: definition)
 
 
 @pytest.mark.usefixtures("seedless_vendor")
@@ -910,9 +918,10 @@ def test_served_refuses_a_seedless_vendor_before_spawning_a_child(monkeypatch: p
     ``vendorfake.registry.resolve_vendor`` does not touch. With that bug,
     this test's ``pytest.raises(LookupError)`` would not even match: the
     unpatched lookup fails ``acme`` for a different reason (``ValueError``,
-    no such vendor) before ``served()`` ever gets far enough to consult a
-    seed at all. The ``subprocess.Popen`` sentinel below is the direct check
-    that no child is ever spawned for a vendor that was going to be refused.
+    no such vendor) before ``served()`` ever gets far enough to load a
+    profile or consult a seed at all. The ``subprocess.Popen`` sentinel below
+    is the direct check that no child is ever spawned for a vendor that was
+    going to be refused.
     """
 
     def refuse_to_spawn(*args: object, **kwargs: object) -> subprocess.Popen[str]:
@@ -934,6 +943,30 @@ def test_served_refuses_a_seedless_vendor_before_spawning_a_child(monkeypatch: p
     assert "'acme'" in message
     assert "'seedless'" in message
     assert NO_SEED_HINT in message
+
+
+def test_served_refuses_a_nonexistent_profile_before_spawning_a_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Loading the profile in the parent (round 1's fix for the vendor-config
+    finding above) changed ``served()``'s failure mode for a bad profile name
+    too, and not just for a seedless vendor: it used to spawn a child that
+    then failed through its own startup/health-check path, and now raises
+    ``UnitError`` -- the same exception :func:`unit` raises for the identical
+    mistake -- from ``load_profile`` in the parent, before ``subprocess.Popen``
+    ever runs. Pinned here, with a real shipped vendor and no fixture needed,
+    so a refactor cannot silently reintroduce the slow-fail path or change the
+    exception type with nothing red.
+    """
+
+    def refuse_to_spawn(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+        pytest.fail(f"subprocess.Popen called with args={args!r} kwargs={kwargs!r}")
+
+    monkeypatch.setattr(subprocess, "Popen", refuse_to_spawn)
+
+    with pytest.raises(UnitError) as refused:  # noqa: SIM117 - the `with served(...)` is the subject
+        with served("square", "nosuchprofile") as driver:
+            pytest.fail(f"served() yielded {driver!r} for a nonexistent profile")
+
+    assert "nosuchprofile" in str(refused.value)
 
 
 def test_served_keeps_the_child_output_readable_and_never_blocks_on_it() -> None:

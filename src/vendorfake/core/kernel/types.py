@@ -46,7 +46,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from urllib.parse import parse_qsl
 
 from vendorfake.core.rand.rng import Rng
@@ -89,6 +89,7 @@ __all__ = [
     "ReplyInit",
     "RequestRecord",
     "Route",
+    "SeedingVendor",
     "ShapedError",
     "SignInput",
     "Signer",
@@ -1013,6 +1014,52 @@ class ErrorShaper(Protocol):
         ...
 
 
+@runtime_checkable
+class SeedingVendor(Protocol):
+    """A vendor that publishes its own seed object: the optional half of
+    :class:`VendorDefinition`.
+
+    FOR: a vendor from the ``vendorfake.vendors`` entry-point group, so that
+    ``unit("<its name>").seed`` hands back something real instead of refusing.
+
+    A SEPARATE PROTOCOL, NOT A MEMBER OF ``VendorDefinition``, and the reason
+    matters. Every member of ``VendorDefinition`` is required -- the class
+    docstring says so about ``hydrate``/``decorate``, and ``roles`` was added
+    on the same terms -- because a vendor with nothing to say writes an empty
+    method, which cannot be confused with "this vendor forgot". A seed is the
+    opposite case: absence is a legitimate, permanent answer, already given a
+    voice by the refusal ``vendorfake.testing`` raises. Declaring it here as a
+    required member would break every existing ``VendorDefinition``
+    implementation, in this distribution and outside it, to express something
+    the type system can express without breaking anything.
+
+    So the hook is discovered structurally. ``seed_for`` asks
+    ``isinstance(definition, SeedingVendor)``; a vendor that does not implement
+    it is exactly as valid as it was before this protocol existed.
+
+    THE RETURN TYPE IS ``object``, DELIBERATELY. What the hook must return is
+    an object satisfying ``vendorfake.testing.Seed`` -- ``credentials``,
+    ``auth``, ``read_only_auth``, ``event_types``. The core may not import
+    ``vendorfake.testing`` (``tools/boundary.toml``), and inventing a second
+    copy of that protocol here so the annotation could be narrower would put
+    the definition of "a seed" in two places, which is the drift this project
+    spends a conformance suite avoiding. ``seed_for`` is the one point where
+    the two layers meet, and it is where a hook returning the wrong shape is
+    caught and named.
+    """
+
+    def seed(self, vendor_config: Mapping[str, object]) -> object:
+        """This vendor's seed object for a unit built on ``vendor_config``.
+
+        ``vendor_config`` is the resolved profile's ``vendor`` block -- the
+        same mapping the built-in seeds read their application credentials
+        out of. Taking it rather than a built ``Unit`` keeps the hook usable
+        before a unit exists, which is what lets ``served()`` refuse a
+        seedless vendor without first spawning a child process.
+        """
+        ...
+
+
 class AuthAdapter(Protocol):
     """Resolves a presented credential into a principal and its scopes.
 
@@ -1101,6 +1148,13 @@ class VendorDefinition(Protocol):
     reference marks both ``?``; here a vendor with nothing to do writes an
     empty method, which is one line and cannot be confused with "this vendor
     forgot".
+
+    Every member below is required for the same reason. The one genuinely
+    optional thing a vendor may publish -- a seed object, so that
+    ``unit("<its name>").seed`` answers rather than refuses -- is declared
+    separately as :class:`SeedingVendor` and discovered structurally, because
+    for a seed "there is none" is a real and permanent answer rather than a
+    forgotten one. See that class for the argument in full.
     """
 
     @property

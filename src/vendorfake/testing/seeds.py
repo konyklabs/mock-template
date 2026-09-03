@@ -25,7 +25,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, cast
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    # Guarded because the runtime import belongs inside the two functions that
+    # need it: this module is reached through `vendorfake.testing`, which a
+    # consumer's conftest imports, and an unguarded import here would pull the
+    # registry and the whole kernel in behind it for every such session.
+    from vendorfake.core.kernel.types import VendorDefinition
 
 __all__ = ["CloverSeed", "Credentials", "Seed", "SquareSeed", "ToastSeed", "seed_for"]
 
@@ -384,9 +391,88 @@ def _toast(vendor_config: Mapping[str, object]) -> ToastSeed:
     )
 
 
-def seed_for(vendor: str, vendor_config: Mapping[str, object]) -> SquareSeed | CloverSeed | ToastSeed | None:
-    """The seed object for a built-in vendor, or ``None`` for one this module
-    does not describe -- a third-party vendor publishes its own."""
+_SEED_MEMBERS = ("credentials", "auth", "read_only_auth", "event_types")
+"""The four names :class:`Seed` requires, as data, for the hook's shape check.
+
+Written out rather than derived from ``Seed.__protocol_attrs__``: that
+attribute is an implementation detail of ``typing`` with no compatibility
+promise, and the error message wants a stable, readable list anyway.
+"""
+
+
+def _from_hook(definition: VendorDefinition, vendor: str, vendor_config: Mapping[str, object]) -> Seed | None:
+    """The vendor's own seed, if it publishes one, checked before it escapes.
+
+    ``SeedingVendor`` is declared in the core, which may not import this
+    module, so its ``seed`` hook is annotated as returning ``object`` -- the
+    narrowing to :class:`Seed` happens here, at the one point where the two
+    layers meet. A hook that returns the wrong shape is named as a hook
+    defect, on the vendor, at the moment the unit is built. Letting it
+    through would surface later as an ``AttributeError`` on
+    ``started.seed.credentials``, which reads like a bug in vendorfake.
+    """
+    from vendorfake.core.kernel.types import SeedingVendor
+
+    if not isinstance(definition, SeedingVendor):
+        return None
+    hook = definition.seed
+    if not callable(hook):
+        # `runtime_checkable` on a method-only Protocol checks attribute
+        # presence, not callability, so this is reachable: `seed` is a
+        # generic name and this package's own convention for seed *data*
+        # besides (every vendor ships a `seed/` subpackage; a profile
+        # document carries a `"seed"` key), so a `VendorDefinition` with a
+        # non-callable `seed` field is a realistic collision, not a
+        # theoretical one. Named here, at the vendor, as a hook defect --
+        # the same way a hook returning the wrong shape is below -- rather
+        # than left to surface as a bare `TypeError: '...' object is not
+        # callable` three frames inside this module, which reads like a
+        # vendorfake bug and names nothing a vendor author can act on.
+        raise TypeError(
+            f"vendor {vendor!r} has a SeedingVendor.seed attribute that is not callable "
+            f"(a {type(hook).__name__!r}). SeedingVendor.seed must be a method: "
+            f"seed(self, vendor_config) -> object."
+        )
+    published = hook(vendor_config)
+    missing = [name for name in _SEED_MEMBERS if not hasattr(published, name)]
+    if missing:
+        raise TypeError(
+            f"vendor {vendor!r} published a seed of type {type(published).__name__!r} that is not a "
+            f"vendorfake.testing.Seed: no {', '.join(missing)}. A seed must carry "
+            f"{', '.join(_SEED_MEMBERS)}."
+        )
+    return cast("Seed", published)
+
+
+def seed_for(
+    vendor: str,
+    vendor_config: Mapping[str, object],
+    *,
+    definition: VendorDefinition | None = None,
+) -> Seed | None:
+    """The seed object for ``vendor``, or ``None`` when it publishes none.
+
+    Resolution order, and why it is this way round. A vendor that implements
+    the :class:`~vendorfake.core.kernel.types.SeedingVendor` hook is asked
+    first, because that is the vendor's own statement about itself; the
+    three-way branch below is only *this module's* knowledge of the three
+    vendors shipped here. None of the three implements the hook, so the
+    ordering changes nothing for them -- a test pins that -- and it means a
+    third-party vendor is never shadowed by a name collision with a built-in.
+
+    ``definition`` is optional so the signature stays what v0.1.0 callers
+    passed. Given one, the lookup is free; without one the vendor is resolved
+    by name, and a name that resolves to nothing yields ``None`` exactly as it
+    did before the hook existed -- this function has never been the place a
+    typo is reported, and making it start would move that message away from
+    ``resolve_vendor``, which names the alternatives.
+    """
+    if definition is None:
+        definition = _resolve_quietly(vendor)
+    if definition is not None:
+        published = _from_hook(definition, vendor, vendor_config)
+        if published is not None:
+            return published
     if vendor == "square":
         return _square(vendor_config)
     if vendor == "clover":
@@ -394,3 +480,24 @@ def seed_for(vendor: str, vendor_config: Mapping[str, object]) -> SquareSeed | C
     if vendor == "toast":
         return _toast(vendor_config)
     return None
+
+
+def _resolve_quietly(vendor: str) -> VendorDefinition | None:
+    """``vendor``'s definition, or ``None`` if there is no such vendor.
+
+    The import is deferred: this module is imported by ``vendorfake.testing``,
+    which a consumer's ``conftest`` imports, and the registry pulls in the
+    control plane and the kernel behind it. Nothing here needs the registry
+    until a caller actually asks for a seed without one in hand.
+
+    ``resolve_vendor`` raises for an unknown name and that refusal is the
+    right one *at the edge* -- but ``seed_for('nope', {})`` answered ``None``
+    in v0.1.0 and callers rely on it, so the exception is swallowed rather
+    than re-raised here.
+    """
+    from vendorfake.registry import resolve_vendor
+
+    try:
+        return resolve_vendor(vendor)
+    except ValueError:
+        return None

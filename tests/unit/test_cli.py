@@ -551,3 +551,83 @@ def test_serve_wires_the_tripwire_into_the_unit_before_building_it(monkeypatch: 
     finally:
         for built in units:
             built.stop()  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Startup failures read as refusals, not as crashes (konyklabs/roadmap#74).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("subcommand", ["serve", "info", "openapi", "routes"])
+def test_a_nonexistent_profile_is_a_refusal_that_names_the_real_ones(subcommand: str) -> None:
+    """A mistyped ``--profile`` used to be a raw ``UnitError`` traceback out of
+    the profile loader, while the adjacent ``--vendor`` flag -- the same kind
+    of typo, one letter away -- was already a one-line refusal. The loader's
+    message always named every profile the vendor ships; nothing but the
+    ``except`` clause stood between it and the caller.
+    """
+    with pytest.raises(SystemExit) as raised:
+        run(subcommand, "--vendor", "square", "--profile", "nosuchprofile")
+
+    message = str(raised.value)
+    assert message.startswith("vendorfake: "), message
+    assert "nosuchprofile" in message
+    for shipped in ("full", "oauth-only", "orders-only", "no-chaos", "no-faults", "chaos-demo"):
+        assert shipped in message
+
+
+def test_the_refusal_carries_a_message_rather_than_a_bare_code() -> None:
+    """``SystemExit`` with a string prints it to stderr and exits 1, which is
+    the shape every other refusal in this module already has. Asserted so the
+    two kinds of startup failure cannot drift apart again.
+    """
+    with pytest.raises(SystemExit) as bad_profile:
+        run("info", "--vendor", "square", "--profile", "nosuchprofile")
+    with pytest.raises(SystemExit) as bad_vendor:
+        run("info", "--vendor", "nosuchvendor")
+
+    assert isinstance(bad_profile.value.code, str), repr(bad_profile.value.code)
+    assert isinstance(bad_vendor.value.code, str), repr(bad_vendor.value.code)
+
+
+def test_a_malformed_profile_document_is_a_refusal_too(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Not only a missing profile. Any ``UnitError`` raised while the unit is
+    being built is a startup failure the caller can act on, so all of them
+    leave through the same message rather than the first one leaving through a
+    traceback.
+    """
+    import vendorfake.registry as registry_module
+    from tests.fakes import FakeVendor
+
+    (tmp_path / "broken.json").write_text('{"name": "broken", "capabilities": "not-a-list"}', encoding="utf-8")
+    definition = FakeVendor(name="acme", profile_dir=tmp_path, base_dir=tmp_path)
+    monkeypatch.setattr(registry_module, "resolve_vendor", lambda name: definition)
+
+    with pytest.raises(SystemExit) as raised:
+        run("info", "--vendor", "acme", "--profile", "broken")
+
+    assert str(raised.value).startswith("vendorfake: "), str(raised.value)
+
+
+def test_the_profiles_subcommand_refuses_a_malformed_profile_document_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same widened ``except (ValueError, UnitError)`` in ``_profiles`` as
+    the test above exercises for ``info``, and not the same code path:
+    ``profiles`` takes no ``--profile`` flag, so its ``UnitError`` can only
+    come from ``available_profiles``'s own scan of every document in the
+    vendor's profile directory, not from loading one named document. Reverting
+    the clause in ``_profiles`` back to ``except ValueError`` leaves this test
+    -- and only this one -- red.
+    """
+    import vendorfake.registry as registry_module
+    from tests.fakes import FakeVendor
+
+    (tmp_path / "broken.json").write_text('{"name": "broken", "capabilities": "not-a-list"}', encoding="utf-8")
+    definition = FakeVendor(name="acme", profile_dir=tmp_path, base_dir=tmp_path)
+    monkeypatch.setattr(registry_module, "resolve_vendor", lambda name: definition)
+
+    with pytest.raises(SystemExit) as raised:
+        run("profiles", "--vendor", "acme")
+
+    assert str(raised.value).startswith("vendorfake: "), str(raised.value)
