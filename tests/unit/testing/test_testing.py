@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 from typing import Any
@@ -16,12 +17,14 @@ from typing import Any
 import httpx
 import pytest
 
+from tests.fakes import FakeVendor
 from vendorfake.conformance.runner import resolve_target, run_check, select_checks
 from vendorfake.conformance.types import Outcome
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.square.signer import verify_square_signature
 from vendorfake.testing import (
     LOG_LINES,
+    NO_SEED_HINT,
     CloverSeed,
     Driver,
     ServedUnit,
@@ -577,6 +580,67 @@ def test_served_enforces_its_startup_deadline_on_a_child_that_never_announces(mo
     with pytest.raises(RuntimeError, match=r"did not announce a port within 1\.0s"), served("square", timeout_s=1.0):
         pass  # pragma: no cover - never entered
     assert time.monotonic() - started < 10
+
+
+@pytest.fixture
+def seedless_vendor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A vendor named ``acme`` that ``registry.resolve_vendor`` reports, for
+    the duration of one test. No seed describes ``acme``, so any caller that
+    reaches :func:`~vendorfake.testing._require_seed` for it is refused.
+
+    ``served()`` never loads a profile before that refusal -- the resolved
+    vendor's name is all it needs -- so, unlike
+    ``tests/unit/testing/test_seed_typing.py``'s fixture of the same name,
+    this one does not need a real profile document on disk.
+
+    Patches the attribute on ``vendorfake.registry``, not a name imported
+    into another module: that is the substitution :func:`served` must route
+    through for a test to reach it at all (see the test below).
+    """
+    monkeypatch.setattr("vendorfake.registry.resolve_vendor", lambda name: FakeVendor(name="acme"))
+
+
+@pytest.mark.usefixtures("seedless_vendor")
+def test_served_refuses_a_seedless_vendor_before_spawning_a_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``served()`` must resolve the vendor and refuse one with no seed
+    *before* ``subprocess.Popen`` runs -- paying for a child that boots,
+    announces its port and answers a health check only to be told the vendor
+    has no seed wastes the startup on every call in a suite that does this
+    per test, and points the traceback at a line inside a connected client
+    rather than at the vendor argument that is actually wrong.
+
+    This is also the regression test for *how* ``served()`` resolves the
+    vendor. It used to reach ``resolve_vendor`` through a name imported
+    straight into ``vendorfake.testing``'s namespace at import time --
+    ``from vendorfake.registry import resolve_vendor`` -- which is a second,
+    separate binding that ``seedless_vendor``'s substitution of
+    ``vendorfake.registry.resolve_vendor`` does not touch. With that bug,
+    this test's ``pytest.raises(LookupError)`` would not even match: the
+    unpatched lookup fails ``acme`` for a different reason (``ValueError``,
+    no such vendor) before ``served()`` ever gets far enough to consult a
+    seed at all. The ``subprocess.Popen`` sentinel below is the direct check
+    that no child is ever spawned for a vendor that was going to be refused.
+    """
+
+    def refuse_to_spawn(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+        pytest.fail(f"subprocess.Popen called with args={args!r} kwargs={kwargs!r}")
+
+    # `vendorfake.testing` imports the same `subprocess` module object this
+    # file does -- module lookups are singletons through `sys.modules` -- so
+    # patching the attribute here reaches the `subprocess.Popen(...)` call
+    # inside `served()` without naming `vendorfake.testing` as an attribute
+    # path (it does not re-export `subprocess`, and mypy's
+    # `no_implicit_reexport` refuses an attribute access that assumes it does).
+    monkeypatch.setattr(subprocess, "Popen", refuse_to_spawn)
+
+    with pytest.raises(LookupError) as refused:  # noqa: SIM117 - the `with served(...)` is the subject
+        with served("acme", "seedless") as driver:
+            pytest.fail(f"served() yielded {driver!r} for a vendor with no seed")
+
+    message = str(refused.value)
+    assert "'acme'" in message
+    assert "'seedless'" in message
+    assert NO_SEED_HINT in message
 
 
 def test_served_keeps_the_child_output_readable_and_never_blocks_on_it() -> None:

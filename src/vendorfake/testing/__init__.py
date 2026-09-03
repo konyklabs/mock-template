@@ -48,12 +48,13 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 import httpx
 
+from vendorfake import registry
 from vendorfake.core.kernel.types import Logger
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.logging import JsonLogger
 from vendorfake.core.webhooks.models import matches_event_type
 from vendorfake.core.webhooks.sink import DeliverySink
-from vendorfake.registry import create_unit, resolve_vendor
+from vendorfake.registry import create_unit
 from vendorfake.testing.receiver import Delivery, WebhookReceiver, webhook_receiver
 from vendorfake.testing.seeds import CloverSeed, Credentials, Seed, SquareSeed, ToastSeed, seed_for
 from vendorfake.testing.transport import UnitTransport
@@ -638,17 +639,30 @@ def _served(
     on forever.
     """
     # Resolved and refused before the child is spawned: `seed_for` is a pure
-    # branch on the vendor's canonical name, and `resolve_vendor` is the same
-    # registry lookup `create_unit` pays for internally, so neither needs a
-    # running unit. Paying for a subprocess that boots, announces its port and
-    # answers a health check only to be told the vendor has no seed wastes the
-    # startup on every call in a suite that does this per test, and points the
-    # traceback at a line inside a connected client rather than at the vendor
-    # argument that is actually wrong. `profile` has nothing left to resolve
-    # here -- unlike `unit()`, `served()` has no `env` layer that could move it
-    # away from what the caller spelled, so the argument already is the
-    # resolved value.
-    resolved_name = resolve_vendor(vendor).name
+    # branch on the vendor's canonical name, and `registry.resolve_vendor` is
+    # the same registry lookup `create_unit` pays for internally, so neither
+    # needs a running unit. Paying for a subprocess that boots, announces its
+    # port and answers a health check only to be told the vendor has no seed
+    # wastes the startup on every call in a suite that does this per test, and
+    # points the traceback at a line inside a connected client rather than at
+    # the vendor argument that is actually wrong. `profile` has nothing left
+    # to resolve here -- unlike `unit()`, `served()` has no `env` layer that
+    # could move it away from what the caller spelled, so the argument
+    # already is the resolved value.
+    #
+    # Called as `registry.resolve_vendor` -- an attribute lookup on the
+    # module -- rather than through a name bound at import time: `unit()`
+    # resolves the vendor by calling `create_unit`, which looks up
+    # `resolve_vendor` in `registry.py`'s own namespace, so a test that
+    # substitutes `vendorfake.registry.resolve_vendor` (patching the
+    # attribute) reaches it. A bare `from vendorfake.registry import
+    # resolve_vendor` here would bind a second, separate name in this
+    # module's namespace that the same substitution does not touch --
+    # `served()` would keep calling the original function while every caller
+    # believed the vendor had been substituted. The module reference is what
+    # keeps `unit()` and `served()` resolving through the one indirection a
+    # test can patch.
+    resolved_name = registry.resolve_vendor(vendor).name
     resolved_seed = _require_seed(resolved_name, profile, seed_for(resolved_name, {}))
     argv = [
         *SERVE_COMMAND,
