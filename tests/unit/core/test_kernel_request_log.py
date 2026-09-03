@@ -181,6 +181,28 @@ def test_a_wrong_verb_on_a_real_control_route_is_still_never_recorded() -> None:
     assert [row.path for row in unit.requests.records()] == ["/v2/orders"]
 
 
+def test_the_bare_control_prefix_with_no_trailing_slash_is_still_never_recorded() -> None:
+    """`/__unit` (no trailing slash) matches no registered route -- every
+    control route lives at `/__unit/<segment>` -- but it is still the
+    observer's own address, the way a health-check or a load-balancer probe
+    would hit it. A prefix check alone (`startswith('/__unit/')`) misses this
+    exact path; `is_control_path` does not."""
+    api, unit = _api()
+    api.get("/v2/orders")
+    api.get("/__unit")
+    assert [row.path for row in unit.requests.records()] == ["/v2/orders"]
+
+
+def test_a_path_merely_resembling_the_control_prefix_is_recorded() -> None:
+    """`/__unitx` is not the control plane, only similar to it -- a vendor
+    404, not the observer's own traffic, so it belongs in the log like any
+    other unmatched vendor request."""
+    api, unit = _api()
+    api.get("/v2/orders")
+    api.get("/__unitx")
+    assert [row.path for row in unit.requests.records()] == ["/__unitx", "/v2/orders"]
+
+
 def test_an_unmatched_request_is_recorded_with_its_near_misses() -> None:
     api, unit = _api()
     api.get("/v2/order")
