@@ -146,8 +146,8 @@ module's path.
 
 ## More
 
-[README](../README.md) for install and the full quickstarts,
+[the site home](index.md) for install and the full quickstarts,
 [Seeded scenario](seeded-scenario.md) for exact field tables per vendor,
 [Async consumers](async-consumers.md) for every async entry point and what a
 delay does on each binding, [The pytest plugin](pytest-plugin.md) for the
-marker and fixtures, [CHANGELOG](../CHANGELOG.md) for what changed and when.
+marker and fixtures, [the changelog](changelog.md) for what changed and when.
