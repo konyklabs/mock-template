@@ -82,7 +82,7 @@ from vendorfake.core.kernel.types import (
 )
 from vendorfake.core.state.machine import MachineDef
 
-__all__ = ["CLOVER_MAGIC", "CloverVendor", "create_clover_vendor"]
+__all__ = ["CLOVER_MAGIC", "CLOVER_ROLES", "CloverVendor", "create_clover_vendor"]
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
@@ -99,6 +99,15 @@ convention is Square's sandbox magic values
 (https://developer.squareup.com/docs/devtools/sandbox/testing); Clover
 publishes no equivalent, so the mechanism is this project's, flagged by the
 ``chaos:`` prefix no real value would carry."""
+
+CLOVER_ROLES: Mapping[str, str] = {
+    "auth": "oauth",
+    "orders": "orders",
+    "webhooks": "webhooks",
+    "chaos": "chaos",
+}
+"""The neutral role vocabulary, mapped to Clover's own capability names. See
+``VendorDefinition.roles``."""
 
 _VOLATILE_FIELDS: tuple[str, ...] = (
     "access_token_expiration_ms",
@@ -193,6 +202,10 @@ class CloverVendor:
     @property
     def not_supported(self) -> Mapping[str, str]:
         return CLOVER_NOT_SUPPORTED
+
+    @property
+    def roles(self) -> Mapping[str, str]:
+        return CLOVER_ROLES
 
     @property
     def routes(self) -> Sequence[Route]:

@@ -1120,6 +1120,30 @@ class VendorDefinition(Protocol):
     def capabilities(self) -> Sequence[CapabilityDecl]: ...
 
     @property
+    def roles(self) -> Mapping[str, str]:
+        """The neutral role vocabulary -- ``auth``, ``orders``, ``webhooks``,
+        ``chaos`` -- mapped to *this* vendor's own capability names.
+
+        Vendors keep faithful capability names: Toast's login surface is
+        declared ``auth`` while Square's and Clover's is ``oauth``, and Square
+        calls its order surface ``order-lifecycle`` where Clover and Toast
+        just say ``orders``. ``profile="oauth-only"`` working the same way
+        across all three has, until this mapping existed, been a coincidence
+        of naming rather than a contract -- nothing stopped a fourth vendor
+        from calling its login capability ``login`` and breaking every
+        consumer who wrote ``capabilities=["auth"]`` expecting it to travel.
+
+        All four roles must be present; a conformance clause checks it, and
+        that every mapped value names a capability this vendor actually
+        declares. ``webhooks`` and ``chaos`` map to themselves for every
+        vendor shipped here, because those two names are the core's own gated
+        vocabulary (``core/capability/gates.py::CoreCapability``) and a vendor
+        has no capability of its own to rename them to; ``auth`` and
+        ``orders`` are the two a vendor genuinely renames.
+        """
+        ...
+
+    @property
     def routes(self) -> Sequence[Route]: ...
 
     @property

@@ -174,12 +174,12 @@ live with the dispatcher; their keys are declared here so the catalogue has one
 owner."""
 
 FAULT_DESCRIPTIONS: Mapping[str, str] = {spec.name: spec.summary for spec in BUILTIN_FAULTS}
-"""One-line description per fault, keyed by name -- the same summaries
-:data:`~vendorfake.core.chaos.rules.BUILTIN_FAULTS` already publishes, derived
-rather than retyped so a CLI ``faults`` listing and the catalogue cannot say
-two different things about the same fault. Read by ``vendorfake info`` (which
-prints ``GET /__unit/info`` unchanged) today; a later CLI subcommand reads it
-directly instead of walking ``BUILTIN_FAULTS`` itself."""
+"""One-line description per fault, keyed by name exactly as :data:`FAULT_PARAM_KEYS`
+-- the same summaries :data:`~vendorfake.core.chaos.rules.BUILTIN_FAULTS` already
+publishes, derived rather than retyped so ``vendorfake faults``, ``vendorfake info``
+(which prints ``GET /__unit/info`` unchanged) and the catalogue cannot say two
+different things about the same fault, and so a fault added to the catalogue
+(the five transport-fidelity kinds, for one) appears in every listing at once."""
 
 
 def _delay_owed(clock: Clock, delay_ms: float) -> int:

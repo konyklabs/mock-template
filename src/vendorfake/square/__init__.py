@@ -44,7 +44,7 @@ from vendorfake.square.retry import SQUARE_RETRY_SCHEDULE_MS
 from vendorfake.square.seed import SeedDocument, hydrate_square
 from vendorfake.square.signer import SquareWebhookSigner, square_signature, verify_square_signature
 from vendorfake.square.surface.oauth import oauth_routes
-from vendorfake.square.vendor import SQUARE_MAGIC, SQUARE_SCOPES, SquareVendor, create_square_vendor
+from vendorfake.square.vendor import SQUARE_MAGIC, SQUARE_ROLES, SQUARE_SCOPES, SquareVendor, create_square_vendor
 
 __all__ = [
     "COL",
@@ -61,6 +61,7 @@ __all__ = [
     "SQUARE_MAGIC",
     "SQUARE_NOT_SUPPORTED",
     "SQUARE_RETRY_SCHEDULE_MS",
+    "SQUARE_ROLES",
     "SQUARE_SCOPES",
     "SUPPORTED_GRANT_TYPES",
     "VENDOR",

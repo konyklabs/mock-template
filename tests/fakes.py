@@ -151,6 +151,7 @@ class FakeVendor:
     routes: tuple[Route, ...] = ()
     capabilities: tuple[CapabilityDecl, ...] = DEFAULT_CAPABILITIES
     not_supported: Mapping[str, str] = field(default_factory=lambda: dict(DEFAULT_NOT_SUPPORTED))
+    roles: Mapping[str, str] = field(default_factory=dict)
     auth: FakeAuth = field(default_factory=FakeAuth)
     errors: FakeErrors = field(default_factory=FakeErrors)
     magic: MagicTriggerSpec | None = None

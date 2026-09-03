@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from vendorfake.conformance.registry import CHECKS
 
-from . import auth, capabilities, chaos, control_plane, errors, state, transport, webhooks
+from . import auth, capabilities, chaos, control_plane, discovery, errors, state, transport, webhooks
 
 CHECKS.sort(key=lambda spec: spec.id)
 
-__all__ = ["auth", "capabilities", "chaos", "control_plane", "errors", "state", "transport", "webhooks"]
+__all__ = ["auth", "capabilities", "chaos", "control_plane", "discovery", "errors", "state", "transport", "webhooks"]

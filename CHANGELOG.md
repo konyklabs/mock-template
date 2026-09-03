@@ -9,6 +9,7 @@ commit subject.
 ### Features
 
 
+
 * **testing:** the vendor name narrows the seed. `unit()` and `served()` are
   overloaded on the vendor literal, so `unit("clover")` yields a
   `StartedUnit[CloverSeed]` rather than a union a consumer had to unpick with
@@ -94,7 +95,15 @@ commit subject.
   came before them. Every faulted response, old kinds included, now carries
   `Vendorfake-Fault` and `Vendorfake-Rule` headers.
 
+
+* **vendorfake:** discover profiles and routes by code — `registry.available_profiles`, `registry.routes`, `Driver.route_for`/`path_for`, and a per-vendor `paths` module of hand-written path constants kept honest against the router by `tests/unit/test_paths_drift.py` (konyklabs/roadmap#70)
+* **vendorfake:** add `VendorDefinition.roles`, the neutral capability-role vocabulary (`auth`, `orders`, `webhooks`, `chaos`) every vendor maps to its own capability names, published at `GET /__unit/info` under `vendor.roles` (konyklabs/roadmap#70)
+* **vendorfake:** `create_unit`/`unit()` accept `capabilities=[...]` — role names or a vendor's own capability names — and resolve to the narrowest shipped profile that is a superset, or `full` plus an absolute list when none qualifies; passing `profile=` and `capabilities=` together, or an empty `capabilities=[]`, is a `ValueError`. `GET /__unit/info` echoes the request back under `requested_capabilities` (konyklabs/roadmap#70)
+* **cli:** add `--json`, accepted both before and after the subcommand (`vendorfake --json profiles` and `vendorfake profiles --json` are the same request; a no-op where a subcommand already prints JSON) and three subcommands — `vendorfake profiles`, `vendorfake routes`, `vendorfake faults` — plus `vendorfake vendors --json` (konyklabs/roadmap#70)
+* **conformance:** add C34 (every vendor maps all four capability roles to a declared capability) and C35 (the profile-name contract holds: every vendor ships all six of `full`, `oauth-only`, `orders-only`, `no-chaos`, `no-faults`, `chaos-demo`, published at `GET /__unit/info` under `vendor.profiles`, and the profile a unit was built on honours what its name promises) (konyklabs/roadmap#70)
+
 ### Behaviour changes
+
 
 
 * **testing:** `Driver.seed` is no longer `Optional`. It was `None` for any
@@ -136,6 +145,7 @@ commit subject.
 ### Breaking changes
 
 
+
 * **testing:** an in-process unit (`unit()`) now raises
   `vendorfake.testing.UnmatchedRequest` — an `AssertionError` — for a request no
   route matched, where v0.1.0 returned the vendor's 404. A test that
@@ -161,11 +171,22 @@ commit subject.
 ### Dependencies
 
 
+
 * `anyio` is now declared directly (it was already installed as an
   unconditional dependency of `httpx`); `vendorfake.testing.transport` imports
   it so the async wait works under trio as well as asyncio.
 * `pytest-asyncio` added to the dev group, used only to run a consumer's suite
   under it inside `pytester`.
+
+### Bug Fixes
+
+
+* **vendorfake:** `unit()`'s `profile` argument now resolves the same three-step precedence `create_unit` documents — an explicit `profile=` argument, then `VENDORFAKE_PROFILE` in the `env=` mapping given to that call, then `full` — where v0.1.0 passed the literal string `"full"` and so never read `VENDORFAKE_PROFILE` from an `env=` mapping passed to `unit()` at all. **Behaviour change:** a caller who builds one `env` mapping for a whole test module and passes it to both `served()` (a real environment) and `unit()` will now see `unit()` honour `VENDORFAKE_PROFILE` in it too, where v0.1.0 silently ignored the variable for this call (konyklabs/roadmap#70)
+
+### Documentation
+
+
+* **vendorfake:** the profile-name contract, as it actually holds across all three shipped vendors: `orders-only` does NOT enable role `auth` (every shipped profile of that name promises "no OAuth dance, authenticate with a seeded token", pinned by each vendor's own tests) and `no-chaos` keeps role `chaos` enabled, switching off only `webhooks.chaos` (`no-faults` is the profile that switches off both). Documented in `src/vendorfake/conformance/checks/discovery.py` and the README's new "Discovering profiles and routes" section (konyklabs/roadmap#70)
 
 
 ## 0.1.0 (2026-09-01)

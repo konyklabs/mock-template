@@ -239,9 +239,20 @@ def control_plane_routes(
                             "name": ctx.vendor.name,
                             "display_name": ctx.vendor.display_name,
                             "api_version": ctx.vendor.api_version,
+                            "roles": dict(ctx.vendor.roles),
+                            # The profile-name contract (conformance C35) is a promise about
+                            # which *names* a vendor ships, not about the unit already running --
+                            # so the check needs the roster, not just this unit's own profile.
+                            # Read the same way registry._profiles_of does (glob profile_dir for
+                            # *.json, name by stem), duplicated rather than imported because the
+                            # core may not import vendorfake.registry (tools/boundary.toml).
+                            "profiles": sorted(path.stem for path in ctx.vendor.profile_dir.glob("*.json")),
                         }
                     ),
                     "profile": ctx.config.profile,
+                    "requested_capabilities": (
+                        None if ctx.config.requested_capabilities is None else list(ctx.config.requested_capabilities)
+                    ),
                     "capabilities": [view.as_json() for view in ctx.capabilities.view()],
                     "not_supported": dict(ctx.vendor.not_supported),
                     "auth": dict(ctx.vendor.auth.describe()),

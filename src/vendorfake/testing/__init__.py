@@ -66,7 +66,7 @@ from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.logging import JsonLogger
 from vendorfake.core.webhooks.models import matches_event_type
 from vendorfake.core.webhooks.sink import DeliverySink
-from vendorfake.registry import create_unit, resolve_vendor
+from vendorfake.registry import RouteInfo, create_unit, resolve_vendor
 from vendorfake.testing.receiver import Delivery, WebhookReceiver, webhook_receiver
 from vendorfake.testing.seeds import CloverSeed, Credentials, Seed, SquareSeed, ToastSeed, seed_for
 from vendorfake.testing.transport import UnitTransport, UnmatchedRequest
@@ -83,6 +83,7 @@ __all__ = [
     "Credentials",
     "Delivery",
     "Driver",
+    "RouteInfo",
     "Seed",
     "SeedT",
     "ServedUnit",
@@ -223,6 +224,37 @@ class Driver(Generic[SeedT]):
         """
         payload = self.info()["clock"]
         return ClockInfo(now=datetime.fromisoformat(str(payload["now"])), mode=payload["mode"])
+
+    def _route_table(self) -> list[dict[str, Any]]:
+        return list(self._json(self.client.get("/__unit/routes"))["routes"])
+
+    def route_for(self, operation_id: str) -> RouteInfo:
+        """The route named ``operation_id``, discovered from ``GET
+        /__unit/routes`` -- works over any binding this :class:`Driver`
+        happens to be, in-process or served, because it never reaches for a
+        ``Unit`` object.
+
+        Raises ``KeyError`` naming every operation id this unit actually
+        registers, so a typo is a startup failure that lists the real ones
+        rather than a ``KeyError`` with nothing to go on.
+        """
+        for row in self._route_table():
+            if row.get("operation_id") == operation_id:
+                return RouteInfo(
+                    method=str(row["method"]),
+                    path=str(row["path"]),
+                    operation_id=operation_id,
+                    capability=str(row["capability"]),
+                    summary=None if row.get("summary") is None else str(row["summary"]),
+                    internal=bool(row.get("internal", False)),
+                )
+        known = sorted(str(row["operation_id"]) for row in self._route_table() if row.get("operation_id"))
+        raise KeyError(f"no route with operation_id {operation_id!r}. Known: {known}")
+
+    def path_for(self, operation_id: str) -> str:
+        """``self.route_for(operation_id).path``, for the common case that
+        only wants the path template."""
+        return self.route_for(operation_id).path
 
     def deliveries(self) -> list[dict[str, Any]]:
         """Every webhook delivery attempt the unit made, oldest first."""
@@ -599,8 +631,9 @@ def _require_seed(vendor: str, profile: str, found: SquareSeed | CloverSeed | To
 @overload
 def unit(
     vendor: Literal["square"],
-    profile: str = ...,
+    profile: str | None = ...,
     *,
+    capabilities: Sequence[str] | None = ...,
     sink: DeliverySink | None = ...,
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
@@ -613,8 +646,9 @@ def unit(
 @overload
 def unit(
     vendor: Literal["clover"],
-    profile: str = ...,
+    profile: str | None = ...,
     *,
+    capabilities: Sequence[str] | None = ...,
     sink: DeliverySink | None = ...,
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
@@ -627,8 +661,9 @@ def unit(
 @overload
 def unit(
     vendor: Literal["toast"],
-    profile: str = ...,
+    profile: str | None = ...,
     *,
+    capabilities: Sequence[str] | None = ...,
     sink: DeliverySink | None = ...,
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
@@ -641,8 +676,9 @@ def unit(
 @overload
 def unit(
     vendor: str,
-    profile: str = ...,
+    profile: str | None = ...,
     *,
+    capabilities: Sequence[str] | None = ...,
     sink: DeliverySink | None = ...,
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
@@ -654,8 +690,9 @@ def unit(
 
 def unit(
     vendor: str,
-    profile: str = "full",
+    profile: str | None = None,
     *,
+    capabilities: Sequence[str] | None = None,
     sink: DeliverySink | None = None,
     env: Mapping[str, str] | None = None,
     logger: Logger | None = None,
@@ -679,17 +716,43 @@ def unit(
     in either checker. The object handed back is the same
     ``contextlib`` context manager it always was; only its declared type is
     ``AbstractContextManager``.
+
+    ``profile`` defaults to ``None``, which resolves via
+    :func:`~vendorfake.registry.create_unit` / ``load_profile`` in the same
+    three steps ``vendorfake serve`` uses: an explicit ``profile=`` argument
+    wins; failing that, ``VENDORFAKE_PROFILE`` in the ``env=`` mapping given
+    to *this call*; failing that, ``full``. Prior to this release ``unit()``
+    passed the literal string ``"full"`` to ``create_unit``, so an explicit
+    default always beat the environment and a caller's ``env=`` mapping could
+    never change which profile an in-process unit started on -- **this is a
+    behaviour change**, recorded in ``CHANGELOG.md``: a caller who builds one
+    ``env`` mapping for a whole test module and passes it to both
+    :func:`served` (a real environment) and ``unit()`` (which never read
+    ``VENDORFAKE_PROFILE`` from it before) will now see ``unit()`` start on
+    that profile too. See :func:`~vendorfake.registry.create_unit` for
+    exactly how a capability request resolves to a profile instead when
+    ``capabilities`` is given; supplying both ``profile`` and ``capabilities``
+    is a ``ValueError``, and so is an empty ``capabilities=[]``.
     """
     return _unit(
-        vendor, profile, sink=sink, env=env, logger=logger, seed=seed, unmatched=unmatched, clock_start=clock_start
+        vendor,
+        profile,
+        capabilities=capabilities,
+        sink=sink,
+        env=env,
+        logger=logger,
+        seed=seed,
+        unmatched=unmatched,
+        clock_start=clock_start,
     )
 
 
 @contextmanager
 def _unit(
     vendor: str,
-    profile: str = "full",
+    profile: str | None = None,
     *,
+    capabilities: Sequence[str] | None = None,
     sink: DeliverySink | None = None,
     env: Mapping[str, str] | None = None,
     logger: Logger | None = None,
@@ -705,6 +768,14 @@ def _unit(
     instead. ``env`` is the ``VENDORFAKE_*`` layer, empty by default -- the
     process environment is never read here, so one test's variables cannot
     change another test's profile.
+
+    **Asymmetric with** :func:`served`: ``served()`` keeps a plain
+    ``profile: str = "full"`` and has no ``capabilities=`` parameter, so a
+    ``VENDORFAKE_PROFILE`` entry in an ``env`` mapping never influences it
+    (it does not even accept one) and a capability request cannot be moved
+    from one to the other without first resolving it by hand. Spec-compliant
+    -- only ``unit()`` was asked to gain either -- but undocumented before
+    this paragraph.
 
     **Ids are deterministic per unit.** Two units on the same profile mint the
     same order ids, tokens and codes in the same order, because each starts
@@ -753,6 +824,7 @@ def _unit(
     built = create_unit(
         vendor=vendor,
         profile=profile,
+        capabilities=capabilities,
         env=environ,
         sink=sink,
         logger=JsonLogger("warn") if logger is None else logger,
@@ -823,8 +895,9 @@ def _release_async_client(started: StartedUnit[Any]) -> None:
 @overload
 def async_unit(
     vendor: Literal["square"],
-    profile: str = ...,
+    profile: str | None = ...,
     *,
+    capabilities: Sequence[str] | None = ...,
     sink: DeliverySink | None = ...,
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
@@ -837,8 +910,9 @@ def async_unit(
 @overload
 def async_unit(
     vendor: Literal["clover"],
-    profile: str = ...,
+    profile: str | None = ...,
     *,
+    capabilities: Sequence[str] | None = ...,
     sink: DeliverySink | None = ...,
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
@@ -851,8 +925,9 @@ def async_unit(
 @overload
 def async_unit(
     vendor: Literal["toast"],
-    profile: str = ...,
+    profile: str | None = ...,
     *,
+    capabilities: Sequence[str] | None = ...,
     sink: DeliverySink | None = ...,
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
@@ -865,8 +940,9 @@ def async_unit(
 @overload
 def async_unit(
     vendor: str,
-    profile: str = ...,
+    profile: str | None = ...,
     *,
+    capabilities: Sequence[str] | None = ...,
     sink: DeliverySink | None = ...,
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
@@ -878,8 +954,9 @@ def async_unit(
 
 def async_unit(
     vendor: str,
-    profile: str = "full",
+    profile: str | None = None,
     *,
+    capabilities: Sequence[str] | None = None,
     sink: DeliverySink | None = None,
     env: Mapping[str, str] | None = None,
     logger: Logger | None = None,
@@ -908,15 +985,24 @@ def async_unit(
     call before the code under test runs.
     """
     return _async_unit(
-        vendor, profile, sink=sink, env=env, logger=logger, seed=seed, unmatched=unmatched, clock_start=clock_start
+        vendor,
+        profile,
+        capabilities=capabilities,
+        sink=sink,
+        env=env,
+        logger=logger,
+        seed=seed,
+        unmatched=unmatched,
+        clock_start=clock_start,
     )
 
 
 @asynccontextmanager
 async def _async_unit(
     vendor: str,
-    profile: str = "full",
+    profile: str | None = None,
     *,
+    capabilities: Sequence[str] | None = None,
     sink: DeliverySink | None = None,
     env: Mapping[str, str] | None = None,
     logger: Logger | None = None,
@@ -926,7 +1012,15 @@ async def _async_unit(
 ) -> AsyncIterator[StartedUnit[Seed]]:
     """The body of :func:`async_unit`. See that function for the contract."""
     with unit(
-        vendor, profile, sink=sink, env=env, logger=logger, seed=seed, unmatched=unmatched, clock_start=clock_start
+        vendor,
+        profile,
+        capabilities=capabilities,
+        sink=sink,
+        env=env,
+        logger=logger,
+        seed=seed,
+        unmatched=unmatched,
+        clock_start=clock_start,
     ) as started:
         try:
             yield started
@@ -1053,6 +1147,17 @@ def _served(
     the operating system choose, and the CLI announces the number before it
     accepts a request. The child is asked to stop with ``SIGTERM`` -- uvicorn's
     graceful path -- and killed only if it ignores that.
+
+    ``profile`` is a plain ``str = "full"`` and there is no ``capabilities=``
+    parameter -- unlike :func:`unit`, which resolves ``VENDORFAKE_PROFILE``
+    out of the ``env=`` mapping it is given when ``profile`` is not passed,
+    and which accepts ``capabilities=``. This subcommand-launching helper
+    takes neither: the child inherits the real process environment rather
+    than an explicit mapping, so there is no ``env=`` argument here for a
+    variable to come from, and a capability request must be resolved to a
+    profile name by hand (or via :func:`unit`) before it can be passed to
+    ``profile=``. Spec-compliant -- only ``unit()`` was asked to gain
+    either -- but easy to trip on when moving a test from one to the other.
 
     Both pipes are read on a daemon thread for the life of the child, so a
     child that logs more than the pipe buffers cannot block mid-test, and

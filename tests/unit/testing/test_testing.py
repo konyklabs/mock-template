@@ -172,6 +172,31 @@ def test_served_s_clock_start_reaches_the_child_through_this_process_s_own_envir
         assert info.now == datetime(2026, 1, 1, tzinfo=UTC)
 
 
+def test_unit_resolves_profile_through_the_argument_then_env_then_the_default() -> None:
+    """The three-level precedence :func:`~vendorfake.registry.create_unit`
+    documents, pinned at all three levels: an explicit ``profile=`` argument
+    beats ``VENDORFAKE_PROFILE`` in the ``env=`` mapping, which beats the
+    ``full`` default.
+
+    **Behaviour change**, recorded in ``CHANGELOG.md``: v0.1.0's ``unit()``
+    passed the literal string ``"full"`` to ``create_unit`` regardless of
+    ``env``, so ``env={"VENDORFAKE_PROFILE": ...}`` was silently ignored for
+    this call. A caller who builds one ``env`` mapping for a whole test
+    module and passes it to both :func:`~vendorfake.testing.served` and
+    :func:`~vendorfake.testing.unit` now gets the same profile from both.
+    """
+    # Level 3: neither an argument nor VENDORFAKE_PROFILE -- the "full" default.
+    with unit("square") as square:
+        assert square.profile == "full"
+    # Level 2: no explicit profile= -- VENDORFAKE_PROFILE in env= wins.
+    with unit("square", env={"VENDORFAKE_PROFILE": "oauth-only"}) as square:
+        assert square.profile == "oauth-only"
+    # Level 1: an explicit profile= beats VENDORFAKE_PROFILE in env=, even
+    # when the two name different, both-real profiles.
+    with unit("square", "no-faults", env={"VENDORFAKE_PROFILE": "oauth-only"}) as square:
+        assert square.profile == "no-faults"
+
+
 def test_a_memory_sink_captures_instead_of_delivering() -> None:
     sink = MemorySink()
     with unit("square", sink=sink) as square:
