@@ -340,11 +340,22 @@ def unit(
 ) -> Iterator[StartedUnit]:
     """A unit in this process, stopped however the block ends.
 
-    ``profile`` defaults to ``None``, which resolves to ``full`` -- the same
-    default it has always had -- unless ``capabilities`` is given instead;
-    see :func:`~vendorfake.registry.create_unit` for exactly how a
-    capability request resolves to a profile, and note that supplying both
-    ``profile`` and ``capabilities`` is a ``ValueError``.
+    ``profile`` defaults to ``None``, which resolves via
+    :func:`~vendorfake.registry.create_unit` / ``load_profile`` in the same
+    three steps ``vendorfake serve`` uses: an explicit ``profile=`` argument
+    wins; failing that, ``VENDORFAKE_PROFILE`` in the ``env=`` mapping given
+    to *this call*; failing that, ``full``. Prior to this release ``unit()``
+    passed the literal string ``"full"`` to ``create_unit``, so an explicit
+    default always beat the environment and a caller's ``env=`` mapping could
+    never change which profile an in-process unit started on -- **this is a
+    behaviour change**, recorded in ``CHANGELOG.md``: a caller who builds one
+    ``env`` mapping for a whole test module and passes it to both
+    :func:`served` (a real environment) and ``unit()`` (which never read
+    ``VENDORFAKE_PROFILE`` from it before) will now see ``unit()`` start on
+    that profile too. See :func:`~vendorfake.registry.create_unit` for
+    exactly how a capability request resolves to a profile instead when
+    ``capabilities`` is given; supplying both ``profile`` and ``capabilities``
+    is a ``ValueError``, and so is an empty ``capabilities=[]``.
 
     ``sink`` defaults to real HTTP delivery, so a subscribed
     :func:`webhook_receiver` sees signed bytes; pass
@@ -352,6 +363,14 @@ def unit(
     instead. ``env`` is the ``VENDORFAKE_*`` layer, empty by default -- the
     process environment is never read here, so one test's variables cannot
     change another test's profile.
+
+    **Asymmetric with** :func:`served`: ``served()`` keeps a plain
+    ``profile: str = "full"`` and has no ``capabilities=`` parameter, so a
+    ``VENDORFAKE_PROFILE`` entry in an ``env`` mapping never influences it
+    (it does not even accept one) and a capability request cannot be moved
+    from one to the other without first resolving it by hand. Spec-compliant
+    -- only ``unit()`` was asked to gain either -- but undocumented before
+    this paragraph.
 
     **Ids are deterministic per unit.** Two units on the same profile mint the
     same order ids, tokens and codes in the same order, because each starts
@@ -441,6 +460,17 @@ def served(
     the operating system choose, and the CLI announces the number before it
     accepts a request. The child is asked to stop with ``SIGTERM`` -- uvicorn's
     graceful path -- and killed only if it ignores that.
+
+    ``profile`` is a plain ``str = "full"`` and there is no ``capabilities=``
+    parameter -- unlike :func:`unit`, which resolves ``VENDORFAKE_PROFILE``
+    out of the ``env=`` mapping it is given when ``profile`` is not passed,
+    and which accepts ``capabilities=``. This subcommand-launching helper
+    takes neither: the child inherits the real process environment rather
+    than an explicit mapping, so there is no ``env=`` argument here for a
+    variable to come from, and a capability request must be resolved to a
+    profile name by hand (or via :func:`unit`) before it can be passed to
+    ``profile=``. Spec-compliant -- only ``unit()`` was asked to gain
+    either -- but easy to trip on when moving a test from one to the other.
 
     Both pipes are read on a daemon thread for the life of the child, so a
     child that logs more than the pipe buffers cannot block mid-test, and

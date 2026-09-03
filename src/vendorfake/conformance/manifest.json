@@ -24,8 +24,8 @@
     "C21": "webhooks: the declared retry schedule is the schedule actually followed",
     "C22": "state: the seed scenario is deterministic across two OPERATING-SYSTEM PROCESSES",
     "C23": "transport: a repeated query parameter reaches the handler whole",
-    "C24": "discovery: every vendor maps all four capability roles to a declared capability",
-    "C25": "discovery: the profile-name contract holds for the profile this unit was built on"
+    "C34": "discovery: every vendor maps all four capability roles to a declared capability",
+    "C35": "discovery: the profile-name contract holds for the profile this unit was built on"
   },
   "expected_skips": {
     "C07": [

@@ -291,7 +291,7 @@ def test_the_cli_can_drop_the_control_plane_from_the_document() -> None:
 # ---------------------------------------------------------------------------
 
 #: Every subcommand `--json` is honoured by. `serve` and `conformance` are
-#: deliberately absent -- see `_add_json_flag`'s docstring in cli.py.
+#: deliberately absent -- see `_json_flag_parent`'s docstring in cli.py.
 JSON_SUBCOMMANDS: tuple[tuple[str, ...], ...] = (
     ("info", "--vendor", "square"),
     ("openapi", "--vendor", "square"),
@@ -308,6 +308,33 @@ def test_every_json_subcommand_produces_one_parseable_document_on_stdout(argv: t
     assert code == 0
     parsed = json.loads(out)  # raises if anything but valid JSON reached stdout
     assert parsed is not None
+
+
+@pytest.mark.parametrize("argv", JSON_SUBCOMMANDS, ids=[row[0] for row in JSON_SUBCOMMANDS])
+def test_every_json_subcommand_also_accepts_json_before_the_subcommand(argv: tuple[str, ...]) -> None:
+    """``--json`` reads naturally on either side of the subcommand name:
+    ``vendorfake --json profiles --vendor square`` and
+    ``vendorfake profiles --vendor square --json`` are the same request.
+    Before this fix, only the trailing position worked: the global position
+    exited 2 with ``unrecognized arguments: --json``, which contradicted the
+    CHANGELOG's own description of the flag as global."""
+    code, out = run("--json", *argv)
+    assert code == 0
+    parsed = json.loads(out)
+    assert parsed is not None
+
+
+def test_json_before_and_after_the_subcommand_produce_the_identical_document() -> None:
+    global_code, global_out = run("--json", "profiles", "--vendor", "square")
+    trailing_code, trailing_out = run("profiles", "--vendor", "square", "--json")
+    assert global_code == trailing_code == 0
+    assert json.loads(global_out) == json.loads(trailing_out)
+
+
+def test_a_json_flag_repeated_on_both_sides_of_the_subcommand_is_accepted() -> None:
+    code, out = run("--json", "profiles", "--vendor", "square", "--json")
+    assert code == 0
+    assert json.loads(out)
 
 
 def test_profiles_lists_the_six_shipped_profiles() -> None:

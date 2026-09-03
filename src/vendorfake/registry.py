@@ -145,7 +145,15 @@ def _profiles_of(definition: VendorDefinition) -> tuple[ProfileInfo, ...]:
         out.append(
             ProfileInfo(
                 vendor=definition.name,
-                name=document.name or path.stem,
+                # The file's stem, not `document.name` -- `load_profile` addresses a
+                # profile by stem (`profile_path` below), so the name reported here
+                # must be the name that then loads, not whatever a document's own
+                # optional `name` field happens to say. All eighteen shipped
+                # profiles agree today, which is exactly why a mismatch would go
+                # unnoticed without this: `available_profiles` advertising a name
+                # that `unit(vendor, that_name)` cannot load is precisely the class
+                # of surprise this module exists to rule out.
+                name=path.stem,
                 summary=document.summary or "",
                 capabilities=document.capabilities,
                 seed=document.seed,
@@ -161,7 +169,12 @@ def available_profiles(vendor: str) -> tuple[ProfileInfo, ...]:
     :func:`~vendorfake.core.config.models.parse_profile_document` -- the same
     schema :func:`~vendorfake.core.config.profile.load_profile` validates a
     profile against before ``create_unit`` will start on it -- so a name
-    reported here can never be a name that then fails to parse. Not the fully
+    reported here can never be a name that then fails to parse. Each
+    :class:`ProfileInfo`'s ``name`` is the file's *stem*, not its optional
+    ``name`` field: :func:`~vendorfake.core.config.profile.load_profile`
+    addresses a profile by stem, so a name this reports and the name that
+    then loads it are guaranteed to be the same string, never merely the same
+    string by every shipped profile happening to agree. Not the fully
     resolved config: no environment layer, no vendor defaults merged in, none
     of that is a property of the *profile document* this call describes.
     """
@@ -174,6 +187,18 @@ class RouteInfo:
     *by*, trimmed from everything ``GET /__unit/routes`` also publishes for
     the control plane's own reasons (scopes, idempotency, an example body).
     See :func:`routes`.
+
+    This is a distinct, smaller type from
+    :class:`vendorfake.core.kernel.unit.RouteInfo`, not a shadowing accident:
+    the kernel's version is what the control plane actually publishes at
+    ``GET /__unit/routes`` (with ``scopes``, ``idempotency``, ``example_body``
+    and ``auth`` besides), and ``registry.RouteInfo`` is the six-field
+    consumer-facing *projection* of one of its rows -- named ``RouteInfo`` in
+    the spec this module implements, kept under that name here, and never
+    re-exported next to the kernel's own so that an import naming
+    ``vendorfake.registry.RouteInfo`` or
+    ``vendorfake.core.kernel.unit.RouteInfo`` is always unambiguous about
+    which shape it names.
     """
 
     method: str
@@ -306,7 +331,13 @@ def create_unit(
     ``capabilities``, when given, is resolved instead of ``profile`` --
     passing both is a ``ValueError``, because the two are two different
     answers to "which profile" and a caller who supplied both cannot have
-    meant for one to be ignored. Each name is either a role
+    meant for one to be ignored. An empty ``capabilities=[]`` is a
+    ``ValueError`` too, rather than "no request": the empty set is a subset
+    of every profile's capabilities, so resolving it the way any other
+    request resolves would silently pick the smallest shipped profile, which
+    is the one reading of an empty list a caller almost certainly did not
+    intend. Pass ``capabilities=None`` (the default) to mean no request at
+    all. Each name is either a role
     (:data:`ROLE_NAMES` -- ``auth``, ``orders``, ``webhooks``, ``chaos``),
     translated through ``vendor.roles`` into this vendor's own capability
     name, or already one of this vendor's own capability names, used as
@@ -339,6 +370,15 @@ def create_unit(
                 "create_unit(capabilities=..., profile=...) were both given; they are two different "
                 "answers to which profile to start. Name the profile you want, or name the capabilities "
                 "and let resolution choose one -- not both."
+            )
+        if len(capabilities) == 0:
+            raise ValueError(
+                "create_unit(capabilities=[]) is ambiguous. An empty set is a subset of every profile's "
+                "capabilities, so resolving it the way a non-empty request resolves would silently start "
+                "the smallest shipped profile -- almost certainly not what an empty list was meant to ask "
+                "for. Pass capabilities=None (or omit the argument) to mean 'no capability request', "
+                "profile=... to name a profile directly, or a non-empty list to request specific "
+                "capabilities or roles."
             )
         requested = tuple(capabilities)
         translated = _translate_capability_names(definition, requested)

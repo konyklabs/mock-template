@@ -51,6 +51,26 @@ def _upper_snake(operation_id: str) -> str:
     return s3.upper()
 
 
+def _upper_snake_string_constants(module: object) -> dict[str, str]:
+    """Every ``UPPER_SNAKE`` name the module actually defines, mapped to its
+    value -- read from the module's own namespace, never from ``__all__``.
+
+    ``__all__`` is a *statement of intent about star-imports*, not an
+    inventory: a constant left off it by a hand-edit is still a live
+    attribute a caller can `from vendorfake.square.paths import OLD_NAME`.
+    Scanning ``__all__`` for the orphan half of this test's assertion (a
+    constant naming a route that no longer exists) missed exactly that case
+    -- a stale constant dropped from ``__all__`` instead of deleted kept
+    resolving on import while this test stayed green, which defeats the
+    module's own promise that no such constant can exist undetected.
+    """
+    return {
+        name: value
+        for name, value in vars(module).items()
+        if not name.startswith("_") and name.isupper() and isinstance(value, str)
+    }
+
+
 @pytest.mark.parametrize("name,factory,module", VENDORS, ids=[row[0] for row in VENDORS])
 def test_every_operation_id_has_exactly_one_constant_and_the_values_agree(
     name: str, factory: Callable[[], VendorDefinition], module: object
@@ -68,8 +88,7 @@ def test_every_operation_id_has_exactly_one_constant_and_the_values_agree(
         )
         expected[const] = route.path
 
-    names: tuple[str, ...] = module.__all__  # type: ignore[attr-defined]
-    published = {const: getattr(module, const) for const in names}
+    published = _upper_snake_string_constants(module)
 
     missing = sorted(set(expected) - set(published))
     assert not missing, (

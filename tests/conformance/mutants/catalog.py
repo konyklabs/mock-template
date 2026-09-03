@@ -1125,7 +1125,7 @@ Python startup assertion in front of it.
 
 
 # ---------------------------------------------------------------------------
-# C24 -- every vendor maps all four capability roles to a declared capability.
+# C34 -- every vendor maps all four capability roles to a declared capability.
 # ---------------------------------------------------------------------------
 
 
@@ -1136,17 +1136,17 @@ def _point_the_auth_role_at_an_undeclared_capability(inner: VendorDefinition) ->
 
 register(
     Mutant(
-        id="M32",
+        id="M55",
         name="role-mapped-to-an-undeclared-capability",
         defect="VendorDefinition.roles['auth'] names a capability this vendor never declares.",
         provenance=Provenance.HYPOTHETICAL,
-        trips=frozenset({"C24"}),
-        also_trips=frozenset({"C25"}),
+        trips=frozenset({"C34"}),
+        also_trips=frozenset({"C35"}),
         cascade=(
-            "C25 resolves every role name through the same published vendor.roles mapping C24 checks. "
+            "C35 resolves every role name through the same published vendor.roles mapping C34 checks. "
             "On the 'oauth-only' profile it asks whether the capability role 'auth' resolves to is "
             "enabled, and an undeclared capability can never be enabled -- so the same corrupted "
-            "entry that fails C24's completeness check also fails C25's formula for this one profile."
+            "entry that fails C34's completeness check also fails C35's formula for this one profile."
         ),
         vendor=_point_the_auth_role_at_an_undeclared_capability,
         profiles=("oauth-only",),
@@ -1163,7 +1163,7 @@ mutant reaches the vendor definition rather than the route table.
 
 
 # ---------------------------------------------------------------------------
-# C25 -- the profile-name contract.
+# C35 -- the profile-name contract.
 # ---------------------------------------------------------------------------
 
 
@@ -1177,7 +1177,7 @@ def _report_chaos_disabled(document: dict[str, Any]) -> dict[str, Any]:
 
 register(
     Mutant(
-        id="M33",
+        id="M56",
         name="no-chaos-profile-reports-its-chaos-role-disabled",
         defect=(
             "GET /__unit/capabilities reports the capability role 'chaos' as disabled on the "
@@ -1186,7 +1186,7 @@ register(
             "faults are switched off."
         ),
         provenance=Provenance.HYPOTHETICAL,
-        trips=frozenset({"C25"}),
+        trips=frozenset({"C35"}),
         also_trips=frozenset({"C14"}),
         cascade=(
             "C14 computes its own 'everything currently enabled' baseline from GET /__unit/capabilities "
@@ -1211,6 +1211,6 @@ register(
 switches off only delivery-scope faults (`webhooks.chaos`), which is a real
 distinction from `no-faults` that a consumer can only trust if the name and
 the published capability state agree. This mutant breaks exactly that
-agreement, at the wire document C25 reads, without touching the vendor
-definition C24 checks or any route a request-handling contract would notice.
+agreement, at the wire document C35 reads, without touching the vendor
+definition C34 checks or any route a request-handling contract would notice.
 """

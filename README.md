@@ -328,6 +328,25 @@ started) and `requested_capabilities` (what was actually asked for, when
 `capabilities=` was used) — so a consumer never has to guess which one a
 running unit resolved to.
 
+**The profile-name contract.** Every vendor ships all six profiles in the
+[table below](#profiles) — `full`, `oauth-only`, `orders-only`, `no-chaos`,
+`no-faults`, `chaos-demo` — and a name means the same shape of thing
+whichever vendor answers it, checked by the conformance suite (C34, C35) on
+every vendor. Two of the six read as narrower or broader than they are, so
+name a profile by what it actually does, not by what it sounds like:
+
+- `oauth-only` enables role `auth` and role `chaos` (nothing says it enables
+  *only* those two — a vendor whose OAuth surface needs a third capability to
+  function is not thereby non-conformant).
+- `orders-only` enables role `orders` and deliberately does **not** enable
+  role `auth`: all three vendors ship this profile with the login/token
+  surface switched off, authenticating instead with a seeded token — the
+  profile's own `summary` field says so.
+- `no-chaos` keeps role `chaos` enabled and switches off only
+  `webhooks.chaos` (delivery-scope chaos) — the name promises no *delivery*
+  chaos, not no chaos at all. `no-faults` is the profile that switches off
+  both role `chaos` and `webhooks.chaos`.
+
 ### Rehearsing failures
 
 Faults are rules, not dice: same seed, same profile, same faults every run.

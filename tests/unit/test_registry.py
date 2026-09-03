@@ -178,6 +178,32 @@ def test_available_profiles_reads_the_same_schema_load_profile_validates_against
     assert "OAuth" in row.summary
 
 
+def test_every_shipped_profiles_own_name_field_equals_its_file_stem() -> None:
+    """``ProfileInfo.name`` is the file's stem, not the document's own
+    optional ``name`` field (see ``_profiles_of``'s docstring) -- and this
+    pins the data, not just that code path: every shipped profile's own
+    ``name`` field agrees with its filename too, across all three vendors,
+    so a document that quietly drifted from its filename would be caught
+    here even though ``available_profiles`` itself can no longer surface it
+    (it reports the stem regardless of what the document says)."""
+    from importlib import resources
+
+    for vendor_name in ("square", "clover", "toast"):
+        package = resources.files(f"vendorfake.{vendor_name}") / "profiles"
+        checked = 0
+        for entry in package.iterdir():
+            if not entry.name.endswith(".json"):
+                continue
+            document = json.loads(entry.read_text(encoding="utf-8"))
+            stem = entry.name.removesuffix(".json")
+            assert document.get("name") == stem, (
+                f"{vendor_name}/profiles/{entry.name}: document's own 'name' field is "
+                f"{document.get('name')!r}, not {stem!r}"
+            )
+            checked += 1
+        assert checked == 6, f"{vendor_name}: expected 6 shipped profiles, found {checked}"
+
+
 def test_available_profiles_refuses_an_unknown_vendor_the_same_way_resolve_vendor_does() -> None:
     from vendorfake.registry import available_profiles
 
@@ -216,6 +242,19 @@ def test_capabilities_and_profile_together_is_a_value_error() -> None:
         create_unit(vendor="square", profile="full", capabilities=["oauth"])
     assert "capabilities" in str(caught.value)
     assert "profile" in str(caught.value)
+
+
+def test_an_empty_capabilities_list_is_a_value_error_not_the_narrowest_profile() -> None:
+    """An empty set is a subset of every profile's capabilities, so resolving
+    it the way a non-empty request resolves would silently pick the smallest
+    shipped profile -- almost certainly not what an empty list was meant to
+    ask for. Verified against the wrong behaviour first: before this guard,
+    ``create_unit(vendor="square", capabilities=[])`` started on 'oauth-only'
+    with capabilities ('oauth', 'chaos')."""
+    with pytest.raises(ValueError) as caught:
+        create_unit(vendor="square", capabilities=[])
+    assert "capabilities" in str(caught.value)
+    assert "empty" in str(caught.value) or "[]" in str(caught.value)
 
 
 def test_capabilities_translates_a_role_name_into_this_vendors_own_and_picks_the_narrowest_profile() -> None:
