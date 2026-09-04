@@ -204,7 +204,7 @@ def test_every_control_route_carries_a_summary_and_an_operation_id() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_health_names_the_vendor_the_profile_and_the_framework_counter() -> None:
+def test_health_names_the_vendor_the_profile_and_the_uptime() -> None:
     api, _ = _api()
     body = api.get("/__unit/health").json()
     assert body["status"] == "ok"
