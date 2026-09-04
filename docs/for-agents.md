@@ -111,13 +111,12 @@ the unit *does* serve, and `GET /__unit/routes` (or `vendorfake explain route
 <operation_id>`) is the ground truth behind it. A 404 from a route that *did*
 match -- an id that does not exist -- is a real answer and never raises.
 
-Served and container units never raise; they stand in for the vendor and
-answer as it would. The same diagnosis rides on every unmatched HTTP response
-instead, as the `Vendorfake-Near-Miss` header -- a compact JSON array of the
-same candidates (`route`, `score`, `operation_id`). Pass
-`unit(vendor, unmatched="vendor-404")`, or set `VENDORFAKE_UNMATCHED` /
-a profile's `unmatched.policy`, for a test or a suite that probes an
-unmodelled path on purpose.
+`served()` and `serve_in_thread()` drivers raise the same way, from a response
+hook on their client; on the wire every binding answers 404 with the diagnosis
+in the `Vendorfake-Near-Miss` header -- a compact JSON array of the same
+candidates (`route`, `score`, `operation_id`) -- which is what a container or a
+non-Python consumer sees. Pass `unmatched="vendor-404"` to `unit()` or
+`served()` for a test that probes an unmodelled path on purpose.
 
 ## The evidence habit
 

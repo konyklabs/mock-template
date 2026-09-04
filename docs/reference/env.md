@@ -24,4 +24,3 @@ Every environment variable `load_profile` reads.
 | `VENDORFAKE_LOG_LEVEL` | log_level | Minimum level the unit's logger emits. |
 | `VENDORFAKE_VENDOR_<suffix>` | vendor_config | Prefix: the remainder becomes a snake_case vendor-config key. |
 | `VENDORFAKE_REQUEST_LOG_CAPACITY` | requests.capacity | How many requests the in-memory request log keeps before evicting the oldest. |
-| `VENDORFAKE_UNMATCHED` | unmatched.policy | 'vendor-404' or 'error': what an in-process binding does with a request no route matched. |

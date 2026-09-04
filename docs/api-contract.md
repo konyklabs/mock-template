@@ -31,6 +31,8 @@ exists and building one are a single task:
 | `routes(vendor, profile)` | The route table a profile serves |
 | `create_unit(...)` | The one constructor: a name and a profile in, a running `Unit` out |
 | `resolve_vendor(name)` | A name to a `VendorDefinition`, refusing a typo by listing the real ones |
+| `ambient_env()` | The exported `VENDORFAKE_*` variables; the one place a binding reads the process environment |
+| `resolve_capabilities(definition, profile, capabilities)` | A `capabilities=` request to `(profile, env layer)`, shared by `create_unit` and `served()` |
 
 `__version__` is the version of the code that is imported, which is not always
 what `importlib.metadata` reports — the two disagree in a source checkout.
@@ -64,14 +66,14 @@ child's inherited `os.environ` — an entry beats the ambient variable of the
 same name, `clock_start=` layers beneath it exactly as in `unit()`, and the
 parent-resolved `.seed` reads the same `VENDORFAKE_VENDOR_*` layer. Additive:
 a call without it behaves as before. Entries for what `served()` passes as a
-flag (`VENDORFAKE_PROFILE`, `VENDORFAKE_HOST`, `VENDORFAKE_PORT`,
-`VENDORFAKE_LOG_LEVEL`), for `VENDORFAKE_SEED` and for
-`VENDORFAKE_SEED_OVERLAY` are refused with
-`ValueError` before the child is spawned — the first four because the flag
-would beat them (the message names the parameter to use), the
-seed because `.seed` could not describe it, and the overlay because
-`seed_overlay=` is the parameter for it and only the parameter's path checks
-the document in the calling process. There is still no `capabilities=`.
+flag (`VENDORFAKE_HOST`, `VENDORFAKE_PORT`, `VENDORFAKE_LOG_LEVEL`), for
+`VENDORFAKE_SEED` and for `VENDORFAKE_SEED_OVERLAY` are refused with
+`ValueError` before the child is spawned — the first three because the flag
+would beat them (the message names the parameter to use), the seed because
+`.seed` could not describe it, and the overlay because `seed_overlay=` is the
+parameter for it and only the parameter's path checks the document in the
+calling process. `served()` takes `capabilities=` and `unmatched=` with
+`unit()`'s meaning, and every HTTP driver has `.async_client`.
 
 **All three bindings take `seed_overlay=`.** A partial seed document merged
 over the profile's before the store is hydrated — an inline mapping, or a

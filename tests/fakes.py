@@ -219,7 +219,6 @@ def make_config(
     subscribers: Sequence[Mapping[str, object]] = (),
     disable_delivery: bool = False,
     request_log_capacity: int | None = None,
-    unmatched: str | None = None,
 ) -> object:
     """A ``ResolvedConfig`` for a kernel test, with the knobs those tests move."""
     from vendorfake.core.config.models import (
@@ -232,7 +231,6 @@ def make_config(
         RetryPolicy,
         SubscriberConfig,
         TransportSection,
-        UnmatchedSection,
     )
 
     return ResolvedConfig(
@@ -250,7 +248,6 @@ def make_config(
         errors=ErrorsSection(sidecar=error_sidecar),  # type: ignore[arg-type]
         transport=TransportSection(),
         requests=RequestsSection() if request_log_capacity is None else RequestsSection(capacity=request_log_capacity),
-        unmatched=UnmatchedSection(policy=unmatched),  # type: ignore[arg-type]
         log_level=log_level,
     )
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.metadata import entry_points
@@ -33,9 +34,11 @@ __all__ = [
     "RouteInfo",
     "SeedingVendor",
     "VendorDefinition",
+    "ambient_env",
     "available_profiles",
     "available_vendors",
     "create_unit",
+    "resolve_capabilities",
     "resolve_vendor",
     "routes",
 ]
@@ -235,6 +238,42 @@ def _pick(vendor: str | VendorDefinition | None, env: Mapping[str, str]) -> Vend
     return vendor
 
 
+def ambient_env(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The ``VENDORFAKE_*`` variables of the process environment: the one place a
+    binding reads it. ``unit()``, ``served()`` and the CLI all layer explicit
+    configuration over this, so an exported variable means one thing everywhere."""
+    source = os.environ if environ is None else environ
+    return {key: value for key, value in source.items() if key.startswith("VENDORFAKE_")}
+
+
+def resolve_capabilities(
+    definition: VendorDefinition, profile: str | None, capabilities: Sequence[str] | None
+) -> tuple[str | None, dict[str, str]]:
+    """Turn a ``capabilities=`` request into ``(profile name, env layer)``: the
+    narrowest shipped profile covering the translated set, else ``full`` plus a
+    ``VENDORFAKE_CAPABILITIES`` layer. Refuses ``capabilities`` together with
+    ``profile``, and an empty list. Shared by ``create_unit`` and ``served()``."""
+    if capabilities is None:
+        return profile, {}
+    if profile is not None:
+        raise ValueError(
+            "capabilities=... and profile=... were both given; they are two different answers to which "
+            "profile to start. Name the profile you want, or name the capabilities and let resolution "
+            "choose one -- not both."
+        )
+    if len(capabilities) == 0:
+        raise ValueError(
+            "capabilities=[] is ambiguous: an empty set is a subset of every profile's capabilities. Pass "
+            "capabilities=None to mean 'no capability request', profile=... to name a profile, or a "
+            "non-empty list of capabilities or roles."
+        )
+    translated = _translate_capability_names(definition, tuple(capabilities))
+    matched = _narrowest_profile_for(definition, translated)
+    if matched is not None:
+        return matched, {}
+    return "full", {"VENDORFAKE_CAPABILITIES": ",".join(translated)}
+
+
 def create_unit(
     *,
     vendor: str | VendorDefinition | None = None,
@@ -264,32 +303,9 @@ def create_unit(
     environ: Mapping[str, str] = {} if env is None else env
     definition = _pick(vendor, environ)
 
-    requested: tuple[str, ...] | None = None
-    resolved_profile = profile
-    if capabilities is not None:
-        if profile is not None:
-            raise ValueError(
-                "create_unit(capabilities=..., profile=...) were both given; they are two different "
-                "answers to which profile to start. Name the profile you want, or name the capabilities "
-                "and let resolution choose one -- not both."
-            )
-        if len(capabilities) == 0:
-            raise ValueError(
-                "create_unit(capabilities=[]) is ambiguous. An empty set is a subset of every profile's "
-                "capabilities, so resolving it the way a non-empty request resolves would silently start "
-                "the smallest shipped profile -- almost certainly not what an empty list was meant to ask "
-                "for. Pass capabilities=None (or omit the argument) to mean 'no capability request', "
-                "profile=... to name a profile directly, or a non-empty list to request specific "
-                "capabilities or roles."
-            )
-        requested = tuple(capabilities)
-        translated = _translate_capability_names(definition, requested)
-        matched = _narrowest_profile_for(definition, translated)
-        if matched is not None:
-            resolved_profile = matched
-        else:
-            resolved_profile = "full"
-            environ = {**environ, "VENDORFAKE_CAPABILITIES": ",".join(translated)}
+    requested = None if capabilities is None else tuple(capabilities)
+    resolved_profile, capability_layer = resolve_capabilities(definition, profile, capabilities)
+    environ = {**environ, **capability_layer}
 
     loaded = load_profile(
         profile_dir=definition.profile_dir,

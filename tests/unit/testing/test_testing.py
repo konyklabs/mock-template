@@ -96,25 +96,14 @@ def test_a_vendor_error_comes_back_as_the_vendor_shapes_it() -> None:
         assert refused.headers["x-unit-error"]
 
 
-def test_the_process_environment_is_ignored_unless_passed_in(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The isolation invariant, tested where it can actually fail.
-
-    ``VENDORFAKE_CLOCK`` is the probe because no explicit ``unit()`` argument
-    names the clock: if ``unit()`` ever read ``os.environ``, the ambient
-    variable would flip a consumer's units to a virtual clock with nothing
-    overriding it. (An earlier version probed ``VENDORFAKE_PROFILE``, which
-    ``unit()`` always passes explicitly and ``load_profile`` then never looks
-    up -- that test passed regardless of what ``unit()`` did with ``env``.)
-    """
+def test_the_ambient_environment_is_honoured_and_an_explicit_layer_beats_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One resolution on every binding: an exported ``VENDORFAKE_*`` variable
+    configures ``unit()`` the way it configures the CLI, and ``env=`` beats it."""
     monkeypatch.setenv("VENDORFAKE_CLOCK", "virtual")
     with unit("square") as square:
-        assert square.info()["clock"]["mode"] == "real"
-        with pytest.raises(RuntimeError, match="answered 400"):
-            square.advance_clock(1000)
-    # The same variable, passed in deliberately, is honoured.
-    with unit("square", env={"VENDORFAKE_CLOCK": "virtual"}) as square:
         assert square.info()["clock"]["mode"] == "virtual"
-        square.advance_clock(1000)
+    with unit("square", env={"VENDORFAKE_CLOCK": "real"}) as square:
+        assert square.info()["clock"]["mode"] == "real"
     assert os.environ["VENDORFAKE_CLOCK"] == "virtual"
 
 
@@ -224,7 +213,6 @@ def test_served_refuses_a_seed_document_in_env_before_spawning_a_child(monkeypat
 @pytest.mark.parametrize(
     "name",
     [
-        "VENDORFAKE_PROFILE",
         "VENDORFAKE_HOST",
         "VENDORFAKE_PORT",
         "VENDORFAKE_LOG_LEVEL",
@@ -351,14 +339,42 @@ def test_a_receiver_answers_404_off_its_path_and_records_nothing() -> None:
             receiver.wait_for(2, timeout_s=0.2)
 
 
-def test_a_receiver_can_bind_all_interfaces_for_a_container_and_still_name_loopback() -> None:
+def test_a_receiver_bound_to_all_interfaces_refuses_to_guess_its_url() -> None:
+    """The routable address of a wildcard bind depends on who is asking, so
+    ``url`` raises and names ``port``; the receiver itself still serves."""
     with webhook_receiver(host="0.0.0.0") as receiver:
-        # `url` names loopback -- the routable address for a wildcard bind
-        # depends on who is asking (host.docker.internal, ...), so the class
-        # publishes `port` and the recipe rather than guessing.
-        assert receiver.url == f"http://127.0.0.1:{receiver.port}/webhooks"
-        assert httpx.post(receiver.url, content=b"{}").status_code == 200
+        with pytest.raises(ValueError, match=str(receiver.port)):
+            _ = receiver.url
+        assert httpx.post(f"http://127.0.0.1:{receiver.port}/webhooks", content=b"{}").status_code == 200
         assert len(receiver.received) == 1
+
+
+def test_served_takes_capabilities_the_way_unit_does() -> None:
+    with served("square", capabilities=["orders"]) as child:
+        assert child.profile == "orders-only"
+        enabled = {c["name"] for c in child.info()["capabilities"] if c["enabled"]}
+        assert "order-lifecycle" in enabled and "oauth" not in enabled
+
+
+def test_served_honours_an_ambient_profile_and_an_explicit_one_beats_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VENDORFAKE_PROFILE", "no-faults")
+    with served("square") as child:
+        assert child.profile == "no-faults"
+    with served("square", "oauth-only") as child:
+        assert child.profile == "oauth-only"
+
+
+def test_serve_in_thread_offers_an_async_client_onto_the_same_unit() -> None:
+    import asyncio
+
+    with unit("square") as square, serve_in_thread(square) as over_http:
+
+        async def read() -> int:
+            response = await over_http.async_client.get("/v2/locations", headers=square.seed.auth)
+            await over_http.aclose()
+            return response.status_code
+
+        assert asyncio.run(read()) == 200
 
 
 def test_reset_drops_control_plane_subscribers_and_keeps_seed_and_profile_ones(tmp_path: Any) -> None:

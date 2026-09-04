@@ -21,7 +21,8 @@ directly — no socket, no event loop. Use this for the overwhelming majority
 of tests: it is the fastest binding, and by default an unmatched request
 raises `vendorfake.testing.UnmatchedRequest` (an `AssertionError`) rather
 than answering the vendor's 404, which turns "my client hit the wrong path"
-into a loud test failure instead of a quiet one. See
+into a loud test failure instead of a quiet one; `served()` does the same
+from a response hook on its client. See
 [Recipes → Sync pytest](../pytest-plugin.md).
 
 ## In-process, async
@@ -60,10 +61,10 @@ thread in front of a unit you already built in-process. Reach for one of
 these when the code under test needs an actual `host:port` it can point an
 HTTP client library at — a service configured by URL, a language binding
 with no custom-transport seam, or a webhook subscriber that must receive a
-real POST over loopback. Served units never raise on an unmatched request;
-they answer the vendor's own 404, the same as production would, because a
-served unit is standing in for the vendor rather than acting as a test
-double.
+real POST over loopback. On the wire a served unit answers the vendor's own
+404 to an unmatched request, the same as production would; the `served()`
+driver raises `UnmatchedRequest` from that answer by default, and
+`unmatched="vendor-404"` hands the 404 through.
 
 `served(..., env={...})` is the `VENDORFAKE_*` layer for that one child,
 on top of the environment it inherits — `env={"VENDORFAKE_CLOCK":
@@ -72,10 +73,11 @@ override for a second, deliberately misconfigured child — so two
 differently-seeded children can run in one process with nothing written to
 `os.environ`. The parent-resolved `.seed` reads the same
 `VENDORFAKE_VENDOR_*` layer, so its credentials agree with the child's.
-Entries for what `served()` passes as a flag — `VENDORFAKE_PROFILE`,
-`VENDORFAKE_HOST`, `VENDORFAKE_PORT`, `VENDORFAKE_LOG_LEVEL` — are refused
-with a `ValueError` naming the parameter to use, rather than silently
-beaten by the flag. `VENDORFAKE_SEED` is refused because `.seed` is
+Entries for what `served()` passes as a flag — `VENDORFAKE_HOST`,
+`VENDORFAKE_PORT`, `VENDORFAKE_LOG_LEVEL` — are refused with a `ValueError`
+naming the parameter to use, rather than silently beaten by the flag.
+`VENDORFAKE_PROFILE` is honoured (an explicit `profile=` beats it), and
+`served(capabilities=)` resolves the way `unit()`'s does. `VENDORFAKE_SEED` is refused because `.seed` is
 derived from the vendor's constants and could not describe a child hydrated
 from another document, and `VENDORFAKE_SEED_OVERLAY` because
 [`seed_overlay=`](../concepts/seed.md#seed-overlays) is the parameter for it —
@@ -117,3 +119,17 @@ end-to-end suite, or anything driven through
 Default to in-process (sync unless the code under test is already async);
 move to served only when something genuinely needs a socket; move to the
 container only when the consumer is not Python.
+
+## One contract, three bindings
+
+What a consumer sees is the same on every binding, with the exceptions below,
+each asserted by `tests/parity/`:
+
+| Behaviour | In-process `unit()` | `served()` | CLI / container |
+|---|---|---|---|
+| Exported `VENDORFAKE_*` variables | honoured; `env=` and arguments beat them | honoured; `env=` and arguments beat them | honoured |
+| Unmatched path, on the wire | 404 + `Vendorfake-Near-Miss` | 404 + `Vendorfake-Near-Miss` | 404 + `Vendorfake-Near-Miss` |
+| Unmatched path, Python driver | raises `UnmatchedRequest`; `unmatched="vendor-404"` opts out | the same | no driver |
+| `timeout` fault, real clock | the client's own `ReadTimeout`, raised without waiting when the delay exceeds it | the client's own `ReadTimeout`, after waiting | the same |
+| `timeout` fault, virtual clock | `ReadTimeout` at once when the delay exceeds the client's read timeout, else 504 | 504 at once, `Vendorfake-Delay-Ms` carrying the asked delay: a socket cannot know the client's timeout | the same |
+| Seeds, chaos rules, reset, the control plane | identical | identical | identical |

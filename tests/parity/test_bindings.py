@@ -1,10 +1,10 @@
 """One behaviour, three bindings: ``unit()`` in process, ``served()`` as a child,
 and the bare CLI (``vendorfake serve``) reading only its environment.
 
-Each case asserts the answer a consumer sees on the wire is the same whichever
-binding stands in for the vendor. A binding that diverges today is a strict xfail
-naming the audit finding it tracks (konyklabs/roadmap#116); the fix makes it an
-XPASS failure, so the divergence is on record until the mark is dropped.
+Each case asserts the answer a consumer sees is the one the binding contract in
+docs/start/bindings.md documents. A binding that diverges from it is a strict
+xfail naming the audit finding it tracks (konyklabs/roadmap#116); the fix makes
+it an XPASS failure, so the divergence is on record until the mark is dropped.
 """
 
 from __future__ import annotations
@@ -45,23 +45,23 @@ Opener = Callable[[Mapping[str, str], float | None], Iterator[Bound]]
 
 
 @contextmanager
-def _in_process(explicit: Mapping[str, str], read_timeout_s: float | None) -> Iterator[Bound]:
-    with unit(VENDOR, env=explicit) as started:
+def _in_process(explicit: Mapping[str, str], read_timeout_s: float | None, unmatched: str | None) -> Iterator[Bound]:
+    with unit(VENDOR, env=explicit, unmatched=unmatched) as started:  # type: ignore[arg-type]
         if read_timeout_s is not None:
             started.client.timeout = httpx.Timeout(read_timeout_s)
         yield Bound("unit", started.client)
 
 
 @contextmanager
-def _served(explicit: Mapping[str, str], read_timeout_s: float | None) -> Iterator[Bound]:
-    with served(VENDOR, env=explicit) as child:
+def _served(explicit: Mapping[str, str], read_timeout_s: float | None, unmatched: str | None) -> Iterator[Bound]:
+    with served(VENDOR, env=explicit, unmatched=unmatched) as child:  # type: ignore[arg-type]
         if read_timeout_s is not None:
             child.client.timeout = httpx.Timeout(read_timeout_s)
         yield Bound("served", child.client)
 
 
 @contextmanager
-def _cli(explicit: Mapping[str, str], read_timeout_s: float | None) -> Iterator[Bound]:
+def _cli(explicit: Mapping[str, str], read_timeout_s: float | None, unmatched: str | None) -> Iterator[Bound]:
     argv = [*SERVE_COMMAND, "--vendor", VENDOR, "--host", "127.0.0.1", "--port", "0"]
     process = subprocess.Popen(
         argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env={**os.environ, **explicit}
@@ -109,10 +109,11 @@ def open_unit(binding: str, monkeypatch: pytest.MonkeyPatch) -> Callable[..., It
         ambient: Mapping[str, str] | None = None,
         explicit: Mapping[str, str] | None = None,
         read_timeout_s: float | None = None,
+        unmatched: str | None = None,
     ) -> Iterator[Bound]:
         for key, value in (ambient or {}).items():
             monkeypatch.setenv(key, value)
-        with OPENERS[binding](explicit or {}, read_timeout_s) as bound:
+        with OPENERS[binding](explicit or {}, read_timeout_s, unmatched) as bound:
             yield bound
 
     return opener
@@ -127,13 +128,7 @@ def _auth(bound: Bound) -> dict[str, str]:
 # -- environment resolution (audit E1) ---------------------------------------
 
 
-@pytest.mark.parametrize(
-    "binding",
-    over(
-        unit="E1: unit() ignores the ambient environment",
-        served="E1: served() passes the profile as a flag that beats the ambient variable",
-    ),
-)
+@pytest.mark.parametrize("binding", ALL)
 def test_an_ambient_profile_variable_is_honoured(binding: str, open_unit: Callable[..., Iterator[Bound]]) -> None:
     """``VENDORFAKE_PROFILE`` exported by the job selects the profile on every
     binding; an explicit argument beats it, nothing else does."""
@@ -141,39 +136,36 @@ def test_an_ambient_profile_variable_is_honoured(binding: str, open_unit: Callab
         assert bound.client.get("/__unit/info").json()["profile"] == "no-faults"
 
 
-@pytest.mark.parametrize("binding", over(unit="E1: unit() ignores the ambient environment"))
+@pytest.mark.parametrize("binding", ALL)
 def test_an_ambient_clock_variable_is_honoured(binding: str, open_unit: Callable[..., Iterator[Bound]]) -> None:
     with open_unit(ambient={"VENDORFAKE_CLOCK": "virtual"}) as bound:
         assert bound.client.get("/__unit/info").json()["clock"]["mode"] == "virtual"
 
 
 # -- unmatched path (audit E2) -------------------------------------------------
+# The contract: on the wire every binding answers 404 with the near-miss header;
+# a Python driver (unit(), served(), serve_in_thread()) raises UnmatchedRequest
+# by default and answers the 404 under unmatched="vendor-404".
 
 
 @pytest.mark.parametrize("binding", ALL)
-def test_an_unmatched_path_answers_404_with_the_near_miss_header_under_vendor_404(
+def test_an_unmatched_path_answers_404_with_the_near_miss_header_on_the_wire(
     binding: str, open_unit: Callable[..., Iterator[Bound]]
 ) -> None:
-    with open_unit(explicit={"VENDORFAKE_UNMATCHED": "vendor-404"}) as bound:
+    with open_unit(unmatched="vendor-404") as bound:
         response = bound.client.get("/v2/locationz", headers=_auth(bound))
         assert response.status_code == 404
         assert "ListLocations" in response.headers[NEAR_MISS_HEADER]
 
 
-@pytest.mark.parametrize(
-    "binding", over(unit="E2: the in-process default raises UnmatchedRequest; served and the CLI answer 404")
-)
-def test_the_default_unmatched_policy_is_the_same_on_every_binding(
+@pytest.mark.parametrize("binding", ALL)
+def test_a_python_driver_raises_on_an_unmatched_path_by_default(
     binding: str, open_unit: Callable[..., Iterator[Bound]]
 ) -> None:
-    """With nothing configured, the wire answer to a mistyped path is one thing."""
-    with open_unit() as bound:
-        try:
-            response = bound.client.get("/v2/locationz", headers=_auth(bound))
-        except UnmatchedRequest:
-            pytest.fail("the in-process binding raised where the others answer 404")
-        assert response.status_code == 404
-        assert NEAR_MISS_HEADER in response.headers
+    if binding == "cli":
+        pytest.skip("the bare CLI has no Python driver; the wire answer is the case above")
+    with open_unit() as bound, pytest.raises(UnmatchedRequest, match="ListLocations"):
+        bound.client.get("/v2/locationz", headers=_auth(bound))
 
 
 # -- timeout fault (audit E4) --------------------------------------------------
@@ -203,21 +195,23 @@ def test_a_timeout_fault_past_the_read_timeout_is_a_read_timeout_on_a_real_clock
             bound.client.get("/v2/locations", headers=_auth(bound))
 
 
-@pytest.mark.parametrize(
-    "binding",
-    over(
-        served="E4: in-process raises ReadTimeout at once, served answers 504 at once; the contract is Phase 2's",
-        cli="E4: in-process raises ReadTimeout at once, served answers 504 at once; the contract is Phase 2's",
-    ),
-)
-def test_a_timeout_fault_on_a_virtual_clock_answers_the_same_on_every_binding(
+@pytest.mark.parametrize("binding", ALL)
+def test_a_timeout_fault_on_a_virtual_clock_follows_the_documented_matrix(
     binding: str, open_unit: Callable[..., Iterator[Bound]]
 ) -> None:
-    """A virtual clock does not sleep; the answer must still be one thing."""
+    """A virtual clock does not sleep. In process the client's own read timeout is
+    compared with the asked delay and ReadTimeout is raised at once; over a socket
+    the unit cannot know the client's timeout, so it answers 504 at once with the
+    asked delay in Vendorfake-Delay-Ms (docs/start/bindings.md)."""
     with open_unit(ambient={"VENDORFAKE_CLOCK": "virtual"}, read_timeout_s=0.5) as bound:
         _arm_timeout(bound, delay_ms=5_000)
-        with pytest.raises(httpx.ReadTimeout):
-            bound.client.get("/v2/locations", headers=_auth(bound))
+        if binding == "unit":
+            with pytest.raises(httpx.ReadTimeout):
+                bound.client.get("/v2/locations", headers=_auth(bound))
+        else:
+            response = bound.client.get("/v2/locations", headers=_auth(bound))
+            assert response.status_code == 504
+            assert response.headers["vendorfake-delay-ms"] == "5000"
 
 
 # -- seeds, chaos rules, reset --------------------------------------------------

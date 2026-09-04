@@ -11,4 +11,16 @@ own pytest run sees when vendorfake's ``pytest11`` entry point is installed
 
 from __future__ import annotations
 
+import os
+
+import pytest
+
 pytest_plugins = ["pytester"]
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _no_ambient_vendorfake_environment() -> None:
+    """Every binding now honours exported ``VENDORFAKE_*`` variables, so this
+    suite strips any the developer's shell carries; tests that want one set it."""
+    for key in [k for k in os.environ if k.startswith("VENDORFAKE_")]:
+        del os.environ[key]

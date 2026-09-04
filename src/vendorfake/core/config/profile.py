@@ -20,7 +20,6 @@ from typing import Any
 
 from vendorfake.core.capability.registry import apply_capability_delta
 from vendorfake.core.config.models import (
-    UNMATCHED_POLICIES,
     ProfileDocument,
     ResolvedChaos,
     ResolvedConfig,
@@ -28,7 +27,6 @@ from vendorfake.core.config.models import (
     RetryPolicy,
     SubscriberConfig,
     TransportSection,
-    UnmatchedPolicy,
     parse_profile_document,
 )
 from vendorfake.core.config.overlay import apply_seed_overlay, seed_overlay_digest
@@ -133,11 +131,6 @@ ENV_TABLE: tuple[EnvVar, ...] = (
         "requests.capacity",
         "How many requests the in-memory request log keeps before evicting the oldest.",
     ),
-    EnvVar(
-        "VENDORFAKE_UNMATCHED",
-        "unmatched.policy",
-        "'vendor-404' or 'error': what an in-process binding does with a request no route matched.",
-    ),
 )
 """Every environment variable this loader reads; one entry is a prefix.
 ``VENDORFAKE_VENDOR`` is absent -- it selects the vendor module, before a
@@ -228,23 +221,6 @@ def _env_float(env: Mapping[str, str], name: str) -> float | None:
             field=name,
         )
     return value
-
-
-def _env_unmatched(env: Mapping[str, str]) -> UnmatchedPolicy | None:
-    """``VENDORFAKE_UNMATCHED``, checked against the two policies -- a typo
-    is refused loudly rather than silently falling back to the binding's
-    default."""
-    raw = env.get("VENDORFAKE_UNMATCHED")
-    if not raw:
-        return None
-    for policy in UNMATCHED_POLICIES:
-        if raw == policy:
-            return policy
-    raise UnitError(
-        UnitErrorKind.INVALID_VALUE,
-        detail=f"VENDORFAKE_UNMATCHED={raw!r} is not one of {', '.join(UNMATCHED_POLICIES)}.",
-        field="VENDORFAKE_UNMATCHED",
-    )
 
 
 def _env_clock_mode(env: Mapping[str, str]) -> str | None:
@@ -370,7 +346,6 @@ def resolve_config(
             detail=f"VENDORFAKE_REQUEST_LOG_CAPACITY={capacity} must be zero or more (zero switches the log off).",
             field="VENDORFAKE_REQUEST_LOG_CAPACITY",
         )
-    unmatched = _env_unmatched(environ)
 
     return ResolvedConfig(
         profile=document.name or name,
@@ -400,9 +375,6 @@ def resolve_config(
         ),
         requests=(
             document.requests if capacity is None else document.requests.model_copy(update={"capacity": capacity})
-        ),
-        unmatched=(
-            document.unmatched if unmatched is None else document.unmatched.model_copy(update={"policy": unmatched})
         ),
         log_level=environ.get("VENDORFAKE_LOG_LEVEL", "info"),
     )

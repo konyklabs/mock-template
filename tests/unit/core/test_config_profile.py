@@ -203,7 +203,7 @@ def test_vendor_prefixed_variables_become_snake_case_keys() -> None:
 def test_every_env_table_row_is_complete() -> None:
     """The generated env reference is built from ENV_TABLE: every row carries a
     VENDORFAKE_ name, what it applies to and a summary, and exactly one is a prefix."""
-    assert len(ENV_TABLE) == 19
+    assert len(ENV_TABLE) == 18
     assert all(name.startswith("VENDORFAKE_") for name in env_names())
     assert sum(1 for var in ENV_TABLE if var.is_prefix) == 1
     assert all(var.applies_to and var.summary for var in ENV_TABLE)

@@ -58,14 +58,11 @@ the same facts, whichever binding is in front of it.
 
 ## Unmatched requests
 
-A path this unit does not serve is, in-process, an assertion failure by
-default (`vendorfake.testing.UnmatchedRequest`) rather than the vendor's own
-404 — because in that binding the unit is standing in for a *test double*,
-and a request nobody wrote a handler for is almost always a typo, not
-something worth a passing 404. A served unit never raises; it answers as
-the vendor would, because there the unit stands in for the *vendor itself*.
-Pass `unmatched="vendor-404"` to `unit()`, or set `VENDORFAKE_UNMATCHED`, to
-get the vendor's answer in-process too. Every unmatched response — either
-binding — carries a `Vendorfake-Near-Miss` header naming the closest routes,
-scored deterministically, so the same mistake prints the same diagnosis
-every run.
+A path this unit does not serve answers the vendor's own 404 on the wire, on
+every binding, with a `Vendorfake-Near-Miss` header naming the closest routes,
+scored deterministically. The Python drivers (`unit()`, `served()`,
+`serve_in_thread()`) turn that answer into an assertion failure by default
+(`vendorfake.testing.UnmatchedRequest`), because in a test a request nobody
+wrote a handler for is almost always a typo; pass `unmatched="vendor-404"` to
+any of them to get the 404 instead. The policy is the driver's, never the
+unit's: a container or a non-Python consumer sees the 404 and the header.

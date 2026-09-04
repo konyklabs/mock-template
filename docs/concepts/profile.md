@@ -30,11 +30,12 @@ built-in defaults  <  caller defaults (a vendor's retry schedule)  <  profile do
 `vendor.retry_defaults` sits **under** the profile document, not over it, so
 a profile can override a vendor default and an operator can override both
 through `VENDORFAKE_*` variables — see
-[the generated environment-variable reference](../reference/env.md). The
-environment is a parameter (`env: Mapping[str, str]`) that defaults to
-`{}`, never to the real process environment: only the CLI reads
-`os.environ`, so a variable set by one test can never change the profile a
-unit built by another test resolves to.
+[the generated environment-variable reference](../reference/env.md). Every
+binding resolves them the same way: the exported process environment first,
+then the `env=` mapping a test passes, then explicit arguments, each layer
+beating the one before. `create_unit()` itself takes `env` as a parameter
+defaulting to `{}`; `unit()`, `served()` and the CLI hand it the ambient
+`VENDORFAKE_*` variables through one function, `registry.ambient_env()`.
 
 ## Choosing one
 
