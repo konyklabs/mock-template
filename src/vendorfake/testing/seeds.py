@@ -353,8 +353,9 @@ class ToastSeed:
 class LightspeedSeed:
     """The Lightspeed scenario: one retailer, two outlets, a register in each,
     three payment types (one of them internal), six products in four families
-    with stock at both outlets, one customer group and three customers, a
-    pre-issued OAuth access and refresh pair, a read-only token, a personal
+    with stock at both outlets, one customer group and three customers, three
+    sales over that catalogue -- parked, closed with a payment, and a layby --
+    a pre-issued OAuth access and refresh pair, a read-only token, a personal
     token, and one webhook subscription on ``register_closure.create``.
 
     Lightspeed scopes a request to its retailer by **subdomain** --
@@ -395,6 +396,9 @@ class LightspeedSeed:
     #: A standalone product, and the SKU it answers ``GET /products?sku=`` on.
     product_trail_mix_id: str
     product_trail_mix_sku: str
+    #: The second standalone product. Both it and the trail mix hold stock at
+    #: both outlets, which is what lets the seeded sales draw on real levels.
+    product_socks_id: str
     #: Seeded INACTIVE, so ``include_inactive`` on the inventory-levels report
     #: has something to include.
     product_bottle_id: str
@@ -418,6 +422,27 @@ class LightspeedSeed:
     #: sign. The tag that would create a third is deferred.
     adjustment_reason_found_id: str
     adjustment_reason_spoiled_id: str
+    # -- sales (slice L2b of konyklabs/roadmap#94) --
+    #: The cashier every seeded sale names as its ``source.author_id``. It is
+    #: the retailer's id: nothing resolves it, because the Users tag is
+    #: outside the issue's scoped surface, and a stock adjustment's
+    #: ``user_id`` is the same id for the same reason.
+    cashier_user_id: str
+    #: Both outlets' ``default_tax_id``, and the ``tax.id`` on every seeded
+    #: line item. Nothing resolves it either -- the Taxes tag is out of scope.
+    tax_id: str
+    #: The seeded sales name :attr:`product_trail_mix_id` and
+    #: :attr:`product_socks_id` on their line items and
+    #: :attr:`customer_ada_id` as their customer.
+    #: ``state: "parked"`` -- still editable, so a ``PUT`` succeeds against it.
+    sale_saved_id: str
+    #: ``state: "closed"`` with a card payment on the open main register. The
+    #: state is terminal, so a ``PUT`` is a 409; the return action is what
+    #: works on it.
+    sale_closed_id: str
+    #: A layby: parked, carrying the ``layby`` attribute and a part payment.
+    #: There is no ``LAYBY`` state in the 2026-07 schema.
+    sale_layby_id: str
     webhook_subscription_id: str
     #: The HMAC secret behind the ``X-Signature`` header. Lightspeed signs with
     #: the application's own ``client_secret``: ``WebhookRequest`` carries no
@@ -601,6 +626,7 @@ def _lightspeed(vendor_config: Mapping[str, object]) -> LightspeedSeed:
         payment_type_internal_id=c.SEED_PAYMENT_TYPE_INTERNAL_ID,
         product_trail_mix_id=c.SEED_PRODUCT_TRAIL_MIX_ID,
         product_trail_mix_sku=c.SEED_PRODUCT_TRAIL_MIX_SKU,
+        product_socks_id=c.SEED_PRODUCT_SOCKS_ID,
         product_bottle_id=c.SEED_PRODUCT_BOTTLE_ID,
         product_bottle_sku=c.SEED_PRODUCT_BOTTLE_SKU,
         product_tee_id=c.SEED_PRODUCT_TEE_ID,
@@ -612,6 +638,11 @@ def _lightspeed(vendor_config: Mapping[str, object]) -> LightspeedSeed:
         customer_noor_id=c.SEED_CUSTOMER_NOOR_ID,
         adjustment_reason_found_id=c.SEED_ADJUSTMENT_REASON_FOUND_ID,
         adjustment_reason_spoiled_id=c.SEED_ADJUSTMENT_REASON_SPOILED_ID,
+        cashier_user_id=c.SEED_USER_ID,
+        tax_id=c.SEED_TAX_ID,
+        sale_saved_id=c.SEED_SALE_SAVED_ID,
+        sale_closed_id=c.SEED_SALE_CLOSED_ID,
+        sale_layby_id=c.SEED_SALE_LAYBY_ID,
         webhook_subscription_id=c.SEED_WEBHOOK_ID,
         # Lightspeed signs with the application's own secret; there is no
         # per-subscription secret member on WebhookRequest.

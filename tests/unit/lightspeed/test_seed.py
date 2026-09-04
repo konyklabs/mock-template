@@ -112,6 +112,7 @@ def test_the_scenario_loads_what_it_says_it_loads(h: Harness) -> None:
         "refresh_tokens": 1,
         "registers": 2,
         "retailer": 1,
+        "sales": 3,
         "stock_adjustments": 2,
         "subscriptions": 1,
         "tokens": 3,
@@ -275,10 +276,12 @@ def test_a_webhook_on_an_undocumented_event_is_refused() -> None:
 
 def test_a_token_claiming_a_scope_the_application_lacks_is_refused() -> None:
     document = _document()
-    document["personal_tokens"] = [{"id": "t1", "access_token": "x", "scopes": ["sales:write"]}]
+    # A documented scope this application never carries -- consignments are
+    # outside issue #94's scoped surface. See test_auth.py's twin.
+    document["personal_tokens"] = [{"id": "t1", "access_token": "x", "scopes": ["consignments:read"]}]
     with pytest.raises(UnitError) as caught:
         parse_seed_document(document)
-    assert "sales:write" in str(caught.value)
+    assert "consignments:read" in str(caught.value)
 
 
 def test_an_unknown_key_is_refused_by_name() -> None:

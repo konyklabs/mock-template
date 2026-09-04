@@ -10,12 +10,12 @@ fails at construction when one of its gated capabilities (``chaos``,
 ``webhooks``, ``webhooks.chaos``) is neither declared here nor excused in
 ``VendorDefinition.not_supported`` with a reason.
 
-SCOPE. Two slices of konyklabs/roadmap#94 have landed: the foundation (the
+SCOPE. Three slices of konyklabs/roadmap#94 have landed: the chassis (the
 token endpoint and the authorize stand-in, the retailer, outlets, registers,
-payment types and webhooks) and products/inventory/customers. Sales is in the
-issue's scoped surface and arrives in the next slice; it is NOT listed in
-:data:`LIGHTSPEED_NOT_MODELED`, because that map is for behaviour this fake has
-decided against, not for work not yet done.
+payment types and webhooks), products/inventory/customers, and sales. That is
+the whole of the issue's scoped surface, so nothing is pending here; the
+documented behaviour this fake has decided AGAINST is what
+:data:`LIGHTSPEED_NOT_MODELED` below is for.
 
 ``not_supported`` may not name anything the core does not gate on, so the
 documented Lightspeed features this fake omits live in
@@ -80,6 +80,14 @@ LIGHTSPEED_CAPABILITIES: tuple[CapabilityDecl, ...] = (
         ),
     ),
     CapabilityDecl(
+        name="sales",
+        summary=(
+            "Sales: the version-cursor list, one sale by id, create, update and the return action. Line items "
+            "and payments are inline on the sale; a payment is refused on a register that is not open. Every "
+            "write fires sale.update, and closing a sale moves the outlet's inventory."
+        ),
+    ),
+    CapabilityDecl(
         name="webhooks",
         summary=(
             "The five documented webhook operations, and delivery: form-encoded payload=<JSON>, X-Signature "
@@ -103,6 +111,38 @@ LIGHTSPEED_NOT_SUPPORTED: Mapping[str, str] = {}
 """Empty: every core-gated capability is declared above."""
 
 LIGHTSPEED_NOT_MODELED: Mapping[str, str] = {
+    "sale-status-vocabulary": (
+        "A sale here carries the 2026-07 `state` enum (parked | pending | voided | closed) and NOT the API 1.0 "
+        "`status` vocabulary (SAVED | CLOSED | LAYBY | ONACCOUNT | VOIDED). No 2026-07 schema declares a "
+        "`status` member on a sale and no schema in the document declares LAYBY or ONACCOUNT as an enum value "
+        "at all; the older vocabulary survives in exactly one place, the initReturnSale response EXAMPLE, "
+        "which prints an API 1.0 sale carrying both. A layby or account sale is expressed the way the schema "
+        "expresses it, through `attributes` (documented example value: ['onaccount'])."
+    ),
+    "sale-adjustments": (
+        "SalePricing.adjustments and LineItemPricing.adjustments (SaleAdjustment / LineItemAdjustment, types "
+        "NON_CASH_FEE | DISCOUNT | TIP) are accepted on a sale body and change no total. Their semantics "
+        "belong to the Promotions tag (8 operations) and the discount machinery, both outside issue #94's "
+        "scoped surface. `totals.surcharge` is 0 for the same reason."
+    ),
+    "sale-author-not-resolved": (
+        "SaleRequestSource.author_id is required and is not checked against anything: the Users tag is outside "
+        "issue #94's scoped surface, so this unit has no user collection, and refusing an unknown cashier "
+        "would be applying a rule it cannot apply consistently. The `users:read` scope initReturnSale "
+        "documents IS required, because the operation's description names it."
+    ),
+    "sale-search-and-filters": (
+        "GET /sales declares only after / before / page_size. Its own description sends a caller wanting "
+        "filters to GET /search, which is outside issue #94's scoped surface, so no status, outlet, customer "
+        "or date filter is offered here -- inventing one would teach a consumer a query the real API answers "
+        "with an unfiltered page."
+    ),
+    "sale-sub-resources": (
+        "There is no /sales/{sale_id}/payments and no /sales/{sale_id}/line_items in this specification "
+        "version: both are inline arrays on the sale itself. The Sales tag's five operations are the whole "
+        "tag. Pick lists, fulfillments, service orders and quotes -- the neighbouring tags a sale can reach "
+        "-- are all outside issue #94's scoped surface."
+    ),
     "consignment-events": (
         "consignment.send and consignment.receive are two of the seven values in the spec's WebhookType enum "
         "and a subscription to either is accepted, but nothing in this unit ever fires one: consignments "

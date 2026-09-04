@@ -33,10 +33,15 @@ WHAT FIRES WHAT
                               tracking enabled")
 ============================  ==============================================
 
-``sales`` is populated by the next slice of konyklabs/roadmap#94 and still uses
-the generic projection below; ``products``, ``customers`` and ``inventory``
-carry their own model's wire shape, so the entity a webhook delivers and the
-entity the REST route answers are ONE function and cannot drift.
+``products``, ``customers``, ``inventory`` and ``sales`` each carry their own
+model's wire shape, so the entity a webhook delivers and the entity the REST
+route answers are ONE function and cannot drift.
+
+A ``sale.update`` payload carries no payment-type NAME
+(``PaymentTypeDetails.name``): the mapper projects from the journal entry and
+has no reason to reach into the payment types collection for a label the
+request itself did not carry. The payment's ``config_id`` is there, which is
+the id a consumer resolves against ``GET /payment_types``.
 
 A ``product.update`` and a ``customer.update`` fire on a DELETE as well as a
 create or an edit, because both deletes here are soft: the row keeps its id,
@@ -75,6 +80,7 @@ from vendorfake.lightspeed.entities import COL, OBJECT_VERSION
 from vendorfake.lightspeed.model.customer import project_customer
 from vendorfake.lightspeed.model.inventory import project_inventory
 from vendorfake.lightspeed.model.product import project_product
+from vendorfake.lightspeed.model.sale import project_sale
 from vendorfake.lightspeed.model.webhooks import (
     DOMAIN_PREFIX_FIELD,
     ENVIRONMENT_FIELD,
@@ -118,9 +124,10 @@ def _generic(entity: Mapping[str, Any]) -> dict[str, Any]:
     bookkeeping dropped, and Lightspeed's ``version`` restored from
     :data:`~vendorfake.lightspeed.entities.OBJECT_VERSION`.
 
-    The placeholder projection for ``sales``, which the next slice populates.
-    A slice that adds a surface replaces its own collection's entry in
-    :data:`_PROJECTIONS` with that surface's model projection.
+    No collection this unit writes falls back here any more -- every one of
+    the five in :data:`_PROJECTIONS` names its own surface's model projection.
+    It stays as the table's default, so a collection added by a later slice
+    delivers its stored shape rather than raising at delivery time.
     """
     out: dict[str, Any] = {"id": entity["id"]}
     for key, value in entity.items():
@@ -135,10 +142,11 @@ _PROJECTIONS: Mapping[str, Any] = {
     COL.products: project_product,
     COL.customers: project_customer,
     COL.inventory: project_inventory,
+    COL.sales: project_sale,
 }
 """Which committed collection is carried by which wire projection. A
-collection absent from this table falls back to :func:`_generic`; today that is
-``sales`` alone."""
+collection absent from this table falls back to :func:`_generic`; today no
+collection this unit writes is."""
 
 
 class LightspeedEventMapper:

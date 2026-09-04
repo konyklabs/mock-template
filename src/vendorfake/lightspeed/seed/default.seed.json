@@ -33,7 +33,33 @@
     "derivation.",
     "",
     "No 'version' anywhere: the Lightspeed version is drawn from the retailer's",
-    "one monotonically increasing counter at hydrate, in the order below."
+    "one monotonically increasing counter at hydrate, in the order below.",
+    "",
+    "Three sales, in the three shapes a till produces: one parked (saved and",
+    "still editable), one closed with a card payment on the OPEN main register",
+    "-- so the return action and the register payments summary both have",
+    "something real to work on -- and one layby, which is a parked sale",
+    "carrying the 'layby' attribute and a part payment, because the 2026-07",
+    "schema has no LAYBY state (see machine.py).",
+    "",
+    "Every sale resolves against the ONE catalogue above: line items name the",
+    "trail mix and the socks, both of which hold stock at both outlets, and",
+    "the customer is Ada. A line's price is the product's own, tax-exclusive,",
+    "with the unit tax beside it: 10.87 + 1.63 = 12.50 and 21.65 + 3.25 =",
+    "24.90. The author of every sale is the retailer's id, for the same reason",
+    "a stock adjustment's user_id is: there is no users collection to name a",
+    "cashier in.",
+    "",
+    "The seeded closed sale did NOT draw down the seeded inventory levels --",
+    "the levels are stated outright and the sales are the history beside them,",
+    "the same way the seeded stock adjustments do not move them either. The",
+    "decrement is what CLOSING a sale through the API does.",
+    "Money here is the wire's number (4.5), not the store's minor units:",
+    "hydrate converts through model/money.py exactly as a request does.",
+    "",
+    "Every sale payment is dated inside the main register's open window",
+    "(register_open_time 2026-09-01T08:00:00Z), so closing that register",
+    "aggregates them into its closure's totals."
   ],
   "retailer": {
     "id": "1a000000-0000-1000-8000-000000000001",
@@ -480,6 +506,9 @@
         "register:close",
         "register:open",
         "retailer:read",
+        "sales:read",
+        "sales:write",
+        "users:read",
         "webhooks"
       ]
     },
@@ -494,7 +523,9 @@
         "payment_types:read",
         "products:read",
         "registers:read",
-        "retailer:read"
+        "retailer:read",
+        "sales:read",
+        "users:read"
       ]
     }
   ],
@@ -516,6 +547,9 @@
         "register:close",
         "register:open",
         "retailer:read",
+        "sales:read",
+        "sales:write",
+        "users:read",
         "webhooks"
       ]
     }
@@ -539,6 +573,9 @@
         "register:close",
         "register:open",
         "retailer:read",
+        "sales:read",
+        "sales:write",
+        "users:read",
         "webhooks"
       ]
     }
@@ -549,6 +586,100 @@
       "type": "register_closure.create",
       "url": "https://consumer.example/hooks/lightspeed",
       "active": true
+    }
+  ],
+  "sales": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000a01",
+      "state": "parked",
+      "date": "2026-09-01T08:40:00Z",
+      "note": "Holding for pickup after lunch.",
+      "source": {
+        "author_id": "1a000000-0000-1000-8000-000000000001",
+        "register_id": "1a000000-0000-1000-8000-000000000201"
+      },
+      "line_items": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000b01",
+          "product_id": "1a000000-0000-1000-8000-000000000701",
+          "quantity": 1,
+          "price": "10.87",
+          "cost": "6.00",
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1",
+          "tax": "1.63"
+        }
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000a02",
+      "state": "closed",
+      "date": "2026-09-01T09:15:00Z",
+      "customer_id": "1a000000-0000-1000-8000-000000000911",
+      "source": {
+        "author_id": "1a000000-0000-1000-8000-000000000001",
+        "register_id": "1a000000-0000-1000-8000-000000000201"
+      },
+      "line_items": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000b02",
+          "product_id": "1a000000-0000-1000-8000-000000000701",
+          "quantity": 2,
+          "price": "10.87",
+          "cost": "6.00",
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1",
+          "tax": "1.63"
+        },
+        {
+          "id": "1a000000-0000-1000-8000-000000000b03",
+          "product_id": "1a000000-0000-1000-8000-000000000702",
+          "quantity": 1,
+          "price": "21.65",
+          "cost": "11.00",
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1",
+          "tax": "3.25"
+        }
+      ],
+      "payments": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000c01",
+          "payment_type_id": "1a000000-0000-1000-8000-000000000302",
+          "amount": "49.90",
+          "date": "2026-09-01T09:15:00Z"
+        }
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000a03",
+      "state": "parked",
+      "date": "2026-09-01T10:05:00Z",
+      "attributes": [
+        "layby"
+      ],
+      "customer_id": "1a000000-0000-1000-8000-000000000911",
+      "note": "Layby: balance due on collection.",
+      "source": {
+        "author_id": "1a000000-0000-1000-8000-000000000001",
+        "register_id": "1a000000-0000-1000-8000-000000000201"
+      },
+      "line_items": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000b04",
+          "product_id": "1a000000-0000-1000-8000-000000000702",
+          "quantity": 3,
+          "price": "21.65",
+          "cost": "11.00",
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1",
+          "tax": "3.25"
+        }
+      ],
+      "payments": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000c02",
+          "payment_type_id": "1a000000-0000-1000-8000-000000000301",
+          "amount": "10.00",
+          "date": "2026-09-01T10:05:00Z"
+        }
+      ]
     }
   ]
 }

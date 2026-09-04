@@ -10,6 +10,7 @@
     "products",
     "inventory",
     "customers",
+    "sales",
     "webhooks",
     "chaos",
     "webhooks.chaos"

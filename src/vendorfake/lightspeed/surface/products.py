@@ -139,11 +139,11 @@ class LightspeedProductsSurface:
         self._deps = deps
 
     def routes(self) -> tuple[Route, ...]:
-        # No `example_body`: this slice deliberately leaves the vendor's
-        # published example on CloseRegister, so that the Sales slice can move
-        # it to POST /sales where conformance C18 needs a repeatable,
-        # create-shaped, event-producing route. See the L1 report's open
-        # question 1.
+        # No `example_body`: the vendor's published example lives on
+        # `POST /sales`, which is the repeatable, create-shaped,
+        # event-producing route conformance C18 needs. `POST /products` would
+        # serve as well, and publishing a second one would only make which of
+        # the two C18 drives depend on route order. See surface/sales.py.
         return (
             Route(
                 method="GET",

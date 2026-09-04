@@ -4,7 +4,8 @@ One retailer ("Ridgeline Provisions"), two outlets, one register in each, three
 payment types (one of them internal, so the scope's "excluding internal payment
 types" is testable), six products in four families with ten inventory rows
 across the two outlets, two custom adjustment reasons and two adjustments
-already logged, one customer group and three customers, a pre-issued OAuth
+already logged, one customer group and three customers, three sales (one
+parked, one closed against the main register, one layby), a pre-issued OAuth
 access/refresh pair, a read-only token, a personal token, and one webhook
 subscription on ``register_closure.create``. :mod:`.constants` names every id;
 :mod:`.document` is the schema; :mod:`.hydrate` loads it.
@@ -45,8 +46,13 @@ from vendorfake.lightspeed.seed.constants import (
     SEED_REGISTER_SECOND_ID,
     SEED_RETAILER_ID,
     SEED_RETAILER_NAME,
+    SEED_SALE_CLOSED_ID,
+    SEED_SALE_LAYBY_ID,
+    SEED_SALE_SAVED_ID,
     SEED_STOCK_ADJUSTMENT_FIRST_ID,
     SEED_STOCK_ADJUSTMENT_SECOND_ID,
+    SEED_TAX_ID,
+    SEED_USER_ID,
     SEED_WEBHOOK_ID,
     SEED_WEBHOOK_TYPE,
     SEED_WEBHOOK_URL,
@@ -87,8 +93,13 @@ __all__ = [
     "SEED_REGISTER_SECOND_ID",
     "SEED_RETAILER_ID",
     "SEED_RETAILER_NAME",
+    "SEED_SALE_CLOSED_ID",
+    "SEED_SALE_LAYBY_ID",
+    "SEED_SALE_SAVED_ID",
     "SEED_STOCK_ADJUSTMENT_FIRST_ID",
     "SEED_STOCK_ADJUSTMENT_SECOND_ID",
+    "SEED_TAX_ID",
+    "SEED_USER_ID",
     "SEED_WEBHOOK_ID",
     "SEED_WEBHOOK_TYPE",
     "SEED_WEBHOOK_URL",

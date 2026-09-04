@@ -29,7 +29,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
-__all__ = ["MINOR_UNITS", "to_amount", "to_minor"]
+__all__ = ["MINOR_UNITS", "to_amount", "to_minor", "to_number"]
 
 MINOR_UNITS = 2
 """Decimal places on the wire. JUDGMENT -- see the module docstring."""
@@ -89,3 +89,36 @@ def _refuse(field: str, value: object) -> UnitError:
         field=field,
         info={"supplied": value if isinstance(value, str | int | float) else str(value)},
     )
+
+
+# ---------------------------------------------------------------------------
+# SALES MONEY (slice L2b of konyklabs/roadmap#94).
+# ---------------------------------------------------------------------------
+
+
+def to_number(minor: int) -> float:
+    """``25500`` -> ``255.0``; ``103877`` -> ``1038.77``; ``0`` -> ``0.0``.
+
+    THE SECOND WIRE SHAPE, and it is the vendor's, not an inconsistency of this
+    package's. The register close totals are decimal **strings**
+    (``RegisterClosePaymentType.total`` is ``"type": "string"``, and its
+    examples print ``"255.00"``); every money member of a *sale* is a JSON
+    **number** with ``format: double`` -- ``SaleTotals.price``,
+    ``SaleTotals.price_incl_tax``, ``SaleTotals.tax``, ``LineItemPricing.price``,
+    ``LineItemPricing.cost``, ``LineItemPricing.discount``,
+    ``LineItemTax.amount`` and ``SalePayment.amount`` are all typed that way. A
+    consumer that assumes one shape across the whole API fails on the other,
+    which is exactly what a fake is for.
+
+    JUDGMENT: a **float** is emitted even where the value is whole, so
+    ``255.00`` reaches the wire as ``255.0`` rather than as ``255``. Both are
+    valid JSON for ``type: number`` and the vendor's own examples print whole
+    amounts as integers (``"price": 200``); emitting one Python type for every
+    amount is the choice that keeps a consumer's deserialiser from seeing an
+    ``int`` on one line item and a ``float`` on the next.
+
+    :func:`to_minor` is the inverse for both shapes and accepts a number, so
+    ``to_minor(to_number(c), field=...) == c`` for every integer ``c`` a
+    two-place decimal can hold -- pinned by a test.
+    """
+    return float(Decimal(minor).scaleb(-MINOR_UNITS))

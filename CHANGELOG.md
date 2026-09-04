@@ -11,8 +11,8 @@
   returned with; a stand-in `GET /connect` issuing the single-use code; the
   retailer, outlets, registers and payment types; the five documented webhook
   operations with the 409 on a duplicate type-and-url pair; and delivery of
-  `register_closure.create` end to end. Products, inventory, customers and
-  sales are in issue #94's scoped surface and arrive in later slices.
+  `register_closure.create` end to end. Products, inventory and customers are
+  in issue #94's scoped surface and arrive in a sibling slice.
 
   Three cross-cutting mechanics come with it, all vendor-side because the core
   has no seam for any of them:
@@ -68,7 +68,47 @@
   The scenario gains six products in four families (one of them a parent with
   two variants and no stock of its own, one seeded inactive), ten inventory
   rows, two custom adjustment reasons, two logged adjustments, a customer group
-  and three customers. Sales is the remaining slice.
+  and three customers -- the catalogue the sales below are rung up against.
+
+* **lightspeed:** the Sales tag -- all five documented operations
+  (`GET /sales`, `POST /sales`, `GET /sales/{sale_id}`, `PUT /sales/{sale_id}`,
+  `POST /sales/{sale_id}/actions/return`), with line items and payments inline
+  on the sale as the specification declares them (there is no
+  `/sales/{sale_id}/payments` sub-resource in this API version). With it:
+
+  - the **sale lifecycle** as a declared state machine -- the schema's four
+    `state` values `parked | pending | voided | closed`, with `closed` and
+    `voided` terminal, so a `PUT` against a completed sale is a 409 and a
+    return is what corrects it. Published at `GET /__unit/machines`, enforced
+    by the core, and the reason conformance C13 now runs on this vendor.
+  - **totals computed from the line items**, never taken from the request:
+    `SaleTotals` is absent from `SaleRequestBase`, so a caller cannot declare
+    one. Sale money is a JSON **number** (`format: double`) while the register
+    close totals are decimal **strings** -- both the vendor's, and a consumer
+    that assumes one shape across the API fails on the other.
+  - **payment refusals in the vendor's own `PaymentErrorResponse` shape**,
+    `{"error": {"code": <int>, "message": <str>}}` -- the only error schema the
+    specification names. A payment on a register that is not open is refused;
+    the integer codes are this project's, since Lightspeed publishes none.
+  - `sale.update` on every create, update and return -- twice for a return,
+    which is one of the cases the webhooks page means by "may fire multiple
+    times" -- and `inventory.update` for each stock record a closing sale
+    moves.
+  - the **register payments summary now aggregates real sales**: a closure's
+    totals are the payments the register took while it was open, summed per
+    payment type, plus whatever the close request declared. The response
+    schema is unchanged.
+  - `POST /sales` carries this vendor's published `example_body`, moved off
+    the register close action. Closing an already-closed register is a 409, so
+    the example could not be driven twice and conformance C18 -- which drives
+    it three times with the webhooks capability on, off and on again -- failed
+    on every webhook-enabled profile. It passes now.
+  - the shipped scenario gains three sales (parked, closed with a card
+    payment, and a layby), rung up on the products and customers above at
+    those products' own prices; `LightspeedSeed` exposes each id. A product
+    that tracks inventory but has no record at the sale's outlet is skipped
+    silently on close: the record's absence is a fact about the scenario, not
+    an error the caller made.
 
 * **core:** `vendorfake.core.webhooks.models.BodyEncodingSigner` -- an
   optional, structurally discovered protocol (the same shape as

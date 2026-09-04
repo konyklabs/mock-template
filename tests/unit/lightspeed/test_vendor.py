@@ -38,17 +38,24 @@ def test_every_role_maps_to_a_declared_capability() -> None:
     assert set(LIGHTSPEED_ROLES.values()) <= declared
 
 
-def test_the_orders_role_points_at_registers_in_this_slice() -> None:
-    """Pinned deliberately: Lightspeed's order-equivalent is a *sale*, and the
-    Sales surface arrives in a later slice of konyklabs/roadmap#94. This test is
-    what makes re-pointing the role a visible change rather than a silent one."""
-    assert LIGHTSPEED_ROLES["orders"] == "registers"
+def test_the_orders_role_points_at_sales() -> None:
+    """Lightspeed's order-equivalent resource is a *sale*.
+
+    It pointed at ``registers`` while the Sales tag was not yet served here,
+    which the chassis slice of konyklabs/roadmap#94 recorded as a JUDGMENT to
+    revisit and pinned with a test whose name said so. Slice L2b revisited it;
+    this assertion is the visible half of that change.
+    """
+    assert LIGHTSPEED_ROLES["orders"] == "sales"
 
 
-def test_no_state_machine_is_declared() -> None:
-    """A register is open or closed -- a boolean, not a lifecycle. The sale
-    machine (parked/pending/voided/closed) arrives with the Sales surface."""
-    assert dict(VENDOR.machines) == {}
+def test_the_sale_is_the_only_declared_state_machine() -> None:
+    """A register is open or closed -- a boolean, not a lifecycle, so it gets no
+    machine. A sale's ``state`` is a documented four-value enum and does."""
+    assert set(VENDOR.machines) == {"sale"}
+    machine = VENDOR.machines["sale"]
+    assert machine.field == "state"
+    assert set(machine.states) == {"parked", "pending", "voided", "closed"}
 
 
 def test_the_signer_and_the_event_mapper_are_both_present() -> None:

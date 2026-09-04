@@ -54,8 +54,13 @@ __all__ = [
     "SEED_REGISTER_SECOND_ID",
     "SEED_RETAILER_ID",
     "SEED_RETAILER_NAME",
+    "SEED_SALE_CLOSED_ID",
+    "SEED_SALE_LAYBY_ID",
+    "SEED_SALE_SAVED_ID",
     "SEED_STOCK_ADJUSTMENT_FIRST_ID",
     "SEED_STOCK_ADJUSTMENT_SECOND_ID",
+    "SEED_TAX_ID",
+    "SEED_USER_ID",
     "SEED_WEBHOOK_ID",
     "SEED_WEBHOOK_TYPE",
     "SEED_WEBHOOK_URL",
@@ -122,6 +127,36 @@ SEED_STOCK_ADJUSTMENT_FIRST_ID = "1a000000-0000-1000-8000-000000000931"
 SEED_STOCK_ADJUSTMENT_SECOND_ID = "1a000000-0000-1000-8000-000000000932"
 """Two rows already in the adjustment log, so ``GET /stock_adjustments`` has a
 page boundary to cross before anything is written."""
+
+# -- sales (slice L2b of konyklabs/roadmap#94) ------------------------------
+# The line items of the seeded sales resolve against the products above and
+# their customer against the customers above; nothing here duplicates them.
+
+SEED_TAX_ID = "1a000000-0000-1000-8000-0000000000a1"
+"""The retailer's one tax, already named as both outlets' ``default_tax_id``
+and as every seeded product's ``outlet_taxes`` entry. There is no ``taxes``
+collection: the Taxes tag is outside issue #94's scoped surface, so a sale's
+``LineItemTax.id`` is carried and never resolved."""
+
+SEED_USER_ID = SEED_RETAILER_ID
+"""The cashier every seeded sale names as its ``source.author_id``. There is no
+``users`` collection -- the Users tag is out of scope -- so nothing resolves
+this id, and it is the RETAILER's for the same reason
+``StockAdjustment.user_id`` is (``surface/inventory.py``): one scenario, one
+actor, rather than two invented ids for the same absent user."""
+
+SEED_SALE_SAVED_ID = "1a000000-0000-1000-8000-000000000a01"
+"""``state: "parked"`` -- a saved sale, still editable. Takes a ``PUT``."""
+
+SEED_SALE_CLOSED_ID = "1a000000-0000-1000-8000-000000000a02"
+"""``state: "closed"`` with a payment on the open main register, so the return
+action and the register payments summary both have something real to work on.
+Terminal: a ``PUT`` against it is the 409 this vendor's machine produces."""
+
+SEED_SALE_LAYBY_ID = "1a000000-0000-1000-8000-000000000a03"
+"""A layby: ``state: "parked"`` carrying the ``layby`` attribute and a part
+payment. There is no ``LAYBY`` state in the 2026-07 schema -- see
+``machine.py`` -- and ``attributes`` is how the schema expresses one."""
 
 SEED_WEBHOOK_ID = "1a000000-0000-1000-8000-000000000401"
 SEED_WEBHOOK_TYPE = "register_closure.create"

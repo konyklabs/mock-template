@@ -153,13 +153,14 @@ _LIGHTSPEED_NO_IDEMPOTENCY_KEY = (
 )
 
 LIGHTSPEED_INAPPLICABLE: Mapping[str, str] = {
-    "C13": (
-        "This vendor declares no state machines. A register is open or closed -- a boolean with two actions, "
-        "not a lifecycle -- and publishing a two-state machine for it would put a vocabulary on the control "
-        "plane that no route uses. The sale lifecycle (parked/pending/voided/closed, an enum on "
-        "SaleRequestBase) is a real machine and arrives with the Sales surface; the inapplicable guard fails "
-        "the day a machine appears."
-    ),
+    # C13 WAS DECLARED HERE and is not any more. The chassis slice of
+    # konyklabs/roadmap#94 declared this vendor to have no state machines --
+    # true then, and its own wording named what would end it: "the sale
+    # lifecycle ... is a real machine and arrives with the Sales surface; the
+    # inapplicable guard fails the day a machine appears." Slice L2b added it,
+    # the guard duly failed the run ("DECLARED INAPPLICABLE BUT RAN C13"), and
+    # the declaration is deleted rather than reworded. C13 now runs and passes
+    # on every profile that enables `sales`.
     "C19": _LIGHTSPEED_NO_IDEMPOTENCY_KEY.format(contract="replay"),
     "C24": _LIGHTSPEED_NO_IDEMPOTENCY_KEY.format(contract="key-scope"),
     "C25": _LIGHTSPEED_NO_IDEMPOTENCY_KEY.format(contract="mismatch"),

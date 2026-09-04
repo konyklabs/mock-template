@@ -33,6 +33,11 @@ Every route lightspeed's surface serves -- vendor-facing only. The `/__unit/*` c
 | POST | `/api/2026-07/customers` | CreateCustomer | customers | Create a customer; 201 with the whole record. Fires customer.update. |
 | PUT | `/api/2026-07/customers/{customer_id}` | UpdateCustomerByID | customers | Replace a customer from the same CustomerBase body the create takes; 404 otherwise. |
 | DELETE | `/api/2026-07/customers/{customer_id}` | DeleteCustomerByID | customers | Soft-delete a customer; documented 204, no body. Fires customer.update. |
+| GET | `/api/2026-07/sales` | ListSales | sales | Sales, ascending by version; after/before/page_size. No resource filter is documented. |
+| POST | `/api/2026-07/sales` | CreateSale | sales | Create a sale; line items and payments are inline. Fires sale.update. |
+| GET | `/api/2026-07/sales/{sale_id}` | GetSaleByID | sales | One sale by id. |
+| PUT | `/api/2026-07/sales/{sale_id}` | UpdateSale | sales | Replace a sale's editable attributes. 409 once it is closed or voided. |
+| POST | `/api/2026-07/sales/{sale_id}/actions/return` | initReturnSale | sales | Open a return against a closed sale; answers the new parked return sale. |
 | GET | `/api/2026-07/webhooks` | ListWebhooks | webhooks | All webhooks: {"data": [...]}, with no version envelope. Vendor operationId: get-webhooks. |
 | POST | `/api/2026-07/webhooks` | CreateWebhook | webhooks | Create a webhook; 201, or 409 when the type and URL pair already exists. Vendor: post-webhooks. |
 | GET | `/api/2026-07/webhooks/{webhookId}` | GetWebhook | webhooks | One webhook by id; 404 otherwise. Vendor operationId: get-webhooks-id. |

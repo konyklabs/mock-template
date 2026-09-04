@@ -64,12 +64,18 @@ from vendorfake.core.kernel.types import (
 )
 from vendorfake.core.util.json import compact
 from vendorfake.core.util.numbers import as_int
-from vendorfake.lightspeed.model.error import ErrorWire, WebhookConflictWire
+from vendorfake.lightspeed.model.error import (
+    PAYMENT_ERROR_INFO_KEY,
+    ErrorWire,
+    PaymentErrorWire,
+    WebhookConflictWire,
+)
 
 __all__ = [
     "CATALOGUE_RETRY_AFTER",
     "LIGHTSPEED_ERROR_TABLE",
     "ONE_MEMBER_BODY_INFO_KEY",
+    "PAYMENT_ERROR_INFO_KEY",
     "RATE_LIMITED_MESSAGE",
     "RATE_LIMITED_TITLE",
     "RATE_LIMIT_LIMIT_HEADER",
@@ -328,8 +334,16 @@ class LightspeedErrorShaper:
         info = dict(err.info or {})
         detail = err.detail or mapping.message
         body: dict[str, Any]
+        payment_code = info.get(PAYMENT_ERROR_INFO_KEY)
         if info.get(ONE_MEMBER_BODY_INFO_KEY) is True:
             body = WebhookConflictWire(error=detail).wire()
+        elif isinstance(payment_code, int) and not isinstance(payment_code, bool):
+            # The Sales surface's payment refusals, in the one error shape the
+            # specification actually names (``PaymentErrorResponse``). The
+            # STATUS is still this table's -- a closed register is the 409 an
+            # invalid transition gets, an unresolvable id the 422 a bad value
+            # gets -- because the schema carries no status of its own.
+            body = PaymentErrorWire(code=payment_code, message=detail).wire()
         else:
             body = ErrorWire(error=mapping.title, message=detail).wire()
         headers = mechanism_headers(err, retry_after_header=self._retry_after_header)

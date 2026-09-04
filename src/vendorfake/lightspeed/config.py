@@ -55,6 +55,9 @@ __all__ = [
     "SCOPE_REGISTER_CLOSE",
     "SCOPE_REGISTER_OPEN",
     "SCOPE_RETAILER_READ",
+    "SCOPE_SALES_READ",
+    "SCOPE_SALES_WRITE",
+    "SCOPE_USERS_READ",
     "SCOPE_WEBHOOKS",
     "LightspeedConfig",
     "resolve_lightspeed_config",
@@ -73,8 +76,11 @@ SCOPE_REGISTERS_READ = "registers:read"
 SCOPE_REGISTER_CLOSE = "register:close"
 SCOPE_REGISTER_OPEN = "register:open"
 SCOPE_RETAILER_READ = "retailer:read"
+SCOPE_SALES_READ = "sales:read"
+SCOPE_SALES_WRITE = "sales:write"
+SCOPE_USERS_READ = "users:read"
 SCOPE_WEBHOOKS = "webhooks"
-"""The fourteen scopes this package's surface is gated on, each read out of
+"""The seventeen scopes this package's surface is gated on, each read out of
 the operation's own ``description`` annotation in ``api-2026-07`` and each
 present on the 58-scope reference page. ``webhooks`` really is unqualified --
 there is no ``webhooks:read``/``webhooks:write`` pair.
@@ -87,7 +93,15 @@ four inventory reads, ``inventory:write`` on the two stock-adjustment
 operations, and the ``customers:read``/``customers:write`` pair across the five
 customer operations. **``inventory:write`` gates a READ**
 (``GET /stock_adjustments``), which is the vendor's own annotation and is
-reproduced rather than corrected."""
+reproduced rather than corrected.
+
+The three added by the sales slice are the Sales tag's own, and ``users:read``
+is on the list because ``initReturnSale``'s description names a PAIR -- "🔒
+Requires: ``sales:write`` ``users:read`` scopes" -- exactly as
+``CloseRegister``'s does. The reference page's own wording for the two sale
+scopes: ``sales:read`` is "Read all sales and payments in your account" and
+``sales:write`` is "Create sales and payments, and adjust, void or return
+sales", which is where the verbs this surface implements come from."""
 
 DOCUMENTED_SCOPES: tuple[str, ...] = (
     SCOPE_CUSTOMERS_READ,
@@ -103,6 +117,9 @@ DOCUMENTED_SCOPES: tuple[str, ...] = (
     SCOPE_REGISTER_CLOSE,
     SCOPE_REGISTER_OPEN,
     SCOPE_RETAILER_READ,
+    SCOPE_SALES_READ,
+    SCOPE_SALES_WRITE,
+    SCOPE_USERS_READ,
     SCOPE_WEBHOOKS,
 )
 
@@ -121,11 +138,13 @@ READ_ONLY_SCOPES: tuple[str, ...] = (
     SCOPE_PRODUCTS_READ,
     SCOPE_REGISTERS_READ,
     SCOPE_RETAILER_READ,
+    SCOPE_SALES_READ,
+    SCOPE_USERS_READ,
 )
 """A narrower set the scenario hands a second token, so "403 on the write path"
 is testable without minting anything: no ``register:open``/``register:close``,
-no ``products:write``, no ``customers:write``, no ``inventory:write`` and no
-``webhooks``.
+no ``products:write``, no ``customers:write``, no ``inventory:write``, no
+``sales:write`` and no ``webhooks``.
 
 ``inventory:read`` is here and ``inventory:write`` is not, which means this
 token cannot reach ``GET /stock_adjustments`` either -- the vendor gates that

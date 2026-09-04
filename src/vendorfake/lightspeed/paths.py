@@ -46,6 +46,7 @@ __all__ = [
     "CONNECT",
     "CREATE_CUSTOMER",
     "CREATE_PRODUCT",
+    "CREATE_SALE",
     "CREATE_STOCK_ADJUSTMENTS",
     "CREATE_WEBHOOK",
     "DELETE_CUSTOMER_BY_ID",
@@ -56,7 +57,9 @@ __all__ = [
     "GET_PRODUCT_BY_ID",
     "GET_REGISTER_BY_ID",
     "GET_RETAILER",
+    "GET_SALE_BY_ID",
     "GET_WEBHOOK",
+    "INIT_RETURN_SALE",
     "LIST_CUSTOMERS",
     "LIST_INVENTORY_LEVELS",
     "LIST_INVENTORY_RECORDS",
@@ -66,6 +69,7 @@ __all__ = [
     "LIST_PRODUCT_INVENTORY_LEVELS",
     "LIST_PRODUCT_INVENTORY_RECORDS",
     "LIST_REGISTERS",
+    "LIST_SALES",
     "LIST_STOCK_ADJUSTMENTS",
     "LIST_WEBHOOKS",
     "OPEN_REGISTER",
@@ -73,6 +77,7 @@ __all__ = [
     "TOKEN_EXCHANGE",
     "UPDATE_CUSTOMER_BY_ID",
     "UPDATE_PRODUCT",
+    "UPDATE_SALE",
     "UPDATE_WEBHOOK",
 ]
 
@@ -92,6 +97,8 @@ CREATE_CUSTOMER = _api("/customers")
 """``POST /api/2026-07/customers`` -- ``operation_id="CreateCustomer"``."""
 CREATE_PRODUCT = _api("/products")
 """``POST /api/2026-07/products`` -- ``operation_id="CreateProduct"``."""
+CREATE_SALE = _api("/sales")
+"""``POST /api/2026-07/sales`` -- ``operation_id="CreateSale"``."""
 CREATE_STOCK_ADJUSTMENTS = _api("/stock_adjustments")
 """``POST /api/2026-07/stock_adjustments`` -- ``operation_id="CreateStockAdjustments"``."""
 CREATE_WEBHOOK = _api("/webhooks")
@@ -112,8 +119,17 @@ GET_REGISTER_BY_ID = _api("/registers/{register_id}")
 """``GET /api/2026-07/registers/{register_id}`` -- ``operation_id="GetRegisterByID"``."""
 GET_RETAILER = _api("/retailer")
 """``GET /api/2026-07/retailer`` -- ``operation_id="GetRetailer"``."""
+GET_SALE_BY_ID = _api("/sales/{sale_id}")
+"""``GET /api/2026-07/sales/{sale_id}`` -- ``operation_id="GetSaleByID"``."""
 GET_WEBHOOK = _api("/webhooks/{webhookId}")
 """``GET /api/2026-07/webhooks/{webhookId}`` -- ``operation_id="GetWebhook"``."""
+INIT_RETURN_SALE = _api("/sales/{sale_id}/actions/return")
+"""``POST /api/2026-07/sales/{sale_id}/actions/return`` -- ``operation_id="initReturnSale"``.
+
+The specification's own operation id, camelCase with a lower-case first letter
+where the rest of the document capitalises: ``UPPER_SNAKE`` of it is
+``INIT_RETURN_SALE`` either way, so unlike the five webhook ids this one is
+kept exactly as the vendor spells it."""
 LIST_CUSTOMERS = _api("/customers")
 """``GET /api/2026-07/customers`` -- ``operation_id="ListCustomers"``."""
 LIST_INVENTORY_LEVELS = _api("/inventory_levels")
@@ -133,6 +149,8 @@ LIST_PRODUCT_INVENTORY_RECORDS = _api("/inventory/{product_id}")
 """``GET /api/2026-07/inventory/{product_id}`` -- ``operation_id="ListProductInventoryRecords"``."""
 LIST_REGISTERS = _api("/registers")
 """``GET /api/2026-07/registers`` -- ``operation_id="ListRegisters"``."""
+LIST_SALES = _api("/sales")
+"""``GET /api/2026-07/sales`` -- ``operation_id="ListSales"``."""
 LIST_STOCK_ADJUSTMENTS = _api("/stock_adjustments")
 """``GET /api/2026-07/stock_adjustments`` -- ``operation_id="ListStockAdjustments"``."""
 LIST_WEBHOOKS = _api("/webhooks")
@@ -147,5 +165,7 @@ UPDATE_CUSTOMER_BY_ID = _api("/customers/{customer_id}")
 """``PUT /api/2026-07/customers/{customer_id}`` -- ``operation_id="UpdateCustomerByID"``."""
 UPDATE_PRODUCT = _api("/products/{product_id}")
 """``PUT /api/2026-07/products/{product_id}`` -- ``operation_id="UpdateProduct"``."""
+UPDATE_SALE = _api("/sales/{sale_id}")
+"""``PUT /api/2026-07/sales/{sale_id}`` -- ``operation_id="UpdateSale"``."""
 UPDATE_WEBHOOK = _api("/webhooks/{webhookId}")
 """``PUT /api/2026-07/webhooks/{webhookId}`` -- ``operation_id="UpdateWebhook"``."""
