@@ -62,6 +62,7 @@ __all__ = [
     "run_conformance",
     "select_checks",
     "skip_is_declared",
+    "unobserved_contracts",
 ]
 
 TARGET_ENV_VAR = "VENDORFAKE_CONFORMANCE_TARGET"
@@ -77,7 +78,8 @@ REMOTE_TRANSPORT = "http"
 REMOTE_CAVEAT = (
     "a unit reached over --base-url is SHARED, not rebuilt per check. Capabilities and seed state are "
     "restored before every contract, but two 'fresh' units are the same process, so the determinism "
-    "contracts compare a unit with itself; and the contracts that exercise fault injection reset the "
+    "contracts -- C30's read-inertness pair included -- compare a unit with itself and prove less "
+    "here than against real pairs; and the contracts that exercise fault injection reset the "
     "chaos engine, which drops rules the profile configured at startup. Point this at a throwaway "
     "container, never at one another test is using."
 )
@@ -308,8 +310,38 @@ def run_conformance(
         strict=strict,
         expected_skips=declared_skips(target),
         inapplicable=dict(target.inapplicable),
+        unobserved=unobserved_contracts(specs, results) if strict else {},
         cross_profile=derived if cross_profile is None else cross_profile,
     )
+
+
+def unobserved_contracts(specs: Sequence[CheckSpec], results: Sequence[CheckResult]) -> dict[str, str]:
+    """Contracts whose precondition is about the RUN, not the vendor, and that
+    no (profile, transport) in the run could meet.
+
+    Only the virtual clock today. Every other precondition describes the
+    vendor or the profile -- no signer, no seed, a capability off -- and a
+    profile that lacks the capability skips the contract forever, which is
+    what the expected-skip matrix records. The clock is different: it is a
+    property of how the unit was STARTED, any profile can run on either, and
+    a container is checked on exactly one. A run in which no profile offered
+    one has not skipped the retry-schedule contract for a reason about the
+    vendor; it has simply not looked, and under ``--strict`` that is a
+    failure naming what to start differently rather than a declared skip.
+    """
+    out: dict[str, str] = {}
+    for spec in specs:
+        if not spec.requires.virtual_clock:
+            continue
+        asked = [result for result in results if result.check_id == spec.id]
+        if asked and all(result.outcome is Outcome.SKIP for result in asked):
+            profiles = sorted({result.profile for result in asked})
+            out[spec.id] = (
+                f"no profile in this run ({', '.join(profiles)}) offered a virtual clock, so the "
+                f"declared retry schedule was never observed being followed. Start the unit with "
+                f"clock.mode=virtual (VENDORFAKE_CLOCK=virtual for a container) on at least one profile."
+            )
+    return out
 
 
 def declared_skips(target: ConformanceTarget) -> dict[str, frozenset[str]]:

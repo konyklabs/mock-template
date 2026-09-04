@@ -62,12 +62,24 @@ CLOVER_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
     "C17": ("oauth-only",),
     "C18": ("oauth-only", "orders-only"),
     "C21": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
+    "C26": ("oauth-only",),
+    "C27": ("no-faults",),
+    "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
+    "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
 }
 
 CLOVER_INAPPLICABLE: Mapping[str, str] = {
     "C19": (
         "Clover's REST API documents no idempotency key on any endpoint, so no clover route carries an "
         "IdempotencySpec and the replay contract can never be asked of this vendor."
+    ),
+    "C24": (
+        "Clover's REST API documents no idempotency key on any endpoint, so no clover route carries an "
+        "IdempotencySpec and the key-scope contract can never be asked of this vendor."
+    ),
+    "C25": (
+        "Clover's REST API documents no idempotency key on any endpoint, so no clover route carries an "
+        "IdempotencySpec and the mismatch contract can never be asked of this vendor."
     ),
 }
 
@@ -80,14 +92,28 @@ TOAST_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
     "C17": ("oauth-only",),
     "C18": ("oauth-only", "orders-only"),
     "C21": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
+    "C27": ("no-faults",),
+    "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
+    "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
 }
 
+_TOAST_NO_IDEMPOTENCY_KEY = (
+    "Toast's REST APIs document no idempotency key on any endpoint (the orders API deduplicates on the "
+    "caller's unique externalId instead), so no toast route carries an IdempotencySpec and the {contract} "
+    "contract can never be asked of this vendor."
+)
+
 TOAST_INAPPLICABLE: Mapping[str, str] = {
-    "C19": (
-        "Toast's REST APIs document no idempotency key on any endpoint (the orders API deduplicates on the "
-        "caller's unique externalId instead), so no toast route carries an IdempotencySpec and the replay "
-        "contract can never be asked of this vendor."
+    "C19": _TOAST_NO_IDEMPOTENCY_KEY.format(contract="replay"),
+    "C26": (
+        "Every paginating toast surface opts out of the identity walk by declaration -- the config "
+        "lists answer a bare array with the next token in a response header and no page-size "
+        "parameter, and the partners envelope can never hold two rows because this unit models one "
+        "connected restaurant -- so the page-walk contract can never be asked of this vendor. The "
+        "inapplicable guard fails the day a walkable toast list appears."
     ),
+    "C24": _TOAST_NO_IDEMPOTENCY_KEY.format(contract="key-scope"),
+    "C25": _TOAST_NO_IDEMPOTENCY_KEY.format(contract="mismatch"),
 }
 
 

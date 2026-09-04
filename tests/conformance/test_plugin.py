@@ -212,6 +212,60 @@ def test_a_narrowed_matrix_states_nothing_either() -> None:
     assert ledger.problems() == ()
 
 
+def test_a_strict_run_that_never_observed_a_run_bound_contract_is_a_problem_even_narrowed() -> None:
+    """N-2 (konyklabs/roadmap#15): the plugin's half of the rule the runner applies.
+
+    A narrowed run states nothing about the matrix, and that stays true; but a
+    contract whose precondition is about the RUN -- the virtual clock -- and
+    that skipped on every case is a problem under strict whatever the run's
+    shape, because a one-profile run is the container case.
+    """
+    ledger = _Ledger()
+    ledger.arm(
+        target=target(),
+        profiles=("full",),
+        transports=("inprocess",),
+        specs=(find_check("C01"), find_check("C21")),
+        whole_matrix=False,
+        strict=True,
+    )
+    ledger.record("C01", Outcome.PASS)
+    ledger.record("C21", Outcome.SKIP)
+    assert ledger.unobserved == ("C21",)
+    problems = ledger.problems()
+    assert len(problems) == 1
+    assert problems[0].startswith("NEVER OBSERVED C21")
+    assert "VENDORFAKE_CLOCK=virtual" in problems[0]
+
+    lenient = _Ledger()
+    lenient.arm(
+        target=target(),
+        profiles=("full",),
+        transports=("inprocess",),
+        specs=(find_check("C01"), find_check("C21")),
+        whole_matrix=False,
+    )
+    lenient.record("C01", Outcome.PASS)
+    lenient.record("C21", Outcome.SKIP)
+    assert lenient.problems() == ()
+
+
+def test_a_run_bound_contract_observed_somewhere_is_not_a_problem() -> None:
+    ledger = _Ledger()
+    ledger.arm(
+        target=target(),
+        profiles=("full", "chaos-demo"),
+        transports=("inprocess",),
+        specs=(find_check("C21"),),
+        whole_matrix=False,
+        strict=True,
+    )
+    ledger.record("C21", Outcome.SKIP)
+    ledger.record("C21", Outcome.PASS)
+    assert ledger.unobserved == ()
+    assert ledger.problems() == ()
+
+
 def test_an_unarmed_ledger_is_silent() -> None:
     """Every pytest run on the machine loads this plugin. Most collect nothing here."""
     assert _Ledger().problems() == ()
@@ -258,12 +312,13 @@ def test_the_session_goes_red_when_a_contract_passes_on_no_profile() -> None:
     this target skip, and a skip is not a failure. The session must still exit
     non-zero, because a contract nobody could ask proved nothing.
 
-    The three are named rather than counted: C08 and C12 need fault injection,
-    which this profile switches off, and C21 needs a virtual clock, which it
-    does not run. Naming them means a fourth contract quietly joining the list
-    changes this test rather than sliding under a number.
+    The six are named rather than counted: C08, C12 and C27 need fault
+    injection, which this profile switches off; C29 needs delivery-scope fault
+    injection, likewise off; and C21 and C32 need a virtual clock, which it
+    does not run. Naming them means a seventh contract quietly joining the
+    list changes this test rather than sliding under a number.
     """
-    silent = ("C08", "C12", "C21")
+    silent = ("C08", "C12", "C21", "C27", "C29", "C32")
     done = _pytest_pyargs("--conformance-target", f"{HARNESS}:one_profile_target")
     assert done.returncode == 1, done.stdout + done.stderr
     assert f"{len(CHECKS) - len(silent)} passed, {len(silent)} skipped" in done.stdout, done.stdout

@@ -106,12 +106,12 @@ def test_base_url_discovers_the_profile_and_runs_the_registry(capsys: pytest.Cap
     # The profile was read from the running unit, not passed in.
     assert "== full / http ==" in printed
     assert "SHARED, not rebuilt per check" in printed
-    # Three contracts cannot be asked of a unit somebody else is running, and
+    # Four contracts cannot be asked of a unit somebody else is running, and
     # each for a reason the target honestly declares: C10 compares two
     # bindings and a remote target has one, C22 needs a unit built in another
-    # process and a base URL is one unit, and C21 needs a virtual clock, which
-    # the profile behind this URL does not run.
-    unaskable = ("C10", "C21", "C22")
+    # process and a base URL is one unit, and C21 and C32 need a virtual
+    # clock, which the profile behind this URL does not run.
+    unaskable = ("C10", "C21", "C22", "C32")
     assert f"{len(CHECKS) - len(unaskable)} passed, 0 failed, {len(unaskable)} skipped" in printed, printed
 
 
@@ -144,7 +144,7 @@ def test_base_url_restores_the_shared_unit_between_contracts() -> None:
     finally:
         unit.stop()
     assert before == after
-    assert before, "the full profile must enable something, or this proves nothing"
+    assert before, f"profile 'full' enabled no capabilities (enabled={sorted(before)}), so before==after proves nothing"
 
 
 @pytest.mark.integration
@@ -162,3 +162,30 @@ def test_an_address_with_no_unit_behind_it_is_an_error_not_a_crash(capsys: pytes
     code = main(["--base-url", "http://127.0.0.1:1"])
     assert code == 2
     assert "cannot reach a unit at http://127.0.0.1:1" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# --strict on a run no profile of which offers a virtual clock.
+# ---------------------------------------------------------------------------
+
+
+def test_a_strict_run_with_no_virtual_clock_refuses_to_certify_the_retry_schedule(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """N-2 (konyklabs/roadmap#15): the container case, spelled as a narrowed matrix.
+
+    Every skip in this run is declared -- C21 skips on ``full`` by the manifest
+    -- and until this rule a strict one-profile run certified a unit that
+    retried once against eleven declared intervals. The same run without
+    ``--strict`` stays informational, which is what keeps ``--profile`` usable.
+    """
+    strict = main(["--target", HARNESS_TARGET, "--transport", "inprocess", "--profile", "full", "--strict"])
+    printed = capsys.readouterr().out
+    assert strict == 1, printed
+    assert "never observed in this run: C21" in printed, printed
+    assert "VENDORFAKE_CLOCK=virtual" in printed, printed
+
+    lenient = main(["--target", HARNESS_TARGET, "--transport", "inprocess", "--profile", "full"])
+    printed = capsys.readouterr().out
+    assert lenient == 0, printed
+    assert "never observed" not in printed, printed

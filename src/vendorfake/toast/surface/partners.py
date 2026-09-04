@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Any
 
 from vendorfake.core.kernel.reply import json_
-from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route
+from vendorfake.core.kernel.types import HandlerArgs, PaginationSpec, ReplyInit, Route
 from vendorfake.toast.entities import COL
 from vendorfake.toast.model.dates import parse_rest_date
 from vendorfake.toast.model.partners import (
@@ -60,6 +60,23 @@ class ToastPartnersSurface:
                 scopes=("partners:read",),
                 operation_id="PartnersConnectedRestaurantsGet",
                 summary="The restaurants connected to this partner, in the documented page envelope.",
+                pagination=PaginationSpec(
+                    style="cursor",
+                    items_path="results",
+                    limit_param="pageSize",
+                    cursor_param="pageToken",
+                    next_cursor_path="nextPageToken",
+                    id_path="restaurantGuid",
+                    walkable=False,
+                    unwalkable_reason=(
+                        "The seed document models exactly one restaurant (seed/document.py declares "
+                        "`restaurant` as a single object, not a list) and the partners row is "
+                        "derived from it (seed/hydrate.py::_insert_partner), so this listing cannot "
+                        "hold the two rows a page-boundary walk needs without a second restaurant "
+                        "-- a unit-wide scope decision, weighed on konyklabs/roadmap#47 rather than "
+                        "changed here."
+                    ),
+                ),
             ),
             Route(
                 method="GET",

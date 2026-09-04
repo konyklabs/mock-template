@@ -1,4 +1,5 @@
-"""C09, C16 -- signing is what the vendor says it is, and delivery is unbranded.
+"""C09, C16, C18, C21, C29 -- signing is what the vendor says it is, delivery is
+unbranded and gated, the schedule is followed, and delivery faults are real.
 
 C09 asks the signing scheme what it depends on and then checks each direction
 *in the direction declared*. That is the difference between a conformance
@@ -19,15 +20,18 @@ format, which is the coupling this architecture exists to refuse.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv
 from vendorfake.conformance.registry import check
 from vendorfake.conformance.types import ConformanceFailure, ConformanceSkip, Requires, require
 from vendorfake.core.capability.gates import CoreCapability
+from vendorfake.core.chaos.rules import BUILTIN_FAULTS
 
 __all__ = [
     "delivery_headers_are_the_vendors_own",
+    "every_delivery_fault_has_its_effect",
     "signing_matches_the_declared_bindings",
     "the_declared_retry_schedule_is_the_one_followed",
     "the_webhooks_capability_gate_is_real",
@@ -321,7 +325,7 @@ def _drive_example_mutation(env: CheckEnv, label: str) -> str:
     spec = route.idempotency
     if spec is not None:
         body[str(spec["key_path"])] = f"conformance-{label}"
-    answered = env.client.call(route.method, route.probe_path, json_body=body, headers=env.authorized(route))
+    answered = env.client.call(route.method, route.example_path, json_body=body, headers=env.authorized(route))
     require(
         200 <= answered.status < 300,
         f"{route.key} refused its own published example_body: {answered.status} "
@@ -562,3 +566,220 @@ def the_declared_retry_schedule_is_the_one_followed(env: CheckEnv) -> str:
         f"{len(final)} attempts, each retry after its interval and none before, last recorded "
         f"{final[-1]['status']!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# C29 -- a delivery-scope rule changes what the sink observes.
+# ---------------------------------------------------------------------------
+
+_EFFECT_SUBSCRIBER = "conformance-effect"
+_EFFECT_RULE = "conformance-effect"
+_DELAY_MS = 750
+"""Long enough that the pending timer is read before it fires on a real
+clock, short enough that draining it afterwards does not cost a profile."""
+_DUPLICATE_COPY = "duplicate-copy"
+_RELEASED = "released-after-reorder"
+"""The two chaos labels the core stamps on the extra copy and on the held
+event, in ``core/webhooks/dispatcher.py::_apply_chaos_and_schedule``."""
+
+
+def _delivered(records: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return [dict(row) for row in records if row["status"] == "delivered"]
+
+
+def _observe_duplicate(env: CheckEnv) -> str:
+    event = _emit(env, {"probe": "duplicate"})
+    records = _records(env, event)
+    delivered = _delivered(records)
+    require(
+        len(delivered) == 2 and all(int(row["attempt"]) == 1 for row in delivered),
+        f"webhook.duplicate (default copies=1) produced {len(delivered)} delivered record(s) for "
+        f"{event!r} at attempt {[row['attempt'] for row in delivered]}, expected 2 first attempts. The "
+        f"copy is built in core/webhooks/dispatcher.py::_apply_chaos_and_schedule; a subscriber "
+        f"deduplicating on event id is what this fault exists to exercise.",
+    )
+    require(
+        any(_DUPLICATE_COPY in row.get("chaos", []) for row in delivered),
+        f"neither delivered copy of {event!r} is labelled {_DUPLICATE_COPY!r} in its chaos list "
+        f"({[row.get('chaos') for row in delivered]}); a consumer reading the log cannot tell the "
+        f"copy from the original.",
+    )
+    return f"duplicate: 2 first attempts, one labelled {_DUPLICATE_COPY!r}"
+
+
+def _observe_delay(env: CheckEnv) -> str:
+    event = _emit(env, {"probe": "delay"}, drain=False)
+    before = len(_records(env, event))
+    clock = env.get_json(f"{CONTROL_PREFIX}info").get("clock") or {}
+    pending = clock.get("pending_timers")
+    require(
+        pending is not None,
+        "GET /__unit/info publishes no clock block, so a delayed delivery cannot be told apart "
+        "from a late one: the timer the webhook.delay fault schedules is only observable there. "
+        "C01 owns the missing key; this contract cannot be asked without it.",
+    )
+    due = [float(timer["due_in_ms"]) for timer in pending or ()]
+    require(
+        before == 0 and any(value > 0 for value in due),
+        f"webhook.delay (delay_ms={_DELAY_MS}) left {before} record(s) for {event!r} and pending "
+        f"timers due in {due}ms before any drain; expected no delivery yet and a timer counting down. "
+        f"A delay must put the attempt on the clock (core/webhooks/dispatcher.py::_schedule), not "
+        f"submit it and label it delayed.",
+    )
+    env.client.call("POST", f"{CONTROL_PREFIX}webhooks/drain", json_body={})
+    delivered = _delivered(_records(env, event))
+    require(
+        len(delivered) == 1 and any("webhook.delay" in label for label in delivered[0].get("chaos", [])),
+        f"after the drain, {event!r} has {len(delivered)} delivered record(s) with chaos "
+        f"{[row.get('chaos') for row in delivered]}; expected one, labelled with the delay rule.",
+    )
+    return f"delay: nothing delivered while a timer was due in {max(due):.0f}ms, one delivery after the drain"
+
+
+def _observe_drop_ack(env: CheckEnv) -> str:
+    event = _emit(env, {"probe": "drop_ack"})
+    attempts = sorted(_records(env, event), key=lambda row: int(row["attempt"]))
+    require(
+        len(attempts) >= 2,
+        f"webhook.drop_ack produced {len(attempts)} attempt(s) for {event!r}, expected at least 2: the "
+        f"subscriber's acknowledgement is lost, so the dispatcher must retry.",
+    )
+    first, second = attempts[0], attempts[1]
+    require(
+        first["status"] == "failed" and 200 <= int(first["response_status"]) < 300,
+        f"the first attempt of {event!r} is recorded as {first['status']!r} with response_status "
+        f"{first['response_status']}; expected 'failed' with a 2xx, because the subscriber DID answer "
+        f"and the answer was dropped -- that is what makes the fault distinguishable from an outage "
+        f"(core/webhooks/dispatcher.py::_run_attempt applies drop_ack after the send).",
+    )
+    require(
+        second["status"] == "delivered",
+        f"the retry of {event!r} is recorded as {second['status']!r}, expected 'delivered': the "
+        f"dropped acknowledgement applies to one attempt, not to the subscriber.",
+    )
+    return "drop_ack: attempt 1 failed with a 2xx from the subscriber, attempt 2 delivered"
+
+
+def _observe_out_of_order(env: CheckEnv) -> str:
+    held = _emit(env, {"probe": "held"}, drain=False)
+    releaser = _emit(env, {"probe": "releaser"})
+    log = list(env.deliveries())
+    held_rows = [row for row in log if row["event_id"] == held]
+    require(
+        any(row["status"] == "skipped" for row in held_rows),
+        f"webhook.out_of_order recorded no 'skipped' entry for the held event {held!r} "
+        f"({[row['status'] for row in held_rows]}); the hold is recorded so a consumer can see why "
+        f"an event arrived late.",
+    )
+    order = [row["event_id"] for row in _delivered(log) if row["event_id"] in (held, releaser)]
+    require(
+        order == [releaser, held],
+        f"delivery order was {order}; expected the later event {releaser!r} delivered BEFORE the held "
+        f"one {held!r}. The one reorder slot is released on the next enqueue, after that event's own "
+        f"copies (core/webhooks/dispatcher.py::_apply_chaos_and_schedule).",
+    )
+    require(
+        any(_RELEASED in row.get("chaos", []) for row in held_rows),
+        f"the held event's delivery is not labelled {_RELEASED!r} ({[row.get('chaos') for row in held_rows]}).",
+    )
+    return "out_of_order: the second event was delivered first and the held one after it"
+
+
+def _observe_drop(env: CheckEnv) -> str:
+    event = _emit(env, {"probe": "drop"})
+    records = _records(env, event)
+    require(
+        [row["status"] for row in records] == ["dropped"],
+        f"webhook.drop produced {[row['status'] for row in records]} for {event!r}, expected exactly "
+        f"one 'dropped' record and no delivery: the subscriber gets nothing and no retry is scheduled.",
+    )
+    return "drop: one 'dropped' record, nothing delivered"
+
+
+_CORE_WEBHOOK_FAULTS = frozenset(fault.name for fault in BUILTIN_FAULTS if fault.scope == "webhook")
+"""The specification's own delivery-fault vocabulary, so the published list is
+checked against the contract rather than against itself."""
+
+_OBSERVATIONS: dict[str, tuple[Callable[[CheckEnv], str], dict[str, Any]]] = {
+    "webhook.duplicate": (_observe_duplicate, {}),
+    "webhook.delay": (_observe_delay, {"delay_ms": _DELAY_MS}),
+    "webhook.drop_ack": (_observe_drop_ack, {}),
+    "webhook.out_of_order": (_observe_out_of_order, {}),
+    "webhook.drop": (_observe_drop, {}),
+}
+"""How each delivery-scope fault the core publishes is observed at the sink,
+and the parameters its rule carries."""
+
+
+@check(
+    id="C29",
+    name="chaos: every delivery-scope fault the unit publishes has its effect at the sink",
+    asserts=(
+        "For every webhook-scope fault listed at /__unit/chaos: a rule naming it changes the delivery "
+        "log the way the fault promises -- a second copy, a timer before delivery, a lost "
+        "acknowledgement then a retry, a later event delivered first, or no delivery at all."
+    ),
+    requires=Requires(signer=True, webhooks=True, memory_sink=True, webhooks_chaos=True),
+)
+def every_delivery_fault_has_its_effect(env: CheckEnv) -> str:
+    """What C14 is for the request scope, one level down.
+
+    Making no webhook-scope rule ever fire -- all four delivery faults dead at
+    once -- left the matrix green (konyklabs/roadmap#10, N-7; tracked as
+    konyklabs/roadmap#15). C14 proves the request-scope gate, C18 proves the
+    delivery gate, and nothing observed a delivery fault at the sink: a
+    profile could ship ``reorder-order-updated`` and no consumer's handling of
+    reordering would ever have been exercised.
+
+    The fault list is read from the unit rather than written here, so a fault
+    the core adds is a fault this contract refuses to leave unobserved: an
+    entry with no observation is a failure naming it, not a silent pass.
+    """
+    published = [str(fault["name"]) for fault in env.info()["chaos"]["faults"] if fault["scope"] == "webhook"]
+    require(published, "GET /__unit/info publishes no webhook-scope fault, so there is nothing to observe.")
+    # The list is cross-checked against the core's own fault catalogue -- the
+    # same shape as C11's core_gates comparison -- because a fault list read
+    # from the unit under test is otherwise a list the unit can shorten:
+    # publish one fault, implement one fault, and "1 delivery faults
+    # observed" reads as a pass. BUILTIN_FAULTS is the specification's
+    # vocabulary, imported exactly as CoreCapability is.
+    missing = sorted(_CORE_WEBHOOK_FAULTS - set(published))
+    require(
+        not missing,
+        f"GET /__unit/info publishes {sorted(published)} as its webhook-scope faults and the core's "
+        f"catalogue (core/chaos/rules.py::BUILTIN_FAULTS) declares {sorted(_CORE_WEBHOOK_FAULTS)}: "
+        f"{missing} are missing. A fault dropped from the published list would silently drop out of "
+        f"this observation too, so under-declaring is a failure, not a smaller contract.",
+    )
+    unknown = sorted(set(published) - set(_OBSERVATIONS))
+    require(
+        not unknown,
+        f"the unit publishes webhook-scope fault(s) {unknown} that this contract has no observation for. "
+        f"A delivery fault nothing observes is a delivery fault a consumer cannot rely on; add its "
+        f"observation to conformance/checks/webhooks.py alongside the others.",
+    )
+
+    env.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
+    _subscribe(env, _EFFECT_SUBSCRIBER, _URL_A, _SECRET_ONE)
+    observed: list[str] = []
+    for fault in published:
+        observe, params = _OBSERVATIONS[fault]
+        rule: dict[str, Any] = {
+            "id": f"{_EFFECT_RULE}-{fault}",
+            "scope": "webhook",
+            "fault": fault,
+            "match": {"event_type": _EVENT_TYPE},
+            "when": {"times": 1},
+        }
+        if params:
+            rule["params"] = params
+        installed = env.client.call("POST", f"{CONTROL_PREFIX}chaos/rules", json_body={"rules": [rule]})
+        require(
+            installed.status == 200,
+            f"POST /__unit/chaos/rules refused the webhook-scope rule for {fault!r} with "
+            f"{installed.status}: {installed.text[:200]}. The {CoreCapability.WEBHOOKS_CHAOS.value!r} "
+            f"capability is enabled on this profile, so the rule must be accepted.",
+        )
+        observed.append(observe(env))
+        env.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
+    return f"{len(published)} delivery faults observed at the sink -- " + "; ".join(observed)

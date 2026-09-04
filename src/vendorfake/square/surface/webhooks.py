@@ -160,6 +160,12 @@ class WebhooksSurface:
                 auth="bearer",
                 scopes=(WEBHOOK_SUBSCRIPTIONS_SCOPE,),
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="webhooks.create"),
+                example_body={
+                    "subscription": {
+                        "notification_url": "https://example-consumer.test/hooks",
+                        "event_types": ["order.created"],
+                    }
+                },
                 operation_id="CreateWebhookSubscription",
                 summary="Register a subscriber and receive its signature key.",
             ),

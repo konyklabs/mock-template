@@ -113,7 +113,15 @@ from vendorfake.clover.surface.common import (
 )
 from vendorfake.clover.surface.inventory import item_tax_rates
 from vendorfake.core.kernel.reply import json_
-from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitContext, UnitError, UnitErrorKind
+from vendorfake.core.kernel.types import (
+    HandlerArgs,
+    PaginationSpec,
+    ReplyInit,
+    Route,
+    UnitContext,
+    UnitError,
+    UnitErrorKind,
+)
 from vendorfake.core.state.machine import StateMachine
 from vendorfake.core.state.store import Collection, Entity
 from vendorfake.core.util.json import compact
@@ -202,6 +210,7 @@ class CloverOrdersSurface:
                 scopes=("ORDERS_R",),
                 operation_id="GetOrders",
                 summary="Orders in the elements envelope: filter, expand, limit, offset.",
+                pagination=PaginationSpec(style="offset", items_path="elements"),
             ),
             Route(
                 method="GET",

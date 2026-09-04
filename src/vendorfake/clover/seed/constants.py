@@ -22,6 +22,7 @@ from pathlib import Path
 
 __all__ = [
     "CUSTOMER_ADA_ID",
+    "CUSTOMER_GRACE_ID",
     "DEFAULT_SEED_PATH",
     "EMPLOYEE_BARISTA_ID",
     "EMPLOYEE_OWNER_ID",
@@ -43,6 +44,7 @@ __all__ = [
     "SEED_READ_ONLY_PERMISSIONS",
     "SEED_READ_ONLY_REFRESH_TOKEN",
     "SEED_REFRESH_TOKEN",
+    "SEED_SECOND_ORDER_ID",
     "SEED_WEBHOOK_AUTH_CODE",
     "SEED_WEBHOOK_SUBSCRIPTION_ID",
     "SEED_WEBHOOK_URL",
@@ -90,6 +92,13 @@ MODIFIER_OAT_ID = "MODIFIEROAT01"
 MODIFIER_SOY_ID = "MODIFIERSOY01"
 
 CUSTOMER_ADA_ID = "CUSTOMERADA01"
+
+SEED_SECOND_ORDER_ID = "SEEDORDER0002"
+"""The second seeded order, so the orders list survives a page walk
+(konyklabs/roadmap#15)."""
+
+CUSTOMER_GRACE_ID = "GRACEHOPPER01"
+"""The second seeded customer, for the same reason."""
 
 SEED_OPEN_ORDER_ID = "SEEDORDER0001"
 SEED_OPEN_ORDER_LINE_ID = "SEEDLINE00001"

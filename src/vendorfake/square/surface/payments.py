@@ -118,6 +118,13 @@ class PaymentsSurface:
                 auth="bearer",
                 scopes=("PAYMENTS_WRITE",),
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="payments.create", required=True),
+                # The one source this unit takes ("source_id should be
+                # EXTERNAL"), with the two fields an external payment needs.
+                example_body={
+                    "source_id": "EXTERNAL",
+                    "amount_money": {"amount": 500, "currency": "USD"},
+                    "external_details": {"type": "OTHER", "source": "Seller-recorded external payment"},
+                },
                 operation_id="CreatePayment",
                 summary="Take an EXTERNAL payment, optionally against an order; autocomplete by default.",
             ),

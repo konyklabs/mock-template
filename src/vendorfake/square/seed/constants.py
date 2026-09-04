@@ -43,6 +43,7 @@ __all__ = [
     "SEED_LOYALTY_CUSTOMER_ID",
     "SEED_LOYALTY_PROGRAM_ID",
     "SEED_LOYALTY_REWARD_TIER_ID",
+    "SEED_LOYALTY_SECOND_ACCOUNT_ID",
     "SEED_LOYALTY_SPEND_AMOUNT",
     "SEED_MERCHANT_ID",
     "SEED_OPEN_ORDER_ID",
@@ -106,6 +107,10 @@ SEED_LOYALTY_SPEND_AMOUNT = 100
 """The seeded SPEND accrual rule: one point per 100 minor units. JUDGMENT --
 the numbers are this scenario's, chosen so that a 500-cent order earns a
 round five points; Square's example program is one point per dollar too."""
+
+SEED_LOYALTY_SECOND_ACCOUNT_ID = "5f2b7c14-9a3e-4d68-8c01-7d54c2a90b31"
+"""The second enrolled buyer, seeded so the loyalty search survives the
+conformance page walk (konyklabs/roadmap#15)."""
 
 SEED_LOYALTY_ACCOUNT_ID = "79b807d2-d786-46a9-933b-918028d7a8c5"
 SEED_LOYALTY_ACCOUNT_PHONE = "+14155551234"

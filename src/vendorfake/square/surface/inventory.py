@@ -65,6 +65,7 @@ from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import (
     HandlerArgs,
     IdempotencySpec,
+    PaginationSpec,
     ReplyInit,
     Route,
     UnitContext,
@@ -85,6 +86,7 @@ from vendorfake.square.model.inventory import (
     parse_quantity,
     project_inventory_count,
 )
+from vendorfake.square.seed.constants import SEED_LOCATION_ID, TEA_MUG_VARIATION_ID
 from vendorfake.square.surface.common import SquareDeps, instant_ms
 
 __all__ = ["CAPABILITY", "COUNTS_DEFAULT_LIMIT", "COUNTS_MAX_LIMIT", "InventorySurface", "inventory_routes"]
@@ -140,6 +142,23 @@ class InventorySurface:
                 auth="bearer",
                 scopes=("INVENTORY_WRITE",),
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="inventory.batch-create", required=True),
+                # One physical count of a seeded variation at the seeded
+                # location; occurred_at is fixed so the example is one request,
+                # not a template.
+                example_body={
+                    "changes": [
+                        {
+                            "type": "PHYSICAL_COUNT",
+                            "physical_count": {
+                                "catalog_object_id": TEA_MUG_VARIATION_ID,
+                                "location_id": SEED_LOCATION_ID,
+                                "state": "IN_STOCK",
+                                "quantity": "9",
+                                "occurred_at": "2026-08-30T12:00:00.000Z",
+                            },
+                        }
+                    ]
+                },
                 operation_id="BatchChangeInventory",
                 summary="Apply physical counts and adjustments to IN_STOCK counts.",
             ),
@@ -152,6 +171,18 @@ class InventorySurface:
                 scopes=("INVENTORY_READ",),
                 operation_id="BatchRetrieveInventoryCounts",
                 summary="Counts filtered by object, location, state or change time.",
+                pagination=PaginationSpec(
+                    style="cursor",
+                    where="body",
+                    items_path="counts",
+                    walkable=False,
+                    unwalkable_reason=(
+                        "An InventoryCount has no id: Square keys it on the (object, location, "
+                        "state) triple and documents no identifier, and the identity walk compares "
+                        "rows by one declared path -- naming any single field would false-fail on "
+                        "two locations counting one object."
+                    ),
+                ),
             ),
             Route(
                 method="GET",
@@ -162,6 +193,16 @@ class InventorySurface:
                 scopes=("INVENTORY_READ",),
                 operation_id="RetrieveInventoryCount",
                 summary="One variation's counts across locations.",
+                pagination=PaginationSpec(
+                    style="cursor",
+                    items_path="counts",
+                    walkable=False,
+                    unwalkable_reason=(
+                        "The rows are InventoryCounts, which carry no per-row identifier, and the "
+                        "documented endpoint reads no limit parameter, so pages cannot be narrowed "
+                        "to force a boundary."
+                    ),
+                ),
             ),
         )
 

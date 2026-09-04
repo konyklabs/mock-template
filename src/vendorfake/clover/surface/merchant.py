@@ -39,7 +39,7 @@ from typing import Any
 from vendorfake.clover.entities import COL, MerchantEntity
 from vendorfake.clover.surface.common import CloverDeps, elements, owned_by, page_window, require_merchant
 from vendorfake.core.kernel.reply import json_
-from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitError, UnitErrorKind
+from vendorfake.core.kernel.types import HandlerArgs, PaginationSpec, ReplyInit, Route, UnitError, UnitErrorKind
 from vendorfake.core.util.json import compact
 
 __all__ = ["CAPABILITY", "CloverMerchantSurface", "merchant_routes"]
@@ -78,6 +78,7 @@ class CloverMerchantSurface:
                 scopes=("EMPLOYEES_R",),
                 operation_id="GetEmployees",
                 summary="Employees: id, name, nickname, role.",
+                pagination=PaginationSpec(style="offset", items_path="elements"),
             ),
             Route(
                 method="GET",
@@ -88,6 +89,7 @@ class CloverMerchantSurface:
                 scopes=("MERCHANT_R",),
                 operation_id="GetTenders",
                 summary="Tenders: id, label, labelKey, enabled, visible, opensCashDrawer, editable.",
+                pagination=PaginationSpec(style="offset", items_path="elements"),
             ),
             Route(
                 method="GET",
@@ -98,6 +100,7 @@ class CloverMerchantSurface:
                 scopes=("MERCHANT_R",),
                 operation_id="GetOrderTypes",
                 summary="Order types: id, label, labelKey, taxable, isDefault, filterCategories, isHidden, fee.",
+                pagination=PaginationSpec(style="offset", items_path="elements"),
             ),
             Route(
                 method="GET",

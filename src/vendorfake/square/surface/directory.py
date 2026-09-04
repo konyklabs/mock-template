@@ -49,7 +49,15 @@ from collections.abc import Mapping
 from typing import Any
 
 from vendorfake.core.kernel.reply import json_
-from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitContext, UnitError, UnitErrorKind
+from vendorfake.core.kernel.types import (
+    HandlerArgs,
+    PaginationSpec,
+    ReplyInit,
+    Route,
+    UnitContext,
+    UnitError,
+    UnitErrorKind,
+)
 from vendorfake.core.util.json import compact
 from vendorfake.core.util.numbers import as_int
 from vendorfake.square.entities import COL
@@ -108,6 +116,16 @@ class DirectorySurface:
                 scopes=("MERCHANT_PROFILE_READ",),
                 operation_id="ListMerchants",
                 summary="Every merchant the caller can reach -- one, in this unit.",
+                pagination=PaginationSpec(
+                    style="cursor",
+                    items_path="merchant",
+                    walkable=False,
+                    unwalkable_reason=(
+                        "Square's documented cursor here is an integer offset and the endpoint takes "
+                        "no limit parameter, so the page size cannot be narrowed and no page "
+                        "boundary can be forced over the single seeded merchant."
+                    ),
+                ),
             ),
             Route(
                 method="GET",
@@ -138,6 +156,7 @@ class DirectorySurface:
                 scopes=("ITEMS_READ",),
                 operation_id="ListCatalog",
                 summary="Catalog objects, filtered by type and cursor-paginated.",
+                pagination=PaginationSpec(style="cursor", items_path="objects"),
             ),
         )
 

@@ -151,3 +151,27 @@ def test_the_cli_text_names_a_declared_inapplicable_check_that_ran() -> None:
     assert "DECLARED INAPPLICABLE BUT RAN C19: " in text
     assert "(no idempotency key)" in text
     assert text.endswith("NOT OK")
+
+
+def test_a_run_bound_contract_nobody_could_observe_fails_only_under_strict() -> None:
+    """N-2: every skip declared, the run still never looked (konyklabs/roadmap#15).
+
+    The runner fills ``unobserved`` for the retry-schedule contract when no
+    profile in the run offered a virtual clock. That is not the anti-vacuity
+    rule: a one-profile container run switches that rule off, which is
+    exactly the run this one has to catch.
+    """
+    results = (_result("C01", "full", Outcome.PASS), _result("C21", "full", Outcome.SKIP))
+    reason = "no profile in this run (full) offered a virtual clock."
+    lenient = ConformanceReport(results, expected_skips={"C21": frozenset({"full"})}, cross_profile=False)
+    assert lenient.ok
+    strict = ConformanceReport(
+        results,
+        strict=True,
+        expected_skips={"C21": frozenset({"full"})},
+        unobserved={"C21": reason},
+        cross_profile=False,
+    )
+    assert not strict.ok
+    assert strict.problems[0].startswith("NEVER OBSERVED C21: no profile in this run")
+    assert "never observed in this run: C21" in format_report(strict)

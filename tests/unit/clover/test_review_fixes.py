@@ -13,6 +13,7 @@ import pytest
 
 from tests.unit.clover.harness import (
     CUSTOMER_ADA,
+    CUSTOMER_GRACE,
     EMPLOYEE_BARISTA,
     ITEM_BEER,
     ITEM_CROISSANT,
@@ -345,7 +346,7 @@ def test_another_merchants_employee_is_not_a_reference(h: Harness) -> None:
     assert "OTHEREMPLOY01" not in [e["id"] for e in employees]
     assert all("merchant_id" not in e for e in employees)
     customers = h.get("/customers").json()["elements"]
-    assert [c["id"] for c in customers] == [CUSTOMER_ADA]
+    assert [c["id"] for c in customers] == [CUSTOMER_ADA, CUSTOMER_GRACE]
     assert all("merchant_id" not in c for c in customers)
 
 
