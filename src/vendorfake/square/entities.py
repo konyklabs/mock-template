@@ -980,10 +980,18 @@ class TokenEntity:
     #: so a refresh intersects against the approval and not against whatever the
     #: last refresh happened to ask for. Intersecting against the current
     #: token's scopes makes every narrowing permanent: take a narrow token for
-    #: one subtask and the grant can never produce a full one again. Empty means
-    #: "not recorded", and callers fall back to ``scopes`` -- right for a seeded
-    #: token that never came from a grant.
-    authorized_scopes: tuple[str, ...] = ()
+    #: one subtask and the grant can never produce a full one again.
+    #:
+    #: ``None`` means "not recorded" -- a seeded token that never came from a
+    #: grant -- and readers fall back to ``scopes``. An EMPTY tuple means "the
+    #: approval was recorded and contains nothing", which must not fall back:
+    #: the fallback would silently re-grant whatever the token happens to
+    #: hold. The two states used to collapse into one because the empty tuple
+    #: serialised as an absent key (konyklabs/roadmap#28); ``()`` is currently
+    #: unreachable from the surface (an empty intersection is refused with a
+    #: 400 before minting), so the distinction is load-bearing armour, not a
+    #: live branch.
+    authorized_scopes: tuple[str, ...] | None = None
     #: PKCE only: "Refresh tokens obtained using the PKCE flow ... expire after
     #: 90 days." Code-flow refresh tokens do not expire, so the key is absent.
     refresh_token_expires_at: str | None = None
@@ -1009,7 +1017,12 @@ class TokenEntity:
             merchant_id=_str(entity.get("merchant_id")),
             expires_at=_str(entity.get("expires_at")),
             scopes=_str_tuple(entity.get("scopes")),
-            authorized_scopes=_str_tuple(entity.get("authorized_scopes")),
+            # `.get` distinguishes deliberately: an absent key is "not
+            # recorded" (None), a present list -- empty included -- is the
+            # approval as recorded (konyklabs/roadmap#28).
+            authorized_scopes=(
+                None if entity.get("authorized_scopes") is None else _str_tuple(entity.get("authorized_scopes"))
+            ),
             refresh_token_expires_at=_opt_str(entity.get("refresh_token_expires_at")),
             short_lived=_bool(entity.get("short_lived")),
             revoked_at=_opt_str(entity.get("revoked_at")),
@@ -1027,7 +1040,11 @@ class TokenEntity:
                 "merchant_id": self.merchant_id,
                 "expires_at": self.expires_at,
                 "scopes": list(self.scopes),
-                "authorized_scopes": list(self.authorized_scopes) or None,
+                # NOT `or None`: an empty approval must survive the round trip
+                # as `[]`, or it comes back as "not recorded" and the reader's
+                # fallback re-grants the token's own scopes
+                # (konyklabs/roadmap#28). compact() drops only the None.
+                "authorized_scopes": None if self.authorized_scopes is None else list(self.authorized_scopes),
                 "refresh_token_expires_at": self.refresh_token_expires_at,
                 "short_lived": self.short_lived,
                 "revoked_at": self.revoked_at,

@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from collections.abc import Iterator
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -1142,6 +1143,44 @@ def test_a_down_scoped_refresh_does_not_ratchet_the_grant_down_permanently(h: Ha
     )
     assert granted.status == 200, granted.text
     assert "ORDERS_WRITE" in granted.json()["scopes"], granted.text
+
+
+def test_a_recorded_empty_approval_refuses_a_refresh_rather_than_regranting(h: Harness) -> None:
+    """konyklabs/roadmap#28, the direction the old fallback got wrong.
+
+    An approval RECORDED as empty must intersect as empty and be refused; the
+    truthiness fallback read it as "not recorded" and silently re-granted
+    whatever the token happened to carry. The state is unreachable from the
+    surface today (an empty intersection is refused before minting), so it is
+    planted at the store, which is exactly what makes the reader's direction
+    worth pinning: the rule holds even when the writer that enforces it is
+    somewhere else.
+    """
+    first = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="authorization_code",
+        code=h.code(scope="ORDERS_READ"),
+    ).json()
+    tokens = h.unit.context.store.collection(COL.tokens)
+    record = tokens.find(lambda entity: entity.get("access_token") == first["access_token"])
+    assert record is not None, f"no token entity for access_token {first['access_token']!r}"
+
+    def blank_approval(draft: dict[str, Any]) -> None:
+        draft["authorized_scopes"] = []
+
+    tokens.update(str(record["id"]), blank_approval, meta={"operation_id": "TestPlant"})
+    assert TokenEntity.from_entity(tokens.find(lambda e: e.get("id") == record["id"]) or {}).authorized_scopes == ()
+
+    refreshed = h.token(
+        client_secret=APPLICATION_SECRET,
+        grant_type="refresh_token",
+        refresh_token=first["refresh_token"],
+        scopes=["ORDERS_READ"],
+    )
+    assert refreshed.status == 400, (
+        f"expected the empty intersection refused, got {refreshed.status} {refreshed.text[:200]}"
+    )
+    assert "None of the requested scopes were authorized" in refreshed.text, refreshed.text[:300]
 
 
 # ---------------------------------------------------------------------------
