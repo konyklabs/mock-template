@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from vendorfake.core.rand.ids import HEX, MIXED_ALNUM, IdStream
 
-__all__ = ["CREDENTIAL_SALT", "LightspeedCredentialIds", "LightspeedIds"]
+__all__ = ["CODE_ALPHABET", "CREDENTIAL_SALT", "LightspeedCredentialIds", "LightspeedIds"]
 
 #: RFC 4122 variant nibble: 8, 9, a or b.
 _VARIANT = "89ab"
@@ -48,6 +48,13 @@ _VERSION = "1"
 CREDENTIAL_SALT = 0x1C575EED
 """XOR salt separating the credential stream from the entity id stream (which
 is itself salted off the chaos stream). This project's constant."""
+
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+"""The alphabet a customer code's suffix is drawn from. JUDGMENT: the vendor
+shows the shape (``Tony-N4ZJ``) and never the alphabet; ``I``, ``O``, ``0``
+and ``1`` are left out so a code read off a receipt is unambiguous."""
+
+_CUSTOMER_CODE_LENGTH = 4
 
 _ACCESS_TOKEN_LENGTH = 40
 _REFRESH_TOKEN_LENGTH = 40
@@ -93,6 +100,43 @@ class LightspeedIds(_UuidStream):
     def payment_type(self) -> str:
         return self.uuid()
 
+    # -- konyklabs/roadmap#94, products / inventory / customers --------------
+
+    def product(self) -> str:
+        """``Product.id`` -- ``format: uuid`` on ``SaleLineItem.product_id``."""
+        return self.uuid()
+
+    def product_family(self) -> str:
+        """``Product.family_id`` -- ``format: uuid``. Every product has one;
+        a family with variants shares it across the parent and its children."""
+        return self.uuid()
+
+    def product_code(self) -> str:
+        """``ProductCode.id`` -- required on the schema and never supplied by
+        the caller, who sends only ``code`` and ``type``."""
+        return self.uuid()
+
+    def product_supplier(self) -> str:
+        """``ProductSupplier.id`` -- required, and likewise minted here."""
+        return self.uuid()
+
+    def inventory(self) -> str:
+        """``Inventory.id`` -- one row per product per outlet."""
+        return self.uuid()
+
+    def stock_adjustment(self) -> str:
+        """``StockAdjustment.id`` -- ``format: uuid``."""
+        return self.uuid()
+
+    def customer(self) -> str:
+        """``Customer.id``; ``SaleRequestBase.customer_id`` is ``format: uuid``."""
+        return self.uuid()
+
+    def customer_group(self) -> str:
+        """``CustomerGroup.id``. Only ever drawn for the seeded default group:
+        the Customer Groups tag is deferred, so nothing can create a second."""
+        return self.uuid()
+
     def webhook(self) -> str:
         """``Webhook.id`` -- typed a plain string in the specification, minted
         as the same UUID shape as every other id here (JUDGMENT)."""
@@ -115,6 +159,18 @@ class LightspeedCredentialIds(IdStream):
 
     def reseed(self, seed: int) -> None:
         super().reseed(seed ^ CREDENTIAL_SALT)
+
+    def customer_code(self) -> str:
+        """``Customer.customer_code`` -- the documented examples are
+        ``Tony-N4ZJ``/``Tony-37YP``: a name fragment, a hyphen and four
+        upper-case alphanumerics. This mints the four-character suffix; the
+        prefix is the customer's own first name (``model/customer.py``).
+
+        On the CREDENTIAL stream deliberately: a code is minted on a create
+        that may still be refused for a later field, and a refused create must
+        not renumber the next product's id.
+        """
+        return self._pick(CODE_ALPHABET, _CUSTOMER_CODE_LENGTH)
 
     def access_token(self) -> str:
         """An opaque bearer string. Deliberately not UUID-shaped: the vendor

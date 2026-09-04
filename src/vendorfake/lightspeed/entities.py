@@ -37,14 +37,20 @@ from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION
 __all__ = [
     "COL",
     "OBJECT_VERSION",
+    "AdjustmentReasonEntity",
     "AuthorizationCodeEntity",
+    "CustomerEntity",
+    "CustomerGroupEntity",
+    "InventoryEntity",
     "LightspeedCollections",
     "OutletEntity",
     "PaymentTypeEntity",
+    "ProductEntity",
     "RefreshTokenEntity",
     "RegisterClosureEntity",
     "RegisterEntity",
     "RetailerEntity",
+    "StockAdjustmentEntity",
     "TokenEntity",
 ]
 
@@ -75,10 +81,23 @@ class LightspeedCollections:
     #: handles on it are that action and ``GET .../payments_summary``.
     register_closures: str = "register_closures"
     payment_types: str = "payment_types"
-    #: Populated by a later slice.
     products: str = "products"
+    #: One row per product per outlet -- the documented ``Inventory`` record.
     inventory: str = "inventory"
+    #: The immutable log ``POST /stock_adjustments`` appends to. Deliberately
+    #: NOT an event source: no ``WebhookType`` value names a stock adjustment,
+    #: and the inventory row the adjustment moves fires ``inventory.update``.
+    stock_adjustments: str = "stock_adjustments"
+    #: The two seeded ``CustomInventoryAdjustmentReason`` rows a ``CUSTOM``
+    #: adjustment may name. The tag's own three operations are deferred, so
+    #: nothing can create a third; see ``capabilities.py``.
+    adjustment_reasons: str = "adjustment_reasons"
     customers: str = "customers"
+    #: One seeded default group. The Customer Groups tag (7 operations) is
+    #: deferred, so this collection is read by the customer projection and
+    #: written by nothing.
+    customer_groups: str = "customer_groups"
+    #: Populated by a later slice.
     sales: str = "sales"
     #: The webhook subscription list is the CORE's, so that the dispatcher's
     #: own matcher is what filters a delivery. Lightspeed's ``/webhooks`` CRUD
@@ -105,7 +124,10 @@ class LightspeedCollections:
             self.payment_types,
             self.products,
             self.inventory,
+            self.stock_adjustments,
+            self.adjustment_reasons,
             self.customers,
+            self.customer_groups,
             self.sales,
             self.webhooks,
             self.oauth_apps,
@@ -625,5 +647,369 @@ class RefreshTokenEntity:
                 "access_token_id": self.access_token_id,
                 "retired_at_ms": self.retired_at_ms,
                 "created_at_ms": self.created_at_ms,
+            }
+        )
+
+
+# ---------------------------------------------------------------------------
+# konyklabs/roadmap#94, slice L2a: products, inventory, customers.
+#
+# THE `document` MEMBER, AND WHY TWO OF THESE FIVE HAVE ONE. `Product` declares
+# 57 members and `Customer` 47, nearly all of them nullable strings the unit
+# never computes from: an address line, a custom field, a weight. Typing all of
+# them here would put a hundred lines of pass-through in this module and buy
+# nothing, so each carries the members this package READS in typed fields and
+# the rest in `document`, exactly as `RetailerEntity` already does for the
+# retailer's `gift_cards`/`loyalty`/`sku_sequence` blocks. `document` is in the
+# vendor's `opaque_fields`, so the state digest takes it verbatim.
+#
+# `Inventory`, `StockAdjustment`, `CustomerGroup` and
+# `CustomInventoryAdjustmentReason` are small enough to type outright, and are.
+#
+# MONEY AND QUANTITIES ARE STORED AS DECIMAL TEXT. Both are JSON *numbers* on
+# this wire (`price_excluding_tax` is `type: number`, `current_inventory_level`
+# is `format: double`) -- unlike the register totals, which are strings. Storing
+# the decimal text and projecting it to a number is what keeps `12.50` from
+# becoming `12.500000000000002` on a round trip, and keeps two units' digests
+# identical. `model/scalars.py` owns both directions.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ProductEntity:
+    """One product, in the documented ``Product`` shape.
+
+    ``family_id`` is present on every product, including one with no variants:
+    the schema types it ``format: uuid`` with no nullability, and a family of
+    one is still a family. ``variant_parent_id`` is set only on a child.
+
+    ``has_variants`` is the PARENT's flag ("Bravo" in the vendor's own example
+    prints ``has_variants: true`` with ``variant_options: []``), and
+    ``variant_name`` is the child's own name within the family.
+    """
+
+    id: str
+    name: str
+    handle: str
+    sku: str
+    family_id: str
+    price_excluding_tax: str = "0"
+    price_including_tax: str = "0"
+    supply_price: str = "0"
+    has_inventory: bool = True
+    has_variants: bool = False
+    variant_parent_id: str | None = None
+    variant_name: str | None = None
+    variant_count: int | None = None
+    variant_options: list[dict[str, Any]] = field(default_factory=list)
+    document: dict[str, Any] = field(default_factory=dict)
+    deleted_at: str | None = None
+    object_version: int = 0
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> ProductEntity:
+        variant_count = entity.get("variant_count")
+        return cls(
+            id=_str(entity["id"]),
+            name=_str(entity.get("name")),
+            handle=_str(entity.get("handle")),
+            sku=_str(entity.get("sku")),
+            family_id=_str(entity.get("family_id")),
+            price_excluding_tax=_str(entity.get("price_excluding_tax"), "0"),
+            price_including_tax=_str(entity.get("price_including_tax"), "0"),
+            supply_price=_str(entity.get("supply_price"), "0"),
+            has_inventory=_bool(entity.get("has_inventory"), True),
+            has_variants=_bool(entity.get("has_variants")),
+            variant_parent_id=_opt_str(entity.get("variant_parent_id")),
+            variant_name=_opt_str(entity.get("variant_name")),
+            variant_count=None if variant_count is None else _int(variant_count),
+            variant_options=_rows(entity.get("variant_options")),
+            document=_mapping(entity.get("document")),
+            deleted_at=_opt_str(entity.get("deleted_at")),
+            object_version=_int(entity.get(OBJECT_VERSION)),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "name": self.name,
+                "handle": self.handle,
+                "sku": self.sku,
+                "family_id": self.family_id,
+                "price_excluding_tax": self.price_excluding_tax,
+                "price_including_tax": self.price_including_tax,
+                "supply_price": self.supply_price,
+                "has_inventory": self.has_inventory,
+                "has_variants": self.has_variants,
+                "variant_parent_id": self.variant_parent_id,
+                "variant_name": self.variant_name,
+                "variant_count": self.variant_count,
+                "variant_options": list(self.variant_options),
+                "document": dict(self.document),
+                "deleted_at": self.deleted_at,
+                OBJECT_VERSION: self.object_version,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryEntity:
+    """One ``Inventory`` record: what one product's stock is at one outlet.
+
+    ``reorder_method`` is the documented ``FIXED``/``MIN_MAX`` enum and is
+    ``nullable``, so a product nobody has set a reorder rule for carries
+    ``None`` -- which the projection emits as an explicit ``null``, because the
+    schema's enum lists ``null`` as one of its own values.
+    """
+
+    id: str
+    product_id: str
+    outlet_id: str
+    current_inventory_level: str = "0"
+    average_cost: str | None = None
+    reorder_point: str | None = None
+    reorder_amount: str | None = None
+    reorder_target: str | None = None
+    reorder_method: str | None = None
+    quantity_to_procure: str = "0"
+    deleted_at: str | None = None
+    object_version: int = 0
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> InventoryEntity:
+        return cls(
+            id=_str(entity["id"]),
+            product_id=_str(entity.get("product_id")),
+            outlet_id=_str(entity.get("outlet_id")),
+            current_inventory_level=_str(entity.get("current_inventory_level"), "0"),
+            average_cost=_opt_str(entity.get("average_cost")),
+            reorder_point=_opt_str(entity.get("reorder_point")),
+            reorder_amount=_opt_str(entity.get("reorder_amount")),
+            reorder_target=_opt_str(entity.get("reorder_target")),
+            reorder_method=_opt_str(entity.get("reorder_method")),
+            quantity_to_procure=_str(entity.get("quantity_to_procure"), "0"),
+            deleted_at=_opt_str(entity.get("deleted_at")),
+            object_version=_int(entity.get(OBJECT_VERSION)),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "product_id": self.product_id,
+                "outlet_id": self.outlet_id,
+                "current_inventory_level": self.current_inventory_level,
+                "average_cost": self.average_cost,
+                "reorder_point": self.reorder_point,
+                "reorder_amount": self.reorder_amount,
+                "reorder_target": self.reorder_target,
+                "reorder_method": self.reorder_method,
+                "quantity_to_procure": self.quantity_to_procure,
+                "deleted_at": self.deleted_at,
+                OBJECT_VERSION: self.object_version,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StockAdjustmentEntity:
+    """One row of the stock-adjustment log.
+
+    ``quantity`` is typed ``string`` in the specification -- unlike every other
+    quantity on this surface -- and is signed: the reason decides which sign is
+    legal ("Negative reasons (require ``quantity`` < 0)").
+
+    ``user_id`` is required on ``StockAdjustment`` and there is no Users
+    surface here, so it is the retailer's id (JUDGMENT, recorded in
+    ``capabilities.py`` under ``stock-adjustment-user``).
+    """
+
+    id: str
+    product_id: str
+    outlet_id: str
+    quantity: str
+    reason: str
+    user_id: str
+    custom_inventory_adjustment_reason_id: str | None = None
+    object_version: int = 0
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> StockAdjustmentEntity:
+        return cls(
+            id=_str(entity["id"]),
+            product_id=_str(entity.get("product_id")),
+            outlet_id=_str(entity.get("outlet_id")),
+            quantity=_str(entity.get("quantity"), "0"),
+            reason=_str(entity.get("reason")),
+            user_id=_str(entity.get("user_id")),
+            custom_inventory_adjustment_reason_id=_opt_str(entity.get("custom_inventory_adjustment_reason_id")),
+            object_version=_int(entity.get(OBJECT_VERSION)),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "product_id": self.product_id,
+                "outlet_id": self.outlet_id,
+                "quantity": self.quantity,
+                "reason": self.reason,
+                "user_id": self.user_id,
+                "custom_inventory_adjustment_reason_id": self.custom_inventory_adjustment_reason_id,
+                OBJECT_VERSION: self.object_version,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AdjustmentReasonEntity:
+    """One ``CustomInventoryAdjustmentReason``.
+
+    ``is_from_external_source`` is required and documents whether an
+    integration created the reason; both seeded reasons are the retailer's own,
+    so it is ``False``.
+    """
+
+    id: str
+    name: str
+    type: str
+    enabled: bool = True
+    is_from_external_source: bool = False
+    object_version: int = 0
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> AdjustmentReasonEntity:
+        return cls(
+            id=_str(entity["id"]),
+            name=_str(entity.get("name")),
+            type=_str(entity.get("type")),
+            enabled=_bool(entity.get("enabled"), True),
+            is_from_external_source=_bool(entity.get("is_from_external_source")),
+            object_version=_int(entity.get(OBJECT_VERSION)),
+        )
+
+    def to_entity(self) -> Entity:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "type": self.type,
+            "enabled": self.enabled,
+            "is_from_external_source": self.is_from_external_source,
+            OBJECT_VERSION: self.object_version,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerGroupEntity:
+    """One ``CustomerGroup``. Read-only here: the Customer Groups tag is
+    deferred, and the scenario seeds the retailer's default group so that every
+    customer has one to belong to."""
+
+    id: str
+    name: str
+    retailer_id: str
+    group_id: str | None = None
+    deleted_at: str | None = None
+    object_version: int = 0
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> CustomerGroupEntity:
+        return cls(
+            id=_str(entity["id"]),
+            name=_str(entity.get("name")),
+            retailer_id=_str(entity.get("retailer_id")),
+            group_id=_opt_str(entity.get("group_id")),
+            deleted_at=_opt_str(entity.get("deleted_at")),
+            object_version=_int(entity.get(OBJECT_VERSION)),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "name": self.name,
+                "retailer_id": self.retailer_id,
+                "group_id": self.group_id,
+                "deleted_at": self.deleted_at,
+                OBJECT_VERSION: self.object_version,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerEntity:
+    """One customer, in the documented ``Customer`` shape.
+
+    ``first_name`` and ``last_name`` are the two members ``Customer`` and
+    ``CustomerBase`` both mark required, and both are ALSO ``nullable`` --
+    which this package reads as "the key is always there, the value may be
+    null", so a create that omits either is a 422 and a create that sends
+    ``null`` is not.
+
+    ``name`` is derived, never supplied: the documented examples print
+    ``"first_name": "Anthony", "last_name": "Stark", "name": "Anthony Stark"``
+    and ``CustomerBase`` -- the create and update body -- has no ``name``
+    member for a caller to set.
+
+    The three money members (``balance``, ``loyalty_balance``,
+    ``year_to_date``) are ``format: double`` and are not settable through this
+    surface at all: nothing in issue #94's scoped surface moves a customer's
+    balance, so they stay where the scenario put them.
+    """
+
+    id: str
+    first_name: str | None
+    last_name: str | None
+    customer_code: str
+    customer_group_id: str
+    email: str | None = None
+    balance: str = "0"
+    loyalty_balance: str = "0"
+    year_to_date: str = "0"
+    document: dict[str, Any] = field(default_factory=dict)
+    deleted_at: str | None = None
+    object_version: int = 0
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> CustomerEntity:
+        return cls(
+            id=_str(entity["id"]),
+            first_name=_opt_str(entity.get("first_name")),
+            last_name=_opt_str(entity.get("last_name")),
+            customer_code=_str(entity.get("customer_code")),
+            customer_group_id=_str(entity.get("customer_group_id")),
+            email=_opt_str(entity.get("email")),
+            balance=_str(entity.get("balance"), "0"),
+            loyalty_balance=_str(entity.get("loyalty_balance"), "0"),
+            year_to_date=_str(entity.get("year_to_date"), "0"),
+            document=_mapping(entity.get("document")),
+            deleted_at=_opt_str(entity.get("deleted_at")),
+            object_version=_int(entity.get(OBJECT_VERSION)),
+        )
+
+    @property
+    def name(self) -> str | None:
+        """``"Anthony Stark"`` -- the derived display name, or ``None`` when
+        both halves are null, because a name assembled from nothing is not an
+        empty string."""
+        parts = [part for part in (self.first_name, self.last_name) if part]
+        return " ".join(parts) if parts else None
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "first_name": self.first_name,
+                "last_name": self.last_name,
+                "customer_code": self.customer_code,
+                "customer_group_id": self.customer_group_id,
+                "email": self.email,
+                "balance": self.balance,
+                "loyalty_balance": self.loyalty_balance,
+                "year_to_date": self.year_to_date,
+                "document": dict(self.document),
+                "deleted_at": self.deleted_at,
+                OBJECT_VERSION: self.object_version,
             }
         )

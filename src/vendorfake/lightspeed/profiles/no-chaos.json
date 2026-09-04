@@ -7,6 +7,9 @@
     "outlets",
     "registers",
     "payment_types",
+    "products",
+    "inventory",
+    "customers",
     "webhooks",
     "chaos"
   ],

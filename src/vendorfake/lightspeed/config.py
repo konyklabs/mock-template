@@ -42,9 +42,15 @@ __all__ = [
     "DEFAULT_SCOPES",
     "DOCUMENTED_SCOPES",
     "READ_ONLY_SCOPES",
+    "SCOPE_CUSTOMERS_READ",
+    "SCOPE_CUSTOMERS_WRITE",
+    "SCOPE_INVENTORY_READ",
+    "SCOPE_INVENTORY_WRITE",
     "SCOPE_OUTLETS_READ",
     "SCOPE_PAYMENTS_READ",
     "SCOPE_PAYMENT_TYPES_READ",
+    "SCOPE_PRODUCTS_READ",
+    "SCOPE_PRODUCTS_WRITE",
     "SCOPE_REGISTERS_READ",
     "SCOPE_REGISTER_CLOSE",
     "SCOPE_REGISTER_OPEN",
@@ -54,23 +60,45 @@ __all__ = [
     "resolve_lightspeed_config",
 ]
 
+SCOPE_CUSTOMERS_READ = "customers:read"
+SCOPE_CUSTOMERS_WRITE = "customers:write"
+SCOPE_INVENTORY_READ = "inventory:read"
+SCOPE_INVENTORY_WRITE = "inventory:write"
 SCOPE_OUTLETS_READ = "outlets:read"
 SCOPE_PAYMENTS_READ = "payments:read"
 SCOPE_PAYMENT_TYPES_READ = "payment_types:read"
+SCOPE_PRODUCTS_READ = "products:read"
+SCOPE_PRODUCTS_WRITE = "products:write"
 SCOPE_REGISTERS_READ = "registers:read"
 SCOPE_REGISTER_CLOSE = "register:close"
 SCOPE_REGISTER_OPEN = "register:open"
 SCOPE_RETAILER_READ = "retailer:read"
 SCOPE_WEBHOOKS = "webhooks"
-"""The eight scopes this slice's surface is gated on, each read out of the
-operation's own ``description`` annotation in ``api-2026-07`` and each present
-on the 58-scope reference page. ``webhooks`` really is unqualified -- there is
-no ``webhooks:read``/``webhooks:write`` pair."""
+"""The fourteen scopes this package's surface is gated on, each read out of
+the operation's own ``description`` annotation in ``api-2026-07`` and each
+present on the 58-scope reference page. ``webhooks`` really is unqualified --
+there is no ``webhooks:read``/``webhooks:write`` pair.
+
+The six added by the products/inventory/customers slice
+(konyklabs/roadmap#94) are each annotated on every operation that carries them:
+``products:read`` on ``ListProducts``/``GetProductByID``, ``products:write`` on
+``CreateProduct``/``UpdateProduct``/``DeleteProduct``, ``inventory:read`` on the
+four inventory reads, ``inventory:write`` on the two stock-adjustment
+operations, and the ``customers:read``/``customers:write`` pair across the five
+customer operations. **``inventory:write`` gates a READ**
+(``GET /stock_adjustments``), which is the vendor's own annotation and is
+reproduced rather than corrected."""
 
 DOCUMENTED_SCOPES: tuple[str, ...] = (
+    SCOPE_CUSTOMERS_READ,
+    SCOPE_CUSTOMERS_WRITE,
+    SCOPE_INVENTORY_READ,
+    SCOPE_INVENTORY_WRITE,
     SCOPE_OUTLETS_READ,
     SCOPE_PAYMENTS_READ,
     SCOPE_PAYMENT_TYPES_READ,
+    SCOPE_PRODUCTS_READ,
+    SCOPE_PRODUCTS_WRITE,
     SCOPE_REGISTERS_READ,
     SCOPE_REGISTER_CLOSE,
     SCOPE_REGISTER_OPEN,
@@ -85,15 +113,24 @@ because the vendor publishes the whole vocabulary and the annotation that maps
 it to operations."""
 
 READ_ONLY_SCOPES: tuple[str, ...] = (
+    SCOPE_CUSTOMERS_READ,
+    SCOPE_INVENTORY_READ,
     SCOPE_OUTLETS_READ,
     SCOPE_PAYMENTS_READ,
     SCOPE_PAYMENT_TYPES_READ,
+    SCOPE_PRODUCTS_READ,
     SCOPE_REGISTERS_READ,
     SCOPE_RETAILER_READ,
 )
 """A narrower set the scenario hands a second token, so "403 on the write path"
-is testable without minting anything: no ``register:open``/``register:close``
-and no ``webhooks``."""
+is testable without minting anything: no ``register:open``/``register:close``,
+no ``products:write``, no ``customers:write``, no ``inventory:write`` and no
+``webhooks``.
+
+``inventory:read`` is here and ``inventory:write`` is not, which means this
+token cannot reach ``GET /stock_adjustments`` either -- the vendor gates that
+read on the write scope, so a "read-only" token genuinely cannot see the
+adjustment log."""
 
 _DOCUMENTED_EXPIRES_IN_S = 86400
 """``"expires_in": "86400"`` -- the one numeric lifetime the authorization
@@ -155,6 +192,16 @@ class LightspeedConfig(BaseModel):
     rate_limit_window_ms: int = Field(default=_DOCUMENTED_WINDOW_MS, gt=0)
     rate_limit_per_register: int = Field(default=_DOCUMENTED_QUOTA_PER_REGISTER, ge=0)
     rate_limit_base: int = Field(default=_DOCUMENTED_QUOTA_BASE, ge=0)
+
+    #: The tax rate used to derive the price a product create did NOT supply.
+    #: JUDGMENT, and the loudest one on the products surface: the create body
+    #: may carry ``price_including_tax`` or ``price_excluding_tax`` and not
+    #: both (the operation's own requestBody description), so the other has to
+    #: come from somewhere -- and the Taxes tag, where a real rate would live,
+    #: is outside issue #94's scoped surface. 0.15 is New Zealand's GST, which
+    #: is the country and currency the shipped scenario seeds. A decimal
+    #: STRING, not a float, so the derivation is exact.
+    product_tax_rate: str = "0.15"
 
     #: Emit the namespaced ``unit_error`` sidecar beside the error body. A
     #: deliberate deviation from the wire format; see errors.py.

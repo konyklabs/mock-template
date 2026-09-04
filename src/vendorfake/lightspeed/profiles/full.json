@@ -1,12 +1,15 @@
 {
   "name": "full",
-  "summary": "Every capability on. The default profile. Seeds the whole scenario: one retailer, two outlets, a register in each, three payment types (one internal), an OAuth access/refresh pair, a read-only token, a personal token and one webhook subscription on register_closure.create.",
+  "summary": "Every capability on. The default profile. Seeds the whole scenario: one retailer, two outlets, a register in each, three payment types (one internal), six products in four families with stock at both outlets, three customers, an OAuth access/refresh pair, a read-only token, a personal token and one webhook subscription on register_closure.create.",
   "capabilities": [
     "auth",
     "retailer",
     "outlets",
     "registers",
     "payment_types",
+    "products",
+    "inventory",
+    "customers",
     "webhooks",
     "chaos",
     "webhooks.chaos"

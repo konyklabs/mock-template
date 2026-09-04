@@ -33,6 +33,43 @@
   - **form-encoded webhook delivery**: `payload=<JSON>` plus `domain_prefix`
     and `environment`, signed `X-Signature: signature=<hex>,algorithm=HMAC-SHA256`.
 
+* **lightspeed:** products, inventory and customers -- the second slice of
+  konyklabs/roadmap#94, seventeen routes across three new capabilities. Every
+  write fires the documented webhook (`product.update`, `inventory.update`,
+  `customer.update`) through the journal, and both deletes are SOFT, which is
+  what makes the `deleted=true` list parameter mean anything and what lets a
+  delete carry its own tombstone to a subscriber.
+
+  Three of this API's own inconsistencies are reproduced rather than smoothed
+  over, because a consumer will meet all three:
+
+  - **money is a JSON number here and a JSON string on the register surface.**
+    `Product.price_excluding_tax` is `type: number` and the examples print
+    `110`, `126.5` and `2.63158`; `RegisterClosePaymentType.total` is a string
+    and prints `"255.00"`. The store holds decimal text either way, so a price
+    survives a round trip exactly (`model/scalars.py`).
+  - **the four inventory reads answer a bare JSON array**, not the
+    `{"data": …, "version": …}` envelope the rest of the API uses -- and two of
+    the four are POSTs whose query travels in the request body under parameter
+    names of their own (`size`, `offset`). The adjustment list is the one that
+    does answer the envelope.
+  - **the status codes differ per tag.** `POST /customers` is a 201 and
+    `DELETE /customers/{id}` a 204; `POST /products` is a 200 answering an
+    ARRAY of ids (because inline `variants` create one child product each) and
+    `DELETE /products/{id}` an empty 200.
+
+  Also: the documented mutually-exclusive price pair on `POST /products`
+  (sending both is the one documented 422 on this surface, and the other is
+  derived at a `product_tax_rate` knob), the documented sign rules on
+  `StockAdjustmentReason`, an all-or-nothing 1-1000 adjustment batch, and
+  `GET /stock_adjustments` gated on `inventory:write` -- a read behind a write
+  scope, which is the vendor's own annotation.
+
+  The scenario gains six products in four families (one of them a parent with
+  two variants and no stock of its own, one seeded inactive), ten inventory
+  rows, two custom adjustment reasons, two logged adjustments, a customer group
+  and three customers. Sales is the remaining slice.
+
 * **core:** `vendorfake.core.webhooks.models.BodyEncodingSigner` -- an
   optional, structurally discovered protocol (the same shape as
   `SeedingVendor`) letting a vendor whose delivery body is not JSON encode it

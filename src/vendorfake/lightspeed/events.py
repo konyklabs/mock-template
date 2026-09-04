@@ -33,11 +33,20 @@ WHAT FIRES WHAT
                               tracking enabled")
 ============================  ==============================================
 
-The last four collections are populated by later slices of
-konyklabs/roadmap#94. They are keyed here now, with the generic projection
-below, so that adding a surface is one projection function rather than a
-second place to remember the event vocabulary; each slice replaces
-:func:`_generic` for its own collection with its own model's wire shape.
+``sales`` is populated by the next slice of konyklabs/roadmap#94 and still uses
+the generic projection below; ``products``, ``customers`` and ``inventory``
+carry their own model's wire shape, so the entity a webhook delivers and the
+entity the REST route answers are ONE function and cannot drift.
+
+A ``product.update`` and a ``customer.update`` fire on a DELETE as well as a
+create or an edit, because both deletes here are soft: the row keeps its id,
+gains a ``deleted_at``, and is still there for the payload to carry. The
+webhooks page documents ``customer.update`` as covering
+"create/delete/modify".
+
+``inventory.update`` fires per inventory ROW, not per request: a stock
+adjustment batch that moves three rows delivers three, and a product created
+with opening stock at two outlets delivers two plus its ``product.update``.
 
 THE PAYLOAD SHAPE is the 2026-07 entity as this unit stores it. DOCUMENTED
 DEVIATION, and UNVERIFIED: the webhooks page says "The payload objects you'll
@@ -63,6 +72,9 @@ from typing import Any
 
 from vendorfake.core.kernel.types import EventMeta, JournalEntry, MappedEvent, UnitContext
 from vendorfake.lightspeed.entities import COL, OBJECT_VERSION
+from vendorfake.lightspeed.model.customer import project_customer
+from vendorfake.lightspeed.model.inventory import project_inventory
+from vendorfake.lightspeed.model.product import project_product
 from vendorfake.lightspeed.model.webhooks import (
     DOMAIN_PREFIX_FIELD,
     ENVIRONMENT_FIELD,
@@ -106,10 +118,9 @@ def _generic(entity: Mapping[str, Any]) -> dict[str, Any]:
     bookkeeping dropped, and Lightspeed's ``version`` restored from
     :data:`~vendorfake.lightspeed.entities.OBJECT_VERSION`.
 
-    The placeholder projection for the four collections later slices populate.
-    A slice that adds a surface replaces its own collection's entry with that
-    surface's model projection, so the entity a webhook carries and the entity
-    the REST route answers are one function.
+    The placeholder projection for ``sales``, which the next slice populates.
+    A slice that adds a surface replaces its own collection's entry in
+    :data:`_PROJECTIONS` with that surface's model projection.
     """
     out: dict[str, Any] = {"id": entity["id"]}
     for key, value in entity.items():
@@ -117,6 +128,17 @@ def _generic(entity: Mapping[str, Any]) -> dict[str, Any]:
             out[key] = value
     out["version"] = entity.get(OBJECT_VERSION, 0)
     return out
+
+
+_PROJECTIONS: Mapping[str, Any] = {
+    COL.register_closures: project_register_closure,
+    COL.products: project_product,
+    COL.customers: project_customer,
+    COL.inventory: project_inventory,
+}
+"""Which committed collection is carried by which wire projection. A
+collection absent from this table falls back to :func:`_generic`; today that is
+``sales`` alone."""
 
 
 class LightspeedEventMapper:
@@ -139,7 +161,8 @@ class LightspeedEventMapper:
             # whose event is documented to fire on delete -- a later slice
             # that models the deletion carries the tombstone it needs.
             return ()
-        payload = project_register_closure(stored) if entry.collection == COL.register_closures else _generic(stored)
+        project = _PROJECTIONS.get(entry.collection, _generic)
+        payload = project(stored)
         config = self._deps.config
 
         def build(_meta: EventMeta) -> object:

@@ -17,6 +17,22 @@ Every route lightspeed's surface serves -- vendor-facing only. The `/__unit/*` c
 | PUT | `/api/2026-07/registers/{register_id}/actions/close` | CloseRegister | registers | Close a register and record its totals; fires register_closure.create. 409 if closed. |
 | GET | `/api/2026-07/registers/{register_id}/payments_summary` | RegisterPaymentsSummary | registers | Payment totals for a register's most recent closure. |
 | GET | `/api/2026-07/payment_types` | ListPaymentTypes | payment_types | Payment types, ascending by version; internal types excluded, as the scope says. |
+| GET | `/api/2026-07/products` | ListProducts | products | Products, ascending by version; after/before/page_size/deleted, or sku/name to override. |
+| GET | `/api/2026-07/products/{product_id}` | GetProductByID | products | One product by id. |
+| POST | `/api/2026-07/products` | CreateProduct | products | Create a product and any inline variants; answers {"data": [id, ...]}. |
+| PUT | `/api/2026-07/products/{product_id}` | UpdateProduct | products | Update a product from the two-block ProductUpdate21Request body; 404 or 422 otherwise. |
+| DELETE | `/api/2026-07/products/{product_id}` | DeleteProduct | products | Soft-delete a product: deleted_at is set and it leaves the list unless deleted=true. |
+| POST | `/api/2026-07/inventory` | ListInventoryRecords | inventory | A POST that READS: inventory records for this retailer, as a bare array. |
+| GET | `/api/2026-07/inventory/{product_id}` | ListProductInventoryRecords | inventory | One product's inventory records at every outlet, as a bare array. |
+| POST | `/api/2026-07/inventory_levels` | ListInventoryLevels | inventory | A POST that READS: the denormalised InventoryLevel report, as a bare array. |
+| GET | `/api/2026-07/inventory_levels/{product_id}` | ListProductInventoryLevels | inventory | One product's InventoryLevel rows, as a bare array. |
+| GET | `/api/2026-07/stock_adjustments` | ListStockAdjustments | inventory | The adjustment log, in the {data, version} envelope; gated on inventory:write. |
+| POST | `/api/2026-07/stock_adjustments` | CreateStockAdjustments | inventory | Move stock: 1-1000 adjustments, all or nothing, 201. Fires inventory.update per row. |
+| GET | `/api/2026-07/customers` | ListCustomers | customers | Customers, ascending by version; after/before/page_size/deleted. |
+| GET | `/api/2026-07/customers/{customer_id}` | GetCustomerByID | customers | One customer by id. |
+| POST | `/api/2026-07/customers` | CreateCustomer | customers | Create a customer; 201 with the whole record. Fires customer.update. |
+| PUT | `/api/2026-07/customers/{customer_id}` | UpdateCustomerByID | customers | Replace a customer from the same CustomerBase body the create takes; 404 otherwise. |
+| DELETE | `/api/2026-07/customers/{customer_id}` | DeleteCustomerByID | customers | Soft-delete a customer; documented 204, no body. Fires customer.update. |
 | GET | `/api/2026-07/webhooks` | ListWebhooks | webhooks | All webhooks: {"data": [...]}, with no version envelope. Vendor operationId: get-webhooks. |
 | POST | `/api/2026-07/webhooks` | CreateWebhook | webhooks | Create a webhook; 201, or 409 when the type and URL pair already exists. Vendor: post-webhooks. |
 | GET | `/api/2026-07/webhooks/{webhookId}` | GetWebhook | webhooks | One webhook by id; 404 otherwise. Vendor operationId: get-webhooks-id. |

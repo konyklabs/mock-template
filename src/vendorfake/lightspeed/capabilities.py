@@ -10,10 +10,10 @@ fails at construction when one of its gated capabilities (``chaos``,
 ``webhooks``, ``webhooks.chaos``) is neither declared here nor excused in
 ``VendorDefinition.not_supported`` with a reason.
 
-SCOPE. This is the foundation slice of konyklabs/roadmap#94: the token
-endpoint and the authorize stand-in, the retailer, outlets, registers, payment
-types and webhooks. Products, inventory, customers and sales are in the
-issue's scoped surface and arrive in later slices; they are NOT listed in
+SCOPE. Two slices of konyklabs/roadmap#94 have landed: the foundation (the
+token endpoint and the authorize stand-in, the retailer, outlets, registers,
+payment types and webhooks) and products/inventory/customers. Sales is in the
+issue's scoped surface and arrives in the next slice; it is NOT listed in
 :data:`LIGHTSPEED_NOT_MODELED`, because that map is for behaviour this fake has
 decided against, not for work not yet done.
 
@@ -58,6 +58,28 @@ LIGHTSPEED_CAPABILITIES: tuple[CapabilityDecl, ...] = (
         summary="Payment types: the version-cursor list, excluding internal types unless asked for.",
     ),
     CapabilityDecl(
+        name="products",
+        summary=(
+            "Products: the version-cursor list with its sku/name/family_name overrides, one product by id, "
+            "create with inline variants, update, and a soft delete. Every write fires product.update."
+        ),
+    ),
+    CapabilityDecl(
+        name="inventory",
+        summary=(
+            "Inventory: the four documented reads (two of them POSTs whose query is the body, all four "
+            "answering a bare array) and the 1-1000 stock-adjustment batch. A level change fires "
+            "inventory.update."
+        ),
+    ),
+    CapabilityDecl(
+        name="customers",
+        summary=(
+            "Customers: the version-cursor list, one by id, create (201), replace, and a soft delete (204). "
+            "Every write fires customer.update. One seeded, read-only customer group."
+        ),
+    ),
+    CapabilityDecl(
         name="webhooks",
         summary=(
             "The five documented webhook operations, and delivery: form-encoded payload=<JSON>, X-Signature "
@@ -90,6 +112,86 @@ LIGHTSPEED_NOT_MODELED: Mapping[str, str] = {
     "product-images": (
         "POST /products/{product_id}/actions/image_upload is multipart/form-data and the Product Images tag's "
         "three operations serve binary image data; issue #94 excludes images explicitly."
+    ),
+    "product-family-delete": (
+        "DELETE /products/{product_id}/all (DeleteProductFamily) removes a parent and every variant in one "
+        "call. Issue #94's scoped surface names list/get/create/update/delete for the Products tag and not "
+        "the family delete, so DELETE /products/{product_id} here removes exactly the product it addresses, "
+        "which is what the delete operation's own description says a variant id does."
+    ),
+    "product-reference-tags": (
+        "Product embeds a BrandSample, a SupplierSample and a ProductTypeSample, each {id, name, version}. "
+        "The Brands, Suppliers and Product Types tags are outside issue #94's scoped surface, so there is no "
+        "entity here to resolve an id against: brand, supplier and type are always the empty object the "
+        "vendor's own example prints for a product with none, while brand_id, supplier_id and "
+        "product_type_id carry through whatever the caller set."
+    ),
+    "product-categories-and-tags": (
+        "Product.categories is an array of Tag and Product.tag_ids is an array of tag ids. The Tags and "
+        "Product Categories tags are excluded by issue #94, so tag_ids is stored and echoed verbatim and "
+        "categories is always empty -- there is nothing to expand an id into."
+    ),
+    "composite-products": (
+        "ProductCreateBody.composite, Product.composite_bom, Product.is_composite and the includes[] value "
+        "'composite_products' describe a product assembled from other products. Nothing in issue #94's "
+        "scoped surface consumes a bill of materials, so is_composite is always false, composite and "
+        "includes[] are accepted and change nothing, and no composite_bom is ever emitted."
+    ),
+    "variant-attributes": (
+        "The Variant Attributes tag (5 operations) owns the attribute vocabulary a variant's "
+        "{attribute_id, value} pairs refer to, and is outside issue #94's scoped surface. Variants "
+        "themselves ARE modelled -- ProductCreateBody.variants creates one child product per payload -- but "
+        "an attribute_id cannot be resolved to a display name here, so each variant_options row carries the "
+        "attribute_id verbatim as its name."
+    ),
+    "product-sku-uniqueness": (
+        "Nothing in the specification says a SKU is unique: the list parameter is documented as loading 'a "
+        "product by one of its SKUs' and the sku member carries no uniqueness annotation. So two products "
+        "may share one here and no 409 is invented for it -- the sku filter answers every match."
+    ),
+    "reorder-points": (
+        "POST /inventory/reorder_points (SetReorderPoints) is an Inventory-tag operation that configures "
+        "replenishment rather than reading or adjusting stock, and the build contract scopes in 'the "
+        "inventory read + adjustment operations'. A product's reorder_point, reorder_amount, reorder_target "
+        "and reorder_method are still modelled: the create body's inventory payload sets the first two."
+    ),
+    "custom-adjustment-reason-crud": (
+        "The three custom_inventory_adjustment_reasons operations (list, create, update) are deferred with "
+        "the rest of the out-of-scope surface, but a CUSTOM stock adjustment needs a reason to point at -- "
+        "so the scenario seeds two, one POSITIVE and one NEGATIVE, and a CUSTOM adjustment naming anything "
+        "else is a 422. JUDGMENT, and the reason there is no route to create a third."
+    ),
+    "quantity-to-procure": (
+        "Inventory.quantity_to_procure and InventoryLevel.quantity_to_procure are how much of a product a "
+        "replenishment run says to order. Purchase Orders and Consignments -- the two tags that would "
+        "compute it -- are outside issue #94's scoped surface, so it is always 0 here rather than a number "
+        "this unit made up."
+    ),
+    "inventory-level-report-filters": (
+        "InventoryLevelsRequest declares group_variants, include_composites, supplier_ids, sort_type and "
+        "to_be_procured_only. This unit has no composites, no supplier entity and no per-column sort to "
+        "apply them to, so all five are accepted and change nothing -- recorded here rather than silently."
+    ),
+    "customer-groups": (
+        "The Customer Groups tag (7 operations) is outside issue #94's scoped surface. The scenario seeds "
+        "the retailer's one default group so that every customer has one to belong to, a create or update "
+        "naming a group that does not exist is a 422, and there is no route to read, create or delete one."
+    ),
+    "customer-addresses": (
+        "The Customer Addresses tag (5 operations) is a sub-resource of a customer and is excluded by issue "
+        "#94. The flat physical_* and postal_* members ON the customer -- which are what CustomerBase "
+        "carries -- are fully modelled; the addressable CustomerAddress records are not."
+    ),
+    "customer-balances": (
+        "Customer.balance, loyalty_balance and year_to_date are format: double on the response and absent "
+        "from CustomerBase, so nothing a consumer can send moves one. Store credit, loyalty adjustments and "
+        "on-account sales -- the three things that would -- are all outside issue #94's scoped surface, so "
+        "these three stay wherever the scenario put them."
+    ),
+    "stock-adjustment-user": (
+        "StockAdjustment.user_id is required and the Users tag (7 operations) is outside issue #94's scoped "
+        "surface, so there is no user entity to attribute an adjustment to. Every adjustment this unit "
+        "records carries the retailer's own id. JUDGMENT."
     ),
     "price-books": (
         "The Price Books tag (10 operations) and the products:read:price_books / products:write:price_books "

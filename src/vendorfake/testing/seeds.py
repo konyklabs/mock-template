@@ -352,9 +352,10 @@ class ToastSeed:
 @dataclass(frozen=True, slots=True)
 class LightspeedSeed:
     """The Lightspeed scenario: one retailer, two outlets, a register in each,
-    three payment types (one of them internal), a pre-issued OAuth access and
-    refresh pair, a read-only token, a personal token, and one webhook
-    subscription on ``register_closure.create``.
+    three payment types (one of them internal), six products in four families
+    with stock at both outlets, one customer group and three customers, a
+    pre-issued OAuth access and refresh pair, a read-only token, a personal
+    token, and one webhook subscription on ``register_closure.create``.
 
     Lightspeed scopes a request to its retailer by **subdomain** --
     ``{domain_prefix}.retail.lightspeed.app`` -- and a unit serves exactly one
@@ -391,6 +392,32 @@ class LightspeedSeed:
     #: ``internal: true``: absent from the payment-types list, because the
     #: ``payment_types:read`` scope is documented as excluding internal types.
     payment_type_internal_id: str
+    #: A standalone product, and the SKU it answers ``GET /products?sku=`` on.
+    product_trail_mix_id: str
+    product_trail_mix_sku: str
+    #: Seeded INACTIVE, so ``include_inactive`` on the inventory-levels report
+    #: has something to include.
+    product_bottle_id: str
+    product_bottle_sku: str
+    #: The family: a parent with ``has_variants`` and no stock of its own, and
+    #: its two variants, which each hold stock at both outlets. ``?name=``
+    #: selects the whole family.
+    product_tee_id: str
+    product_tee_small_id: str
+    product_tee_large_id: str
+    #: The retailer's one customer group. There is no route to create another.
+    customer_group_id: str
+    #: Filled in completely: addresses, custom fields, a non-zero balance.
+    customer_ada_id: str
+    #: A company and nothing else.
+    customer_blake_id: str
+    #: ``last_name`` is null, which is legal: the member is required AND
+    #: nullable on the vendor's own schema.
+    customer_noor_id: str
+    #: The two reasons a ``CUSTOM`` stock adjustment may name, one of each
+    #: sign. The tag that would create a third is deferred.
+    adjustment_reason_found_id: str
+    adjustment_reason_spoiled_id: str
     webhook_subscription_id: str
     #: The HMAC secret behind the ``X-Signature`` header. Lightspeed signs with
     #: the application's own ``client_secret``: ``WebhookRequest`` carries no
@@ -572,6 +599,19 @@ def _lightspeed(vendor_config: Mapping[str, object]) -> LightspeedSeed:
         payment_type_cash_id=c.SEED_PAYMENT_TYPE_CASH_ID,
         payment_type_card_id=c.SEED_PAYMENT_TYPE_CARD_ID,
         payment_type_internal_id=c.SEED_PAYMENT_TYPE_INTERNAL_ID,
+        product_trail_mix_id=c.SEED_PRODUCT_TRAIL_MIX_ID,
+        product_trail_mix_sku=c.SEED_PRODUCT_TRAIL_MIX_SKU,
+        product_bottle_id=c.SEED_PRODUCT_BOTTLE_ID,
+        product_bottle_sku=c.SEED_PRODUCT_BOTTLE_SKU,
+        product_tee_id=c.SEED_PRODUCT_TEE_ID,
+        product_tee_small_id=c.SEED_PRODUCT_TEE_SMALL_ID,
+        product_tee_large_id=c.SEED_PRODUCT_TEE_LARGE_ID,
+        customer_group_id=c.SEED_CUSTOMER_GROUP_ID,
+        customer_ada_id=c.SEED_CUSTOMER_ADA_ID,
+        customer_blake_id=c.SEED_CUSTOMER_BLAKE_ID,
+        customer_noor_id=c.SEED_CUSTOMER_NOOR_ID,
+        adjustment_reason_found_id=c.SEED_ADJUSTMENT_REASON_FOUND_ID,
+        adjustment_reason_spoiled_id=c.SEED_ADJUSTMENT_REASON_SPOILED_ID,
         webhook_subscription_id=c.SEED_WEBHOOK_ID,
         # Lightspeed signs with the application's own secret; there is no
         # per-subscription secret member on WebhookRequest.

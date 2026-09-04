@@ -77,8 +77,11 @@ from vendorfake.lightspeed.retry import lightspeed_retry_defaults
 from vendorfake.lightspeed.seed.hydrate import hydrate_lightspeed
 from vendorfake.lightspeed.signer import LightspeedWebhookSigner
 from vendorfake.lightspeed.surface.auth import auth_routes
+from vendorfake.lightspeed.surface.customers import customer_routes
+from vendorfake.lightspeed.surface.inventory import inventory_routes
 from vendorfake.lightspeed.surface.outlets import outlet_routes
 from vendorfake.lightspeed.surface.payment_types import payment_type_routes
+from vendorfake.lightspeed.surface.products import product_routes
 from vendorfake.lightspeed.surface.registers import register_routes
 from vendorfake.lightspeed.surface.retailer import retailer_routes
 from vendorfake.lightspeed.surface.webhooks import webhook_routes
@@ -246,6 +249,13 @@ class LightspeedVendor:
                 + outlet_routes(self)
                 + register_routes(self)
                 + payment_type_routes(self)
+                # konyklabs/roadmap#94, slice L2a. Appended AFTER the register
+                # routes deliberately: conformance drives the FIRST route that
+                # publishes an `example_body`, and that is still CloseRegister.
+                # See the note in surface/products.py.
+                + product_routes(self)
+                + inventory_routes(self)
+                + customer_routes(self)
                 + webhook_routes(self)
             )
         return self._routes

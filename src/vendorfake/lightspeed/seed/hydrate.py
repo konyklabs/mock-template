@@ -15,10 +15,13 @@ two units stamp the same sequence -- and the token expiries, which come from
 the unit's clock.
 
 THE ORDER IS THE VERSION ORDER. Entities are inserted retailer, outlets,
-registers, payment types, so the version numbers ascend in that order and a
-consumer paging ``/outlets`` sees them in the order the document lists them.
-Changing the order here renumbers every entity, which is why it is stated
-rather than incidental.
+registers, payment types, products, inventory, customer groups, customers,
+adjustment reasons, stock adjustments -- so the version numbers ascend in that
+order and a consumer paging ``/outlets`` sees them in the order the document
+lists them. Changing the order here renumbers every entity, which is why it is
+stated rather than incidental, and why the products of konyklabs/roadmap#94's
+second slice were appended AFTER the payment types rather than slotted in
+beside them.
 """
 
 from __future__ import annotations
@@ -30,13 +33,22 @@ from vendorfake.lightspeed.config import LightspeedConfig
 from vendorfake.lightspeed.entities import (
     COL,
     OBJECT_VERSION,
+    AdjustmentReasonEntity,
+    CustomerEntity,
+    CustomerGroupEntity,
+    InventoryEntity,
     OutletEntity,
     PaymentTypeEntity,
+    ProductEntity,
     RefreshTokenEntity,
     RegisterEntity,
     RetailerEntity,
+    StockAdjustmentEntity,
     TokenEntity,
 )
+from vendorfake.lightspeed.model.customer import customer_document
+from vendorfake.lightspeed.model.product import product_document
+from vendorfake.lightspeed.model.scalars import decimal_text
 from vendorfake.lightspeed.seed.document import SeedDocument, parse_seed_document
 from vendorfake.lightspeed.versioning import LightspeedVersions
 
@@ -59,6 +71,10 @@ def hydrate_lightspeed(
     _insert_outlets(ctx, doc, versions)
     _insert_registers(ctx, doc, versions)
     _insert_payment_types(ctx, doc, versions)
+    _insert_products(ctx, doc, versions)
+    _insert_inventory(ctx, doc, versions)
+    _insert_customers(ctx, doc, versions)
+    _insert_adjustments(ctx, doc, versions)
     _insert_tokens(ctx, doc, config)
     _insert_webhooks(ctx, doc, config)
     return doc
@@ -156,6 +172,141 @@ def _insert_payment_types(ctx: UnitContext, doc: SeedDocument, versions: Lightsp
             ).to_entity(),
             SEED_META,
         )
+
+
+def _insert_products(ctx: UnitContext, doc: SeedDocument, versions: LightspeedVersions) -> None:
+    products = ctx.store.collection(COL.products)
+    for index, product in enumerate(doc.products):
+        where = f"products[{index}]."
+        products.insert(
+            ProductEntity(
+                id=product.id,
+                name=product.name,
+                handle=product.handle or product.sku,
+                sku=product.sku,
+                family_id=product.family_id,
+                price_excluding_tax=decimal_text(product.price_excluding_tax, field=f"{where}price_excluding_tax"),
+                price_including_tax=decimal_text(product.price_including_tax, field=f"{where}price_including_tax"),
+                supply_price=decimal_text(product.supply_price, field=f"{where}supply_price"),
+                has_inventory=product.has_inventory,
+                has_variants=product.has_variants,
+                variant_parent_id=product.variant_parent_id,
+                variant_name=product.variant_name or product.name,
+                variant_count=product.variant_count,
+                variant_options=[dict(row) for row in product.variant_options],
+                document=product_document(
+                    active=product.active,
+                    description=product.description,
+                    tag_ids=list(product.tag_ids),
+                    attributes=[dict(row) for row in product.attributes],
+                    product_codes=[dict(row) for row in product.product_codes],
+                    outlet_taxes=[dict(row) for row in product.outlet_taxes],
+                ),
+                object_version=versions.bump(),
+            ).to_entity(),
+            SEED_META,
+        )
+
+
+def _insert_inventory(ctx: UnitContext, doc: SeedDocument, versions: LightspeedVersions) -> None:
+    inventory = ctx.store.collection(COL.inventory)
+    for index, record in enumerate(doc.inventory):
+        where = f"inventory[{index}]."
+        inventory.insert(
+            InventoryEntity(
+                id=record.id,
+                product_id=record.product_id,
+                outlet_id=record.outlet_id,
+                current_inventory_level=decimal_text(
+                    record.current_inventory_level,
+                    field=f"{where}current_inventory_level",
+                    allow_negative=True,
+                ),
+                average_cost=_optional(record.average_cost, f"{where}average_cost"),
+                reorder_point=_optional(record.reorder_point, f"{where}reorder_point"),
+                reorder_amount=_optional(record.reorder_amount, f"{where}reorder_amount"),
+                reorder_target=_optional(record.reorder_target, f"{where}reorder_target"),
+                reorder_method=record.reorder_method,
+                object_version=versions.bump(),
+            ).to_entity(),
+            SEED_META,
+        )
+
+
+def _insert_customers(ctx: UnitContext, doc: SeedDocument, versions: LightspeedVersions) -> None:
+    """The groups first, then the customers: a customer references a group and
+    the version order should read the same way the dependency does."""
+    retailer_id = doc.retailer.id
+    groups = ctx.store.collection(COL.customer_groups)
+    for group in doc.customer_groups:
+        groups.insert(
+            CustomerGroupEntity(
+                id=group.id,
+                name=group.name,
+                retailer_id=retailer_id,
+                object_version=versions.bump(),
+            ).to_entity(),
+            SEED_META,
+        )
+    default_group = doc.customer_groups[0].id if doc.customer_groups else ""
+    customers = ctx.store.collection(COL.customers)
+    for index, customer in enumerate(doc.customers):
+        where = f"customers[{index}]."
+        customers.insert(
+            CustomerEntity(
+                id=customer.id,
+                first_name=customer.first_name,
+                last_name=customer.last_name,
+                customer_code=customer.customer_code,
+                customer_group_id=customer.customer_group_id or default_group,
+                email=customer.email,
+                balance=decimal_text(customer.balance, field=f"{where}balance", allow_negative=True),
+                loyalty_balance=decimal_text(
+                    customer.loyalty_balance, field=f"{where}loyalty_balance", allow_negative=True
+                ),
+                year_to_date=decimal_text(customer.year_to_date, field=f"{where}year_to_date", allow_negative=True),
+                document=customer_document(customer.document),
+                object_version=versions.bump(),
+            ).to_entity(),
+            SEED_META,
+        )
+
+
+def _insert_adjustments(ctx: UnitContext, doc: SeedDocument, versions: LightspeedVersions) -> None:
+    """The reasons first, then the log that may reference them."""
+    reasons = ctx.store.collection(COL.adjustment_reasons)
+    for reason in doc.adjustment_reasons:
+        reasons.insert(
+            AdjustmentReasonEntity(
+                id=reason.id,
+                name=reason.name,
+                type=reason.type,
+                enabled=reason.enabled,
+                object_version=versions.bump(),
+            ).to_entity(),
+            SEED_META,
+        )
+    adjustments = ctx.store.collection(COL.stock_adjustments)
+    for index, adjustment in enumerate(doc.stock_adjustments):
+        adjustments.insert(
+            StockAdjustmentEntity(
+                id=adjustment.id,
+                product_id=adjustment.product_id,
+                outlet_id=adjustment.outlet_id,
+                quantity=decimal_text(
+                    adjustment.quantity, field=f"stock_adjustments[{index}].quantity", allow_negative=True
+                ),
+                reason=adjustment.reason,
+                user_id=doc.retailer.id,
+                custom_inventory_adjustment_reason_id=adjustment.custom_inventory_adjustment_reason_id,
+                object_version=versions.bump(),
+            ).to_entity(),
+            SEED_META,
+        )
+
+
+def _optional(value: str | None, field: str) -> str | None:
+    return None if value is None else decimal_text(value, field=field, allow_negative=True)
 
 
 def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: LightspeedConfig) -> None:

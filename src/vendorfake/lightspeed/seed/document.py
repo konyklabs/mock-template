@@ -11,9 +11,14 @@ type a close request could name -- must resolve inside the document.
 
 Keys: the top level is snake_case like every JSON this project publishes, and
 the entity documents use Lightspeed's own field names, which are snake_case
-too, so a documented example pastes straight in. **Money is not in the seed at
-all** in this slice: the only amounts this surface carries are the totals a
-close request declares.
+too, so a documented example pastes straight in.
+
+MONEY AND QUANTITIES IN THE SEED ARE DECIMAL STRINGS -- ``"12.50"``, not
+``12.5`` -- even though the products and inventory surfaces put them on the
+wire as JSON numbers. A scenario file is read by people and diffed by machines,
+and a float in JSON is neither exact nor stable in either. ``hydrate`` runs
+every one through ``model/scalars.decimal_text``, so a seed that writes
+``"12.50"`` and one that writes ``"12.5"`` produce the same unit.
 
 The Lightspeed ``version`` is NOT in the seed. It is drawn from the retailer's
 one monotonically increasing counter at hydrate, in document order, so that two
@@ -30,13 +35,19 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
 __all__ = [
+    "SeedAdjustmentReason",
+    "SeedCustomer",
+    "SeedCustomerGroup",
     "SeedDocument",
+    "SeedInventory",
     "SeedOutlet",
     "SeedPaymentType",
     "SeedPersonalToken",
+    "SeedProduct",
     "SeedRefreshToken",
     "SeedRegister",
     "SeedRetailer",
+    "SeedStockAdjustment",
     "SeedToken",
     "SeedWebhook",
     "parse_seed_document",
@@ -126,6 +137,119 @@ class SeedPaymentType(BaseModel):
     outlet_ids: list[str] = Field(default_factory=list)
 
 
+class SeedProduct(BaseModel):
+    """One product. ``family_id`` groups a parent with its variants; a product
+    with none is a family of one, because ``Product.family_id`` is not
+    nullable."""
+
+    model_config = _SEED
+
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    sku: str = Field(min_length=1)
+    family_id: str = Field(min_length=1)
+    handle: str | None = None
+    description: str | None = None
+    active: bool = True
+    price_excluding_tax: str = "0"
+    price_including_tax: str = "0"
+    supply_price: str = "0"
+    has_inventory: bool = True
+    has_variants: bool = False
+    variant_parent_id: str | None = None
+    variant_name: str | None = None
+    variant_count: int | None = Field(default=None, ge=0)
+    variant_options: list[dict[str, str]] = Field(default_factory=list)
+    tag_ids: list[str] = Field(default_factory=list)
+    attributes: list[dict[str, str]] = Field(default_factory=list)
+    product_codes: list[dict[str, str]] = Field(default_factory=list)
+    #: ``[{"outlet_id": ..., "tax_id": ...}]`` -- the documented
+    #: ``ProductAddOutletTax`` shape, echoed back on the product.
+    outlet_taxes: list[dict[str, str]] = Field(default_factory=list)
+
+
+class SeedInventory(BaseModel):
+    """One ``Inventory`` record: one product's stock at one outlet."""
+
+    model_config = _SEED
+
+    id: str = Field(min_length=1)
+    product_id: str = Field(min_length=1)
+    outlet_id: str = Field(min_length=1)
+    current_inventory_level: str = "0"
+    average_cost: str | None = None
+    reorder_point: str | None = None
+    reorder_amount: str | None = None
+    reorder_target: str | None = None
+    #: ``FIXED`` or ``MIN_MAX``; the documented enum's third value is null.
+    reorder_method: Literal["FIXED", "MIN_MAX"] | None = None
+
+
+class SeedAdjustmentReason(BaseModel):
+    """One ``CustomInventoryAdjustmentReason``. There is no route to create
+    another: the tag's three operations are deferred, so a CUSTOM stock
+    adjustment can only ever name one seeded here."""
+
+    model_config = _SEED
+
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    type: Literal["POSITIVE", "NEGATIVE"]
+    enabled: bool = True
+
+
+class SeedStockAdjustment(BaseModel):
+    """One row of the adjustment log the scenario starts with.
+
+    Seeded adjustments do NOT move the seeded inventory levels: the levels are
+    stated outright and these are the history that produced them, so a scenario
+    stating both is stating one fact twice and gets to keep them consistent
+    itself.
+    """
+
+    model_config = _SEED
+
+    id: str = Field(min_length=1)
+    product_id: str = Field(min_length=1)
+    outlet_id: str = Field(min_length=1)
+    quantity: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    custom_inventory_adjustment_reason_id: str | None = None
+
+
+class SeedCustomerGroup(BaseModel):
+    """One customer group. The scenario needs at least one: every customer
+    belongs to a group and no route can create one."""
+
+    model_config = _SEED
+
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+
+
+class SeedCustomer(BaseModel):
+    """One customer.
+
+    ``document`` carries the flat ``CustomerBase`` members this unit stores
+    verbatim -- addresses, contact details, the four custom fields -- and its
+    keys are checked against ``model/customer.CUSTOMER_DOCUMENT_FIELDS`` so a
+    misspelling in a scenario is a startup failure naming the key.
+    """
+
+    model_config = _SEED
+
+    id: str = Field(min_length=1)
+    first_name: str | None
+    last_name: str | None
+    customer_code: str = Field(min_length=1)
+    customer_group_id: str | None = None
+    email: str | None = None
+    balance: str = "0"
+    loyalty_balance: str = "0"
+    year_to_date: str = "0"
+    document: dict[str, Any] = Field(default_factory=dict)
+
+
 class SeedToken(BaseModel):
     """A pre-issued OAuth access token."""
 
@@ -177,6 +301,12 @@ class SeedDocument(BaseModel):
     outlets: list[SeedOutlet] = Field(default_factory=list)
     registers: list[SeedRegister] = Field(default_factory=list)
     payment_types: list[SeedPaymentType] = Field(default_factory=list)
+    products: list[SeedProduct] = Field(default_factory=list)
+    inventory: list[SeedInventory] = Field(default_factory=list)
+    adjustment_reasons: list[SeedAdjustmentReason] = Field(default_factory=list)
+    stock_adjustments: list[SeedStockAdjustment] = Field(default_factory=list)
+    customer_groups: list[SeedCustomerGroup] = Field(default_factory=list)
+    customers: list[SeedCustomer] = Field(default_factory=list)
     tokens: list[SeedToken] = Field(default_factory=list)
     personal_tokens: list[SeedPersonalToken] = Field(default_factory=list)
     refresh_tokens: list[SeedRefreshToken] = Field(default_factory=list)
@@ -196,6 +326,8 @@ def _check_references(doc: SeedDocument) -> None:
     """Every reference resolves inside the document."""
     from vendorfake.lightspeed.config import DEFAULT_SCOPES
     from vendorfake.lightspeed.events import LIGHTSPEED_EVENT_TYPES
+    from vendorfake.lightspeed.model.customer import CUSTOMER_DOCUMENT_FIELDS
+    from vendorfake.lightspeed.model.inventory import STOCK_ADJUSTMENT_REASONS
 
     outlet_ids = {outlet.id for outlet in doc.outlets}
     payment_type_ids = {payment_type.id for payment_type in doc.payment_types}
@@ -230,6 +362,57 @@ def _check_references(doc: SeedDocument) -> None:
                 f"webhooks[{index}].type",
                 f"{webhook.type!r} is not one of the seven documented WebhookType values",
             )
+    # -- konyklabs/roadmap#94 slice L2a --------------------------------------
+    product_ids = {product.id for product in doc.products}
+    for index, product in enumerate(doc.products):
+        if product.variant_parent_id is not None and product.variant_parent_id not in product_ids:
+            raise _refuse(f"products[{index}].variant_parent_id", f"product {product.variant_parent_id!r} is absent")
+        if product.has_variants and product.variant_parent_id is not None:
+            raise _refuse(
+                f"products[{index}].has_variants",
+                "a variant cannot itself have variants: this API's families are one level deep",
+            )
+    for index, record in enumerate(doc.inventory):
+        if record.product_id not in product_ids:
+            raise _refuse(f"inventory[{index}].product_id", f"product {record.product_id!r} is absent")
+        if record.outlet_id not in outlet_ids:
+            raise _refuse(f"inventory[{index}].outlet_id", f"outlet {record.outlet_id!r} is absent")
+    reason_ids = {reason.id for reason in doc.adjustment_reasons}
+    for index, adjustment in enumerate(doc.stock_adjustments):
+        if adjustment.product_id not in product_ids:
+            raise _refuse(f"stock_adjustments[{index}].product_id", f"product {adjustment.product_id!r} is absent")
+        if adjustment.outlet_id not in outlet_ids:
+            raise _refuse(f"stock_adjustments[{index}].outlet_id", f"outlet {adjustment.outlet_id!r} is absent")
+        if adjustment.reason not in STOCK_ADJUSTMENT_REASONS:
+            raise _refuse(
+                f"stock_adjustments[{index}].reason",
+                f"{adjustment.reason!r} is not one of the documented StockAdjustmentReason values",
+            )
+        custom_id = adjustment.custom_inventory_adjustment_reason_id
+        if custom_id is not None and custom_id not in reason_ids:
+            raise _refuse(
+                f"stock_adjustments[{index}].custom_inventory_adjustment_reason_id",
+                f"reason {custom_id!r} is absent",
+            )
+    group_ids = {group.id for group in doc.customer_groups}
+    for index, customer in enumerate(doc.customers):
+        if customer.customer_group_id is not None and customer.customer_group_id not in group_ids:
+            raise _refuse(
+                f"customers[{index}].customer_group_id", f"customer group {customer.customer_group_id!r} is absent"
+            )
+        unknown_keys = [key for key in customer.document if key not in CUSTOMER_DOCUMENT_FIELDS]
+        if unknown_keys:
+            raise _refuse(
+                f"customers[{index}].document",
+                f"{unknown_keys} are not members CustomerBase declares",
+            )
+    if doc.customers and not doc.customer_groups:
+        raise _refuse(
+            "customer_groups",
+            "a scenario with customers needs at least one customer group: every customer belongs to one and "
+            "no route in this surface can create one",
+        )
+
     granted = set(DEFAULT_SCOPES)
     holders: list[tuple[str, list[list[str]]]] = [
         ("tokens", [token.scopes for token in doc.tokens]),
