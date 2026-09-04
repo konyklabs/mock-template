@@ -9,13 +9,23 @@ assertions:
 2. ``credentials`` reports each vendor's own application credential under the
    neutral names, and the ``grant`` each vendor documents;
 3. the narrowing is *load-bearing* -- ``unit("toast").seed.merchant_id`` is a
-   type error and not merely un-asserted.
+   type error and not merely un-asserted;
+4. and the same for the overlay types on the way IN --
+   ``unit("square", seed_overlay={"merchants": {}})`` names a collection
+   Square's seed document does not have, and a checker says so.
 
-The third is a negative, and a negative cannot be proved by a type check that
-passes. So it is proved by running mypy on a module written to fail
-(``tests/typing/negative/``) and reading the error out of the output. That
-subprocess is the only slow test in this file and it is the one that matters:
-without it, deleting the overloads would leave every other test here green.
+The last two are negatives, and a negative cannot be proved by a type check
+that passes. So each is proved by running mypy on a module written to fail
+(``tests/typing/negative/``) and reading the error out of the output. Those
+subprocesses are the only slow tests in this file and they are the ones that
+matter: without them, deleting the overloads or the overlay types would leave
+every other test here green.
+
+The overlay types have a third guard that is an ordinary assertion: their keys
+are typed by hand while the seed documents are data, so
+``test_every_overlay_type_names_exactly_its_vendors_seed_collections``
+compares the two and fails the day a collection is added to a document and not
+to its type.
 
 The seedless-vendor test is the other half of "seed is never ``None``". There
 is no shipped vendor without a seed -- all three have one -- so the case is
@@ -34,11 +44,21 @@ import pytest
 
 from tests.fakes import FakeVendor
 from vendorfake.core.kernel.unit import Unit
-from vendorfake.testing import NO_SEED_HINT, Credentials, Seed, unit
+from vendorfake.registry import resolve_vendor
+from vendorfake.testing import (
+    NO_SEED_HINT,
+    CloverSeedOverlay,
+    Credentials,
+    Seed,
+    SquareSeedOverlay,
+    ToastSeedOverlay,
+    unit,
+)
 from vendorfake.testing.seeds import CloverSeed, SquareSeed, ToastSeed, seed_for
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 NEGATIVE_MODULE = Path("tests/typing/negative/toast_merchant_id.py")
+OVERLAY_NEGATIVE_MODULE = Path("tests/typing/negative/square_overlay_unknown_collection.py")
 
 
 def credentials_of(seed: Seed) -> Credentials:
@@ -149,6 +169,58 @@ def test_a_toast_seed_rejects_a_field_that_belongs_to_another_vendor() -> None:
     )
     assert completed.returncode != 0, f"mypy accepted the negative module:\n{completed.stdout}{completed.stderr}"
     assert '"ToastSeed" has no attribute "merchant_id"' in completed.stdout, completed.stdout + completed.stderr
+
+
+def test_a_square_overlay_rejects_a_collection_square_does_not_have() -> None:
+    """mypy must refuse an overlay key that is not one of Square's seed
+    collections, in both the shapes a consumer writes one.
+
+    Run exactly as the sibling above is, and for the same reason: the type is
+    the only thing that can catch this mistake early, because a partial
+    document has nothing to be wrong against at run time -- a mistyped
+    collection merges cleanly and hydrates nothing. The unit refuses it when
+    it starts; this asserts the editor does too.
+
+    Two errors, not one, and the negative module's docstring says why: the
+    annotated form is a plain TypedDict rejection, while the call site
+    resolves to ``unit()``'s ``vendor: str`` fallback overload instead, which
+    costs the vendor narrowing rather than the call. Both are asserted so that
+    a change to either half is a red test rather than a quiet loosening.
+    """
+    pytest.importorskip("mypy", reason="shells out to `python -m mypy`; not installed outside the dev group")
+    completed = subprocess.run(
+        [sys.executable, "-m", "mypy", "--strict", "--no-error-summary", str(OVERLAY_NEGATIVE_MODULE)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode != 0, f"mypy accepted the negative module:\n{completed.stdout}{completed.stderr}"
+    assert 'Extra key "merchants" for TypedDict "SquareSeedOverlay"' in completed.stdout, (
+        completed.stdout + completed.stderr
+    )
+    assert 'Expression is of type "StartedUnit[Seed]", not "StartedUnit[SquareSeed]"' in completed.stdout, (
+        completed.stdout + completed.stderr
+    )
+
+
+def test_every_overlay_type_names_exactly_its_vendors_seed_collections() -> None:
+    """The keys are typed by hand and the seed documents are data, so nothing
+    but this stops the two drifting -- which is the whole failure mode the
+    types exist to prevent, one level up.
+
+    ``_comment`` is excluded deliberately: it is a document annotation, not a
+    collection, and ``overlay_collections`` leaves it out of the refusal's
+    listing for the same reason.
+    """
+    for vendor, overlay_type in (
+        ("square", SquareSeedOverlay),
+        ("clover", CloverSeedOverlay),
+        ("toast", ToastSeedOverlay),
+    ):
+        definition = resolve_vendor(vendor)
+        document = json.loads((definition.base_dir / "seed" / "default.seed.json").read_text(encoding="utf-8"))
+        assert set(overlay_type.__annotations__) == {key for key in document if not key.startswith("_")}, vendor
 
 
 # ---------------------------------------------------------------------------

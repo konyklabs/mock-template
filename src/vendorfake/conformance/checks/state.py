@@ -1,5 +1,6 @@
-"""C06, C07, C13, C19, C20, C22, C24, C25, C26 -- state is reproducible,
-append-only, honestly gated, deduplicated per operation, and paged without overlap.
+"""C06, C07, C13, C19, C20, C22, C24, C25, C26, C36 -- state is reproducible,
+append-only, honestly gated, deduplicated per operation, paged without overlap,
+and seeded from a document an overlay may narrow but not invent keys in.
 
 C06 is the property a consumer's CI depends on: two units built the same way
 hold the same entities, so a test that passed this morning is not going to fail
@@ -24,6 +25,7 @@ __all__ = [
     "a_cursor_belongs_to_the_query_that_issued_it",
     "a_replayed_idempotency_key_does_not_run_twice",
     "a_reused_key_with_a_different_body_answers_as_declared",
+    "a_seed_overlay_cannot_invent_a_collection",
     "an_idempotency_key_is_scoped_to_its_operation",
     "declared_pages_never_overlap_and_lose_nothing",
     "journal_is_append_only",
@@ -71,6 +73,32 @@ short-circuits before the pipeline). ``not_found`` stays out even though a handl
 raise it too, because from outside it is one kind with the router's: a
 partner that would 404 its probe entity must publish example_params naming a
 seeded one (Route.example_params)."""
+
+_ABSENT_COLLECTION = "conformance-absent-collection"
+"""A seed-overlay key no vendor's seed document can have.
+
+Not a plausible near-miss of a real collection name, deliberately, and for the
+same reason ``PROBE_SEGMENT`` is not a plausible id: a probe that could
+accidentally be right proves nothing when it is refused. It carries a hyphen,
+which no shipped seed document uses in a top-level key, so it stays wrong for a
+vendor this suite has never seen.
+"""
+
+_VALID_COLLECTIONS_MARKER = "Valid collections:"
+"""The phrase the refusal carries before its listing.
+
+Part of the contract rather than of one implementation's prose: the clause is
+"the message names the offending collection AND the vendor's valid ones", and
+a check with no agreed marker could only assert the first half. The Python
+implementation writes it in ``core/config/overlay.py``.
+"""
+
+_DIGEST_PREFIX = "sha256:"
+"""What ``seed_overlay.digest`` is prefixed with, named on the wire so a
+consumer comparing two runs can tell a changed algorithm from a changed
+overlay. Spelled here rather than imported from ``core.util`` because it is a
+*wire* value, the same reason ``control_plane.py``'s own constants are."""
+
 
 _QUERY_A: dict[str, str] = {"conformance": "query-a"}
 _QUERY_B: dict[str, str] = {"conformance": "query-b"}
@@ -1190,3 +1218,118 @@ def declared_pages_never_overlap_and_lose_nothing(env: CheckEnv) -> str:
             f"every paginated route this profile declares opts out of the walk{tail or '; none declares one at all'}"
         )
     return f"walked {len(walked)} route(s) one row per page with no repeat and no loss: {'; '.join(walked)}{tail}"
+
+
+@check(
+    id="C36",
+    name="state: a seed overlay may not invent a collection",
+    asserts=(
+        "A unit accepts a seed overlay -- reporting it at GET /__unit/info as active, with a digest, "
+        "and reporting no overlay when none was given -- and REFUSES one whose top-level key is not a "
+        "collection of the seed document, while the unit is being built and before any request, with a "
+        "message naming the offending key and listing the collections that do exist."
+    ),
+    requires=Requires(seed=True, seed_overlay=True),
+)
+def a_seed_overlay_cannot_invent_a_collection(env: CheckEnv) -> str:
+    """The one contract about a *partial* document, and why it needs one.
+
+    An overlay is the only input to a unit that has nothing to be wrong
+    against. A whole seed document is validated by the vendor's hydration --
+    a missing field or a wrong shape shows up as an entity that is not there.
+    A partial document naming ``order`` for a vendor whose collection is
+    ``orders`` merges cleanly, hydrates nothing, and presents an hour later
+    as "the fake ignored my scenario", with no message anywhere. So the
+    refusal is a *contract*, not an implementation detail, and it is asserted
+    at the moment it has to happen: while the unit is built.
+
+    Three claims, in order, and the first two are what make the third
+    attributable. Without them a unit that refused *every* overlay -- or that
+    could not be built at all on this profile -- would satisfy the refusal
+    just as well as one that read the key.
+
+    The refusal message is parsed for its ``Valid collections:`` listing
+    rather than merely searched for the offending key, because "names the
+    vendor's valid collections" is half the clause: a message that says only
+    "unknown collection 'ordrs'" leaves the reader to go and find the seed
+    document, which is exactly the trip the message exists to save. The
+    phrase is part of the contract and ``core/config/overlay.py`` writes it.
+    """
+    with env.seed_overlay_unit({}) as overlaid:
+        info = overlaid.info()
+        reported = info.get("seed_overlay")
+        require(
+            isinstance(reported, Mapping),
+            f"GET /__unit/info published seed_overlay={reported!r} on a unit built with an overlay. "
+            f"It must be an object with 'active' and 'digest'; add it in core/control/plane.py::info.",
+        )
+        overlay_block: Mapping[str, Any] = reported if isinstance(reported, Mapping) else {}
+        require(
+            overlay_block.get("active") is True,
+            f"a unit built with a seed overlay reports seed_overlay.active="
+            f"{overlay_block.get('active')!r} at GET /__unit/info. A consumer reading a report cannot "
+            f"otherwise tell a run on the shipped scenario from a run on an overridden one.",
+        )
+        digest = overlay_block.get("digest")
+        require(
+            isinstance(digest, str) and digest.startswith(_DIGEST_PREFIX),
+            f"seed_overlay.digest is {digest!r}; it must be {_DIGEST_PREFIX!r} followed by the hex "
+            f"SHA-256 of the overlay's canonical JSON, so that two runs can be compared without the "
+            f"overlay's contents ever being published.",
+        )
+
+    plain = env.info().get("seed_overlay")
+    plain_block: Mapping[str, Any] = plain if isinstance(plain, Mapping) else {}
+    require(
+        plain_block.get("active") is False and plain_block.get("digest") is None,
+        f"a unit built with NO seed overlay reports seed_overlay={plain!r}; it must report "
+        f"active=false and digest=null, or 'active' says nothing about this run.",
+    )
+
+    try:
+        with env.seed_overlay_unit({_ABSENT_COLLECTION: {}}) as started:
+            state = started.state()
+    except ConformanceSkip:
+        raise
+    except Exception as refusal:
+        message = str(refusal)
+    else:
+        require(
+            False,
+            f"a unit STARTED on a seed overlay naming {_ABSENT_COLLECTION!r}, which is not one of the "
+            f"seed document's collections (it hydrated {state['entities']}). A partial document has "
+            f"nothing else to be wrong against: a mistyped collection merges cleanly and hydrates "
+            f"nothing, so it must be refused where the overlay is applied -- "
+            f"core/config/overlay.py::apply_seed_overlay.",
+        )
+        raise AssertionError("unreachable: require(False) raises")  # pragma: no cover
+
+    require(
+        _ABSENT_COLLECTION in message,
+        f"the refusal for an unknown overlay collection does not name it: {message!r}. The message is "
+        f"the whole value of the refusal -- name the offending key "
+        f"(core/config/overlay.py::apply_seed_overlay).",
+    )
+    _, marker, listing = message.partition(_VALID_COLLECTIONS_MARKER)
+    require(
+        marker != "",
+        f"the refusal does not carry {_VALID_COLLECTIONS_MARKER!r}: {message!r}. Naming the offending "
+        f"key without listing the ones that exist sends the reader to the seed document, which is the "
+        f"trip the message exists to save.",
+    )
+    named = tuple(part.strip().rstrip(".") for part in listing.strip().rstrip(".").split(",") if part.strip())
+    require(
+        named,
+        f"the refusal lists no valid collections: {message!r}. A seed document that hydrated entities "
+        f"has collections to name.",
+    )
+    require(
+        _ABSENT_COLLECTION not in named,
+        f"the refusal lists {_ABSENT_COLLECTION!r} among the valid collections: {message!r}. The key it "
+        f"refused cannot also be one it accepts.",
+    )
+    return (
+        f"an empty overlay is accepted and reported active with a {_DIGEST_PREFIX} digest, a unit with "
+        f"none reports active=false, and {_ABSENT_COLLECTION!r} is refused before the unit starts, "
+        f"naming {len(named)} valid collection(s): {', '.join(named)}"
+    )

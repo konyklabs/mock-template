@@ -1,4 +1,4 @@
-"""Fifty-six units, each broken in exactly one way, and the check each must trip.
+"""Fifty-seven units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -65,6 +65,7 @@ from vendorfake.core.capability.gates import CoreCapability
 from vendorfake.core.capability.registry import CONTROL_CAPABILITY, CapabilityRegistry
 from vendorfake.core.chaos.engine import ChaosEngine
 from vendorfake.core.chaos.selector import FaultSelector
+from vendorfake.core.config.overlay import merge_seed
 from vendorfake.core.kernel.types import (
     AuthAdapter,
     AuthResult,
@@ -2116,4 +2117,43 @@ distinction from `no-faults` that a consumer can only trust if the name and
 the published capability state agree. This mutant breaks exactly that
 agreement, at the wire document C35 reads, without touching the vendor
 definition C34 checks or any route a request-handling contract would notice.
+"""
+
+
+def _swallow_unknown_overlay_collections(base: object | None, overlay: Mapping[str, Any]) -> dict[str, Any]:
+    """``apply_seed_overlay`` with the unknown-collection check taken out.
+
+    The merge itself is left correct, deliberately: a mutant that also broke
+    the merge would redden the contract for two reasons and prove nothing
+    about either. This one merges exactly as the real function does and simply
+    never looks at whether a top-level key is a collection the seed has --
+    which is the defect that has no other symptom, because the extra key rides
+    through hydration untouched and the unit answers as if the overlay had
+    been empty.
+    """
+    document: Mapping[str, Any] = {} if not isinstance(base, Mapping) else base
+    return merge_seed(document, overlay)
+
+
+register(
+    Mutant(
+        id="M57",
+        name="seed-overlay-invents-a-collection",
+        defect=(
+            "A seed overlay naming a top-level key the seed document does not have is merged in "
+            "silently instead of refused while the unit is built."
+        ),
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C36"}),
+        overlay=_swallow_unknown_overlay_collections,
+    )
+)
+"""The defect a partial document invites and nothing else catches.
+
+A whole seed document is checked by hydration -- a wrong shape shows up as an
+entity that is not there. A partial one has nothing to be wrong against: an
+overlay that says `order` for a vendor whose collection is `orders` merges
+cleanly, hydrates nothing, and reads an hour later as "the fake ignored my
+scenario". So the refusal is the contract, and this mutant is what makes
+"C36 can fail" a measured statement rather than an assumed one.
 """

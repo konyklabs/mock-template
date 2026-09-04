@@ -6,6 +6,37 @@ Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
 2026-09-01 batch (konyklabs/roadmap#53: the conformance-coverage stack #15,
 #46, #42 and the fidelity legs #55, #56).
 
+### Added
+
+* **testing:** `unit()`, `async_unit()` and `served()` take `seed_overlay=` --
+  a **partial** seed document merged over the profile's before the store is
+  hydrated, so the unit answers from the merged scenario on its first request.
+  An inline mapping or a `str`/`os.PathLike` naming a JSON file, and the
+  `VENDORFAKE_SEED_OVERLAY` layer either way: a value starting with `{` is
+  read as inline JSON, anything else as a path, and an explicit entry in
+  `env=` beats the parameter exactly as it does for `seed=` and `clock_start=`.
+  `served(env=)` refuses the variable and names the parameter, because only
+  the parameter's path checks the overlay in the calling process. The merge
+  rule -- objects merge recursively, `null` deletes a key, arrays and scalars
+  replace -- is stated once in `docs/concepts/seed.md` and implemented once in
+  `vendorfake.core.config.overlay.merge_seed`. A top-level key that is not one
+  of the seed document's collections fails the unit at construction, naming
+  the key and the collections that exist; on a vendor named as a literal the
+  new `SquareSeedOverlay`, `CloverSeedOverlay` and `ToastSeedOverlay` types
+  make a checker say so first (a non-literal vendor gets the untyped
+  `SeedOverlay`). `GET /__unit/info` and `vendorfake info` gain
+  `seed_overlay: {"active": bool, "digest": "sha256:<hex>" | null}` -- the
+  digest of the overlay's canonical JSON, never its contents (#85).
+* **conformance:** **C36**, "a seed overlay may not invent a collection": a
+  unit accepts an overlay and reports it at `GET /__unit/info`, and refuses
+  one naming a collection the seed document does not have while the unit is
+  being built, with a message naming the offending key and listing the valid
+  ones. Asked of every vendor through a new
+  `ConformanceTarget.open_with_seed_overlay`, which a target that cannot build
+  units (a remote `--base-url` one) leaves unset to skip rather than pass
+  unmeasured. Mutant **M57** swallows the refusal, so the clause is
+  falsifiable (#85).
+
 ### Bug fixes
 
 * **examples:** the Vitest example's Toast signature helper now mirrors

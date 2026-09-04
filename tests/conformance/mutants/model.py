@@ -24,16 +24,18 @@ unexamined variable sitting under every result.
 from __future__ import annotations
 
 import functools
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 from vendorfake.conformance import ConformanceClient, ConformanceTarget
 from vendorfake.conformance.client import InProcessConformanceClient
 from vendorfake.core.capability.registry import CapabilityRegistry
 from vendorfake.core.chaos.engine import ChaosEngine
 from vendorfake.core.chaos.selector import FaultSelector
+from vendorfake.core.config.overlay import apply_seed_overlay, seed_overlay_digest
 from vendorfake.core.config.profile import load_profile
 from vendorfake.core.control.plane import control_plane_routes
 from vendorfake.core.kernel.types import Route, VendorDefinition
@@ -125,6 +127,14 @@ class Mutant:
     client: Callable[[str, ConformanceClient], ConformanceClient] | None = None
     #: Replaces the webhook dispatcher, through ``Unit(dispatcher=...)``.
     dispatcher: DispatcherFactory | None = None
+    #: Replaces how a seed OVERLAY is applied to the seed document, standing
+    #: in for ``core/config/overlay.py::apply_seed_overlay``. The seam exists
+    #: because that function is the only place the unknown-collection refusal
+    #: can live -- it is where a partial document meets the document it is
+    #: partial against -- so a mutant that swallows the refusal has to replace
+    #: it. ``None`` (every other mutant) uses the real one, which is why the
+    #: overlay contract passes under the null mutant.
+    overlay: Callable[[object | None, Mapping[str, Any]], dict[str, Any]] | None = None
 
     @property
     def expected_red(self) -> frozenset[str]:
@@ -169,7 +179,7 @@ def register(mutant: Mutant) -> Mutant:
 # ---------------------------------------------------------------------------
 
 
-def build_unit(mutant: Mutant, profile: str) -> Unit:
+def build_unit(mutant: Mutant, profile: str, *, seed_overlay: Mapping[str, Any] | None = None) -> Unit:
     """The four steps ``registry.create_unit`` performs, with two seams open.
 
     Spelled out rather than delegated because ``create_unit`` deliberately
@@ -193,10 +203,26 @@ def build_unit(mutant: Mutant, profile: str) -> Unit:
         routes = control_plane_routes(binding, framework_answered=None)
         return routes if mutant.control is None else mutant.control(routes)
 
+    # The overlay is applied HERE rather than through the `VENDORFAKE_SEED_
+    # OVERLAY` layer `load_profile` reads, for the same reason the control
+    # plane and the fault selector are wired by hand above: the seam has to be
+    # reachable. `apply_seed_overlay` is the real function unless the mutant
+    # replaced it, so the null mutant exercises the shipped behaviour and any
+    # drift between this and `load_profile` turns C36 red under M00.
+    seed = loaded.seed
+    config = loaded.config
+    if seed_overlay is not None:
+        seed = (
+            apply_seed_overlay(seed, seed_overlay, profile=profile)
+            if mutant.overlay is None
+            else mutant.overlay(seed, seed_overlay)
+        )
+        config = config.model_copy(update={"seed_overlay_digest": seed_overlay_digest(seed_overlay)})
+
     unit = Unit(
         vendor=definition,
-        config=loaded.config,
-        seed=loaded.seed,
+        config=config,
+        seed=seed,
         sink=MemorySink(),
         control_routes=control,
         fault_selector=mutant.selector,
@@ -268,11 +294,29 @@ def _served_by_a_child(mutant: Mutant, profile: str) -> Iterator[ConformanceClie
         _stop(child)
 
 
+@contextmanager
+def _open_with_seed_overlay(mutant: Mutant, profile: str, overlay: Mapping[str, Any]) -> Iterator[ConformanceClient]:
+    """A mutated unit with ``overlay`` over its seed, in process.
+
+    Declared on every mutant target rather than only the one whose defect is
+    about overlays: a contract that skipped under every mutant would be a
+    contract the meta-suite never showed can fail, which is the whole thing
+    the mutants exist to rule out.
+    """
+    unit = build_unit(mutant, profile, seed_overlay=overlay)
+    try:
+        client: ConformanceClient = InProcessConformanceClient(in_process(unit))
+        yield client if mutant.client is None else mutant.client("inprocess", client)
+    finally:
+        unit.stop()
+
+
 def mutant_target(mutant: Mutant) -> ConformanceTarget:
     """The mutant, as something ``run_conformance`` can be pointed at."""
     return ConformanceTarget(
         name=f"square+{mutant.name}",
         open_client=functools.partial(_open_client, mutant),
+        open_with_seed_overlay=functools.partial(_open_with_seed_overlay, mutant),
         profiles=mutant.profiles,
         transports=mutant.transports,
         out_of_process=mutant.out_of_process,

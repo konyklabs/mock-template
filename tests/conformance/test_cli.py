@@ -106,12 +106,15 @@ def test_base_url_discovers_the_profile_and_runs_the_registry(capsys: pytest.Cap
     # The profile was read from the running unit, not passed in.
     assert "== full / http ==" in printed
     assert "SHARED, not rebuilt per check" in printed
-    # Four contracts cannot be asked of a unit somebody else is running, and
+    # Five contracts cannot be asked of a unit somebody else is running, and
     # each for a reason the target honestly declares: C10 compares two
     # bindings and a remote target has one, C22 needs a unit built in another
-    # process and a base URL is one unit, and C21 and C32 need a virtual
-    # clock, which the profile behind this URL does not run.
-    unaskable = ("C10", "C21", "C22", "C32")
+    # process and a base URL is one unit, C21 and C32 need a virtual
+    # clock, which the profile behind this URL does not run, and C36 needs a
+    # unit BUILT with a seed overlay -- a remote target is handed a URL to a
+    # unit that already started, so it publishes no way to build another
+    # (ConformanceTarget.open_with_seed_overlay is None).
+    unaskable = ("C10", "C21", "C22", "C32", "C36")
     assert f"{len(CHECKS) - len(unaskable)} passed, 0 failed, {len(unaskable)} skipped" in printed, printed
 
 

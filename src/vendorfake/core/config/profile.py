@@ -72,6 +72,7 @@ from vendorfake.core.config.models import (
     UnmatchedPolicy,
     parse_profile_document,
 )
+from vendorfake.core.config.overlay import apply_seed_overlay, seed_overlay_digest
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
 __all__ = [
@@ -131,6 +132,12 @@ ENV_TABLE: tuple[EnvVar, ...] = (
         "Absolute list, or a +add,-remove delta against the profile's list.",
     ),
     EnvVar("VENDORFAKE_SEED", "UNIT_SEED", "seed_path", "Seed document path, overriding the profile's."),
+    EnvVar(
+        "VENDORFAKE_SEED_OVERLAY",
+        None,
+        "seed_overlay",
+        "Partial seed document merged over the seed: a JSON file path, or the JSON itself inline.",
+    ),
     EnvVar(
         "VENDORFAKE_WEBHOOK_URL",
         "UNIT_WEBHOOK_URL",
@@ -205,8 +212,8 @@ ENV_TABLE: tuple[EnvVar, ...] = (
         "'vendor-404' or 'error': what an in-process binding does with a request no route matched.",
     ),
 )
-"""Every environment variable this loader reads. Twenty entries, one of them a
-prefix: the sixteen the reference read, renamed (``replaces`` set), plus four
+"""Every environment variable this loader reads. Twenty-one entries, one of them
+a prefix: the sixteen the reference read, renamed (``replaces`` set), plus five
 vendorfake-native controls the reference never had (``replaces=None``) -- see
 :attr:`EnvVar.replaces`.
 
@@ -483,6 +490,12 @@ def resolve_config(
         profile=document.name or name,
         capabilities=tuple(capabilities),
         seed_path=environ.get("VENDORFAKE_SEED") or document.seed,
+        # A locator, not a document: `load_profile` reads it, because reading
+        # is a filesystem act and this function is documented to touch none.
+        # There is no profile-document key for it on purpose -- an overlay is
+        # a *caller's* delta over the scenario a profile ships, and a profile
+        # that wanted a different scenario would name a different seed.
+        seed_overlay=environ.get("VENDORFAKE_SEED_OVERLAY") or None,
         vendor_config=vendor_config,
         webhooks=ResolvedWebhooks(
             retry=retry,
@@ -596,4 +609,52 @@ def load_profile(
             seed_file = seed_root / seed_file
         seed = _read_json(seed_file, what="seed document", field="seed")
 
+    if config.seed_overlay is not None:
+        overlay = _read_overlay(config.seed_overlay)
+        seed = apply_seed_overlay(seed, overlay, profile=config.profile)
+        config = config.model_copy(update={"seed_overlay_digest": seed_overlay_digest(overlay)})
+
     return LoadedProfile(config=config, seed=seed, document=merged, source_path=source_path)
+
+
+def _read_overlay(locator: str) -> Mapping[str, Any]:
+    """``VENDORFAKE_SEED_OVERLAY`` as a document: inline JSON, or a file.
+
+    A value whose first non-whitespace character is ``{`` is the document
+    itself; anything else is a path. The discriminator is the character and
+    not the presence of a file, deliberately: "if it parses as JSON use it,
+    otherwise open it" would turn a *typo in a path* into a JSON parse error
+    about a filename, and "if the file exists open it" would make the meaning
+    of a value depend on the working directory.
+
+    A path is taken relative to the process's working directory, NOT to the
+    profile or the vendor package the way ``seed_path`` is. The two are
+    different kinds of thing: ``seed`` names a document the vendor ships
+    beside its profiles, and an overlay is a file the *caller* wrote, so the
+    directory a caller is standing in is the only root that could be meant.
+    """
+    text = locator.lstrip()
+    if text.startswith("{"):
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise UnitError(
+                UnitErrorKind.INVALID_JSON,
+                detail=(
+                    f"VENDORFAKE_SEED_OVERLAY starts with '{{' and so is read as inline JSON, but it is not "
+                    f"valid JSON: {exc.msg} at line {exc.lineno} column {exc.colno}."
+                ),
+                field="seed_overlay",
+            ) from exc
+    else:
+        decoded = _read_json(Path(locator), what="seed overlay document", field="seed_overlay")
+    if not isinstance(decoded, Mapping):
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                f"a seed overlay must be a JSON object whose keys name the seed's top-level collections; "
+                f"this one decoded to {type(decoded).__name__}."
+            ),
+            field="seed_overlay",
+        )
+    return {str(key): value for key, value in decoded.items()}

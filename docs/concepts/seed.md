@@ -59,6 +59,91 @@ across vendors:
   `subscribe()` on a [driver](driver.md) checks a request against it and
   refuses a name that will never fire, rather than registering it silently.
 
+## Seed overlays
+
+A scenario that is *almost* right is the common case: the shipped catalog and
+orders, but this merchant's name, or one extra order, or no loyalty program.
+`seed_overlay=` takes a **partial** seed document and merges it over the
+profile's before the store is hydrated, so the unit answers from the merged
+scenario on its very first request:
+
+```python
+with unit("square", seed_overlay={"merchant": {"business_name": "Overlaid"}}) as square:
+    ...  # every other collection is exactly what the profile ships
+```
+
+It is accepted by `unit()`, `async_unit()` and `served()`, as an inline
+mapping or as a `str`/`os.PathLike` naming a JSON file, and by
+`VENDORFAKE_SEED_OVERLAY` — a path, or the JSON itself inline when the value
+starts with `{`. The parameter *is* that variable's layer, so an explicit
+`VENDORFAKE_SEED_OVERLAY` entry in a shared `env=` mapping wins, exactly as
+`seed=` and `clock_start=` behave. `served(env=)` refuses the variable and
+names the parameter: only the parameter's path checks the overlay in the
+calling process, where the refusal is visible.
+
+### The merge rule
+
+Stated here and nowhere else; implemented once, in
+`vendorfake.core.config.overlay.merge_seed`.
+
+| In the overlay | Result |
+| --- | --- |
+| An object, where the base has an object | Merged key by key, recursively; the overlay's keys win |
+| `null` | The key is **removed** from the result, not set to null |
+| An array | Replaces the base array whole — never concatenated, never merged by index or id |
+| Anything else | Replaces |
+
+`null` deletes because a seed carrying `"loyalty_program": null` and a seed
+carrying no `loyalty_program` are different documents, and "remove it" has to
+produce the second — the same *absent means absent* rule the state store
+follows. An array replaces because a seed's `orders` is a list a reader can
+see: an overlay that lists two orders means two.
+
+### A collection you invent is refused when the unit starts
+
+A top-level key that is not one of the seed document's collections fails the
+unit at construction, before any request, naming the offending key and the
+collections that exist:
+
+```text
+seed overlay names 'merchants', which the seed document for profile 'full'
+does not have. ... Valid collections: catalog, inventory_counts, locations,
+loyalty_accounts, loyalty_program, merchant, orders, tokens.
+```
+
+This is the one mistake an overlay has no other symptom for. A partial
+document has nothing to be wrong *against*: `{"order": [...]}` for a vendor
+whose collection is `orders` merges cleanly, hydrates nothing, and reads an
+hour later as "the fake ignored my scenario". Conformance clause **C36**
+asserts the refusal on every vendor.
+
+On a vendor named as a literal a type checker says so first, from the
+per-vendor `TypedDict`s `SquareSeedOverlay`, `CloverSeedOverlay` and
+`ToastSeedOverlay` — whose keys are that vendor's collections, all optional,
+with untyped values. A vendor passed as a plain `str` gets
+`vendorfake.testing.SeedOverlay` (`Mapping[str, Any]`), the honest answer when
+the call site does not know which vendor's collections apply; the unit still
+refuses an unknown collection at start.
+
+### What is published, and what is not
+
+`GET /__unit/info` and `vendorfake info` carry a `seed_overlay` block:
+
+```json
+{"seed_overlay": {"active": true, "digest": "sha256:3233fbc3…"}}
+```
+
+The **contents are never published** — an inline overlay may carry a
+consumer's own credentials. The digest is over the overlay's canonical JSON
+(keys sorted at every depth, no whitespace), so two callers who wrote the same
+overlay with their keys in a different order pin the same value, and a report
+can say which scenario a run was on. A unit built with no overlay reports
+`{"active": false, "digest": null}`.
+
+Ids stay deterministic under an overlay: two units on the same profile and the
+same overlay hold the same entities, exactly as two units on the shipped
+scenario do.
+
 ## Ids are deterministic, not unique
 
 Two `unit("square")` blocks mint the same order ids, tokens and codes in

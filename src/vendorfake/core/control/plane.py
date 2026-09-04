@@ -285,6 +285,18 @@ def control_plane_routes(
                         "now": ctx.clock.iso_ms(),
                         "pending_timers": [_timer_as_json(timer) for timer in ctx.clock.pending()],
                     },
+                    # Whether a partial seed document was laid over the
+                    # profile's, and a fingerprint of it -- never its
+                    # contents, which an inline overlay may have filled with
+                    # the consumer's own credentials. The digest is over
+                    # canonical JSON (see core/config/overlay.py), so it
+                    # identifies the overlay rather than the way it was
+                    # spelled, and is the value a report pins to say which
+                    # scenario a run was on.
+                    "seed_overlay": {
+                        "active": ctx.config.seed_overlay_digest is not None,
+                        "digest": ctx.config.seed_overlay_digest,
+                    },
                     "state": {
                         "entities": ctx.store.stats(),
                         "journal_seq": ctx.store.journal_seq,

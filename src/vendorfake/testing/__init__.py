@@ -66,11 +66,24 @@ from vendorfake.core.control.plane import DEFAULT_REQUEST_LIMIT
 from vendorfake.core.kernel.types import Logger
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.logging import JsonLogger
+from vendorfake.core.util.json import canonical_json
 from vendorfake.core.webhooks.models import matches_event_type
 from vendorfake.core.webhooks.sink import DeliverySink
 from vendorfake.registry import RouteInfo, create_unit
 from vendorfake.testing.receiver import Delivery, WebhookReceiver, webhook_receiver
-from vendorfake.testing.seeds import CloverSeed, Credentials, Seed, SquareSeed, ToastSeed, Token, seed_for
+from vendorfake.testing.seeds import (
+    CloverSeed,
+    CloverSeedOverlay,
+    Credentials,
+    Seed,
+    SeedOverlay,
+    SquareSeed,
+    SquareSeedOverlay,
+    ToastSeed,
+    ToastSeedOverlay,
+    Token,
+    seed_for,
+)
 from vendorfake.testing.transport import UnitTransport, UnmatchedRequest, checked_unmatched
 
 __all__ = [
@@ -82,16 +95,20 @@ __all__ = [
     "SERVE_COMMAND",
     "ClockInfo",
     "CloverSeed",
+    "CloverSeedOverlay",
     "Credentials",
     "Delivery",
     "Driver",
     "RouteInfo",
     "Seed",
+    "SeedOverlay",
     "SeedT",
     "ServedUnit",
     "SquareSeed",
+    "SquareSeedOverlay",
     "StartedUnit",
     "ToastSeed",
+    "ToastSeedOverlay",
     "Token",
     "UnitTransport",
     "UnmatchedRequest",
@@ -189,6 +206,29 @@ def _clock_start_env_value(clock_start: datetime | str) -> str:
             "machines; pass a timezone-aware one (e.g. datetime(..., tzinfo=UTC)) or an RFC 3339 string."
         )
     return clock_start.isoformat()
+
+
+def _seed_overlay_env_value(seed_overlay: Mapping[str, Any] | str | os.PathLike[str]) -> str:
+    """``VENDORFAKE_SEED_OVERLAY``'s value, from either spelling the three
+    bindings accept.
+
+    A mapping becomes the document itself, encoded as canonical JSON -- keys
+    sorted, no whitespace -- so that the value carried into the unit is the
+    same string the digest at ``GET /__unit/info`` is computed from, and two
+    callers who wrote the same overlay with their keys in a different order
+    produce one digest rather than two. A ``str`` or ``os.PathLike`` becomes
+    the path, unchanged; the loader reads a value starting with ``{`` as
+    inline JSON and anything else as a path, which is why an inline document
+    can never be mistaken for a filename.
+
+    ``os.fspath`` rather than ``str()``: a ``Path`` stringifies the same way,
+    but any other ``os.PathLike`` (a ``TemporaryDirectory``-adjacent wrapper,
+    a consumer's own type) would stringify to its ``repr`` and reach the
+    loader as a filename nothing could open.
+    """
+    if isinstance(seed_overlay, Mapping):
+        return canonical_json({str(key): value for key, value in seed_overlay.items()})
+    return os.fspath(seed_overlay)
 
 
 @dataclass
@@ -670,6 +710,7 @@ def unit(
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
     seed: int | None = ...,
+    seed_overlay: SquareSeedOverlay | str | os.PathLike[str] | None = ...,
     unmatched: UnmatchedPolicy | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[StartedUnit[SquareSeed]]: ...
@@ -685,6 +726,7 @@ def unit(
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
     seed: int | None = ...,
+    seed_overlay: CloverSeedOverlay | str | os.PathLike[str] | None = ...,
     unmatched: UnmatchedPolicy | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[StartedUnit[CloverSeed]]: ...
@@ -700,6 +742,7 @@ def unit(
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
     seed: int | None = ...,
+    seed_overlay: ToastSeedOverlay | str | os.PathLike[str] | None = ...,
     unmatched: UnmatchedPolicy | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[StartedUnit[ToastSeed]]: ...
@@ -715,6 +758,7 @@ def unit(
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
     seed: int | None = ...,
+    seed_overlay: SeedOverlay | str | os.PathLike[str] | None = ...,
     unmatched: UnmatchedPolicy | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[StartedUnit[Seed]]: ...
@@ -729,6 +773,7 @@ def unit(
     env: Mapping[str, str] | None = None,
     logger: Logger | None = None,
     seed: int | None = None,
+    seed_overlay: SeedOverlay | str | os.PathLike[str] | None = None,
     unmatched: UnmatchedPolicy | None = None,
     clock_start: datetime | str | None = None,
 ) -> AbstractContextManager[StartedUnit[Any]]:
@@ -765,6 +810,13 @@ def unit(
     exactly how a capability request resolves to a profile instead when
     ``capabilities`` is given; supplying both ``profile`` and ``capabilities``
     is a ``ValueError``, and so is an empty ``capabilities=[]``.
+
+    ``seed_overlay`` is a partial seed document merged over the profile's
+    before the store is built -- an inline mapping, or a path to a JSON file.
+    On a vendor named as a literal it is typed: ``unit("square",
+    seed_overlay={"orders": [...]})`` type-checks and a key that is not one
+    of Square's seed collections does not. See :func:`_unit` for the layering
+    and ``docs/concepts/seed.md`` for the merge rule.
     """
     return _unit(
         vendor,
@@ -774,6 +826,7 @@ def unit(
         env=env,
         logger=logger,
         seed=seed,
+        seed_overlay=seed_overlay,
         unmatched=checked_unmatched(unmatched),
         clock_start=clock_start,
     )
@@ -789,6 +842,7 @@ def _unit(
     env: Mapping[str, str] | None = None,
     logger: Logger | None = None,
     seed: int | None = None,
+    seed_overlay: SeedOverlay | str | os.PathLike[str] | None = None,
     unmatched: UnmatchedPolicy | None = None,
     clock_start: datetime | str | None = None,
 ) -> Iterator[StartedUnit[Seed]]:
@@ -820,6 +874,23 @@ def _unit(
     number, for the rare test that needs two units to diverge; it is the
     ``VENDORFAKE_CHAOS_SEED`` layer, so an explicit ``env`` entry wins.
 
+    ``seed_overlay`` is a **partial seed document** laid over the one the
+    profile names -- a mapping (the document itself) or a ``str`` /
+    ``os.PathLike`` naming a JSON file. It is merged before the store is
+    hydrated, so the unit answers from the merged scenario from its first
+    request; the merge rule is stated once, in ``docs/concepts/seed.md``, and
+    implemented once, in
+    :func:`~vendorfake.core.config.overlay.merge_seed`. Like ``seed`` and
+    ``clock_start`` it is a layer *under* ``env``: it becomes the
+    ``VENDORFAKE_SEED_OVERLAY`` entry, so an explicit entry in a shared
+    ``env`` mapping wins, and the base it merges onto is whatever seed
+    document actually loaded -- the profile's, or the one a
+    ``VENDORFAKE_SEED`` entry pointed at instead. A top-level key that is not
+    one of the seed's collections is refused when the unit starts, naming the
+    key and the collections that exist; on a vendor named as a literal the
+    per-vendor ``TypedDict`` (``SquareSeedOverlay`` and its siblings) makes a
+    type checker say so first.
+
     **A request no route matches raises**
     :class:`~vendorfake.testing.transport.UnmatchedRequest` here, which is a
     change from v0.1. In process this object is a test double, and a wrong path
@@ -845,6 +916,8 @@ def _unit(
     environ: dict[str, str] = {} if seed is None else {"VENDORFAKE_CHAOS_SEED": str(seed)}
     if clock_start is not None:
         environ["VENDORFAKE_CLOCK_START"] = _clock_start_env_value(clock_start)
+    if seed_overlay is not None:
+        environ["VENDORFAKE_SEED_OVERLAY"] = _seed_overlay_env_value(seed_overlay)
     environ.update(env or {})
     # This import brings the web framework in (FrameworkTripwire lives in
     # vendorfake.asgi), and it is paid deliberately: `framework_answered` must
@@ -959,6 +1032,7 @@ def async_unit(
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
     seed: int | None = ...,
+    seed_overlay: SquareSeedOverlay | str | os.PathLike[str] | None = ...,
     unmatched: UnmatchedPolicy | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractAsyncContextManager[StartedUnit[SquareSeed]]: ...
@@ -974,6 +1048,7 @@ def async_unit(
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
     seed: int | None = ...,
+    seed_overlay: CloverSeedOverlay | str | os.PathLike[str] | None = ...,
     unmatched: UnmatchedPolicy | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractAsyncContextManager[StartedUnit[CloverSeed]]: ...
@@ -989,6 +1064,7 @@ def async_unit(
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
     seed: int | None = ...,
+    seed_overlay: ToastSeedOverlay | str | os.PathLike[str] | None = ...,
     unmatched: UnmatchedPolicy | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractAsyncContextManager[StartedUnit[ToastSeed]]: ...
@@ -1004,6 +1080,7 @@ def async_unit(
     env: Mapping[str, str] | None = ...,
     logger: Logger | None = ...,
     seed: int | None = ...,
+    seed_overlay: SeedOverlay | str | os.PathLike[str] | None = ...,
     unmatched: UnmatchedPolicy | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractAsyncContextManager[StartedUnit[Seed]]: ...
@@ -1018,6 +1095,7 @@ def async_unit(
     env: Mapping[str, str] | None = None,
     logger: Logger | None = None,
     seed: int | None = None,
+    seed_overlay: SeedOverlay | str | os.PathLike[str] | None = None,
     unmatched: UnmatchedPolicy | None = None,
     clock_start: datetime | str | None = None,
 ) -> AbstractAsyncContextManager[StartedUnit[Any]]:
@@ -1049,6 +1127,7 @@ def async_unit(
         env=env,
         logger=logger,
         seed=seed,
+        seed_overlay=seed_overlay,
         # Checked here, at the call, and not only inside ``unit()`` on
         # ``__aenter__``: the refusal should land on the line that spelled
         # the value, before an ``async with`` is entered.
@@ -1067,6 +1146,7 @@ async def _async_unit(
     env: Mapping[str, str] | None = None,
     logger: Logger | None = None,
     seed: int | None = None,
+    seed_overlay: SeedOverlay | str | os.PathLike[str] | None = None,
     unmatched: UnmatchedPolicy | None = None,
     clock_start: datetime | str | None = None,
 ) -> AsyncIterator[StartedUnit[Seed]]:
@@ -1079,6 +1159,7 @@ async def _async_unit(
         env=env,
         logger=logger,
         seed=seed,
+        seed_overlay=seed_overlay,
         unmatched=unmatched,
         clock_start=clock_start,
     ) as started:
@@ -1126,6 +1207,7 @@ def served(
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    seed_overlay: SquareSeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[SquareSeed]]: ...
 
 
@@ -1140,6 +1222,7 @@ def served(
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    seed_overlay: CloverSeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[CloverSeed]]: ...
 
 
@@ -1154,6 +1237,7 @@ def served(
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    seed_overlay: ToastSeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[ToastSeed]]: ...
 
 
@@ -1168,6 +1252,7 @@ def served(
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    seed_overlay: SeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[Seed]]: ...
 
 
@@ -1181,6 +1266,7 @@ def served(
     timeout_s: float = STARTUP_TIMEOUT_S,
     env: Mapping[str, str] | None = None,
     clock_start: datetime | str | None = None,
+    seed_overlay: SeedOverlay | str | os.PathLike[str] | None = None,
 ) -> AbstractContextManager[ServedUnit[Any]]:
     """``vendorfake serve`` in a child process, with its URL.
 
@@ -1195,6 +1281,14 @@ def served(
     without either touching ``os.environ``. ``clock_start`` layers the same
     way. See :func:`_served` for the precedence and the one variable the
     mapping cannot reach.
+
+    ``seed_overlay`` is :func:`unit`'s partial seed document, reaching the
+    child as ``VENDORFAKE_SEED_OVERLAY`` -- a mapping is encoded as canonical
+    JSON, a ``str`` or ``os.PathLike`` is passed as the path and read by the
+    child relative to the working directory both processes share. Narrowed on
+    the vendor literal the same way. An ``env=`` entry naming that variable is
+    refused: this is the parameter for it, and only the parameter's path
+    checks the overlay in *this* process, where the refusal is visible.
 
     **Sharing one child across tests:** a session-scoped ``served()`` against
     a vendor with single-use or rotating state (Clover's refresh rotation)
@@ -1212,6 +1306,7 @@ def served(
         timeout_s=timeout_s,
         env=env,
         clock_start=clock_start,
+        seed_overlay=seed_overlay,
     )
 
 
@@ -1226,6 +1321,7 @@ def _served(
     timeout_s: float = STARTUP_TIMEOUT_S,
     env: Mapping[str, str] | None = None,
     clock_start: datetime | str | None = None,
+    seed_overlay: SeedOverlay | str | os.PathLike[str] | None = None,
 ) -> Iterator[ServedUnit[Seed]]:
     """The body of :func:`served`. See that function for the contract.
 
@@ -1246,7 +1342,7 @@ def _served(
     ``VENDORFAKE_CLOCK=virtual``, ``VENDORFAKE_CAPABILITIES`` (an absolute
     list or a delta on the profile's), a ``VENDORFAKE_VENDOR_*`` credential
     override, the webhook and request-log variables: all reach the child
-    through here. Seven are refused with ``ValueError`` before the child is
+    through here. Eight are refused with ``ValueError`` before the child is
     spawned, rather than silently beaten. ``VENDORFAKE_PROFILE``,
     ``VENDORFAKE_HOST``, ``VENDORFAKE_PORT`` and ``VENDORFAKE_LOG_LEVEL`` are
     the four things this function passes to the child as explicit flags
@@ -1256,7 +1352,12 @@ def _served(
     ignored by ``serve``, which only ever binds HTTP. ``VENDORFAKE_SEED`` is refused because the seed handed
     back on ``.seed`` is derived from the vendor's module constants, not read
     from a document, and could not follow an alternate one -- the child would
-    answer with tokens the seed does not carry. There is still no
+    answer with tokens the seed does not carry.
+    ``VENDORFAKE_SEED_OVERLAY`` is refused because ``seed_overlay=`` is the
+    parameter for it: the parameter takes the document as a mapping, encodes
+    it for the child, and loads it in *this* process too, so an overlay naming
+    a collection the vendor does not have raises here rather than killing a
+    child before it announces a port. There is still no
     ``capabilities=`` parameter;
     resolve a capability request to a profile name by hand (or via
     :func:`unit`) before passing it as ``profile=``.
@@ -1384,6 +1485,21 @@ def _served(
             "constants, not from a seed document, and would not describe the child. Use a profile whose "
             "document points at the seed you want, and pass it as profile=."
         )
+    # The same family of refusal, one variable along: `seed_overlay=` is the
+    # parameter, and it is layered below `env` only in the sense that nothing
+    # in `env` may name it at all. An entry here would reach the child
+    # unvalidated by this process -- the mapping is passed through verbatim --
+    # so a misspelled collection would surface as the child exiting before it
+    # announced a port, with the real refusal buried in its stderr, rather
+    # than as the `UnitError` the parameter's own path raises where the caller
+    # can see it. The parameter also accepts a mapping; the variable cannot.
+    if "VENDORFAKE_SEED_OVERLAY" in layer:
+        raise ValueError(
+            "served(env=...) cannot carry VENDORFAKE_SEED_OVERLAY: pass seed_overlay= instead. The parameter "
+            "takes the document itself as a mapping (or a path), encodes it for the child, and refuses an "
+            "unknown collection where the caller can see it -- an env entry would reach the child unchecked "
+            "and surface as a child that exited before announcing a port."
+        )
     # The same shape of refusal for the variables an explicit flag below would
     # silently beat (konyklabs/roadmap#105): a mapping entry that changes
     # nothing is worse than one that is refused, because the caller reads
@@ -1404,6 +1520,22 @@ def _served(
             "Use the parameter instead."
         )
     vendor_env = {key: value for key, value in {**os.environ, **layer}.items() if key.startswith(ENV_VENDOR_PREFIX)}
+    if seed_overlay is not None:
+        # Encoded once and used twice: the child reads it from its environment
+        # (below), and THIS process reads it too, through the `load_profile`
+        # call that follows. That second read is the eager refusal `served()`
+        # already promises for a bad profile and a seedless vendor -- an
+        # overlay naming a collection the vendor does not have raises the same
+        # `UnitError` `unit()` raises, here, before `Popen`, instead of
+        # surfacing as a child that exited before announcing a port with the
+        # real message buried in its stderr. It is added to `vendor_env` --
+        # otherwise filtered to `VENDORFAKE_VENDOR_*` for the reason above --
+        # because it comes from this call's own parameter and not from the
+        # ambient environment, so it cannot import an unrelated shell variable
+        # into a computation that is meant to be about the seed alone.
+        overlay_value = _seed_overlay_env_value(seed_overlay)
+        vendor_env["VENDORFAKE_SEED_OVERLAY"] = overlay_value
+        layer["VENDORFAKE_SEED_OVERLAY"] = overlay_value
     loaded = load_profile(
         profile_dir=definition.profile_dir,
         name=profile,
@@ -1475,9 +1607,10 @@ _FLAG_BEATEN_ENV: frozenset[str] = frozenset(
 """The ``VENDORFAKE_*`` names an ``env=`` entry to :func:`served` is refused
 for because the child gets each as a flag (``--profile``, ``--host``,
 ``--port``, ``--log-level``) that beats the variable; the refusal names the
-parameter to use. ``VENDORFAKE_TRANSPORT``, ``VENDORFAKE_TRANSPORT_DIR`` and
-``VENDORFAKE_SEED`` are refused too, each with its own reason and no substitute
-parameter. See :func:`_served`."""
+parameter to use. ``VENDORFAKE_TRANSPORT``, ``VENDORFAKE_TRANSPORT_DIR``,
+``VENDORFAKE_SEED`` and ``VENDORFAKE_SEED_OVERLAY`` are refused too, each with
+its own reason -- and of those four only the overlay has a parameter to use
+instead (``seed_overlay=``). See :func:`_served`."""
 
 _FLAG_BEATEN_HINT = "profile=, host=, port= and log_level="
 

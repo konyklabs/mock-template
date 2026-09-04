@@ -77,9 +77,13 @@ Entries for what `served()` passes as a flag — `VENDORFAKE_PROFILE`,
 with a `ValueError` naming the parameter to use, rather than silently
 beaten by the flag. `VENDORFAKE_TRANSPORT` and `VENDORFAKE_TRANSPORT_DIR`
 are refused because a served unit is an HTTP unit by definition (there is no parameter to use; build a unit
-in-process for another binding), and `VENDORFAKE_SEED` because `.seed` is
+in-process for another binding), `VENDORFAKE_SEED` because `.seed` is
 derived from the vendor's constants and could not describe a child hydrated
-from another document.
+from another document, and `VENDORFAKE_SEED_OVERLAY` because
+[`seed_overlay=`](../concepts/seed.md#seed-overlays) is the parameter for it —
+the parameter takes the document as a mapping, encodes it for the child, and
+refuses an unknown collection here, where the caller can see it, rather than
+as a child that exited before announcing a port.
 
 A served child shared across tests needs `reset()` between them when the
 vendor keeps single-use state — see

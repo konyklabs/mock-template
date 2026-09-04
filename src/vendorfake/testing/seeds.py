@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     # Guarded because the runtime import belongs inside the two functions that
@@ -34,7 +34,19 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     # registry and the whole kernel in behind it for every such session.
     from vendorfake.core.kernel.types import VendorDefinition
 
-__all__ = ["CloverSeed", "Credentials", "Seed", "SquareSeed", "ToastSeed", "Token", "seed_for"]
+__all__ = [
+    "CloverSeed",
+    "CloverSeedOverlay",
+    "Credentials",
+    "Seed",
+    "SeedOverlay",
+    "SquareSeed",
+    "SquareSeedOverlay",
+    "ToastSeed",
+    "ToastSeedOverlay",
+    "Token",
+    "seed_for",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,6 +350,97 @@ class ToastSeed:
         are not restaurant-scoped (and for asserting the refusal on the
         ones that are)."""
         return {"Authorization": f"Bearer {self.access_token}"}
+
+
+# ---------------------------------------------------------------------------
+# Seed overlays: the typed shape of ``unit(seed_overlay=...)``.
+#
+# One ``TypedDict(total=False)`` per vendor, whose keys are exactly that
+# vendor's top-level seed collections. ``total=False`` because an overlay is a
+# PARTIAL document by definition -- naming one collection is the ordinary case
+# -- and the point of the type is the *other* direction: a checker rejects a
+# key that is not a collection at all, which is the mistake an overlay has no
+# other symptom for. A misspelled collection merges cleanly, hydrates nothing
+# and looks like the fake ignoring the scenario; the unit refuses it at start
+# (``core/config/overlay.py``) and these types move the same refusal to the
+# editor.
+#
+# The VALUES are ``object``, not a per-collection model. A seed document's
+# entities are the vendor's own shapes, they differ per collection, and typing
+# them here would mean a second description of every vendor entity that could
+# drift from the document. The key is the half a consumer gets wrong.
+#
+# ``_comment`` is deliberately absent from all three, though the unit accepts
+# it: it is the document's own annotation, not a collection, and offering it as
+# something to override would be a worse answer than not typing it.
+# ---------------------------------------------------------------------------
+
+
+class SquareSeedOverlay(TypedDict, total=False):
+    """The collections ``vendorfake/square/seed/default.seed.json`` carries."""
+
+    merchant: object
+    locations: object
+    catalog: object
+    orders: object
+    loyalty_program: object
+    loyalty_accounts: object
+    inventory_counts: object
+    tokens: object
+
+
+class CloverSeedOverlay(TypedDict, total=False):
+    """The collections ``vendorfake/clover/seed/default.seed.json`` carries."""
+
+    merchant: object
+    tax_rates: object
+    modifier_groups: object
+    modifiers: object
+    items: object
+    employees: object
+    tenders: object
+    order_types: object
+    service_charges: object
+    customers: object
+    orders: object
+    tokens: object
+    webhook_subscriptions: object
+
+
+class ToastSeedOverlay(TypedDict, total=False):
+    """The collections ``vendorfake/toast/seed/default.seed.json`` carries."""
+
+    restaurant: object
+    partner: object
+    tokens: object
+    config_modified_ms: object
+    dining_options: object
+    alternate_payment_types: object
+    tax_rates: object
+    revenue_centers: object
+    service_areas: object
+    tables: object
+    restaurant_services: object
+    discounts: object
+    service_charges: object
+    void_reasons: object
+    menu_v3: object
+    orders: object
+    credit_authorizations: object
+    stock: object
+    webhook_subscriptions: object
+
+
+SeedOverlay = Mapping[str, Any]
+"""What a vendor passed as a plain ``str`` accepts: any JSON object.
+
+The honest answer for a vendor whose name is not a literal -- a parametrized
+test, or one discovered through the entry-point group -- exactly as
+:class:`Seed` is the honest answer for its ``.seed``. The collections are a
+property of the vendor, and this call site does not know which vendor it has.
+The unit still refuses an unknown collection at start; what is absent is the
+checker's ability to say so first.
+"""
 
 
 def _square(vendor_config: Mapping[str, object]) -> SquareSeed:
