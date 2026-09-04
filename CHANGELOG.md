@@ -159,6 +159,21 @@ the 0.2 gate approval (konyklabs/roadmap#99).
   `docs/pytest-plugin.md` — narrowing the marker fixtures' `Seed` under a
   type checker (#101, item 16).
 
+## [0.4.0](https://github.com/konyklabs/vendorfake/compare/v0.3.0...v0.4.0) (2026-09-04)
+
+
+### Features
+
+* **conformance:** land the coverage stack — C24–C32, mutants M32–M53, inert control-plane reads (konyklabs/roadmap[#15](https://github.com/konyklabs/vendorfake/issues/15)) ([#43](https://github.com/konyklabs/vendorfake/issues/43)) ([81ba77b](https://github.com/konyklabs/vendorfake/commit/81ba77ba935e3cae4b56cfdd00b24e9beb513447))
+* **fidelity:** the Square and Toast fidelity legs under D-006 — contract extracts, corpus, pins (konyklabs/roadmap[#55](https://github.com/konyklabs/vendorfake/issues/55)) ([#44](https://github.com/konyklabs/vendorfake/issues/44)) ([1966529](https://github.com/konyklabs/vendorfake/commit/196652984f1afa12bfd301bdf38cb20a56ad24cf))
+
+
+### Bug Fixes
+
+* **square:** a recorded-empty approval survives the round trip and refuses, never re-grants (konyklabs/roadmap[#28](https://github.com/konyklabs/vendorfake/issues/28)) ([#40](https://github.com/konyklabs/vendorfake/issues/40)) ([f42182b](https://github.com/konyklabs/vendorfake/commit/f42182bf3622648ae5182b1691875f3084287cb9))
+* **testing:** hardening round after 0.3 — signer parity, loud served(env=) refusals, scanners and both examples in the self-test (konyklabs/roadmap[#105](https://github.com/konyklabs/vendorfake/issues/105)) ([#45](https://github.com/konyklabs/vendorfake/issues/45)) ([ce97f1a](https://github.com/konyklabs/vendorfake/commit/ce97f1ada092ca2e28cb4d88d6c7539c4f3dce38))
+* **toast:** caller-supplied extremes answer the documented 400, not a 500 (konyklabs/roadmap[#41](https://github.com/konyklabs/vendorfake/issues/41)) ([#41](https://github.com/konyklabs/vendorfake/issues/41)) ([eb32dbd](https://github.com/konyklabs/vendorfake/commit/eb32dbd1f5089dfc4ddb37157cdd94c6ea69b4f0))
+
 ## [0.3.0](https://github.com/konyklabs/vendorfake/compare/v0.2.0...v0.3.0) (2026-09-03)
 
 

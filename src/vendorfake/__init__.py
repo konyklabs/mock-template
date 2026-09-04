@@ -55,7 +55,7 @@ from vendorfake.registry import (
     routes,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 """The distribution's version, as release-please writes it.
 
 Read it rather than ``importlib.metadata.version("vendorfake")`` when what you
