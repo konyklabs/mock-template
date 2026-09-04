@@ -24,11 +24,15 @@ from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.transport.inprocess import in_process
 from vendorfake.fidelity.corpus import MISSING
 from vendorfake.fidelity.runner import (
+    MANIFEST_CAVEAT,
     FidelityTarget,
+    ManifestWorld,
     modeled_routes,
     resolve_target,
+    run_case,
     run_corpus,
     run_corpus_remote,
+    world_opener,
 )
 from vendorfake.fidelity.types import FidelityDeclaration
 
@@ -300,7 +304,8 @@ def test_a_wrong_expectation_fails_naming_the_step_pointer_and_both_values(
     assert result.failure is not None
     assert (result.failure.step, result.failure.pointer) == ("create", "/order/state")
     assert (result.failure.expected, result.failure.actual) == ("COMPLETED", "OPEN")
-    assert result.steps_run == 1, "the first failing expectation stops the case"
+    # The first failing expectation stops the case.
+    assert result.steps_run == 1
     assert report.failed == 1 and not report.ok
 
 
@@ -343,6 +348,89 @@ def test_an_unresolvable_reference_fails_before_any_request(tmp_path: Path, monk
     failure = report.results[0].failure
     assert failure is not None
     assert failure.pointer == "request" and "${cap.never}" in str(failure.actual)
+
+
+# ---------------------------------------------------------------------------
+# Divergence classes: not that a case failed, but how.
+# ---------------------------------------------------------------------------
+
+_GOOD_BODY = {"order": {"location_id": "${vars.location_id}"}}
+
+DIVERGENCES: list[tuple[str, dict[str, Any]]] = [
+    # A 400 where the case expected a 200: the envelope, before any field.
+    ("status", step("s", "POST", "/v2/orders", body={"order": {}}, status=200)),
+    # The field is there and says something else.
+    ("value", step("s", "POST", "/v2/orders", body=_GOOD_BODY, expect_body={"order": {"state": "COMPLETED"}})),
+    # The field the case expects is not in the answer at all.
+    ("missing", step("s", "POST", "/v2/orders", body=_GOOD_BODY, expect_body={"order": {"closed_at": "${any}"}})),
+    # A field the case said would be absent, and was not.
+    ("unexpected", step("s", "POST", "/v2/orders", body=_GOOD_BODY, absent=["/order/id"])),
+    ("header", step("s", "POST", "/v2/orders", body=_GOOD_BODY, expect_headers={"content-type": "text/plain"})),
+    ("capture", step("s", "POST", "/v2/orders", body=_GOOD_BODY, capture={"nothing": "/order/nope"})),
+    # Nothing was even asked: the reference does not resolve.
+    ("request", step("s", "GET", "/v2/orders/${cap.never}")),
+]
+
+
+@pytest.mark.parametrize(("kind", "failing"), DIVERGENCES, ids=[kind for kind, _ in DIVERGENCES])
+def test_each_way_a_case_can_diverge_is_classified(
+    kind: str, failing: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = _run(tmp_path, monkeypatch, case(f"d.{kind}", [failing]))
+    failure = report.results[0].failure
+    assert failure is not None and failure.kind == kind
+    assert report.by_kind()[kind] == 1
+    assert sum(report.by_kind().values()) == 1
+
+
+def test_a_schema_refusal_is_its_own_class_and_carries_the_first_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The contract leg refusing a body is not the same finding as the unit answering the wrong value."""
+    strict = json.loads(json.dumps(EXTRACT))
+    strict["components"]["schemas"]["Order"]["properties"]["state"]["enum"] = ["NEVER"]
+    anchor = make_anchor(tmp_path, monkeypatch, [case("orders.flow", [CREATE])], extract=strict)
+    from vendorfake.fidelity.corpus import load_corpus
+
+    report = run_corpus(synthetic_target(anchor), load_corpus(anchor))
+    failure = report.results[0].failure
+    assert failure is not None and failure.kind == "schema"
+    assert failure.detail.startswith("/order/state"), failure.detail
+    assert "\n" not in failure.detail, f"the first error only, got {failure.detail!r}"
+
+
+def test_a_declared_route_no_step_reached_is_a_missing_divergence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claims = case("claims", [step("who", "GET", "/v2/whoami")], routes=["POST /v2/orders"])
+    report = _run(tmp_path, monkeypatch, claims)
+    failure = report.results[0].failure
+    assert failure is not None and failure.kind == "missing"
+    assert "never reached: POST /v2/orders" in str(failure.actual)
+
+
+def test_the_tally_counts_every_class_and_prints_only_when_something_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vendorfake.fidelity.report import format_cases
+
+    mixed = [case(f"d.{kind}", [failing]) for kind, failing in DIVERGENCES[:2]]
+    report = _run(tmp_path, monkeypatch, *mixed)
+    assert report.by_kind() == {
+        "status": 1,
+        "value": 1,
+        "missing": 0,
+        "unexpected": 0,
+        "schema": 0,
+        "header": 0,
+        "capture": 0,
+        "request": 0,
+    }
+    text = format_cases(report)
+    assert "divergence: status 1, value 1, missing 0, unexpected 0, schema 0, header 0, capture 0, request 0" in text
+    assert "[FAIL status] d.status" in text and "[FAIL value] d.value" in text
+    green = _run(tmp_path, monkeypatch, case("fine", [CREATE]))
+    assert "divergence:" not in format_cases(green)
 
 
 # ---------------------------------------------------------------------------
@@ -396,8 +484,10 @@ def test_uuid_is_fresh_per_occurrence_and_deterministic_per_case(
     for _ in range(2):
         _run(tmp_path, monkeypatch, case("ids", [two]), client_factory=recording)
     first, second = sent
-    assert first["idempotency_key"] != first["order"]["location_id"], "two references, two ids"
-    assert first == second, "the same case sends the same ids on every run"
+    # Two references, two ids.
+    assert first["idempotency_key"] != first["order"]["location_id"]
+    # The same case sends the same ids on every run.
+    assert first == second
     uuid.UUID(first["idempotency_key"])
 
 
@@ -441,6 +531,117 @@ def test_a_schema_violation_raised_by_the_client_fails_the_case(
 
 
 # ---------------------------------------------------------------------------
+# The world a case runs in.
+# ---------------------------------------------------------------------------
+
+
+class FakeWorld:
+    """A world that is not a control plane, which is the whole point of the seam."""
+
+    def __init__(self, rows: Sequence[Mapping[str, Any]]) -> None:
+        self.rows = list(rows)
+        self.resets = 0
+
+    def profile(self) -> str:
+        return "from-the-world"
+
+    def reset(self) -> None:
+        self.resets += 1
+
+    def credentials(self) -> Sequence[Mapping[str, Any]]:
+        return self.rows
+
+
+@contextmanager
+def _synthetic_opener(profile: str) -> Iterator[Any]:
+    with open_synthetic_unit(profile) as unit:
+        yield in_process(unit)
+
+
+def _one(doc: Mapping[str, Any], **kwargs: Any) -> Any:
+    from vendorfake.fidelity.corpus import parse_case
+
+    return run_case(parse_case(doc), _synthetic_opener, profile="test", variables={}, **kwargs)
+
+
+def test_auth_comes_from_the_world_and_not_from_the_control_plane() -> None:
+    """The unit's own ``/__unit/auth`` publishes mode ``test``; the world publishes ``sandbox``, and wins."""
+    world = FakeWorld([{"mode": "sandbox", "headers": {"authorization": "Bearer from-a-manifest"}}])
+    who = step("who", "GET", "/v2/whoami", headers={"$auth": "sandbox"}, expect_body={"auth": "Bearer from-a-manifest"})
+    result = _one(case("w", [who]), world=world)
+    assert result.passed, result.failure
+
+
+def test_a_mode_the_world_does_not_publish_names_what_it_does() -> None:
+    world = FakeWorld([{"mode": "sandbox", "headers": {}}])
+    result = _one(case("w", [step("who", "GET", "/v2/whoami", headers={"$auth": "oauth"})]), world=world)
+    assert result.failure is not None and result.failure.kind == "request"
+    assert "modes this world publishes: ['sandbox']" in str(result.failure.actual)
+
+
+def test_the_opener_resets_the_world_once_per_case() -> None:
+    world = FakeWorld([])
+    opener = world_opener("http://127.0.0.1:9", world)
+    for _ in range(2):
+        with opener("ignored"):
+            pass
+    assert world.resets == 2
+
+
+def manifest_file(tmp_path: Path, **changes: Any) -> Path:
+    document: dict[str, Any] = {
+        "schema": "vendorfake.manifest/1",
+        "vendorfake": "0.5.0",
+        "vendor": "synthetic",
+        "profile": "full",
+        "base_url": "http://localhost:8080",
+        "credentials": [{"label": "seeded", "mode": "bearer", "headers": {"authorization": "Bearer abc"}}],
+        "ids": {},
+    }
+    document.update({key: value for key, value in changes.items() if value is not ...})
+    for key, value in changes.items():
+        if value is ...:
+            document.pop(key, None)
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(document))
+    return path
+
+
+def test_a_manifest_round_trips_into_a_profile_credentials_and_a_base_url(tmp_path: Path) -> None:
+    world = ManifestWorld(manifest_file(tmp_path))
+    assert world.profile() == "full"
+    assert [row["mode"] for row in world.credentials()] == ["bearer"]
+    assert world.base_url == "http://localhost:8080"
+    world.reset()
+    assert list(world.caveats()) == [MANIFEST_CAVEAT]
+
+
+def test_a_manifest_without_a_base_url_is_a_world_with_no_address(tmp_path: Path) -> None:
+    assert ManifestWorld(manifest_file(tmp_path, base_url=...)).base_url is None
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"schema": "vendorfake.manifest/2"}, "expected 'vendorfake.manifest/1'"),
+        ({"profile": ...}, "no profile"),
+    ],
+)
+def test_a_document_that_is_not_a_manifest_is_refused_by_name(
+    tmp_path: Path, changes: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(LookupError) as raised:
+        ManifestWorld(manifest_file(tmp_path, **changes))
+    assert message in str(raised.value)
+
+
+def test_a_missing_manifest_names_the_path(tmp_path: Path) -> None:
+    with pytest.raises(LookupError) as raised:
+        ManifestWorld(tmp_path / "nope.json")
+    assert "cannot read the manifest" in str(raised.value)
+
+
+# ---------------------------------------------------------------------------
 # Targets and modeled routes.
 # ---------------------------------------------------------------------------
 
@@ -471,7 +672,8 @@ def test_modeled_routes_apply_aliases_and_skip_the_control_plane() -> None:
         },
     )
     with open_synthetic_unit(None) as unit:
-        assert any(r.path.startswith("/__unit/") for r in unit.routes), "the control plane is mounted"
+        # The control plane is mounted.
+        assert any(r.path.startswith("/__unit/") for r in unit.routes)
         modeled = modeled_routes(unit.routes, declaration)
     assert modeled == (
         ("GET", "/v2/orders/{order_id}"),

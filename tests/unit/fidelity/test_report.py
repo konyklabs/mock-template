@@ -58,19 +58,24 @@ def test_the_matrix_has_one_row_per_vendor_route_and_no_control_plane_rows() -> 
     assert "/__unit/" not in text
     assert any(
         line.startswith("POST /v2/orders")
-        and line.endswith("| spec: operation CreateOrder | validated: 3 | documented: 2 (1 FAILED) | judgment: 1")
+        and line.endswith(
+            "| spec: operation CreateOrder | validated: 3 | documented: 2 (1 FAILED) | judgment: 1 | recorded: 0"
+        )
         for line in lines
     ), text
     assert any(
         "GET /v2/orders/{order_id}" in line and "operation RetrieveOrder" in line and "documented: 1 (1 FAILED)" in line
         for line in lines
     )
-    assert any("GET /v2/whoami" in line and "validated: 1 | documented: 0 | judgment: 0" in line for line in lines)
+    assert any(
+        "GET /v2/whoami" in line and "validated: 1 | documented: 0 | judgment: 0 | recorded: 0" in line
+        for line in lines
+    )
     assert any("GET /v2/plain" in line and "spec: EXCUSED (a text route the spec never had)" in line for line in lines)
     assert any(line.startswith("GET /v2/undeclared") and "| spec: UNDECLARED |" in line for line in lines)
     assert "routes: 5 (3 operation, 1 excused, 1 UNDECLARED)" in text
     assert "UNDECLARED GET /v2/undeclared:" in text
-    assert "cases: 2 passed, 1 failed (documented 1/2, judgment 1/1)" in text
+    assert "cases: 2 passed, 1 failed (documented 1/2, judgment 1/1, recorded 0/0)" in text
     assert "FAILED orders.state (documented): state" in text
     assert "step 'create' at /order/state: expected 'COMPLETED', got 'OPEN'" in text
     assert "contract: fidelity: 4 validated over 2 routes" in text
@@ -101,10 +106,13 @@ def test_format_cases_lists_every_case_with_the_failure_under_it() -> None:
     report = CorpusReport(target="synthetic", results=RESULTS, validated=False, caveats=("shared unit",))
     text = format_cases(report)
     assert text.startswith("note: shared unit\n\n[PASS] orders.create (documented, test) creates")
-    assert "[FAIL] orders.state (documented, test) state\n        step 'create' at /order/state" in text
-    assert "2 passed, 1 failed (documented 1/2, judgment 1/1); responses NOT validated against the schema" in text
+    assert "[FAIL value] orders.state (documented, test) state\n        step 'create' at /order/state" in text
+    assert (
+        "2 passed, 1 failed (documented 1/2, judgment 1/1, recorded 0/0); "
+        "responses NOT validated against the schema" in text
+    )
     assert text.endswith("\nNOT OK")
-    assert report.by_provenance() == {"documented": (1, 2), "judgment": (1, 1)}
+    assert report.by_provenance() == {"documented": (1, 2), "judgment": (1, 1), "recorded": (0, 0)}
 
 
 def test_a_failure_detail_is_indented_under_the_step_line() -> None:

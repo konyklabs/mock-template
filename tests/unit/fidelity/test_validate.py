@@ -62,6 +62,10 @@ EXTRACT: dict[str, Any] = {
         "/v2/orders": {
             "post": {
                 "operationId": "CreateOrder",
+                "requestBody": {
+                    "required": True,
+                    "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateOrderRequest"}}},
+                },
                 "responses": {"200": _json_response("#/components/schemas/CreateOrderResponse")},
             }
         },
@@ -104,6 +108,15 @@ EXTRACT: dict[str, Any] = {
                     "closed_at": {"type": "string", "nullable": True},
                     "note": {"type": "string"},
                     "line_items": {"type": "array", "items": {"$ref": "#/components/schemas/LineItem"}},
+                },
+            },
+            "CreateOrderRequest": {
+                "type": "object",
+                "required": ["idempotency_key"],
+                "properties": {
+                    "idempotency_key": {"type": "string"},
+                    "note": {"type": "string"},
+                    "state": {"type": "string", "enum": ["OPEN", "COMPLETED"]},
                 },
             },
             "RetrieveOrderResponse": {
@@ -191,7 +204,7 @@ class World:
     client: ValidatingClient
 
 
-def _build(*, strict_undeclared: bool = True) -> World:
+def _build(*, strict_undeclared: bool = True, validate_requests: bool = False) -> World:
     script = Script()
     unit = make_unit(
         [
@@ -206,7 +219,14 @@ def _build(*, strict_undeclared: bool = True) -> World:
     )
     ledger = Ledger()
     surface = Surface(DECLARATION, Extract(EXTRACT))
-    return World(unit, script, ledger, ValidatingClient(unit, surface, ledger, strict_undeclared=strict_undeclared))
+    return World(
+        unit,
+        script,
+        ledger,
+        ValidatingClient(
+            unit, surface, ledger, strict_undeclared=strict_undeclared, validate_requests=validate_requests
+        ),
+    )
 
 
 @pytest.fixture
@@ -504,7 +524,8 @@ def test_ledger_totals_are_exact(lenient: World) -> None:
     )
     assert lenient.ledger.total("validated") == 3
     assert lenient.ledger.summary() == (
-        "fidelity: 3 validated, 0 deviated, 1 excused, 1 internal, 1 undeclared, 0 undeclared status, 1 unmatched, 1 skipped non json over 7 routes"
+        "fidelity: 3 validated, 0 deviated, 1 excused, 1 internal, 1 undeclared, 0 undeclared status, "
+        "1 unmatched, 1 skipped non json, 0 request validated, 0 request deviated over 7 routes"
     )
 
 
@@ -612,7 +633,7 @@ def test_a_query_string_in_the_path_is_matched_the_way_the_kernel_matches_it(wor
 
 def test_a_success_nothing_routed_is_a_validator_defect_not_a_vendor_fact(world: World) -> None:
     world.script.body = GOOD_ORDER
-    world.client._router = Router([])
+    world.client.validator._router = Router([])
     with pytest.raises(RuntimeError, match="matched no route in the validator"):
         world.client.get("/v2/orders/ord_1")
 
@@ -742,3 +763,128 @@ def test_validators_are_cached_per_unit_route_not_per_operation() -> None:
     client.get("/v2/merchants/m1")  # the plain route: the operation's own schema
     with pytest.raises(FidelityViolation, match="quantity"):
         client.get("/v2/merchants/me")  # the alias route: the override's LineItem schema, not the cached one
+
+
+# ---------------------------------------------------------------------------
+# Request bodies (F3): what the unit ACCEPTED, against the vendor's own schema.
+# ---------------------------------------------------------------------------
+
+GOOD_CREATE = {"idempotency_key": "k-1", "note": "a note"}
+"""A request body ``CreateOrderRequest`` accepts."""
+
+
+@pytest.fixture
+def requesting() -> Any:
+    """The synthetic world with request validation on."""
+    built = _build(validate_requests=True)
+    try:
+        yield built
+    finally:
+        built.unit.stop()
+
+
+def test_a_schema_violating_body_the_unit_accepted_is_a_violation(requesting: World) -> None:
+    """The defect F3 names: the fake is more permissive than the API it stands
+    in for, so a consumer's test passes here and its request fails in production.
+    Nothing in the response can show that -- the answer is a well-formed 200."""
+    requesting.script.body = GOOD_ORDER
+    with pytest.raises(FidelityViolation) as caught:
+        requesting.client.post("/v2/orders", {"idempotency_key": 7})
+    exc = caught.value
+    assert exc.subject == "request body"
+    assert "request body" in str(exc)
+    assert exc.errors == ("/idempotency_key: 7 is not of type 'string'",)
+    # The answer itself was fine; nothing was recorded against the response.
+    assert requesting.ledger.total("request_validated") == 0
+    assert requesting.ledger.total("validated") == 0
+
+
+def test_a_missing_required_member_of_the_request_body_is_a_violation(requesting: World) -> None:
+    requesting.script.body = GOOD_ORDER
+    with pytest.raises(FidelityViolation, match="request body") as caught:
+        requesting.client.post("/v2/orders", {"note": "no key"})
+    assert caught.value.errors == ("(root): 'idempotency_key' is a required property",)
+
+
+def test_a_request_the_unit_refused_is_not_a_fidelity_question(requesting: World) -> None:
+    """A 4xx means the unit and the vendor's schema agree the body is wrong. Only
+    an *accepted* body is evidence about the fake's permissiveness."""
+    requesting.script.status = 400
+    requesting.script.body = {"errors": [{"category": "INVALID_REQUEST_ERROR", "code": "BAD"}]}
+    requesting.client.post("/v2/orders", {"idempotency_key": 7})
+    assert requesting.ledger.total("request_validated") == 0
+    assert requesting.ledger.row("POST /v2/orders").validated == 1
+
+
+def test_the_flag_off_validates_no_request(world: World) -> None:
+    world.script.body = GOOD_ORDER
+    world.client.post("/v2/orders", {"idempotency_key": 7})
+    assert world.ledger.total("request_validated") == 0
+    assert world.ledger.row("POST /v2/orders").validated == 1
+
+
+def test_an_accepted_body_that_matches_is_counted(requesting: World) -> None:
+    requesting.script.body = GOOD_ORDER
+    requesting.client.post("/v2/orders", GOOD_CREATE)
+    row = requesting.ledger.row("POST /v2/orders")
+    assert (row.request_validated, row.request_deviated, row.validated) == (1, 0, 1)
+    assert "1 request validated, 0 request deviated" in requesting.ledger.summary()
+
+
+def test_a_route_with_no_request_body_schema_is_not_request_validated(requesting: World) -> None:
+    """``GET /v2/orders/{id}`` declares no ``requestBody``; there is nothing to
+    check and nothing to count, whatever a caller sends."""
+    requesting.script.body = GOOD_ORDER
+    requesting.client.get("/v2/orders/ord_1")
+    assert requesting.ledger.total("request_validated") == 0
+
+
+def test_a_body_sent_under_another_media_type_is_not_checked(requesting: World) -> None:
+    """The schema describes ``application/json``; a form body is a different
+    document the operation may or may not declare, and never this one."""
+    requesting.script.body = GOOD_ORDER
+    requesting.client.post(
+        "/v2/orders", raw_body="idempotency_key=7", headers={"content-type": "application/x-www-form-urlencoded"}
+    )
+    assert requesting.ledger.total("request_validated") == 0
+
+
+def test_a_raw_body_that_is_not_json_names_the_request(requesting: World) -> None:
+    requesting.script.body = GOOD_ORDER
+    with pytest.raises(FidelityViolation, match="body is not JSON") as caught:
+        requesting.client.post("/v2/orders", raw_body=b"{oops", headers={"content-type": "application/json"})
+    assert caught.value.subject == "request body"
+
+
+def test_an_empty_body_is_nothing_to_validate(requesting: World) -> None:
+    """``requestBody.required`` is a statement about the request the unit should
+    have refused, and the unit's own refusal is what states it; an absent body
+    has no JSON document to check against the schema."""
+    requesting.script.body = GOOD_ORDER
+    requesting.client.post("/v2/orders")
+    assert requesting.ledger.total("request_validated") == 0
+
+
+def test_a_declared_deviation_absorbs_a_request_body_error() -> None:
+    """The same mechanism as a response deviation, and the same format: a
+    deviation names a pointer and a keyword, which are unambiguous already."""
+    script = Script()
+    unit = make_unit([route("POST", "/v2/orders", script.answer)], control_routes=control_plane_routes)
+    ledger = Ledger()
+    deviation = Deviation(
+        pointer="/state",
+        keyword="enum",
+        value="BOGUS",
+        reason="the vendor's guide names BOGUS and its spec omits it",
+        url="https://example.invalid/prose",
+    )
+    declaration = replace(DECLARATION, deviations=(deviation,))
+    client = ValidatingClient(unit, Surface(declaration, Extract(EXTRACT)), ledger, validate_requests=True)
+    try:
+        script.body = GOOD_ORDER
+        client.post("/v2/orders", {**GOOD_CREATE, "state": "BOGUS"})
+        assert ledger.total("request_validated") == 1
+        assert ledger.total("request_deviated") == 1
+        assert ledger.absorbed() == ((deviation.label, 1),)
+    finally:
+        unit.stop()

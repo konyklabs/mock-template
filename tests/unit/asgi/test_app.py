@@ -303,3 +303,48 @@ def test_create_app_is_a_factory(unit: Any) -> None:
     first = create_app(unit)
     second = create_app(unit)
     assert first is not second
+
+
+# ---------------------------------------------------------------------------
+# The response observer: the served-side validator's one seam.
+# ---------------------------------------------------------------------------
+
+
+def test_an_observer_sees_the_request_and_the_answer_and_cannot_change_them(unit: Any) -> None:
+    """It is handed the very ``UnitRequest`` the unit answered and the
+    ``UnitResponse`` it gave, before either is converted back to HTTP -- which is
+    what lets a schema check over a socket be the same check as in process."""
+    seen: list[tuple[Any, Any]] = []
+    app = create_app(unit, observer=lambda request, response: seen.append((request, response)))
+    response = call(app, "POST", "/v2/orders/abc?q=1", content=b'{"note":"hi"}')
+    assert response.status_code == 200
+    assert len(seen) == 1
+    request, answered = seen[0]
+    assert (request.method, request.path, dict(request.query)) == ("POST", "/v2/orders/abc", {"q": "1"})
+    assert request.raw_body == b'{"note":"hi"}'
+    assert answered.status == 200
+    # Untouched: the observer read, and the consumer got what the unit produced.
+    assert response.json()["order_id"] == "abc"
+
+
+def test_an_observer_that_refuses_turns_the_answer_into_the_vendor_s_500(unit: Any) -> None:
+    """A violation a consumer can see. Not a log line and not a framework 500:
+    the point of serving with ``--validate`` is that a fake which drifts from the
+    vendor's document fails the test driving it, over the wire, in the vendor's
+    own error shape."""
+
+    def refuse(request: Any, response: Any) -> None:
+        raise AssertionError("GET /v2/orders/{order_id} answered 200 with a body that fails")
+
+    app = create_app(unit, observer=refuse)
+    response = call(app, "GET", "/v2/orders/abc")
+    assert response.status_code == 500
+    assert response.headers["x-unit-error"] == "internal"
+    body = response.json()
+    assert body["error"]["code"] == "internal"
+    assert "a body that fails" in body["error"]["detail"]
+
+
+def test_no_observer_is_the_default_and_costs_the_dispatch_nothing(app: Any) -> None:
+    """The flag is opt-in; a unit built without one answers exactly as before."""
+    assert call(app, "GET", "/v2/orders/abc").status_code == 200

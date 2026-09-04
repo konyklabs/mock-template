@@ -32,12 +32,13 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any, Protocol
+from pathlib import Path
+from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
 from vendorfake.core.kernel.router import Match, Router
-from vendorfake.core.kernel.types import Route
+from vendorfake.core.kernel.types import Route, SignInput
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.transport.inprocess import in_process
 from vendorfake.fidelity.corpus import (
@@ -57,20 +58,27 @@ from vendorfake.fidelity.types import FidelityDeclaration, load_declaration, loa
 
 __all__ = [
     "CONTROL_PREFIX",
+    "MANIFEST_CAVEAT",
+    "MANIFEST_SCHEMA",
     "REMOTE_CAVEAT",
+    "RESET_CAVEAT",
     "TARGET_ENV_VAR",
     "ClientFactory",
+    "ControlPlaneWorld",
     "CorpusClient",
     "CorpusResponse",
     "FidelityTarget",
     "HttpCorpusClient",
+    "ManifestWorld",
     "Opener",
+    "World",
     "modeled_routes",
     "remote_opener",
     "resolve_target",
     "run_case",
     "run_corpus",
     "run_corpus_remote",
+    "world_opener",
 ]
 
 TARGET_ENV_VAR = "VENDORFAKE_FIDELITY_TARGET"
@@ -78,11 +86,18 @@ TARGET_ENV_VAR = "VENDORFAKE_FIDELITY_TARGET"
 
 CONTROL_PREFIX = "/__unit/"
 
+MANIFEST_SCHEMA = "vendorfake.manifest/1"
+"""The document :class:`ManifestWorld` reads. See ``docs/reference/manifest.md``."""
+
 REMOTE_CAVEAT = (
     "a unit reached over --base-url is SHARED, not rebuilt per case, and its responses are NOT validated "
-    "against the schema: validation needs the unit object, and a base URL is a socket. State is reset "
-    "before every case, so cases still start from the seed. Point this at a throwaway container."
+    "against the schema: validation needs the unit object, and a base URL is a socket. Point this at a "
+    "throwaway container."
 )
+
+RESET_CAVEAT = "state is reset before every case, so cases still start from the seed"
+
+MANIFEST_CAVEAT = "no reset against this world; cases run against whatever state the account holds"
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +207,9 @@ class FidelityTarget:
     anchor: str
     open_unit: Callable[[str | None], AbstractContextManager[Unit]]
     default_profile: str = "full"
+    #: The vendor's ``Signer.sign``, for ``webhooks`` to check a captured delivery against. ``None`` means this target
+    #: makes no signing claim, and the subcommand refuses rather than guessing a scheme.
+    signer: Callable[[SignInput], Mapping[str, str]] | None = None
 
 
 def resolve_target(spec: str) -> FidelityTarget:
@@ -227,6 +245,150 @@ def modeled_routes(routes: Sequence[Route], declaration: FidelityDeclaration) ->
         alias = declaration.alias_for(route.method, route.path)
         out.add((route.method.upper(), alias.spec_path if alias is not None else route.path))
     return tuple(sorted(out))
+
+
+# ---------------------------------------------------------------------------
+# The world a case runs in.
+# ---------------------------------------------------------------------------
+
+
+class World(Protocol):
+    """The three questions a case asks of its surroundings: which profile am I on, put the state back, which credentials
+    work. The control plane answers all three, which is why the base-URL runner was written against it and could only
+    ever address a vendorfake. Named as a seam, the same cases run against a *sandbox account*, where a manifest answers
+    and ``reset`` is not on offer."""
+
+    def profile(self) -> str: ...
+
+    def reset(self) -> None: ...
+
+    def credentials(self) -> Sequence[Mapping[str, Any]]: ...
+
+
+@runtime_checkable
+class _Caveating(Protocol):
+    """A world with something the report must print about what it could not do."""
+
+    def caveats(self) -> Sequence[str]: ...
+
+
+def _caveats_of(world: World) -> tuple[str, ...]:
+    return tuple(str(line) for line in world.caveats()) if isinstance(world, _Caveating) else ()
+
+
+class ControlPlaneWorld:
+    """A running unit: ``/__unit/info``, ``/__unit/state/reset``, ``/__unit/auth``. The profile is DISCOVERED, never
+    asserted, and read once -- a unit's profile does not change under it."""
+
+    __slots__ = ("_base_url", "_client", "_profile")
+
+    def __init__(self, base_url: str) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._client = HttpCorpusClient(base_url)
+        self._profile: str | None = None
+
+    def profile(self) -> str:
+        if self._profile is None:
+            self._profile = str(json.loads(self._get("info").raw.body)["profile"])
+        return self._profile
+
+    def reset(self) -> None:
+        answered = self._client.call(method="POST", path=f"{CONTROL_PREFIX}state/reset", body={})
+        if answered.status // 100 != 2:
+            raise RuntimeError(
+                f"POST {CONTROL_PREFIX}state/reset answered {answered.status} while resetting the shared unit; "
+                f"the next case would read state an earlier one left behind"
+            )
+
+    def credentials(self) -> Sequence[Mapping[str, Any]]:
+        rows = json.loads(self._get("auth").raw.body).get("credentials", [])
+        return [row for row in rows if isinstance(row, Mapping)]
+
+    def caveats(self) -> Sequence[str]:
+        return (RESET_CAVEAT,)
+
+    def close(self) -> None:
+        self._client.close()
+
+    def _get(self, name: str) -> CorpusResponse:
+        try:
+            answered = self._client.call(method="GET", path=f"{CONTROL_PREFIX}{name}")
+        except httpx.HTTPError as exc:
+            raise LookupError(f"cannot reach a unit at {self._base_url}: {type(exc).__name__}: {exc}") from exc
+        if answered.status != 200:
+            raise LookupError(
+                f"GET {self._base_url}{CONTROL_PREFIX}{name} answered {answered.status}, expected 200. "
+                f"--base-url must address a running unit, whose control plane answers on every profile."
+            )
+        return answered
+
+
+class ManifestWorld:
+    """The world a ``vendorfake.manifest/1`` document describes: the profile, the credentials in ``/__unit/auth``'s own
+    shape, and the base URL. That is exactly the subset of the control plane a case needs and the subset a real sandbox
+    account can also produce (``docs/reference/manifest.md``). What it cannot carry is a reset, so :meth:`reset` does
+    nothing and says so."""
+
+    __slots__ = ("_credentials", "_profile", "base_url", "path")
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        try:
+            document = json.loads(self.path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise LookupError(f"cannot read the manifest {self.path}: {exc}") from exc
+        except ValueError as exc:
+            raise LookupError(f"{self.path}: not JSON: {exc}") from exc
+        if not isinstance(document, Mapping):
+            raise LookupError(f"{self.path}: a manifest is an object, not {type(document).__name__}")
+        schema = document.get("schema")
+        if schema != MANIFEST_SCHEMA:
+            raise LookupError(f"{self.path}: schema is {schema!r}, expected {MANIFEST_SCHEMA!r}")
+        profile = document.get("profile")
+        if not profile:
+            raise LookupError(f"{self.path}: no profile; a case runs on a named profile or none at all")
+        self._profile = str(profile)
+        rows = document.get("credentials", [])
+        self._credentials: tuple[Mapping[str, Any], ...] = tuple(row for row in rows if isinstance(row, Mapping))
+        url = document.get("base_url")
+        #: The address the manifest was written for, or ``None``; ``--base-url`` wins, outliving that port.
+        self.base_url: str | None = None if url is None else str(url)
+
+    def profile(self) -> str:
+        return self._profile
+
+    def reset(self) -> None:
+        """Nothing. See the class docstring and :data:`MANIFEST_CAVEAT`."""
+
+    def credentials(self) -> Sequence[Mapping[str, Any]]:
+        return self._credentials
+
+    def caveats(self) -> Sequence[str]:
+        return (MANIFEST_CAVEAT,)
+
+
+class _ClientWorld:
+    """The unit a client is already talking to. In process there is no second address: the client *is* the way in, so
+    only ``credentials`` is ever called -- the caller chose the profile and ``open_unit`` promised the freshness."""
+
+    __slots__ = ("_client", "_profile")
+
+    def __init__(self, client: CorpusClient, profile: str) -> None:
+        self._client = client
+        self._profile = profile
+
+    def profile(self) -> str:
+        return self._profile
+
+    def reset(self) -> None:
+        """Nothing: ``open_unit`` already built a unit nobody else has touched."""
+
+    def credentials(self) -> Sequence[Mapping[str, Any]]:
+        answered = self._client.call(method="GET", path=f"{CONTROL_PREFIX}auth")
+        if answered.status != 200:
+            raise RuntimeError(f"GET {CONTROL_PREFIX}auth answered {answered.status}; a $auth header needs it")
+        rows = json.loads(answered.raw.body).get("credentials", [])
+        return [row for row in rows if isinstance(row, Mapping)]
 
 
 # ---------------------------------------------------------------------------
@@ -328,52 +490,62 @@ def _profile(case: Case, target: FidelityTarget, override: str | None) -> str:
 def remote_opener(base_url: str) -> tuple[Opener, str]:
     """An opener over a unit somebody else is running, and the profile it reports.
 
-    The profile is DISCOVERED from ``GET /__unit/info``; state is reset before
-    every case so each starts from the seed, which is the nearest a shared
-    unit gets to a fresh one. See :data:`REMOTE_CAVEAT`.
+    Kept as the thin form of :func:`world_opener` over a
+    :class:`ControlPlaneWorld`, which is what it always was.
     """
-    probe = HttpCorpusClient(base_url)
-    try:
-        try:
-            answered = probe.call(method="GET", path=f"{CONTROL_PREFIX}info")
-        except httpx.HTTPError as exc:
-            raise LookupError(f"cannot reach a unit at {base_url}: {type(exc).__name__}: {exc}") from exc
-        if answered.status != 200:
-            raise LookupError(
-                f"GET {base_url.rstrip('/')}{CONTROL_PREFIX}info answered {answered.status}, expected 200. "
-                f"--base-url must address a running unit, whose control plane answers on every profile."
-            )
-        profile = str(json.loads(answered.raw.body)["profile"])
-    finally:
-        probe.close()
+    world = ControlPlaneWorld(base_url)
+    return world_opener(base_url, world), world.profile()
+
+
+def world_opener(base_url: str, world: World) -> Opener:
+    """A fresh HTTP client per case over ``base_url``, the world reset first. The reset is the world's to define, and
+    one that cannot says so in a caveat rather than pretending the state is fresh."""
 
     @contextmanager
     def opener(_profile: str) -> Iterator[CorpusClient]:
         client = HttpCorpusClient(base_url)
         try:
-            reset = client.call(method="POST", path=f"{CONTROL_PREFIX}state/reset", body={})
-            if reset.status // 100 != 2:
-                raise RuntimeError(
-                    f"POST {CONTROL_PREFIX}state/reset answered {reset.status} while resetting the shared unit; "
-                    f"the next case would read state an earlier one left behind"
-                )
+            world.reset()
             yield client
         finally:
             client.close()
 
-    return opener, profile
+    return opener
 
 
 def run_corpus_remote(
     base_url: str,
     anchor: str,
     cases: Sequence[Case],
+    *,
+    world: World | None = None,
 ) -> CorpusReport:
-    """``--base-url``: the corpus over HTTP, unvalidated, and the report says so."""
+    """``--base-url``: the corpus over HTTP, unvalidated, and the report says so. ``world`` supplies the profile, the
+    reset and the credentials, defaulting to the control plane at ``base_url``. A world this call builds it also
+    closes; one handed in belongs to its caller, who may run a second corpus through it."""
+    if world is not None:
+        return _run_remote(base_url, anchor, cases, world)
+    control = ControlPlaneWorld(base_url)
+    try:
+        return _run_remote(base_url, anchor, cases, control)
+    finally:
+        control.close()
+
+
+def _run_remote(base_url: str, anchor: str, cases: Sequence[Case], world: World) -> CorpusReport:
     declaration = load_declaration(anchor)
-    opener, profile = remote_opener(base_url)
-    results = tuple(run_case(case, opener, profile=profile, variables=declaration.variables) for case in cases)
-    return CorpusReport(target=base_url, results=results, validated=False, remote=True, caveats=(REMOTE_CAVEAT,))
+    opener = world_opener(base_url, world)
+    profile = world.profile()
+    results = tuple(
+        run_case(case, opener, profile=profile, variables=declaration.variables, world=world) for case in cases
+    )
+    return CorpusReport(
+        target=base_url,
+        results=results,
+        validated=False,
+        remote=True,
+        caveats=(REMOTE_CAVEAT, *_caveats_of(world)),
+    )
 
 
 def run_case(
@@ -382,12 +554,16 @@ def run_case(
     *,
     profile: str,
     variables: Mapping[str, str],
+    world: World | None = None,
 ) -> CaseResult:
     """One case: open a client, run every step in order, stop at the first failure.
 
     ``${uuid}`` values are drawn from a generator seeded with the case id, so
     two runs of the same case send the same ids -- a corpus is a reproducible
     statement, and a diff between two runs should be a diff in the unit.
+
+    ``$auth`` is resolved from ``world.credentials()``; ``None`` means the unit
+    the opener just yielded a client for.
     """
     rng = random.Random(case.id)
 
@@ -400,6 +576,7 @@ def run_case(
     failure: StepFailure | None = None
     try:
         with opener(profile) as client:
+            here: World = world if world is not None else _ClientWorld(client, profile)
             for step in case.steps:
                 steps_run += 1
                 try:
@@ -421,14 +598,14 @@ def run_case(
                         uuid=fresh_uuid,
                     )
                 except InterpolationError as exc:
-                    failure = StepFailure(step.name, "request", "a resolvable reference", str(exc))
+                    failure = StepFailure(step.name, "request", "a resolvable reference", str(exc), kind="request")
                     break
 
                 headers: dict[str, str] = request["headers"]
                 if AUTH_HEADER_KEY in headers:
                     mode = headers.pop(AUTH_HEADER_KEY)
                     if auth_rows is None:
-                        auth_rows = _auth_rows(client)
+                        auth_rows = list(here.credentials())
                     credential = next((row for row in auth_rows if str(row.get("mode")) == mode), None)
                     if credential is None:
                         offered = sorted({str(row.get("mode")) for row in auth_rows})
@@ -436,7 +613,8 @@ def run_case(
                             step.name,
                             f"request/headers/{AUTH_HEADER_KEY}",
                             f"a credential of mode {mode!r}",
-                            f"modes published by GET {CONTROL_PREFIX}auth: {offered}",
+                            f"modes this world publishes: {offered}",
+                            kind="request",
                         )
                         break
                     headers = {**{str(k): str(v) for k, v in dict(credential["headers"]).items()}, **headers}
@@ -450,8 +628,16 @@ def run_case(
                         body=request["body"] if step.request.has_body else None,
                     )
                 except Exception as exc:
+                    # A validating client refuses a body the extract forbids by raising: the contract leg speaking,
+                    # a divergence of its own class rather than an unanswered request.
+                    errors = _violation_errors(exc)
                     failure = StepFailure(
-                        step.name, "response", "an answer", f"{type(exc).__name__}", detail=str(exc)[:1200]
+                        step.name,
+                        "response",
+                        "an answer",
+                        f"{type(exc).__name__}",
+                        detail=(errors[0] if errors else str(exc)[:1200]),
+                        kind="request" if errors is None else "schema",
                     )
                     break
 
@@ -468,13 +654,20 @@ def run_case(
                         "routes",
                         "every declared route reached by a step",
                         f"never reached: {', '.join(unreached)}; reached: {', '.join(observed)}",
+                        kind="missing",  # A route the case claims is missing from what the steps reached.
                     )
 
     except RuntimeError as exc:
         # The unit itself could not be opened, reset or asked for credentials
         # -- a control-plane failure, not a vendor fact. One failed case with
         # the reason, and the run goes on to the next.
-        failure = StepFailure("open", "unit", "a unit to run the case against", f"{type(exc).__name__}: {exc}"[:600])
+        failure = StepFailure(
+            "open",
+            "unit",
+            "a unit to run the case against",
+            f"{type(exc).__name__}: {exc}"[:600],
+            kind="request",
+        )
         observed = ()
 
     return CaseResult(
@@ -490,24 +683,31 @@ def run_case(
     )
 
 
-def _auth_rows(client: CorpusClient) -> list[Mapping[str, Any]]:
-    answered = client.call(method="GET", path=f"{CONTROL_PREFIX}auth")
-    if answered.status != 200:
-        raise RuntimeError(f"GET {CONTROL_PREFIX}auth answered {answered.status}; a $auth header needs it")
-    document = json.loads(answered.raw.body)
-    rows = document.get("credentials", [])
-    return [row for row in rows if isinstance(row, Mapping)]
+def _violation_errors(exc: BaseException) -> tuple[str, ...] | None:
+    """The contract leg's own errors when ``exc`` is one of its refusals, else ``None``. Imported here, not at module
+    scope: the corpus stays runnable without the validator."""
+    try:
+        from vendorfake.fidelity.validate import FidelityViolation
+    except ImportError:  # pragma: no cover -- the validator ships with this package
+        return None
+    return exc.errors if isinstance(exc, FidelityViolation) else None
 
 
 def _check_step(
     step: Step, expected: Mapping[str, Any], response: CorpusResponse, captures: dict[str, Any]
 ) -> StepFailure | None:
+    """The first expectation of one step that does not hold, CLASSIFIED. The class separates "the unit is wrong" from
+    "the unit is silent": ``OPEN`` for ``COMPLETED`` is a ``value``, the field absent is ``missing``, a field the case
+    said would not be there is ``unexpected``. A tally of those reads as a diagnosis; a tally of "13 failed" does
+    not."""
     raw = response.raw.body
     if response.status != step.expect.status:
-        return StepFailure(step.name, "status", step.expect.status, response.status, detail=f"body: {_excerpt(raw)}")
+        return StepFailure(
+            step.name, "status", step.expect.status, response.status, detail=f"body: {_excerpt(raw)}", kind="status"
+        )
     mismatch = match_headers(expected["headers"], response.headers)
     if mismatch is not None:
-        return StepFailure(step.name, mismatch.pointer.lstrip("/"), mismatch.expected, mismatch.actual)
+        return StepFailure(step.name, mismatch.pointer.lstrip("/"), mismatch.expected, mismatch.actual, kind="header")
 
     needs_body = step.expect.has_body or bool(step.expect.absent) or bool(step.capture)
     if not needs_body:
@@ -518,19 +718,25 @@ def _check_step(
         try:
             body = json.loads(raw)
         except ValueError:
-            return StepFailure(step.name, "body", "a JSON body", f"not JSON: {_excerpt(raw)}")
+            return StepFailure(step.name, "body", "a JSON body", f"not JSON: {_excerpt(raw)}", kind="value")
 
     if step.expect.has_body:
         mismatch = match(expected["body"], body)
         if mismatch is not None:
-            return StepFailure(step.name, mismatch.pointer or "/", mismatch.expected, mismatch.actual)
+            return StepFailure(
+                step.name,
+                mismatch.pointer or "/",
+                mismatch.expected,
+                mismatch.actual,
+                kind="missing" if mismatch.actual is MISSING else "value",
+            )
     mismatch = absent_violations(body, step.expect.absent)
     if mismatch is not None:
-        return StepFailure(step.name, mismatch.pointer, "absent", mismatch.actual)
+        return StepFailure(step.name, mismatch.pointer, "absent", mismatch.actual, kind="unexpected")
     for name, pointer in step.capture.items():
         value = resolve_pointer(body, pointer)
         if value is MISSING:
-            return StepFailure(step.name, f"capture/{name}", f"a value at {pointer}", MISSING)
+            return StepFailure(step.name, f"capture/{name}", f"a value at {pointer}", MISSING, kind="capture")
         captures[name] = value
     return None
 

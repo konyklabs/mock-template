@@ -124,6 +124,47 @@ def test_the_schema_rejects_and_names_the_pointer(changes: dict[str, Any], point
     assert f"  {pointer}: " in message, message
 
 
+RECORDED_SOURCE: dict[str, Any] = {
+    "url": "https://example.test/reference/create-order",
+    "fetched": "2026-09-04",
+    "provenance": "recorded",
+    "environment": "sandbox",
+    "api_version": "2026-08-20",
+    "recorded": "2026-09-01",
+    "script": "tools/record.py --case orders.create.minimal",
+    "redaction": "the merchant id and both tokens became ${vars.*}; timestamps became ${re:...}",
+}
+
+
+def test_a_recorded_case_carries_the_five_fields_that_make_it_evidence() -> None:
+    parsed = parse_case(_with(source=RECORDED_SOURCE))
+    assert parsed.provenance == "recorded"
+    source = parsed.source
+    assert (source.environment, source.api_version, source.recorded) == ("sandbox", "2026-08-20", "2026-09-01")
+    assert source.script.startswith("tools/record.py") and "${vars.*}" in source.redaction
+    # The page's fetch date and the recording's date are separate facts.
+    assert (source.fetched, source.recorded) == ("2026-09-04", "2026-09-01")
+
+
+def test_a_documented_case_carries_none_of_them() -> None:
+    source = parse_case(EXAMPLE).source
+    assert (source.environment, source.api_version, source.recorded, source.script, source.redaction) == ("",) * 5
+
+
+@pytest.mark.parametrize("field", ["environment", "api_version", "recorded", "script", "redaction"])
+def test_a_recorded_source_missing_any_of_the_five_is_refused(field: str) -> None:
+    incomplete = {key: value for key, value in RECORDED_SOURCE.items() if key != field}
+    with pytest.raises(CorpusError) as raised:
+        validate_case(_with(source=incomplete), where="case.json")
+    assert f"'{field}' is a required property" in str(raised.value)
+
+
+def test_a_recorded_environment_is_sandbox_or_production_and_nothing_else() -> None:
+    with pytest.raises(CorpusError) as raised:
+        validate_case(_with(source={**RECORDED_SOURCE, "environment": "staging"}), where="case.json")
+    assert "  /source/environment: " in str(raised.value)
+
+
 # ---------------------------------------------------------------------------
 # Loading.
 # ---------------------------------------------------------------------------

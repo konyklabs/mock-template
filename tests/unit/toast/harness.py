@@ -15,6 +15,7 @@ from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.transport.inprocess import InProcessClient, InProcessResponse
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.fidelity import Surface, load_declaration, load_extract
+from vendorfake.fidelity.cache import Unavailable
 from vendorfake.fidelity.validate import Ledger, ValidatingClient
 from vendorfake.toast.entities import COL, TokenEntity
 from vendorfake.toast.seed.constants import (
@@ -44,7 +45,6 @@ class Silent:
 
 
 FIDELITY_ANCHOR = "vendorfake.toast.fidelity"
-SURFACE = Surface(load_declaration(FIDELITY_ANCHOR), load_extract(FIDELITY_ANCHOR))
 LEDGER = Ledger()
 """Every response a Toast test receives through a harness client is validated
 against Toast's published schema for that operation and status (D-006). The
@@ -52,6 +52,19 @@ extract is never committed (konyklabs/roadmap#56): ``load_extract`` cuts it
 from a fresh fetch into the local cache on first use, so a cold cache needs
 the network once -- ``vendorfake-fidelity fetch`` in ``tools/self-test.sh``
 pays for it before pytest runs."""
+
+FIDELITY_UNAVAILABLE_REASON: str | None = None
+"""Set at import time when the cache has no extract and the network cannot
+supply one (T1, konyklabs/roadmap#116): :func:`harness` then drives every
+test through the plain, unvalidated in-process client instead of failing
+collection for the whole suite, and ``conftest.py``'s terminal summary prints
+a SKIPPED line in place of the ledger's."""
+
+try:
+    SURFACE: Surface | None = Surface(load_declaration(FIDELITY_ANCHOR), load_extract(FIDELITY_ANCHOR))
+except Unavailable as exc:
+    SURFACE = None
+    FIDELITY_UNAVAILABLE_REASON = str(exc)
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,13 +129,20 @@ def harness(profile: str = "full", **kwargs: Any) -> Iterator[Harness]:
     kwargs.setdefault("sink", MemorySink())
     kwargs["env"] = {"VENDORFAKE_ERROR_SIDECAR": "both", **kwargs.pop("env", {})}
     unit = create_unit(vendor="toast", profile=profile, logger=Silent(), **kwargs)
+    # SURFACE is None when there's no extract in the cache and no network to
+    # cut one (T1, konyklabs/roadmap#116): every test then runs unvalidated
+    # rather than the whole suite failing to collect for a reason none of
+    # them caused. Otherwise, lenient on an undeclared route: the extract is
+    # cut from TODAY's documents, so a route Toast renames must not redden
+    # every test -- the report step prints it in capitals and fails there
+    # instead.
+    api: InProcessClient = (
+        InProcessClient(unit) if SURFACE is None else ValidatingClient(unit, SURFACE, LEDGER, strict_undeclared=False)
+    )
     try:
         yield Harness(
             unit=unit,
-            # Lenient on an undeclared route: the extract is cut from TODAY's
-            # documents, so a route Toast renames must not redden every test --
-            # the report step prints it in capitals and fails there instead.
-            api=ValidatingClient(unit, SURFACE, LEDGER, strict_undeclared=False),
+            api=api,
             auth={"authorization": f"Bearer {SEED_ACCESS_TOKEN}", RESTAURANT_HEADER.lower(): RESTAURANT},
         )
     finally:

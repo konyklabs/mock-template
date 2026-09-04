@@ -20,7 +20,14 @@ if [ "${1:-}" = "--quick" ]; then QUICK=1; fi
 
 names=()
 codes=()
+kinds=()
 
+# Exit 3 is a named, deliberate skip (T1, konyklabs/roadmap#116): a step that
+# cannot run for a reason outside this script's control (no network and no
+# cache for a fetched-not-committed fidelity extract) rather than a defect.
+# It prints SKIP in the summary, in yellow, and never trips the script's own
+# exit code the way a FAIL does -- only `step`'s caller decides a command
+# means "skip" by exiting 3; every other non-zero exit is still a FAIL.
 step() {
   local name="$1"; shift
   printf '\n\033[1m== %s ==\033[0m\n' "$name"
@@ -28,6 +35,13 @@ step() {
   local code=$?
   names+=("$name")
   codes+=("$code")
+  if [ "$code" -eq 0 ]; then
+    kinds+=("PASS")
+  elif [ "$code" -eq 3 ]; then
+    kinds+=("SKIP")
+  else
+    kinds+=("FAIL")
+  fi
   return 0
 }
 
@@ -229,12 +243,18 @@ done
 printf '\n\033[1m== summary ==\033[0m\n'
 failed=0
 for i in "${!names[@]}"; do
-  if [ "${codes[$i]}" -eq 0 ]; then
-    printf '  %-20s PASS\n' "${names[$i]}"
-  else
-    printf '  %-20s FAIL (exit %s)\n' "${names[$i]}" "${codes[$i]}"
-    failed=1
-  fi
+  case "${kinds[$i]}" in
+    PASS)
+      printf '  %-20s PASS\n' "${names[$i]}"
+      ;;
+    SKIP)
+      printf '  %-20s \033[33mSKIP\033[0m (exit %s)\n' "${names[$i]}" "${codes[$i]}"
+      ;;
+    *)
+      printf '  %-20s FAIL (exit %s)\n' "${names[$i]}" "${codes[$i]}"
+      failed=1
+      ;;
+  esac
 done
 
 if [ "$failed" -ne 0 ]; then

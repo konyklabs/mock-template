@@ -388,3 +388,49 @@ def test_a_cache_inside_the_package_is_refused(tmp_path: Path) -> None:
     with pytest.raises(LookupError, match="must not be inside or above the package"):
         cache_path("vendorfake.fidelity", cache_dir=package.parent.parent)
     assert cache_path("vendorfake.fidelity", cache_dir=tmp_path) == tmp_path / "vendorfake.fidelity"
+
+
+# ---------------------------------------------------------------------------
+# T1 (konyklabs/roadmap#116): the `fetch` CLI's own exit code for this case.
+# ---------------------------------------------------------------------------
+
+_FETCH_TARGET_ANCHOR = ""
+"""Set per test by monkeypatch; :func:`_fetch_target` reads it fresh, the same
+trick ``tests/unit/fidelity/test_cli.py``'s own ``target()`` uses, so the
+CLI's ``module:attr`` resolution reaches a package this test wrote."""
+
+
+def _fetch_target() -> Any:
+    """A :class:`~vendorfake.fidelity.runner.FidelityTarget` the ``fetch``
+    subcommand can resolve without ever opening a unit -- ``_fetch`` never
+    calls ``open_unit``, so a call here would mean the CLI took a wrong turn."""
+    from contextlib import contextmanager
+
+    from vendorfake.fidelity.runner import FidelityTarget
+
+    @contextmanager
+    def open_unit(profile: str | None) -> Any:
+        raise AssertionError("`fetch` must never open a unit")
+        yield  # pragma: no cover
+
+    return FidelityTarget(name=_FETCH_TARGET_ANCHOR, anchor=_FETCH_TARGET_ANCHOR, open_unit=open_unit)
+
+
+def test_fetch_with_no_network_and_no_cache_is_a_named_skip_not_a_usage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cache: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """T1 (konyklabs/roadmap#116): the ``fetch`` CLI turns "no network, no
+    cache" into exit 3 -- a named skip ``tools/self-test.sh`` reports as SKIP
+    rather than failing the whole run -- never the generic usage-error exit 2
+    a bad ``--target`` or a pin-less anchor still get (see
+    ``populate``'s ``Unavailable``, which this is the CLI's own view of)."""
+    from vendorfake.fidelity.__main__ import main
+
+    name = make_package(tmp_path, monkeypatch, pin=pin_for(synthetic()))
+    monkeypatch.setattr(f"{__name__}._FETCH_TARGET_ANCHOR", name)
+    offline = counting_fetcher(None, error=ConnectionError("unreachable"))
+    assert main(["fetch", "--target", f"{__name__}:_fetch_target"], fetcher=offline) == 3
+    assert offline.calls == [URL]
+    err = capsys.readouterr().err
+    assert f"fidelity fetch: {name} UNAVAILABLE" in err
+    assert "its fidelity leg is skipped in this run" in err

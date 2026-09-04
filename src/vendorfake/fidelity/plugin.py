@@ -101,7 +101,8 @@ def run_case(case: PluginCase | None, ledger: _Ledger | None = None) -> None:
     if result.failure is not None:
         lines = "\n".join(result.failure.lines())
         raise FidelityCaseFailure(
-            f"{result.id} ({result.provenance}) {result.title}\n{lines}\nsource: {case.case.source.url}"
+            f"{result.id} ({result.provenance}, divergence {result.failure.kind}) {result.title}\n"
+            f"{lines}\nsource: {case.case.source.url}"
         )
 
 

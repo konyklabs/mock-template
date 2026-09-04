@@ -44,12 +44,12 @@ WRONG = dict(CREATE, expect={"status": 200, "body": {"order": {"state": "COMPLET
 # ---------------------------------------------------------------------------
 
 
-def test_help_lists_the_four_subcommands(capsys: pytest.CaptureFixture[str]) -> None:
+def test_help_lists_every_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as raised:
         main(["--help"])
     assert raised.value.code == 0
     printed = capsys.readouterr().out
-    assert "{pin,fetch,run,report}" in printed
+    assert "{pin,fetch,run,report,webhooks}" in printed
 
 
 def test_no_target_is_refused_rather_than_guessed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,7 +75,7 @@ def test_run_exits_zero_when_every_case_passes(anchor: Any, capsys: pytest.Captu
     assert main(["run", "--target", HERE, "--no-validate"]) == 0
     printed = capsys.readouterr().out
     assert "[PASS] a (documented, test)" in printed and "[PASS] b (judgment, test)" in printed
-    assert "2 passed, 0 failed (documented 1/1, judgment 1/1); responses NOT validated" in printed
+    assert "2 passed, 0 failed (documented 1/1, judgment 1/1, recorded 0/0); responses NOT validated" in printed
     assert printed.rstrip().endswith("OK")
 
 
@@ -83,7 +83,7 @@ def test_run_exits_one_on_a_failed_case_and_prints_the_pointer(anchor: Any, caps
     anchor([case("a", [CREATE]), case("b", [WRONG])])
     assert main(["run", "--target", HERE], client_factory=in_process) == 1
     printed = capsys.readouterr().out
-    assert "[FAIL] b (documented, test)" in printed
+    assert "[FAIL value] b (documented, test)" in printed
     assert "step 'create' at /order/state: expected 'COMPLETED', got 'OPEN'" in printed
     assert printed.rstrip().endswith("NOT OK")
 
@@ -91,7 +91,7 @@ def test_run_exits_one_on_a_failed_case_and_prints_the_pointer(anchor: Any, caps
 def test_run_case_filters_and_an_unknown_id_is_a_usage_error(anchor: Any, capsys: pytest.CaptureFixture[str]) -> None:
     anchor([case("a", [CREATE]), case("b", [WRONG])])
     assert main(["run", "--target", HERE, "--no-validate", "--case", "a"]) == 0
-    assert "[FAIL]" not in capsys.readouterr().out
+    assert "[FAIL" not in capsys.readouterr().out
     assert main(["run", "--target", HERE, "--no-validate", "--case", "zzz"]) == 2
     assert "no such case(s): zzz; the corpus has: a, b" in capsys.readouterr().err
 
@@ -131,6 +131,57 @@ def test_base_url_refuses_a_profile_flag_and_needs_an_anchor(anchor: Any) -> Non
     with pytest.raises(SystemExit) as raised:
         main(["run", "--base-url", "http://127.0.0.1:1"])
     assert raised.value.code == 2
+
+
+def test_manifest_supplies_the_world_and_its_base_url(
+    anchor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--manifest`` is the run with no control plane behind it: the document answers instead."""
+    from tests.unit.fidelity.test_runner import manifest_file
+    from vendorfake.fidelity.report import CorpusReport
+    from vendorfake.fidelity.runner import ManifestWorld
+
+    name = anchor([case("a", [CREATE])])
+    seen: dict[str, Any] = {}
+
+    def fake(base_url: str, anchor_name: str, cases: Any, *, world: Any = None) -> CorpusReport:
+        seen.update(base_url=base_url, anchor=anchor_name, world=world, cases=len(cases))
+        return CorpusReport(target=base_url, results=(), validated=False, remote=True)
+
+    monkeypatch.setattr("vendorfake.fidelity.__main__.run_corpus_remote", fake)
+    assert main(["run", "--manifest", str(manifest_file(tmp_path)), "--anchor", name]) == 0
+    assert seen["base_url"] == "http://localhost:8080" and seen["cases"] == 1
+    assert isinstance(seen["world"], ManifestWorld) and seen["world"].profile() == "full"
+
+
+def test_an_explicit_base_url_wins_over_the_manifests(
+    anchor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.unit.fidelity.test_runner import manifest_file
+    from vendorfake.fidelity.report import CorpusReport
+
+    name = anchor([case("a", [CREATE])])
+    seen: dict[str, Any] = {}
+
+    def fake(base_url: str, anchor_name: str, cases: Any, *, world: Any = None) -> CorpusReport:
+        seen["base_url"] = base_url
+        return CorpusReport(target=base_url, results=(), validated=False, remote=True)
+
+    monkeypatch.setattr("vendorfake.fidelity.__main__.run_corpus_remote", fake)
+    argv = ["run", "--manifest", str(manifest_file(tmp_path)), "--base-url", "http://elsewhere:9", "--anchor", name]
+    assert main(argv) == 0
+    assert seen["base_url"] == "http://elsewhere:9"
+
+
+def test_a_manifest_with_no_address_and_no_base_url_says_so(
+    anchor: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tests.unit.fidelity.test_runner import manifest_file
+
+    name = anchor([case("a", [CREATE])])
+    path = manifest_file(tmp_path, base_url=...)
+    assert main(["run", "--manifest", str(path), "--anchor", name]) == 2
+    assert "carries no base_url; pass --base-url" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -316,14 +367,14 @@ def test_fetch_without_a_pin_is_a_usage_error(not_vendored: Any, capsys: pytest.
     assert fetcher.calls == [] and not cache.exists()
 
 
-def test_fetch_with_no_network_and_no_cache_is_a_usage_error(
+def test_fetch_with_no_network_and_no_cache_is_a_named_skip(
     not_vendored: Any, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from tests.unit.fidelity.test_cache import counting_fetcher
 
     not_vendored()
     offline = counting_fetcher(None, error=ConnectionError("unreachable"))
-    assert main(["fetch", "--target", HERE], fetcher=offline) == 2
+    assert main(["fetch", "--target", HERE], fetcher=offline) == 3
     err = capsys.readouterr().err
     assert "fetch:" in err and "cannot fetch https://example.test/spec.json (unreachable)" in err
 
@@ -375,3 +426,64 @@ def test_pin_on_a_non_vendored_anchor_writes_the_extract_to_the_cache_not_the_pa
     assert (cache / name / "extract.json").is_file()
     assert main(["pin", "--target", HERE, "--check"], refresh=refresh) == 0
     assert "pin: up to date" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# webhooks.
+# ---------------------------------------------------------------------------
+
+
+SIGNING_TARGET = f"{__name__}:signing_target"
+
+
+def signing_target() -> FidelityTarget:
+    from tests.unit.fidelity.test_webhooks import stub_signer
+
+    return FidelityTarget(
+        name="synthetic",
+        anchor=ANCHOR,
+        open_unit=synthetic_target(ANCHOR).open_unit,
+        default_profile="test",
+        signer=stub_signer,
+    )
+
+
+def test_webhooks_verifies_every_golden_in_the_directory(capsys: pytest.CaptureFixture[str]) -> None:
+    from tests.unit.fidelity.test_webhooks import GOLDENS
+
+    assert main(["webhooks", "--target", SIGNING_TARGET, "--golden", str(GOLDENS)]) == 0
+    printed = capsys.readouterr().out
+    assert "[PASS] stub-delivery.json (synthetic, judgment)" in printed
+    assert printed.rstrip().endswith("OK")
+
+
+def test_webhooks_exits_one_on_a_divergence(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    import json as _json
+
+    from tests.unit.fidelity.test_webhooks import SIGNATURE_HEADER, _doc
+
+    tampered = _doc(**{f"delivery.headers.{SIGNATURE_HEADER}": "AAAA"})
+    (tmp_path / "one.json").write_text(_json.dumps(tampered))
+    assert main(["webhooks", "--target", SIGNING_TARGET, "--golden", str(tmp_path)]) == 1
+    assert "expected 'AAAA'" in capsys.readouterr().out
+
+
+def test_webhooks_refuses_a_target_that_publishes_no_signer(capsys: pytest.CaptureFixture[str]) -> None:
+    from tests.unit.fidelity.test_webhooks import GOLDENS
+
+    assert main(["webhooks", "--target", HERE, "--golden", str(GOLDENS)]) == 2
+    assert "publishes no signer" in capsys.readouterr().err
+
+
+def test_webhooks_on_a_directory_that_is_not_there_is_a_usage_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["webhooks", "--target", SIGNING_TARGET, "--golden", str(tmp_path / "nope")]) == 2
+    assert "no such directory of goldens" in capsys.readouterr().err
+
+
+def test_webhooks_on_an_empty_directory_says_so_rather_than_passing_silently(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["webhooks", "--target", SIGNING_TARGET, "--golden", str(tmp_path)]) == 0
+    assert "no goldens in" in capsys.readouterr().out

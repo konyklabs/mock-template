@@ -41,6 +41,7 @@ public API a module here imitates.
 ```text
 usage: vendorfake serve [-h] [--vendor VENDOR] [--profile PROFILE]
                         [--host HOST] [--port PORT] [--log-level LOG_LEVEL]
+                        [--validate]
 
 options:
   -h, --help            show this help message and exit
@@ -57,6 +58,9 @@ options:
   --log-level LOG_LEVEL
                         uvicorn log level. Defaults to $VENDORFAKE_LOG_LEVEL,
                         then the profile's.
+  --validate            Check every answer against the vendor's own published
+                        schema, and answer 500 naming the violation when one
+                        fails. Refused for a vendor with no fidelity leg.
 ```
 
 ## `vendorfake info`

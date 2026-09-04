@@ -41,7 +41,13 @@ def fake_ctx(
 
 
 def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: Any) -> None:
-    """One line: how many responses the Toast suite validated against the spec."""
-    from tests.unit.toast.harness import LEDGER
+    """One line: how many responses the Toast suite validated against the
+    spec -- or, when the fidelity cache is unavailable (no network, no cache;
+    T1, konyklabs/roadmap#116), that validation was skipped this run rather
+    than a ledger of zeroes that would read as "nothing was ever called"."""
+    from tests.unit.toast.harness import FIDELITY_UNAVAILABLE_REASON, LEDGER
 
-    terminalreporter.write_line(f"toast {LEDGER.summary()}")
+    if FIDELITY_UNAVAILABLE_REASON is not None:
+        terminalreporter.write_line("toast fidelity: SKIPPED -- no extract in the cache; run fidelity fetch")
+    else:
+        terminalreporter.write_line(f"toast {LEDGER.summary()}")
