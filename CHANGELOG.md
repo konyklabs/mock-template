@@ -352,6 +352,14 @@ the 0.2 gate approval (konyklabs/roadmap#99).
   `docs/pytest-plugin.md` — narrowing the marker fixtures' `Seed` under a
   type checker (#101, item 16).
 
+## [0.5.0](https://github.com/konyklabs/vendorfake/compare/v0.4.0...v0.5.0) (2026-09-04)
+
+
+### Features
+
+* **lightspeed:** the Lightspeed Retail X-Series vendor — auth, catalogue, inventory, customers, sales, webhooks, fidelity leg (konyklabs/roadmap[#94](https://github.com/konyklabs/vendorfake/issues/94)) ([#48](https://github.com/konyklabs/vendorfake/issues/48)) ([ecb0fc9](https://github.com/konyklabs/vendorfake/commit/ecb0fc9baeb627faddd9c321c473a94d8f11c5d8))
+* **testing:** seed overlays merged over the profile's seed document (konyklabs/roadmap[#85](https://github.com/konyklabs/vendorfake/issues/85)) ([#46](https://github.com/konyklabs/vendorfake/issues/46)) ([c6b0783](https://github.com/konyklabs/vendorfake/commit/c6b0783909e8f77dd6d3e72951878b99e73355d4))
+
 ## [0.4.0](https://github.com/konyklabs/vendorfake/compare/v0.3.0...v0.4.0) (2026-09-04)
 
 
