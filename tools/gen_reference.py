@@ -184,8 +184,8 @@ def _faults_page() -> None:
             "the handler, so nothing is committed; `phase: response` fires on the "
             "answer *after* the handler committed, so a retry does not start "
             "clean; `phase: delivery` is a webhook delivery. See "
-            "[Chaos rules and faults](../concepts/chaos-rules-and-faults.md) and "
-            "[Provenance labels](../concepts/provenance-labels.md)."
+            "[Chaos](../concepts/chaos.md) and "
+            "[Provenance labels](../concepts/chaos.md#provenance)."
         ),
         body=_table(("Fault", "Scope", "Provenance", "Phase", "Params", "Description"), rows),
     )

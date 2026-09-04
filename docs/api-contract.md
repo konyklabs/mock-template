@@ -88,7 +88,9 @@ collection the seed does not have are in
 
 **An overlay may not name the collections `.seed` is built from.** `tokens`,
 and the vendor's identity collection (`merchant` on Square and Clover,
-`restaurant` on Toast), are refused with `UnitError` when the unit starts —
+`restaurant` on Toast, `retailer` on Lightspeed, which also refuses
+`personal_tokens` and `refresh_tokens`), are refused with `UnitError` when the
+unit starts —
 on all three bindings, and in the parent process before `served()` spawns a
 child. `.seed` carries the shipped credentials and tenant id from this
 distribution's constants rather than from the loaded document, so an overlay
@@ -135,8 +137,9 @@ loaded explicitly with `-p vendorfake.conformance.plugin`.
 
 ### The per-vendor path constants
 
-`vendorfake.square.paths`, `vendorfake.clover.paths` and
-`vendorfake.toast.paths` — one `UPPER_SNAKE` constant per route carrying an
+`vendorfake.square.paths`, `vendorfake.clover.paths`,
+`vendorfake.toast.paths` and `vendorfake.lightspeed.paths` — one
+`UPPER_SNAKE` constant per route carrying an
 `operation_id`, named after that `operation_id`, which is the same identifier
 `registry.routes` and `GET /__unit/routes` publish.
 `tests/unit/test_paths_drift.py` asserts every constant against the live route
@@ -279,3 +282,26 @@ A behaviour change to a symbol that keeps its name is not a deprecation and
 does not get a grace release; it is announced under Behaviour changes or
 Breaking changes with a migration note saying what to do instead. The 0.2.0
 entries are written that way, and they are the model.
+
+## Compatibility policy for 0.x
+
+While the major version is 0, a minor release may change or remove public
+behaviour, and every such change is listed under "Breaking changes" in the
+release notes with the removal and its replacement. A change that is not
+listed there follows the deprecation policy above. The public surface is the
+`__all__` of the modules this page names, pinned by
+`tests/unit/test_public_api.py`; a consumer pins a tag and reads the
+breaking-changes section before each bump.
+
+This round's release is 0.6.0, a breaking minor under this policy. Its removals (konyklabs/vendorfake#49
+and #51): `agent-setup`, the file-drop transport and `FileSink`,
+`VENDORFAKE_TRANSPORT`/`VENDORFAKE_TRANSPORT_DIR`, `VENDORFAKE_UNMATCHED` and
+the profile's `unmatched` section, `FrameworkTripwire` and the
+`framework_answered` health field, `MutableResponse`, the `Unit` constructor
+seams. Its behaviour changes: `unit()` and `served()` honour exported
+`VENDORFAKE_*` variables; `served()` and `serve_in_thread()` drivers raise on
+an unmatched path by default; `WebhookReceiver.url` refuses a wildcard bind;
+`vendorfake serve`, `served()` and the container need the `serve` extra
+(`pip install "vendorfake[serve]"`); request bodies over 8 MiB are refused and
+six collections are bounded at 10,000 entries; the Square test-webhook route
+runs serialized and reports the first attempt only.

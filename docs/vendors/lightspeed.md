@@ -317,7 +317,7 @@ Everything below is a place the vendor's published documentation does not
 settle a behaviour a fake must nevertheless have. Each is labelled `JUDGMENT` at
 its site in the code; the citation is the page that is *silent*, which is the
 discipline described under
-[Provenance labels](../concepts/provenance-labels.md).
+[Provenance labels](../concepts/chaos.md#provenance).
 
 | Decision | Why it is a judgment | Cited page |
 |---|---|---|

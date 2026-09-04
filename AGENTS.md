@@ -4,7 +4,10 @@ For an agent working *in this repository* -- building, fixing, or extending
 vendorfake itself. If instead you are writing tests **against** an installed
 vendorfake in a consumer repository, this is the wrong file: run `vendorfake
 explain <kind> <name>` there for one answer at a time, or read
-https://github.com/konyklabs/vendorfake/blob/main/docs/for-agents.md.
+https://github.com/konyklabs/vendorfake/blob/main/docs/concepts/unit.md for
+the vocabulary and
+https://github.com/konyklabs/vendorfake/blob/main/docs/start/bindings.md for
+the four ways to hold a unit.
 
 ## Layout
 

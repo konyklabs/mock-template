@@ -194,7 +194,7 @@ class UnitRequest:
 class TransportDirective:
     """An instruction to a binding about the *socket*, not the vendor's bytes: the three faults no response schema can
     express. ``UnitResponse.body`` still carries what the handler produced. The kernel never touches sockets, so it
-    builds this value and stops. provenance: transport; see ``docs/concepts/chaos-rules-and-faults.md`` ("Transport
+    builds this value and stops. provenance: transport; see ``docs/concepts/chaos.md`` ("Transport
     faults")."""
 
     kind: Literal["connection_reset", "empty_response", "slow_body"]
