@@ -34,7 +34,16 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     # registry and the whole kernel in behind it for every such session.
     from vendorfake.core.kernel.types import VendorDefinition
 
-__all__ = ["CloverSeed", "Credentials", "Seed", "SquareSeed", "ToastSeed", "Token", "seed_for"]
+__all__ = [
+    "CloverSeed",
+    "Credentials",
+    "LightspeedSeed",
+    "Seed",
+    "SquareSeed",
+    "ToastSeed",
+    "Token",
+    "seed_for",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -340,6 +349,100 @@ class ToastSeed:
         return {"Authorization": f"Bearer {self.access_token}"}
 
 
+@dataclass(frozen=True, slots=True)
+class LightspeedSeed:
+    """The Lightspeed scenario: one retailer, two outlets, a register in each,
+    three payment types (one of them internal), a pre-issued OAuth access and
+    refresh pair, a read-only token, a personal token, and one webhook
+    subscription on ``register_closure.create``.
+
+    Lightspeed scopes a request to its retailer by **subdomain** --
+    ``{domain_prefix}.retail.lightspeed.app`` -- and a unit serves exactly one
+    retailer, so there is no tenant header and no tenant path segment. What a
+    consumer needs instead is :attr:`api_path`, which prefixes a resource path
+    with the version segment every route sits under.
+    """
+
+    client_id: str
+    client_secret: str
+    redirect_uri: str
+    domain_prefix: str
+    #: Full scopes: reads, both register actions, and webhooks.
+    access_token: str
+    #: Rotates the pair above. A refresh retires it and revokes that access
+    #: token, which is the documented behaviour a consumer's session handling
+    #: has to get right.
+    refresh_token: str
+    #: Reads only; every write path answers 403 to it.
+    read_only_access_token: str
+    #: A personal token -- Plus-plan only, created in the web application, so a
+    #: unit can only ever be seeded with one. Full scopes, and no expiry.
+    personal_access_token: str
+    retailer_id: str
+    retailer_name: str
+    outlet_main_id: str
+    outlet_second_id: str
+    #: Seeded OPEN, so a close (and the webhook it fires) needs no setup.
+    register_main_id: str
+    #: Seeded CLOSED, so an open needs none either.
+    register_second_id: str
+    payment_type_cash_id: str
+    payment_type_card_id: str
+    #: ``internal: true``: absent from the payment-types list, because the
+    #: ``payment_types:read`` scope is documented as excluding internal types.
+    payment_type_internal_id: str
+    webhook_subscription_id: str
+    #: The HMAC secret behind the ``X-Signature`` header. Lightspeed signs with
+    #: the application's own ``client_secret``: ``WebhookRequest`` carries no
+    #: per-hook secret.
+    webhook_secret: str
+    #: ``/api/2026-07`` -- the version segment every resource route sits under.
+    api_prefix: str
+    #: The seven ``WebhookType`` values. Two of them (the consignment pair) are
+    #: subscribable and never fired here; see the vendor's capabilities.
+    event_types: tuple[str, ...]
+
+    @property
+    def credentials(self) -> Credentials:
+        """The application credential, under the neutral names.
+
+        DOCUMENTED, the ``grant``: Lightspeed issues a refresh token alongside
+        the access token and a consumer rotates it -- "Using a refresh token
+        will revoke the access token that was returned with it ... You must
+        save this new refresh token and use it the next time"
+        (https://x-series-api.lightspeedhq.com/docs/authorization).
+        """
+        return Credentials(app_id=self.client_id, app_secret=self.client_secret, grant="refresh_token")
+
+    @property
+    def token(self) -> Token:
+        """The seeded full-scope pair, under the neutral names. The tenant is
+        the retailer -- there is no narrower id a token can be scoped to."""
+        return Token(access_token=self.access_token, refresh_token=self.refresh_token, tenant_id=self.retailer_id)
+
+    @property
+    def auth(self) -> dict[str, str]:
+        """``Authorization: Bearer`` for the full-scope token. No second
+        header: one flat ``bearerAuth`` scheme is the whole of this vendor's
+        authentication."""
+        return {"Authorization": f"Bearer {self.access_token}"}
+
+    @property
+    def read_only_auth(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.read_only_access_token}"}
+
+    @property
+    def personal_auth(self) -> dict[str, str]:
+        """The personal token, which authenticates identically."""
+        return {"Authorization": f"Bearer {self.personal_access_token}"}
+
+    def api_path(self, suffix: str = "") -> str:
+        """``/api/2026-07`` plus ``suffix``: every resource route sits under
+        the version segment. The token endpoint does NOT -- it is
+        ``/api/1.0/token`` -- so this helper deliberately does not reach it."""
+        return f"{self.api_prefix}{suffix}"
+
+
 def _square(vendor_config: Mapping[str, object]) -> SquareSeed:
     from vendorfake.square.config import SquareConfig
     from vendorfake.square.events import SQUARE_EVENT_TYPES
@@ -444,6 +547,40 @@ def _toast(vendor_config: Mapping[str, object]) -> ToastSeed:
     )
 
 
+def _lightspeed(vendor_config: Mapping[str, object]) -> LightspeedSeed:
+    from vendorfake.lightspeed.config import LightspeedConfig
+    from vendorfake.lightspeed.events import LIGHTSPEED_EVENT_TYPES
+    from vendorfake.lightspeed.seed import constants as c
+    from vendorfake.lightspeed.surface.common import API_PREFIX
+
+    config = LightspeedConfig.model_validate(dict(vendor_config))
+    return LightspeedSeed(
+        client_id=config.client_id,
+        client_secret=config.client_secret,
+        redirect_uri=config.redirect_uri,
+        domain_prefix=config.domain_prefix,
+        access_token=c.SEED_ACCESS_TOKEN,
+        refresh_token=c.SEED_REFRESH_TOKEN,
+        read_only_access_token=c.SEED_READ_ONLY_ACCESS_TOKEN,
+        personal_access_token=c.SEED_PERSONAL_ACCESS_TOKEN,
+        retailer_id=c.SEED_RETAILER_ID,
+        retailer_name=c.SEED_RETAILER_NAME,
+        outlet_main_id=c.SEED_OUTLET_MAIN_ID,
+        outlet_second_id=c.SEED_OUTLET_SECOND_ID,
+        register_main_id=c.SEED_REGISTER_MAIN_ID,
+        register_second_id=c.SEED_REGISTER_SECOND_ID,
+        payment_type_cash_id=c.SEED_PAYMENT_TYPE_CASH_ID,
+        payment_type_card_id=c.SEED_PAYMENT_TYPE_CARD_ID,
+        payment_type_internal_id=c.SEED_PAYMENT_TYPE_INTERNAL_ID,
+        webhook_subscription_id=c.SEED_WEBHOOK_ID,
+        # Lightspeed signs with the application's own secret; there is no
+        # per-subscription secret member on WebhookRequest.
+        webhook_secret=config.client_secret,
+        api_prefix=API_PREFIX,
+        event_types=tuple(LIGHTSPEED_EVENT_TYPES),
+    )
+
+
 _SEED_MEMBERS = ("credentials", "token", "auth", "read_only_auth", "event_types")
 """The five names :class:`Seed` requires, as data, for the hook's shape check.
 
@@ -513,7 +650,7 @@ def seed_for(
     Resolution order, and why it is this way round. A vendor that implements
     the :class:`~vendorfake.core.kernel.types.SeedingVendor` hook is asked
     first, because that is the vendor's own statement about itself; the
-    three-way branch below is only *this module's* knowledge of the three
+    four-way branch below is only *this module's* knowledge of the four
     vendors shipped here. None of the three implements the hook, so the
     ordering changes nothing for them -- a test pins that -- and it means a
     third-party vendor is never shadowed by a name collision with a built-in.
@@ -537,6 +674,8 @@ def seed_for(
         return _clover(vendor_config)
     if vendor == "toast":
         return _toast(vendor_config)
+    if vendor == "lightspeed":
+        return _lightspeed(vendor_config)
     return None
 
 

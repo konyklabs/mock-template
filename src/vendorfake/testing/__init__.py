@@ -70,7 +70,16 @@ from vendorfake.core.webhooks.models import matches_event_type
 from vendorfake.core.webhooks.sink import DeliverySink
 from vendorfake.registry import RouteInfo, create_unit
 from vendorfake.testing.receiver import Delivery, WebhookReceiver, webhook_receiver
-from vendorfake.testing.seeds import CloverSeed, Credentials, Seed, SquareSeed, ToastSeed, Token, seed_for
+from vendorfake.testing.seeds import (
+    CloverSeed,
+    Credentials,
+    LightspeedSeed,
+    Seed,
+    SquareSeed,
+    ToastSeed,
+    Token,
+    seed_for,
+)
 from vendorfake.testing.transport import UnitTransport, UnmatchedRequest, checked_unmatched
 
 __all__ = [
@@ -85,6 +94,7 @@ __all__ = [
     "Credentials",
     "Delivery",
     "Driver",
+    "LightspeedSeed",
     "RouteInfo",
     "Seed",
     "SeedT",
@@ -196,7 +206,7 @@ class Driver(Generic[SeedT]):
     """A unit you can talk to, however it was started.
 
     Generic in its seed. ``seed`` used to be
-    ``SquareSeed | CloverSeed | ToastSeed | None``, which meant that reading
+    ``SquareSeed | CloverSeed | ToastSeed | LightspeedSeed | None``, which meant that reading
     one field of it took an ``isinstance`` ladder *and* a ``None`` guard --
     per vendor, in every consumer, for a value that is never actually absent
     and whose type the caller already named in ``unit("square")``. The
@@ -618,7 +628,7 @@ class ServedUnit(Driver[SeedT]):
 
 
 NO_SEED_HINT = (
-    "vendorfake ships a seed for square, clover and toast. A vendor from the "
+    "vendorfake ships a seed for square, clover, toast and lightspeed. A vendor from the "
     "'vendorfake.vendors' entry-point group publishes its own by implementing "
     "vendorfake.core.kernel.types.SeedingVendor -- a seed(vendor_config) method "
     "returning an object with credentials, auth, read_only_auth and event_types. "
@@ -703,6 +713,21 @@ def unit(
     unmatched: UnmatchedPolicy | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[StartedUnit[ToastSeed]]: ...
+
+
+@overload
+def unit(
+    vendor: Literal["lightspeed"],
+    profile: str | None = ...,
+    *,
+    capabilities: Sequence[str] | None = ...,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
+) -> AbstractContextManager[StartedUnit[LightspeedSeed]]: ...
 
 
 @overload
@@ -996,6 +1021,21 @@ def async_unit(
 
 @overload
 def async_unit(
+    vendor: Literal["lightspeed"],
+    profile: str | None = ...,
+    *,
+    capabilities: Sequence[str] | None = ...,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
+) -> AbstractAsyncContextManager[StartedUnit[LightspeedSeed]]: ...
+
+
+@overload
+def async_unit(
     vendor: str,
     profile: str | None = ...,
     *,
@@ -1155,6 +1195,20 @@ def served(
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[ServedUnit[ToastSeed]]: ...
+
+
+@overload
+def served(
+    vendor: Literal["lightspeed"],
+    profile: str = ...,
+    *,
+    port: int = ...,
+    host: str = ...,
+    log_level: str = ...,
+    timeout_s: float = ...,
+    env: Mapping[str, str] | None = ...,
+    clock_start: datetime | str | None = ...,
+) -> AbstractContextManager[ServedUnit[LightspeedSeed]]: ...
 
 
 @overload

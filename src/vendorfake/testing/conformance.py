@@ -32,11 +32,14 @@ from vendorfake.testing import served
 __all__ = [
     "CLOVER_EXPECTED_SKIPS",
     "CLOVER_INAPPLICABLE",
+    "LIGHTSPEED_EXPECTED_SKIPS",
+    "LIGHTSPEED_INAPPLICABLE",
     "OUT_OF_PROCESS_TRANSPORT",
     "PROFILES",
     "TOAST_EXPECTED_SKIPS",
     "TOAST_INAPPLICABLE",
     "clover_target",
+    "lightspeed_target",
     "square_target",
     "target",
     "toast_target",
@@ -114,6 +117,52 @@ TOAST_INAPPLICABLE: Mapping[str, str] = {
     ),
     "C24": _TOAST_NO_IDEMPOTENCY_KEY.format(contract="key-scope"),
     "C25": _TOAST_NO_IDEMPOTENCY_KEY.format(contract="mismatch"),
+}
+
+
+LIGHTSPEED_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
+    "C07": ("oauth-only",),
+    "C08": ("no-faults",),
+    "C09": ("oauth-only", "orders-only"),
+    "C12": ("no-faults",),
+    "C16": ("oauth-only", "orders-only"),
+    "C17": ("oauth-only",),
+    "C18": ("oauth-only", "orders-only"),
+    "C21": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
+    "C26": ("oauth-only",),
+    "C27": ("no-faults",),
+    "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
+    "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
+}
+"""Which contract skips on which Lightspeed profile, and why each one does:
+
+* ``oauth-only`` enables the token endpoint and nothing else, so it has no
+  paginating route (C26), no example mutation (C07), no webhook surface (C09,
+  C16, C18) and no credential a check can obtain without driving the whole
+  OAuth flow (C17);
+* ``orders-only`` has no webhooks capability (C09, C16, C18);
+* ``no-faults`` has no chaos capability at all (C08, C12, C27);
+* the delivery-scope contracts (C29) need ``webhooks.chaos``, which only
+  ``full`` and ``chaos-demo`` enable, and the retry-cascade (C21) and
+  clock-independence (C32) contracts run only on the virtual-clock profile."""
+
+_LIGHTSPEED_NO_IDEMPOTENCY_KEY = (
+    "Lightspeed's API documents no idempotency key on any endpoint -- there is no Idempotency-Key header and "
+    "no request-id member on any of the 201 operations -- so no lightspeed route carries an IdempotencySpec "
+    "and the {contract} contract can never be asked of this vendor."
+)
+
+LIGHTSPEED_INAPPLICABLE: Mapping[str, str] = {
+    "C13": (
+        "This vendor declares no state machines. A register is open or closed -- a boolean with two actions, "
+        "not a lifecycle -- and publishing a two-state machine for it would put a vocabulary on the control "
+        "plane that no route uses. The sale lifecycle (parked/pending/voided/closed, an enum on "
+        "SaleRequestBase) is a real machine and arrives with the Sales surface; the inapplicable guard fails "
+        "the day a machine appears."
+    ),
+    "C19": _LIGHTSPEED_NO_IDEMPOTENCY_KEY.format(contract="replay"),
+    "C24": _LIGHTSPEED_NO_IDEMPOTENCY_KEY.format(contract="key-scope"),
+    "C25": _LIGHTSPEED_NO_IDEMPOTENCY_KEY.format(contract="mismatch"),
 }
 
 
@@ -220,6 +269,17 @@ def clover_target() -> ConformanceTarget:
         path_params={"mId": SEED_MERCHANT_ID},
         expected_skips=CLOVER_EXPECTED_SKIPS,
         inapplicable=CLOVER_INAPPLICABLE,
+    )
+
+
+def lightspeed_target() -> ConformanceTarget:
+    """The fourth vendor. No ``path_params``: a Lightspeed unit serves exactly
+    one retailer -- tenancy is the per-retailer subdomain, not a path segment --
+    so every probe path stays the probe."""
+    return target(
+        "lightspeed",
+        expected_skips=LIGHTSPEED_EXPECTED_SKIPS,
+        inapplicable=LIGHTSPEED_INAPPLICABLE,
     )
 
 

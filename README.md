@@ -25,7 +25,7 @@ pip install "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
 # or, in a uv project: uv add "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
 # or, from a checkout of this repository: uv sync
 
-vendorfake vendors                       # -> clover, square, toast
+vendorfake vendors                       # -> clover, lightspeed, square, toast
 vendorfake serve --vendor square         # http://127.0.0.1:8080
 ```
 
@@ -34,7 +34,7 @@ curl -s http://127.0.0.1:8080/__unit/health
 # -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"framework_answered":0}
 ```
 
-Every command names a vendor (`--vendor square|clover|toast`, or
+Every command names a vendor (`--vendor square|clover|toast|lightspeed`, or
 `VENDORFAKE_VENDOR`); with none installed it refuses and lists what it found.
 Drop the `@v0.1.0` to track `main` instead of a release tag. A container image
 is also available (one image, every vendor, chosen at run time) — see

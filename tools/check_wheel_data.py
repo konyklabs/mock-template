@@ -81,6 +81,17 @@ REQUIRED = (
     "vendorfake/toast/profiles/orders-only.json",
     "vendorfake/toast/profiles/chaos-demo.json",
     "vendorfake/toast/seed/default.seed.json",
+    "vendorfake/lightspeed/profiles/full.json",
+    "vendorfake/lightspeed/profiles/no-chaos.json",
+    "vendorfake/lightspeed/profiles/no-faults.json",
+    "vendorfake/lightspeed/profiles/oauth-only.json",
+    "vendorfake/lightspeed/profiles/orders-only.json",
+    "vendorfake/lightspeed/profiles/chaos-demo.json",
+    "vendorfake/lightspeed/seed/default.seed.json",
+    # The declaration is a stub in this slice of konyklabs/roadmap#94: it names
+    # the source and the Apache-2.0 licence and nothing else. `extract.json`,
+    # `pin.json` and `corpus/` are filled by slice L3 and join this list then.
+    "vendorfake/lightspeed/fidelity/declaration.json",
 )
 
 

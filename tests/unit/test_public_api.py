@@ -78,6 +78,7 @@ PUBLIC_API: Mapping[str, tuple[str, ...]] = {
         "Credentials",
         "Delivery",
         "Driver",
+        "LightspeedSeed",
         "RouteInfo",
         "Seed",
         "SeedT",
@@ -99,6 +100,7 @@ PUBLIC_API: Mapping[str, tuple[str, ...]] = {
     "vendorfake.testing.seeds": (
         "CloverSeed",
         "Credentials",
+        "LightspeedSeed",
         "Seed",
         "SquareSeed",
         "ToastSeed",

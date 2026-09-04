@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### Features
+
+* **lightspeed:** a fourth vendor -- Lightspeed Retail X-Series, API 2026-07
+  (konyklabs/roadmap#94). This is the foundation slice: the token endpoint
+  (`POST /api/1.0/token`) with both documented grants and the rotation that
+  retires the consumed refresh token *and* revokes the access token it was
+  returned with; a stand-in `GET /connect` issuing the single-use code; the
+  retailer, outlets, registers and payment types; the five documented webhook
+  operations with the 409 on a duplicate type-and-url pair; and delivery of
+  `register_closure.create` end to end. Products, inventory, customers and
+  sales are in issue #94's scoped surface and arrive in later slices.
+
+  Three cross-cutting mechanics come with it, all vendor-side because the core
+  has no seam for any of them:
+
+  - the **retailer-global version counter** -- one monotonically increasing
+    integer per retailer across every resource type, stamped on every entity
+    and bumped by every mutation -- and the list envelope built on it
+    (`{"data": [...], "version": {"max": …, "min": …}}`, ascending by version,
+    with `after`/`before`/`page_size`/`deleted`). The store's own `version` is
+    per-entity optimistic concurrency and its `paginate` is an opaque expiring
+    cursor; both are the right model for a different vendor.
+  - the **documented fixed-window rate limiter**: `300 × registers + 50` per
+    retailer per application over five minutes, `X-RateLimit-Limit` and
+    `X-RateLimit-Remaining` on every response, and a 429 whose `Retry-After`
+    is an RFC 1123 HTTP-date rather than delta-seconds. It is vendor
+    behaviour, not chaos, so no profile switches it off; the quota is a config
+    knob instead.
+  - **form-encoded webhook delivery**: `payload=<JSON>` plus `domain_prefix`
+    and `environment`, signed `X-Signature: signature=<hex>,algorithm=HMAC-SHA256`.
+
+* **core:** `vendorfake.core.webhooks.models.BodyEncodingSigner` -- an
+  optional, structurally discovered protocol (the same shape as
+  `SeedingVendor`) letting a vendor whose delivery body is not JSON encode it
+  itself. The dispatcher's default is unchanged; a signer that does not
+  implement it is declaring "JSON" exactly as before. Without it a vendor
+  could set a content type through `DeliveryHeaderProvider` and then send
+  bytes contradicting it, which is the one shape a fake must not ship.
+
 Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
 2026-09-01 batch (konyklabs/roadmap#53: the conformance-coverage stack #15,
 #46, #42 and the fidelity legs #55, #56).

@@ -1,0 +1,92 @@
+{
+  "name": "chaos-demo",
+  "summary": "Full surface with a preloaded fault set: rate limiting on every third register close, a mid-flow token expiry on the fourth register read, and a duplicated then a delayed delivery. Runs on a virtual clock.",
+  "capabilities": [
+    "auth",
+    "retailer",
+    "outlets",
+    "registers",
+    "payment_types",
+    "webhooks",
+    "chaos",
+    "webhooks.chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "unit-lightspeed-client-id",
+    "client_secret": "unit-lightspeed-client-secret"
+  },
+  "clock": {
+    "mode": "virtual",
+    "start": "2026-09-04T12:00:00.000Z"
+  },
+  "chaos": {
+    "seed": 20260904,
+    "strict_rules": true,
+    "rules": [
+      {
+        "id": "rate-limit-every-third-close",
+        "scope": "request",
+        "fault": "rate_limit",
+        "match": {
+          "route": "PUT /api/2026-07/registers/{register_id}/actions/close"
+        },
+        "when": {
+          "every": 3
+        },
+        "params": {
+          "retry_after_seconds": 300
+        },
+        "note": "Every third CloseRegister is refused with the documented 429 body and an RFC 1123 Retry-After."
+      },
+      {
+        "id": "token-expires-on-fourth-read",
+        "scope": "request",
+        "fault": "token_expiry",
+        "match": {
+          "route": "GET /api/2026-07/registers/{register_id}"
+        },
+        "when": {
+          "nth": [
+            4
+          ]
+        },
+        "note": "The fourth GetRegisterByID sees the documented 401 mid-flow without the stored token changing."
+      },
+      {
+        "id": "duplicate-register-closure",
+        "scope": "webhook",
+        "fault": "webhook.duplicate",
+        "match": {
+          "event_type": "register_closure.create"
+        },
+        "when": {
+          "nth": [
+            1
+          ]
+        },
+        "params": {
+          "copies": 1
+        },
+        "note": "The first register_closure.create is delivered twice -- the at-least-once a 20-attempt retry implies."
+      },
+      {
+        "id": "delay-second-closure",
+        "scope": "webhook",
+        "fault": "webhook.delay",
+        "match": {
+          "event_type": "register_closure.create"
+        },
+        "when": {
+          "nth": [
+            2
+          ]
+        },
+        "params": {
+          "delay_ms": 250
+        },
+        "note": "The second delivery arrives late, so a consumer's ordering assumptions are exercised."
+      }
+    ]
+  }
+}

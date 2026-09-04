@@ -24,12 +24,14 @@ from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.fidelity.runner import FidelityTarget
 from vendorfake.registry import create_unit
 
-__all__ = ["square_target", "toast_target"]
+__all__ = ["lightspeed_target", "square_target", "toast_target"]
 
 _SQUARE = "square"
 _SQUARE_ANCHOR = "vendorfake.square.fidelity"
 _TOAST = "toast"
 _TOAST_ANCHOR = "vendorfake.toast.fidelity"
+_LIGHTSPEED = "lightspeed"
+_LIGHTSPEED_ANCHOR = "vendorfake.lightspeed.fidelity"
 _DEFAULT_PROFILE = "full"
 
 
@@ -54,6 +56,23 @@ def square_target() -> FidelityTarget:
         name=_SQUARE,
         anchor=_SQUARE_ANCHOR,
         open_unit=_opener(_SQUARE, _DEFAULT_PROFILE),
+        default_profile=_DEFAULT_PROFILE,
+    )
+
+
+def lightspeed_target() -> FidelityTarget:
+    """The first VENDORED vendor after Square: the specification is published
+    under Apache 2.0, so a structural extract may be committed and no ``fetch``
+    step is needed.
+
+    The declaration is a stub in this slice of konyklabs/roadmap#94 -- it names
+    the source and the licence and nothing else -- so ``pin --check`` and
+    ``report`` report the missing extract rather than a false pass until slice
+    L3 fills them in."""
+    return FidelityTarget(
+        name=_LIGHTSPEED,
+        anchor=_LIGHTSPEED_ANCHOR,
+        open_unit=_opener(_LIGHTSPEED, _DEFAULT_PROFILE),
         default_profile=_DEFAULT_PROFILE,
     )
 

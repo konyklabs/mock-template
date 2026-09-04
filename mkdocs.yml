@@ -88,6 +88,7 @@ nav:
       - Square routes: reference/routes-square.md
       - Clover routes: reference/routes-clover.md
       - Toast routes: reference/routes-toast.md
+      - Lightspeed routes: reference/routes-lightspeed.md
       - Profiles: reference/profiles.md
       - Faults: reference/faults.md
       - Environment variables: reference/env.md

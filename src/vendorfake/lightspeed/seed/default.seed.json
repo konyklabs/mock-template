@@ -1,0 +1,220 @@
+{
+  "_comment": [
+    "The shipped Lightspeed X-Series scenario. Every id is written by hand in an",
+    "obviously sequential pattern so a reader can tell a seeded id from a minted",
+    "one; the shapes are the vendor's, the values are not copies of any real",
+    "account's. seed/constants.py names each of them and tests/unit/lightspeed/",
+    "test_seed.py asserts the two agree.",
+    "",
+    "Two outlets and one register each: two rows make a list route's page",
+    "boundary crossable, and two registers put the documented rate-limit quota at",
+    "300 x 2 + 50 = 650 requests per five-minute window.",
+    "",
+    "Three payment types, one of them internal, because the payment_types:read",
+    "scope is documented as 'excluding internal payment types' and a scenario",
+    "with no internal type could not show that.",
+    "",
+    "No 'version' anywhere: the Lightspeed version is drawn from the retailer's",
+    "one monotonically increasing counter at hydrate, in the order below."
+  ],
+  "retailer": {
+    "id": "1a000000-0000-1000-8000-000000000001",
+    "name": "Ridgeline Provisions",
+    "domain_prefix": "unit-lightspeed",
+    "currency_code": "NZD",
+    "currency_symbol": "$",
+    "timezone": "Pacific/Auckland",
+    "country": "NZ",
+    "document": {
+      "account_status": "active",
+      "account_type": "standard",
+      "activated_at": "2026-01-05T09:00:00Z",
+      "created_at": "2026-01-05T09:00:00Z",
+      "culture": "en-NZ",
+      "embedded_barcode_option": "none",
+      "enable_line_item_consolidation": true,
+      "gift_cards": {
+        "enabled": false,
+        "never_enabled": true
+      },
+      "loyalty": {
+        "claim_url": "https://unit-lightspeed.example/loyalty",
+        "enabled": false,
+        "ratio": 0,
+        "send_welcome_email": false
+      },
+      "on_account": {
+        "default_limit": null
+      },
+      "sku_sequence": {
+        "enabled": false,
+        "value": 1000
+      },
+      "sso_enabled": false,
+      "store_credit": false,
+      "store_url": "https://unit-lightspeed.example",
+      "tax_exclusive": false
+    }
+  },
+  "outlets": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000101",
+      "name": "Ridgeline Main",
+      "default_tax_id": "1a000000-0000-1000-8000-0000000000a1",
+      "currency": "NZD",
+      "currency_symbol": "$",
+      "display_prices": "inclusive",
+      "time_zone": "Pacific/Auckland",
+      "attributes": [
+        {
+          "key": "order_reference_prefix",
+          "value": "MAIN"
+        },
+        {
+          "key": "order_reference",
+          "value": "1"
+        }
+      ],
+      "physical_address_1": "12 Ridgeline Road",
+      "physical_suburb": "Newmarket",
+      "physical_city": "Auckland",
+      "physical_state": "Auckland",
+      "physical_postcode": "1023",
+      "physical_country_id": "NZ",
+      "email": "main@unit-lightspeed.example"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000102",
+      "name": "Ridgeline Quay",
+      "default_tax_id": "1a000000-0000-1000-8000-0000000000a1",
+      "currency": "NZD",
+      "currency_symbol": "$",
+      "display_prices": "inclusive",
+      "time_zone": "Pacific/Auckland",
+      "attributes": [],
+      "physical_address_1": "3 Quay Street",
+      "physical_city": "Auckland",
+      "physical_country_id": "NZ"
+    }
+  ],
+  "registers": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000201",
+      "name": "Main Register",
+      "outlet_id": "1a000000-0000-1000-8000-000000000101",
+      "is_open": true,
+      "invoice_prefix": "MAIN-",
+      "invoice_suffix": "-NZ",
+      "invoice_sequence": 1041,
+      "ask_for_note_on_save": 1,
+      "email_receipt": true,
+      "print_receipt": true,
+      "cash_managed_payment_type_id": "1a000000-0000-1000-8000-000000000301",
+      "register_open_sequence_id": "1a000000-0000-1000-8000-000000000221",
+      "register_open_time": "2026-09-01T08:00:00Z"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000202",
+      "name": "Quay Register",
+      "outlet_id": "1a000000-0000-1000-8000-000000000102",
+      "is_open": false,
+      "invoice_prefix": "QUAY-",
+      "invoice_sequence": 12,
+      "ask_for_note_on_save": 0,
+      "print_receipt": false
+    }
+  ],
+  "payment_types": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000301",
+      "name": "Cash",
+      "type_id": 1
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000302",
+      "name": "Credit Card",
+      "type_id": 3,
+      "gateway": true,
+      "config": {
+        "print": true
+      },
+      "outlet_ids": [
+        "1a000000-0000-1000-8000-000000000101"
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000303",
+      "name": "Store Credit Redemption",
+      "type_id": 106,
+      "internal": true
+    }
+  ],
+  "tokens": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000501",
+      "access_token": "seedfullscopeaccesstoken000000000000001A",
+      "scopes": [
+        "outlets:read",
+        "payments:read",
+        "payment_types:read",
+        "registers:read",
+        "register:close",
+        "register:open",
+        "retailer:read",
+        "webhooks"
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000502",
+      "access_token": "seedreadonlyaccesstoken0000000000000001A",
+      "scopes": [
+        "outlets:read",
+        "payments:read",
+        "payment_types:read",
+        "registers:read",
+        "retailer:read"
+      ]
+    }
+  ],
+  "personal_tokens": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000503",
+      "access_token": "seedpersonalaccesstoken0000000000000001A",
+      "scopes": [
+        "outlets:read",
+        "payments:read",
+        "payment_types:read",
+        "registers:read",
+        "register:close",
+        "register:open",
+        "retailer:read",
+        "webhooks"
+      ]
+    }
+  ],
+  "refresh_tokens": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000601",
+      "refresh_token": "seedfullscoperefreshtoken00000000000001A",
+      "access_token_id": "1a000000-0000-1000-8000-000000000501",
+      "scopes": [
+        "outlets:read",
+        "payments:read",
+        "payment_types:read",
+        "registers:read",
+        "register:close",
+        "register:open",
+        "retailer:read",
+        "webhooks"
+      ]
+    }
+  ],
+  "webhooks": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000401",
+      "type": "register_closure.create",
+      "url": "https://consumer.example/hooks/lightspeed",
+      "active": true
+    }
+  ]
+}

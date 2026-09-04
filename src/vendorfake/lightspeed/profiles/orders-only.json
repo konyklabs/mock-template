@@ -1,0 +1,21 @@
+{
+  "name": "orders-only",
+  "summary": "The transactional surface -- registers, and the reference data a till reads -- with no token endpoint: authenticate with a seeded token. Lightspeed's sale resource arrives in a later slice; the register lifecycle is this profile's 'orders' role.",
+  "capabilities": [
+    "retailer",
+    "outlets",
+    "registers",
+    "payment_types",
+    "chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "unit-lightspeed-client-id",
+    "client_secret": "unit-lightspeed-client-secret"
+  },
+  "chaos": {
+    "seed": 20260904,
+    "strict_rules": true,
+    "rules": []
+  }
+}

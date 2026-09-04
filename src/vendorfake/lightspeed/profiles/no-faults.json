@@ -1,0 +1,22 @@
+{
+  "name": "no-faults",
+  "summary": "Full surface with fault injection switched off entirely. What a CI suite that only wants happy paths should run. The documented rate limiter still counts.",
+  "capabilities": [
+    "auth",
+    "retailer",
+    "outlets",
+    "registers",
+    "payment_types",
+    "webhooks"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "unit-lightspeed-client-id",
+    "client_secret": "unit-lightspeed-client-secret"
+  },
+  "chaos": {
+    "seed": 20260904,
+    "strict_rules": true,
+    "rules": []
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "oauth-only",
+  "summary": "Only the token endpoint and the authorize stand-in. For a consumer testing the code exchange, refresh rotation and token expiry and nothing else.",
+  "capabilities": [
+    "auth",
+    "chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "unit-lightspeed-client-id",
+    "client_secret": "unit-lightspeed-client-secret"
+  },
+  "chaos": {
+    "seed": 20260904,
+    "strict_rules": true,
+    "rules": []
+  }
+}

@@ -6,8 +6,8 @@
 
 Unofficial. Not affiliated with, endorsed by, or connected to any vendor
 named here. Every behaviour is derived from publicly published API
-documentation. Three vendors ship today: Square (Connect v2), Clover
-(REST v3), Toast (REST v2/v3).
+documentation. Four vendors ship today: Square (Connect v2), Clover
+(REST v3), Toast (REST v2/v3), Lightspeed Retail X-Series (API 2026-07).
 
 ## Docs
 

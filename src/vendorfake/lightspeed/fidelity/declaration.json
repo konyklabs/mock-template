@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "vendored": true,
+  "sources": [
+    {
+      "kind": "openapi3",
+      "url": "https://x-series-api.lightspeedhq.com/openapi/api-2026-07.yaml",
+      "label": "api-2026-07"
+    }
+  ],
+  "aliases": [],
+  "excused": [],
+  "deviations": [],
+  "overrides": [],
+  "stubs_accepted": [],
+  "variables": {
+    "domain_prefix": "unit-lightspeed"
+  }
+}

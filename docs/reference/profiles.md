@@ -16,6 +16,18 @@ Every profile every vendor ships.
 | `orders-only` | orders, payments, inventory, merchant, customers, chaos | seed/default.seed.json | Orders, payments and the reference data they point at. No OAuth dance, no webhooks: authenticate with a seeded token. |
 
 
+## Lightspeed
+
+| Profile | Capabilities | Seed | Summary |
+| --- | --- | --- | --- |
+| `chaos-demo` | auth, retailer, outlets, registers, payment_types, webhooks, chaos, webhooks.chaos | seed/default.seed.json | Full surface with a preloaded fault set: rate limiting on every third register close, a mid-flow token expiry on the fourth register read, and a duplicated then a delayed delivery. Runs on a virtual clock. |
+| `full` | auth, retailer, outlets, registers, payment_types, webhooks, chaos, webhooks.chaos | seed/default.seed.json | Every capability on. The default profile. Seeds the whole scenario: one retailer, two outlets, a register in each, three payment types (one internal), an OAuth access/refresh pair, a read-only token, a personal token and one webhook subscription on register_closure.create. |
+| `no-chaos` | auth, retailer, outlets, registers, payment_types, webhooks, chaos | seed/default.seed.json | Full surface with delivery faults switched off: requests can still be made to fail deliberately, but a webhook that is sent is sent honestly, once. The documented rate limiter still counts -- it is vendor behaviour, not chaos. |
+| `no-faults` | auth, retailer, outlets, registers, payment_types, webhooks | seed/default.seed.json | Full surface with fault injection switched off entirely. What a CI suite that only wants happy paths should run. The documented rate limiter still counts. |
+| `oauth-only` | auth, chaos | seed/default.seed.json | Only the token endpoint and the authorize stand-in. For a consumer testing the code exchange, refresh rotation and token expiry and nothing else. |
+| `orders-only` | retailer, outlets, registers, payment_types, chaos | seed/default.seed.json | The transactional surface -- registers, and the reference data a till reads -- with no token endpoint: authenticate with a seeded token. Lightspeed's sale resource arrives in a later slice; the register lifecycle is this profile's 'orders' role. |
+
+
 ## Square
 
 | Profile | Capabilities | Seed | Summary |
