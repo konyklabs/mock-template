@@ -1,17 +1,20 @@
 {
   "schema": 1,
   "id": "webhooks.retry.schedule",
-  "title": "The delivery timeout is 5 seconds and the schedule allows twenty attempts, the documented bound, inside 48 hours",
+  "title": "The delivery timeout is 5 seconds and a subscriber that never answers is attempted twenty times, the documented bound",
   "source": {
     "url": "https://x-series-api.lightspeedhq.com/docs/webhooks",
     "fetched": "2026-09-04",
     "provenance": "documented",
-    "note": "The page gives four numbers and one exclusion: a subscriber has \"5 seconds to respond with a 2xx response\", delivery is attempted \"up to 20 times over 48h\", the backoff is \"exponential\" with no formula or intervals given, and \"3xx and 4xx will not trigger retries\". Nineteen intervals separate twenty attempts, which is what the length assertion below pins; the interval VALUES are JUDGMENT (a doubling ladder from 30 seconds, capped at four hours, summing to 44h15m -- lightspeed/retry.py, checked at import against the 48-hour bound) and are deliberately not asserted here. The 3xx/4xx exclusion is documented and NOT reproduced: the core dispatcher retries every non-2xx outcome and offers a vendor no hook to say otherwise (konyklabs/roadmap#40), which docs/vendors/lightspeed.md records as a known deviation."
+    "note": "The page gives four numbers and one exclusion: a subscriber has \"5 seconds to respond with a 2xx response\", delivery is attempted \"up to 20 times over 48h\", the backoff is \"exponential\" with no formula or intervals given, and \"3xx and 4xx will not trigger retries\". The twenty attempts are driven here rather than counted off the published ladder: the sink is programmed to answer 500 forever, a register closure produces the delivery, and the drain runs the whole retry cascade on the virtual clock, so what this case pins is the behaviour a subscriber that never answers actually meets. The ladder's LENGTH needs no assertion -- lightspeed/retry.py raises at import if it is not nineteen intervals, one fewer than the documented attempt bound -- and the interval VALUES are JUDGMENT (a doubling ladder from 30 seconds, capped at four hours, summing to 44h15m, checked at import against the 48-hour bound) and are deliberately not asserted. The 3xx/4xx exclusion is documented and NOT reproduced: the core dispatcher retries every non-2xx outcome and offers a vendor no hook to say otherwise (konyklabs/roadmap#40), which docs/vendors/lightspeed.md records as a known deviation."
   },
+  "routes": [
+    "PUT /api/2026-07/registers/{register_id}/actions/close"
+  ],
   "profile": "full",
   "steps": [
     {
-      "name": "the published retry contract",
+      "name": "the published delivery timeout",
       "request": {
         "method": "GET",
         "path": "/__unit/info"
@@ -22,33 +25,72 @@
           "webhooks": {
             "enabled": true,
             "retry": {
-              "timeout_ms": 5000,
-              "schedule_ms": [
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}",
-                "${re:[0-9]+}"
-              ]
+              "timeout_ms": 5000
             }
           }
+        }
+      }
+    },
+    {
+      "name": "a subscriber that never answers",
+      "request": {
+        "method": "POST",
+        "path": "/__unit/webhooks/sink",
+        "body": {
+          "statuses": [
+            500
+          ],
+          "then": 500
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "then": 500
+        }
+      }
+    },
+    {
+      "name": "produce a delivery",
+      "request": {
+        "method": "PUT",
+        "path": "/api/2026-07/registers/${vars.register_main_id}/actions/close",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {}
+      },
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "name": "run the retry cascade on the virtual clock",
+      "request": {
+        "method": "POST",
+        "path": "/__unit/webhooks/drain",
+        "body": {}
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "deliveries": 20
+        }
+      }
+    },
+    {
+      "name": "twenty attempts and no twenty-first",
+      "request": {
+        "method": "GET",
+        "path": "/__unit/webhooks/deliveries"
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "count": 20
         },
         "absent": [
-          "/webhooks/retry/schedule_ms/19"
+          "/deliveries/20"
         ]
       }
     }

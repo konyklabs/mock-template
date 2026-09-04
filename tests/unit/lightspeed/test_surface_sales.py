@@ -717,3 +717,46 @@ def test_updating_a_parked_sale_to_closed_needs_the_outlet_too(h: Harness) -> No
     )
     assert answered.status == 422
     assert answered.json()["unit_error"]["field"] == "line_items[0].fulfilment_outlet_id"
+
+
+def test_closing_a_sale_naming_an_outlet_that_is_not_an_outlet_is_a_422(h: Harness) -> None:
+    """PRESENCE IS NOT RESOLUTION. A sale-level ``fulfillment_outlet_id`` that
+    does not name an outlet used to answer 200 and echo the id back as
+    ``source.outlet_id``, so the body looked right while no stock moved and no
+    ``inventory.update`` fired -- the same failure-wearing-the-shape-of-success
+    the presence guard above exists to remove. Resolved against the ``outlets``
+    collection now, the way ``products.py``'s ``_check_outlets`` resolves the
+    one an opening-stock payload names.
+    """
+    before = h.get(h.path(f"/inventory/{c.SEED_PRODUCT_TRAIL_MIX_ID}")).json()
+    answered = h.post(
+        h.path(SALES),
+        json.dumps(
+            {
+                "state": "closed",
+                "source": {"author_id": c.SEED_USER_ID},
+                "fulfillment_outlet_id": "also-not-an-outlet",
+                "line_items": [line()],
+            }
+        ),
+    )
+    assert answered.status == 422, answered.text
+    assert answered.json()["unit_error"]["field"] == "fulfillment_outlet_id"
+    assert h.get(h.path(f"/inventory/{c.SEED_PRODUCT_TRAIL_MIX_ID}")).json() == before
+
+
+def test_a_line_naming_an_outlet_that_is_not_an_outlet_is_a_422(h: Harness) -> None:
+    """The per-line spelling gets the same resolution, and the field path
+    points at the line that named it."""
+    answered = h.post(
+        h.path(SALES),
+        json.dumps(
+            {
+                "state": "closed",
+                "source": {"author_id": c.SEED_USER_ID},
+                "line_items": [{**line(), "fulfilment_outlet_id": "not-an-outlet-at-all"}],
+            }
+        ),
+    )
+    assert answered.status == 422, answered.text
+    assert answered.json()["unit_error"]["field"] == "line_items[0].fulfilment_outlet_id"

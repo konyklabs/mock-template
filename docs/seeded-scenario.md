@@ -88,6 +88,14 @@ the default below.
 | Webhooks | subscriber `sub_seed_quickstart` (secret `unit-seeded-toast-webhook-secret`, `Toast-Signature` HMAC), **disabled**; register through `POST /__unit/webhooks/subscriptions` |
 | Event types | `order_updated`, `in_stock`, `out_of_stock`, `low_quantity`, `menus_updated` |
 
+The guids in the Toast table above are truncated to their last four characters. They come
+in four families, each with its own fixed prefix and the same
+`-0000-4000-8000-` middle: `e6a4a8d2…` the restaurant and its management
+group, `3c9a1f00…` the menu and everything on it, `5d0e2b11…` restaurant
+configuration (dining options, payment types, tax rates), `9a7b6c5d…`
+orders and checks. So the dine-in dining option in full is
+`5d0e2b11-0000-4000-8000-00000000d001`.
+
 ## Lightspeed Retail X-Series
 
 | | |
@@ -115,13 +123,5 @@ version-1 UUID layout the vendor's own examples use, numbered by entity kind —
 `04xx` webhooks, `05xx` tokens, `07xx` products, `09xx` customers, `0axx`
 sales. So the main register in full is
 `1a000000-0000-1000-8000-000000000201`. The whole surface, with transcripts, is
-on the [Lightspeed page](vendors/lightspeed.md).
-
-The guids in the Toast table above are truncated to their last four characters. They come
-in four families, each with its own fixed prefix and the same
-`-0000-4000-8000-` middle: `e6a4a8d2…` the restaurant and its management
-group, `3c9a1f00…` the menu and everything on it, `5d0e2b11…` restaurant
-configuration (dining options, payment types, tax rates), `9a7b6c5d…`
-orders and checks. So the dine-in dining option in full is
-`5d0e2b11-0000-4000-8000-00000000d001`. Every value is also an attribute on
-the seed object, which is the form to use in a test.
+on the [Lightspeed page](vendors/lightspeed.md). Every value is also an
+attribute on the seed object, which is the form to use in a test.

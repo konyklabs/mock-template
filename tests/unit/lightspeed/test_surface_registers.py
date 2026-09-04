@@ -132,8 +132,8 @@ def test_a_declared_total_for_a_type_the_till_never_took_is_not_reported(h: Harn
 
 
 def test_a_type_the_close_did_not_declare_is_still_reported(h: Harness) -> None:
-    """A closure's totals are what the register TOOK as well as what the
-    cashier declared, so a payment type nobody counted still appears.
+    """A closure's totals are the money the register TOOK, so a payment type
+    the close did not declare still appears.
 
     The scenario's closed sale was paid by card -- 2 x 12.50 of trail mix plus
     24.90 of socks, at the catalogue's own prices -- and the close below
@@ -237,6 +237,30 @@ def _cash_sale(h: Harness, amount: float) -> str:
     return str(answered.json()["data"]["id"])
 
 
+def _parked_cash_sale(amount: float) -> str:
+    """A parked sale carrying one cash payment and NO payment id, which is the
+    body the schema documents: ``SalePayment.id`` is optional and a caller
+    resending the payment has no reason to carry it."""
+    return json.dumps(
+        {
+            "state": "parked",
+            "source": {"author_id": c.SEED_USER_ID, "register_id": c.SEED_REGISTER_MAIN_ID},
+            "line_items": [
+                {
+                    "product": {"id": c.SEED_PRODUCT_TRAIL_MIX_ID},
+                    "quantity": 1,
+                    "pricing": {"price": amount},
+                    "tax": {"id": c.SEED_TAX_ID, "amount": 0},
+                }
+            ],
+            "payments": [{"amount": amount, "type": {"config_id": c.SEED_PAYMENT_TYPE_CASH_ID}}],
+        }
+    )
+
+
+_PARKED_CASH_SALE = _parked_cash_sale(12.50)
+
+
 def _cash_total(h: Harness) -> str:
     totals = {row["payment_type_id"]: row for row in h.get(h.path(SUMMARY)).json()["data"]["payments"]}
     return str(totals.get(c.SEED_PAYMENT_TYPE_CASH_ID, {}).get("total", "0.00"))
@@ -263,6 +287,59 @@ def test_a_second_closure_in_the_same_second_reports_only_its_own_session(h: Har
     summary = h.get(h.path(SUMMARY)).json()["data"]
     assert summary["register_closure_sequence_number"] == 2
     assert _cash_total(h) == "3.25"
+
+
+def test_editing_a_sale_between_two_closures_does_not_count_its_money_twice(h: Harness) -> None:
+    """THE REGRESSION beside the window one: a PUT REPLACES, and
+    ``SalePayment.id`` is optional, so the ordinary POS day -- park a sale with
+    a cash part-payment, close the till, reopen, correct the sale with a body
+    that resends the payment as the schema documents it (amount and type, no
+    id), close again -- used to re-mint the payment's id. The first closure's
+    ``counted_payment_ids`` addressed the old id, so the same 12.50 walked into
+    the second closure and an end-of-day reconciliation summing the two
+    sessions was over by the full amount of every edited sale.
+
+    The seeded layby puts 10.00 of cash through this register, so the first
+    session is 10.00 + 12.50 and the second is nothing at all.
+    """
+    parked = h.post(h.path("/sales"), _PARKED_CASH_SALE)
+    assert parked.status == 200, parked.text
+    sale = parked.json()["data"]
+    payment_id = sale["payments"][0]["id"]
+
+    assert h.put(h.path(CLOSE_REGISTER), "{}").status == 200
+    assert _cash_total(h) == "22.50"
+
+    assert h.put(h.path(f"/registers/{c.SEED_REGISTER_MAIN_ID}/actions/open"), "{}").status == 200
+    edited = h.put(h.path(f"/sales/{sale['id']}"), _PARKED_CASH_SALE)
+    assert edited.status == 200, edited.text
+    # The same money, so the same payment: the id survives the replacement.
+    assert edited.json()["data"]["payments"][0]["id"] == payment_id
+
+    assert h.put(h.path(CLOSE_REGISTER), "{}").status == 200
+    assert h.get(h.path(SUMMARY)).json()["data"]["register_closure_sequence_number"] == 2
+    assert _cash_total(h) == "0.00"
+
+
+def test_a_payment_whose_amount_changed_is_a_new_payment(h: Harness) -> None:
+    """The other half of the matching rule, and JUDGMENT: an id-less payment
+    inherits a stored id only when type and amount both agree. Money that
+    actually moved is a different payment, mints a fresh id, and is counted
+    afresh -- which is what a till reconciliation wants."""
+    parked = h.post(h.path("/sales"), _PARKED_CASH_SALE)
+    assert parked.status == 200, parked.text
+    sale = parked.json()["data"]
+
+    assert h.put(h.path(CLOSE_REGISTER), "{}").status == 200
+    assert _cash_total(h) == "22.50"
+
+    assert h.put(h.path(f"/registers/{c.SEED_REGISTER_MAIN_ID}/actions/open"), "{}").status == 200
+    edited = h.put(h.path(f"/sales/{sale['id']}"), _parked_cash_sale(20.00))
+    assert edited.status == 200, edited.text
+    assert edited.json()["data"]["payments"][0]["id"] != sale["payments"][0]["id"]
+
+    assert h.put(h.path(CLOSE_REGISTER), "{}").status == 200
+    assert _cash_total(h) == "20.00"
 
 
 def test_a_voided_sales_payments_are_not_money_the_till_took(h: Harness) -> None:

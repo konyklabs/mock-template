@@ -75,6 +75,7 @@ from vendorfake.lightspeed.entities import COL, PaymentTypeEntity, RegisterEntit
 from vendorfake.lightspeed.machine import SALE_MACHINE, SaleState
 from vendorfake.lightspeed.model.common import validate_body
 from vendorfake.lightspeed.model.error import PAYMENT_ERROR_INFO_KEY, PaymentErrorCode
+from vendorfake.lightspeed.model.money import to_minor
 from vendorfake.lightspeed.model.sale import (
     SaleLineItemRequest,
     SaleRequest,
@@ -369,10 +370,10 @@ class LightspeedSalesSurface:
         now = wire_time(ctx.clock)
         register = self._register(ctx, request.source.register_id)
         outlet_id = self._outlet_id(request, register)
-        self._check_outlet(request, outlet_id)
+        self._check_outlet(ctx, request, outlet_id)
         self._check_customer(ctx, request.customer_id)
         lines = self._line_items(ctx, request.line_items, previous=previous)
-        payments = self._payments(ctx, request, register=register, now=now)
+        payments = self._payments(ctx, request, register=register, now=now, previous=previous)
         return SaleEntity(
             id=sale_id,
             state=request.state,
@@ -453,6 +454,7 @@ class LightspeedSalesSurface:
         *,
         register: RegisterEntity | None,
         now: str,
+        previous: SaleEntity | None,
     ) -> list[dict[str, Any]]:
         """Every payment resolved to a payment type and an open register.
 
@@ -463,8 +465,30 @@ class LightspeedSalesSurface:
         closed does not take money, and a fake that accepted the payment anyway
         would let a consumer's end-of-day reconciliation pass on data a real
         retailer could never produce.
+
+        A PAYMENT ID SURVIVES A REPLACING PUT. ``SalePayment.id`` is optional
+        and a PUT states the whole document, so the ordinary edit-then-close
+        flow -- park a sale with a part-payment, close the till, reopen it,
+        correct a line item with a body that resends the payment as the schema
+        documents it (amount and type, no id) -- used to re-mint the id. The
+        closure that had already counted that money records the id it counted
+        (``surface/registers.py``'s ``counted_payment_ids``), so a re-minted id
+        walked straight past the guard and the same cash entered a second
+        closure: two sessions reporting 35.00 for a sale ledger holding 22.50.
+
+        THE MATCHING RULE IS JUDGMENT, because the vendor documents neither the
+        id's optionality nor what a replacing PUT does with it: an id-less
+        payment reuses a stored payment's id when the two agree on
+        ``payment_type_id`` **and** on the amount in minor units, taking each
+        stored payment at most once and in order. Amount-and-type rather than
+        position, so that reordering the array does not swap two payments'
+        identities; and a payment whose amount or type actually changed is a
+        different payment, mints a fresh id, and is counted afresh -- which is
+        the answer a till reconciliation wants for money that moved.
         """
         types = {row["id"]: PaymentTypeEntity.from_entity(row) for row in ctx.store.collection(COL.payment_types).all()}
+        carried = list(previous.payments) if previous is not None else []
+        kept: set[str] = {payment.id for payment in request.payments if payment.id}
         built: list[dict[str, Any]] = []
         for index, payment in enumerate(request.payments):
             field = f"payments[{index}]"
@@ -503,17 +527,25 @@ class LightspeedSalesSurface:
                     f"Register {on.id} is not open; a closed register takes no payments.",
                     field=f"{field}.source.register_id",
                 )
+            # A refund is a negative payment; the amount is signed on a return
+            # sale and never on an ordinary one.
+            allow_negative = _is_refund(request)
+            amount_minor = to_minor(payment.amount, field=f"{field}.amount", allow_negative=allow_negative)
+            payment_id = (
+                payment.id
+                or _carried_payment_id(carried, payment_type_id=payment_type_id, amount_minor=amount_minor, taken=kept)
+                or self._deps.ids.sale_payment()
+            )
+            kept.add(payment_id)
             built.append(
                 build_payment(
                     payment,
-                    payment_id=payment.id or self._deps.ids.sale_payment(),
+                    payment_id=payment_id,
                     payment_type_id=payment_type_id,
                     register_id=on.id,
                     date=payment.date or request.date or now,
                     field=field,
-                    # A refund is a negative payment; the amount is signed on
-                    # a return sale and never on an ordinary one.
-                    allow_negative=_is_refund(request),
+                    allow_negative=allow_negative,
                 )
             )
         return built
@@ -582,9 +614,9 @@ class LightspeedSalesSurface:
             return register.outlet_id
         return request.fulfillment_outlet_id
 
-    def _check_outlet(self, request: SaleUpdateRequest, outlet_id: str | None) -> None:
+    def _check_outlet(self, ctx: UnitContext, request: SaleUpdateRequest, outlet_id: str | None) -> None:
         """A sale that CLOSES must say which outlet each of its lines comes out
-        of, because closing is what moves stock.
+        of, and that outlet must exist, because closing is what moves stock.
 
         JUDGMENT, and it is a refusal rather than a silent no-op. Neither
         ``SaleRequestSource`` (``author_id`` is its one required member) nor
@@ -598,13 +630,43 @@ class LightspeedSalesSurface:
         unresolvable references on this surface (``product.id``,
         ``customer_id``, ``payments[n].type.config_id``) and is a 422.
 
+        RESOLVING IS THE HALF THAT MATTERS. Checking only that an outlet id is
+        *present* leaves the failure this guard exists to remove exactly where
+        it was: a close naming an outlet that is not an outlet -- a stale
+        fixture id, an id off by a character, an id from another tenant --
+        answers 200, echoes the id back as ``source.outlet_id`` so the body
+        looks right, moves no stock and fires no ``inventory.update``. So the
+        id is resolved against the ``outlets`` collection, the way
+        ``products.py``'s ``_check_outlets`` resolves the one an opening-stock
+        payload names, and an unknown one is the same 422.
+
+        GUARDED ON THE COLLECTION BEING POPULATED, like ``_check_customer``:
+        ``outlets`` belongs to a sibling slice, and a unit seeded without it
+        must not start refusing every sale.
+
         ONLY ON A CLOSE, and only for a line that resolves to nothing: a
         parked or pending sale moves no stock, and a line naming its own
         ``fulfilment_outlet_id`` resolves whatever the sale does.
         """
         if request.state != SaleState.CLOSED.value:
             return
+        outlets = {str(row["id"]) for row in ctx.store.collection(COL.outlets).all()}
+        if outlets and request.fulfillment_outlet_id is not None and request.fulfillment_outlet_id not in outlets:
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=(f"fulfillment_outlet_id {request.fulfillment_outlet_id!r} is not an outlet of this retailer."),
+                field="fulfillment_outlet_id",
+            )
         for index, line in enumerate(request.line_items):
+            if line.fulfilment_outlet_id and outlets and line.fulfilment_outlet_id not in outlets:
+                raise UnitError(
+                    UnitErrorKind.INVALID_VALUE,
+                    detail=(
+                        f"line_items[{index}].fulfilment_outlet_id {line.fulfilment_outlet_id!r} is not an "
+                        f"outlet of this retailer."
+                    ),
+                    field=f"line_items[{index}].fulfilment_outlet_id",
+                )
             if line.fulfilment_outlet_id or outlet_id:
                 continue
             raise UnitError(
@@ -699,6 +761,32 @@ def _is_refund(request: SaleUpdateRequest) -> bool:
         isinstance(line.quantity, int | float) and not isinstance(line.quantity, bool) and line.quantity < 0
         for line in request.line_items
     )
+
+
+def _carried_payment_id(
+    carried: Sequence[Mapping[str, Any]],
+    *,
+    payment_type_id: str,
+    amount_minor: int,
+    taken: set[str],
+) -> str | None:
+    """The stored id an id-less payment on a replacing PUT inherits, if any.
+
+    The first stored payment that agrees on type and amount and has not already
+    been claimed by an earlier payment in this same body. See ``_payments`` for
+    why the rule is amount-and-type rather than position, and why it is
+    JUDGMENT.
+    """
+    for stored in carried:
+        stored_id = str(stored.get("id", ""))
+        if not stored_id or stored_id in taken:
+            continue
+        if str(stored.get("payment_type_id", "")) != payment_type_id:
+            continue
+        if stored.get("amount_minor") != amount_minor:
+            continue
+        return stored_id
+    return None
 
 
 def _source(request: SaleUpdateRequest, *, outlet_id: str | None) -> dict[str, Any]:

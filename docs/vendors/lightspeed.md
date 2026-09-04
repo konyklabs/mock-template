@@ -1,8 +1,9 @@
 # Lightspeed Retail X-Series (API 2026-07)
 
-The fourth vendor, and the first whose specification is **vendored**: Lightspeed
-publishes `api-2026-07.yaml` under Apache 2.0, so a structural extract of it is
-committed beside the code and every fidelity check runs offline.
+The fourth vendor, the second whose specification is **vendored**, and the first
+with a documentation page of its own: Lightspeed publishes `api-2026-07.yaml`
+under Apache 2.0, so a structural extract of it is committed beside the code and
+every fidelity check runs offline, as Square's already does.
 
 !!! warning "Unofficial"
     Not affiliated with, endorsed by, or connected to Lightspeed. Every
@@ -19,7 +20,10 @@ publishes is deferred — see [Deferred surface](#deferred-surface).
 
 Every transcript on this page was produced by running the commands as written
 against a served unit on the `full` profile. Ids are the shipped scenario's;
-tokens are minted per unit and will differ on yours.
+tokens are minted per unit and will differ on yours. Every value shown is the
+value the unit answered, but the longer bodies are **abridged** to the members
+under discussion; each such block says so underneath, and a block with no such
+note is the whole response.
 
 ```sh
 vendorfake serve --vendor lightspeed --port 8124
@@ -102,6 +106,11 @@ x-ratelimit-remaining: 643
 }
 ```
 
+*Abridged: each `data` row carries about thirty members — `active`,
+`attributes`, `brand`, `button_order`, `categories`, `created_at`,
+`customizations`, `family_id`, `handle`, `has_inventory`, … `variant_options` —
+of which six are shown. The envelope is complete.*
+
 `version` is one per-retailer monotonically increasing integer, bumped on every
 mutation of any resource, and it is the cursor: ask for the next page with
 `after=<the previous response's version.max>` and stop when `data` comes back
@@ -152,6 +161,9 @@ curl -s -X POST http://127.0.0.1:8124/api/2026-07/sales \
   "date": "2026-09-04T05:48:57Z", "version": 1000035}}
 ```
 
+*Abridged: `data` also carries `attributes`, `created_at`, `updated_at` and
+`_metadata`.*
+
 Aim the same sale at the **second** register, which the scenario seeds closed,
 and the refusal comes back in `PaymentErrorResponse` — the one error schema this
 vendor's document names anywhere:
@@ -193,14 +205,27 @@ curl -s http://127.0.0.1:8124/__unit/webhooks/deliveries
 ```
 
 ```json
-{"event_type": "sale.update",
- "url": "https://consumer.example/hooks/sales",
- "attempt": 1, "status": "failed", "response_status": 0,
- "headers": {"content-type": "application/x-www-form-urlencoded",
-             "x-vendorfake-attempt-number": "1",
-             "X-Signature": "signature=04903c38279c9cbf95666f27e303215a174a60fcbbb62c6afeca0e6dfa1abbc1,algorithm=HMAC-SHA256"},
- "body_preview": "payload=%7B%22id%22%3A%22ad801b0c-df35-1056-a623-6af007c4eedf%22%2C%22state%22%3A%22closed%22..."}
+{"count": 20,
+ "deliveries": [
+   {"id": "dlv_00001",
+    "event_id": "807bc150-9af1-e247-e132-63a163d58a6a",
+    "event_type": "sale.update",
+    "entity_id": "ad801b0c-df35-1056-a623-6af007c4eedf",
+    "subscription_id": "dafd6487-b2b9-1b0d-b091-ebcc407cc5d3",
+    "url": "https://consumer.example/hooks/sales",
+    "attempt": 1, "retry_number": 0, "status": "failed", "response_status": 0,
+    "headers": {"content-type": "application/x-www-form-urlencoded",
+                "x-vendorfake-attempt-number": "1",
+                "X-Signature": "signature=8bba5207797c02829c18100ad95173f8386adb385202787c0c068d446b7bf360,algorithm=HMAC-SHA256"},
+    "body_preview": "payload=%7B%22id%22%3A%22ad801b0c-df35-1056-a623-6af007c4eedf%22%2C%22state%22%3A%22closed%22…"},
+   …
+ ]}
 ```
+
+*Abridged: one of the twenty rows is shown, its `body_preview` truncated. A row
+also carries `at`, `body_hash`, `error` and `next_attempt_in_ms`. The `{"count":
+…, "deliveries": [ … ]}` envelope is the whole shape — assert against it, not
+against a bare delivery object.*
 
 `status: failed` because `consumer.example` does not resolve — which is what
 makes the retry ladder visible: `drain` reported 40 deliveries for two events,
@@ -321,12 +346,12 @@ only from this page.
 
 ## Fidelity
 
-Lightspeed is the first **vendored** vendor: `info.license` reads Apache 2.0, so
-`fidelity/extract.json` — the scoped, prose-stripped cut of `api-2026-07.yaml`
-— is committed beside the declaration, and `pin.json` ties it to the upstream
-bytes it was cut from (sha256 `5660c174…`, 519 895 bytes, version `2026-07`,
-fetched 2026-09-04). Both fidelity steps therefore run offline; there is no
-`fetch` to pay for, unlike Toast.
+Lightspeed is the second **vendored** vendor, after Square: `info.license` reads
+Apache 2.0, so `fidelity/extract.json` — the scoped, prose-stripped cut of
+`api-2026-07.yaml` — is committed beside the declaration, and `pin.json` ties it
+to the upstream bytes it was cut from (sha256 `5660c174…`, 519 895 bytes,
+version `2026-07`, fetched 2026-09-04). Both fidelity steps therefore run
+offline; there is no `fetch` to pay for, unlike Toast.
 
 ```sh
 uv run python -m vendorfake.fidelity pin --check --offline \
@@ -337,7 +362,7 @@ uv run python -m vendorfake.fidelity report \
 
 The report joins two legs. **Contract**: every response the corpus produces is
 validated against the vendor's schema for that operation and status — and so is
-every response the unit's own 427-test suite produces, because the test harness
+every response the unit's own test suite produces, because the test harness
 drives the same validating client. **Behaviour**: thirteen corpus cases, all
 `provenance: documented`, each naming the page it was read from and the date it
 was fetched.
@@ -374,6 +399,8 @@ brands, suppliers, product types, variant attributes, users, customer groups as
 a writable resource, the loyalty and account surfaces, and the reorder-point
 write — is deferred and tracked in **konyklabs/roadmap#107**.
 
-Deferred is not silent: `GET /__unit/capabilities` lists thirty
-`LIGHTSPEED_NOT_MODELED` keys, each with the reason it is not modelled, so a
-consumer discovers the boundary from a running unit rather than from a 404.
+Deferred is not silent: `vendorfake.lightspeed.LIGHTSPEED_NOT_MODELED` maps
+thirty-two deferred keys to the reason each is not modelled, so the boundary is
+written down beside the code rather than left to a 404. It is a Python constant
+the surfaces cite; `GET /__unit/capabilities` answers the twelve capabilities
+this unit *has*, which is a different list.

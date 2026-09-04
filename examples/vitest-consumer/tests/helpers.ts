@@ -113,12 +113,6 @@ export const clover = {
 };
 
 /**
- * Toast's are only the two readable strings a partner is issued. Everything
- * else it needs is a guid, and a guid is the fake's to publish rather than
- * this suite's to know: the restaurant comes from `/__unit/auth`, the menu and
- * configuration ids from the menu and the configuration lists.
- */
-/**
  * Lightspeed's ids ARE this suite's to know: they are the seeded scenario's,
  * documented on the Lightspeed page and stable across units by the same
  * determinism contract every other vendor's are. The one thing not listed is a
@@ -140,6 +134,12 @@ export const lightspeed = {
   customerAdaId: "1a000000-0000-1000-8000-000000000911",
 };
 
+/**
+ * Toast's are only the two readable strings a partner is issued. Everything
+ * else it needs is a guid, and a guid is the fake's to publish rather than
+ * this suite's to know: the restaurant comes from `/__unit/auth`, the menu and
+ * configuration ids from the menu and the configuration lists.
+ */
 export const toast = {
   clientId: "unit-toast-client-id",
   clientSecret: "unit-toast-client-secret",

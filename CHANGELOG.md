@@ -10,8 +10,8 @@
   stand-in `GET /connect`, the retailer, outlets, registers and payment types,
   products with inline variants, inventory, customers, sales, and the five
   documented webhook operations. `vendorfake vendors` now answers `clover,
-  lightspeed, square, toast`; six profiles, one seeded scenario, 427 unit
-  tests, and the conformance matrix green on every profile and both
+  lightspeed, square, toast`; six profiles, one seeded scenario, the unit's own
+  test suite, and the conformance matrix green on every profile and both
   transports.
 
   **Rotation that revokes.** A refresh call retires the consumed refresh token
@@ -42,17 +42,19 @@
   payment refusals in `PaymentErrorResponse` -- the only error schema the
   specification names.
 
-  **Four of the vendor's own inconsistencies are reproduced rather than
-  smoothed over**, because a consumer will meet all four: money is a JSON
+  **Five of the vendor's own inconsistencies are reproduced rather than
+  smoothed over**, because a consumer will meet all five: money is a JSON
   number on the catalogue and a JSON string on the register surface; the four
   inventory reads answer a bare array rather than the envelope, two of them as
   POSTs whose paging travels in the body; `POST /customers` is a 201 and its
   delete a 204 while `POST /products` is a 200 answering an array of ids and
-  its delete an empty 200; and `GET /stock_adjustments` sits behind
+  its delete an empty 200; `GET /stock_adjustments` sits behind
   `inventory:write`, a read gated on a write scope, which is the operation's
-  own annotation.
+  own annotation; and `include_images=false` produces a body the vendor's own
+  schema rejects, because `images` and `skuImages` are two of `Product`'s
+  twenty-one required members while the parameter documents removing them.
 
-  **Fidelity (D-006), and the first vendored extract.** `api-2026-07.yaml` is
+  **Fidelity (D-006), and a second vendored extract.** `api-2026-07.yaml` is
   published under Apache 2.0, so the scoped, prose-stripped `extract.json` is
   committed beside the declaration and `pin.json` ties it to the upstream bytes
   (sha256 `5660c174…`, 519 895 bytes, version `2026-07`). Both fidelity steps
