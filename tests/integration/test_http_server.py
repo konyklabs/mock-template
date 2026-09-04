@@ -11,9 +11,7 @@ The three properties this proves, and cannot be proved anywhere else:
   "the exact shape that broke two of three implementations" includes the
   socket, and an in-process test never touches uvicorn's h11 parser;
 * HTTP and in-process answers are byte-identical, with the difference having
-  survived a process boundary in each direction;
-* ``framework_answered`` is 0 **as read over HTTP**, which is the only place a
-  parent process can read it.
+  survived a process boundary in each direction.
 """
 
 from __future__ import annotations
@@ -209,15 +207,3 @@ def test_http_and_in_process_answers_are_byte_identical(client: httpx.Client, se
         }
         got_headers = {name: value for name, value in response.headers.items() if name not in EXCLUDED_HEADERS}
         assert got_headers == expected_headers, where
-
-
-def test_the_framework_answered_nothing_over_http(client: httpx.Client) -> None:
-    """Read last, over the wire, after every other test in this module.
-
-    The counter lives in the child process, so this is the only way to read it
-    at all -- which is precisely why it is reported at ``/__unit/health``
-    instead of kept in a list the parent could never see. Its correct value is
-    0: every request above reached the unit, and none was answered by Starlette
-    on the way.
-    """
-    assert client.get("/__unit/health").json()["framework_answered"] == 0

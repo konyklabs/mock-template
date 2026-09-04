@@ -1,20 +1,14 @@
-"""Fixtures for the transport-adapter tests: one unit, one app, one tripwire.
-
-The three are built together because the wiring between them is the thing under
-test: the tripwire has to exist before the unit so the control plane can close
-over it, and the app has to be handed the same object the unit reports.
-"""
+"""Fixtures for the transport-adapter tests: one unit and its app."""
 
 from __future__ import annotations
 
-import functools
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
 from tests.fakes import make_unit, route
-from vendorfake.asgi import FrameworkTripwire, create_app
+from vendorfake.asgi import create_app
 from vendorfake.core.control.plane import control_plane_routes
 from vendorfake.core.kernel.reply import json_, text
 
@@ -57,12 +51,7 @@ def _stable(args: Any) -> Any:
 
 
 @pytest.fixture
-def tripwire() -> FrameworkTripwire:
-    return FrameworkTripwire()
-
-
-@pytest.fixture
-def unit(tripwire: FrameworkTripwire) -> Iterator[Any]:
+def unit() -> Iterator[Any]:
     built = make_unit(
         [
             route("GET", "/v2/orders/{order_id}", _show),
@@ -70,7 +59,7 @@ def unit(tripwire: FrameworkTripwire) -> Iterator[Any]:
             route("GET", "/v2/plain", _plain),
             route("GET", "/v2/stable", _stable),
         ],
-        control_routes=functools.partial(control_plane_routes, framework_answered=tripwire.get),
+        control_routes=control_plane_routes,
     )
     try:
         yield built
@@ -79,5 +68,5 @@ def unit(tripwire: FrameworkTripwire) -> Iterator[Any]:
 
 
 @pytest.fixture
-def app(unit: Any, tripwire: FrameworkTripwire) -> Any:
-    return create_app(unit, tripwire=tripwire)
+def app(unit: Any) -> Any:
+    return create_app(unit)

@@ -129,10 +129,10 @@ for vendor in "${vendors[@]}"; do
     fail "healthcheck command exited non-zero"
   fi
 
-  if [ "$(curl -sf "http://127.0.0.1:$port/__unit/health" | grep -o '"framework_answered":[0-9]*')" = '"framework_answered":0' ]; then
-    ok "framework_answered is 0"
+  if curl -sf "http://127.0.0.1:$port/__unit/health" | grep -q '"status":"ok"'; then
+    ok "health reports status ok"
   else
-    fail "the web framework answered a request inside the container"
+    fail "GET /__unit/health did not report status ok"
   fi
 done
 

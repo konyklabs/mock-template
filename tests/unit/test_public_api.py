@@ -300,10 +300,6 @@ def _import_statements_paid_on_import(tree: ast.Module) -> Iterator[ast.Import |
     Module level only, and not under an ``if TYPE_CHECKING:`` guard. Both
     exclusions are the point rather than leniency:
 
-    ``vendorfake.testing`` imports ``FrameworkTripwire`` from
-    ``vendorfake.asgi`` under that guard, for an annotation. Nothing is
-    imported at run time and the name never reaches ``__all__``.
-
     ``serve_in_thread`` imports ``create_app`` from ``vendorfake.asgi`` inside
     its own body, because starting a real server is what a caller asked it to
     do. That is the same deliberate pattern ``cli.py``'s ``serve`` subcommand

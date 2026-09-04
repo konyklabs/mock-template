@@ -42,7 +42,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, TextIO
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at run time
@@ -319,12 +319,7 @@ def _table(rows: Sequence[Mapping[str, object]], columns: Sequence[str]) -> str:
     return "\n".join(lines)
 
 
-def _make_unit(
-    args: argparse.Namespace,
-    env: Mapping[str, str],
-    *,
-    framework_answered: Callable[[], int] | None = None,
-) -> Unit:
+def _make_unit(args: argparse.Namespace, env: Mapping[str, str]) -> Unit:
     """Resolve the vendor and build the unit, turning a bad name into a refusal.
 
     ``resolve_vendor`` raises ``ValueError`` naming every available vendor,
@@ -356,7 +351,6 @@ def _make_unit(
             vendor=args.vendor,
             profile=args.profile,
             env=env,
-            framework_answered=framework_answered,
         )
     except (ValueError, UnitError) as exc:
         raise SystemExit(f"{PROG}: {exc}") from None
@@ -374,16 +368,10 @@ def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int
     into :mod:`vendorfake.asgi`, and therefore the only import of a web
     framework anywhere outside that package. ``vendorfake --help`` must not pay
     for it, and no other subcommand should be able to.
-
-    The tripwire is created *before* the unit, because the unit's control plane
-    closes over the callable that reads it -- that is what puts
-    ``framework_answered`` in ``GET /__unit/health``, where a parent process can
-    read it over HTTP.
     """
-    from vendorfake.asgi import DEFAULT_HOST, DEFAULT_PORT, FrameworkTripwire, create_app, run_server
+    from vendorfake.asgi import DEFAULT_HOST, DEFAULT_PORT, create_app, run_server
 
-    tripwire = FrameworkTripwire()
-    unit = _make_unit(args, env, framework_answered=tripwire.get)
+    unit = _make_unit(args, env)
     transport = unit.context.config.transport
 
     host = args.host or _env_str(env, "VENDORFAKE_HOST") or transport.host or DEFAULT_HOST
@@ -392,7 +380,7 @@ def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int
         port = transport.port if transport.port else DEFAULT_PORT
     log_level = args.log_level or _env_str(env, "VENDORFAKE_LOG_LEVEL") or unit.context.config.log_level
 
-    app = create_app(unit, tripwire=tripwire)
+    app = create_app(unit)
 
     def announce(bound_host: str, bound_port: int) -> None:
         # One line, flushed, before a single request can arrive. `--port 0` is

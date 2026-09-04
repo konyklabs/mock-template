@@ -39,7 +39,7 @@ vendorfake serve --vendor square         # http://127.0.0.1:8080
 
 ```sh
 curl -s http://127.0.0.1:8080/__unit/health
-# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"framework_answered":0}
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221}
 ```
 
 The full walkthrough, including the container and the pytest fixtures, is

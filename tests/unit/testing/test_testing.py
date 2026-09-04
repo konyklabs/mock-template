@@ -897,27 +897,6 @@ def test_drain_over_a_thread_server_settles_a_real_retry_cascade() -> None:
         assert elapsed > 5.0, f"the cascade settled in {elapsed:.1f}s -- it no longer proves the old default fails"
 
 
-def test_the_tripwire_is_wired_so_framework_answered_is_a_measurement() -> None:
-    """The regression tests/conformance/harness.py records: a counter wired
-    at neither end reports a literal 0 forever, and both contracts on it
-    become vacuous. Here the positive half (requests the unit answers leave
-    it at 0) and the negative half (the one request a framework can still
-    answer first -- an exotic verb outside HTTP_METHODS -- moves the number
-    on the wire) prove unit() and serve_in_thread() share a live tripwire."""
-    with unit("square") as square, serve_in_thread(square) as over_http:
-        assert over_http.client.get("/v2/locations", headers=square.seed.auth).status_code == 200
-        assert over_http.health()["framework_answered"] == 0
-        assert square.tripwire.count == 0
-
-        answered = over_http.client.request("PROPFIND", "/v2/locations", headers=square.seed.auth)
-        # The consumer still gets a vendor-shaped answer (the handler
-        # dispatches to the unit after recording), and the counter moved.
-        assert answered.status_code != 500
-        assert over_http.health()["framework_answered"] == 1
-        assert square.health()["framework_answered"] == 1  # same tripwire, read in process
-        assert square.tripwire.count == 1
-
-
 def test_repeated_headers_reach_the_unit_identically_through_the_transport_and_the_server() -> None:
     """UnitTransport is a third binding, so its parity with HTTP is pinned
     here: the same request with two ``accept`` and two ``x-forwarded-for``

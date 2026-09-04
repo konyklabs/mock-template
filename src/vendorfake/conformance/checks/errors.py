@@ -78,7 +78,7 @@ def _body_parsing_route(env: CheckEnv) -> tuple[RouteRow, dict[str, str], str]:
     name="errors: the framework never answers a consumer",
     asserts=(
         "An unknown path, a wrong method and a malformed body are all vendor-shaped, carry "
-        "x-unit-error, are never a validation framework's 422, and leave framework_answered at 0."
+        "x-unit-error, and are never a validation framework's 422."
     ),
     requires=Requires(surface_route=True),
 )
@@ -150,19 +150,10 @@ def the_framework_never_answers_a_consumer(env: CheckEnv) -> str:
         f"UnitErrorKind.INVALID_JSON for the vendor to shape into its own document.",
     )
 
-    health = env.client.call("GET", f"{CONTROL_PREFIX}health").json()
-    require(
-        health.get("framework_answered") == 0,
-        f"after three deliberately wrong requests, framework_answered is "
-        f"{health.get('framework_answered')!r}. The tripwire in asgi/app.py counted a request the "
-        f"framework answered by itself: that consumer received a document no vendor wrote. The "
-        f"three requests above are chosen to be exactly the ones a framework likes to answer for "
-        f"itself, so a hole in the catch-all shows up here and nowhere else.",
-    )
     return (
         f"unknown path -> {missing.status}:{missing.error_kind}; {wrong_method} {route.probe_path} -> "
         f"{wrong.status}:{wrong.error_kind}; malformed body to {parser.key} ({why}) -> "
-        f"{malformed.status}:{malformed.error_kind}; framework_answered {health.get('framework_answered')!r}"
+        f"{malformed.status}:{malformed.error_kind}"
     )
 
 

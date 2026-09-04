@@ -19,7 +19,6 @@ from vendorfake.asgi.adapt import TRANSPORT, to_response, to_unit_request
 from vendorfake.asgi.app import (
     HTTP_METHODS,
     OPENAPI_PATH,
-    FrameworkTripwire,
     TransportFaultAbort,
     create_app,
     registered_methods,
@@ -32,7 +31,6 @@ __all__ = [
     "HTTP_METHODS",
     "OPENAPI_PATH",
     "TRANSPORT",
-    "FrameworkTripwire",
     "TransportFaultAbort",
     "bind",
     "bound_port",

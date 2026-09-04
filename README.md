@@ -35,7 +35,7 @@ vendorfake serve --vendor lightspeed     # or any other installed vendor
 
 ```sh
 curl -s http://127.0.0.1:8080/__unit/health
-# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"framework_answered":0}
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221}
 ```
 
 Every command names a vendor (`--vendor square|clover|toast|lightspeed`, or

@@ -28,7 +28,6 @@ it while the server is still starting.
 from __future__ import annotations
 
 import base64
-import functools
 import json
 import sys
 from pathlib import Path
@@ -38,7 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from tests.fakes import make_unit, route  # noqa: E402
-from vendorfake.asgi import FrameworkTripwire, create_app, run_server  # noqa: E402
+from vendorfake.asgi import create_app, run_server  # noqa: E402
 from vendorfake.core.control.plane import control_plane_routes  # noqa: E402
 from vendorfake.core.kernel.reply import json_, text  # noqa: E402
 from vendorfake.core.transport.inprocess import in_process  # noqa: E402
@@ -73,13 +72,12 @@ def _plain(args: Any) -> Any:
 
 
 def main() -> int:
-    tripwire = FrameworkTripwire()
     unit = make_unit(
         [
             route("GET", "/v2/stable", _stable),
             route("GET", "/v2/plain", _plain),
         ],
-        control_routes=functools.partial(control_plane_routes, framework_answered=tripwire.get),
+        control_routes=control_plane_routes,
         log_level="error",
     )
 
@@ -103,7 +101,7 @@ def main() -> int:
             }
         )
 
-    app = create_app(unit, tripwire=tripwire)
+    app = create_app(unit)
 
     def announce(host: str, port: int) -> None:
         sys.stdout.write(json.dumps({"port": port, "host": host, "probes": expected}) + "\n")

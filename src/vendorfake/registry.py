@@ -30,11 +30,10 @@ error message listing a vendor that does not exist is worse than no message.
 
 from __future__ import annotations
 
-import functools
 import importlib
 import importlib.util
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 
@@ -340,7 +339,6 @@ def create_unit(
     env: Mapping[str, str] | None = None,
     sink: DeliverySink | None = None,
     logger: Logger | None = None,
-    framework_answered: Callable[[], int] | None = None,
 ) -> Unit:
     """Build and start a unit. The single constructor.
 
@@ -383,15 +381,6 @@ def create_unit(
     the original request under ``requested_capabilities`` alongside whichever
     profile it resolved to, so a consumer can confirm what was asked for and
     not merely what was answered.
-
-    ``framework_answered`` is the transport adapter's tripwire, reported by
-    ``GET /__unit/health``: a count of requests a web framework answered by
-    itself instead of handing to the unit. It is threaded through here rather
-    than read from a global because the counter has to exist *before* the unit
-    does -- the control plane closes over it at construction -- and because the
-    only process that can read it is the one serving, which is why the number
-    is on the wire at all. ``None``, the default, reports 0, which is the true
-    answer for a unit with no framework in front of it rather than a stub.
     """
     environ: Mapping[str, str] = {} if env is None else env
     definition = _pick(vendor, environ)
@@ -444,7 +433,7 @@ def create_unit(
         # a vendor surface and nothing else -- but a unit a *consumer* is given
         # without `/__unit/*` is a unit they cannot drive, and there is exactly
         # one place to decide that.
-        control_routes=functools.partial(control_plane_routes, framework_answered=framework_answered),
+        control_routes=control_plane_routes,
     )
     unit.start()
     return unit

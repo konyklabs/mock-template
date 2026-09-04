@@ -25,7 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from vendorfake import create_unit  # noqa: E402
-from vendorfake.asgi import FrameworkTripwire, create_app, run_server  # noqa: E402
+from vendorfake.asgi import create_app, run_server  # noqa: E402
 from vendorfake.core.transport.inprocess import in_process  # noqa: E402
 
 APPLICATION_ID = "sandbox-sq0idb-unit-square-application"
@@ -33,7 +33,6 @@ APPLICATION_SECRET = "sandbox-sq0csb-unit-square-secret"
 
 
 def main() -> int:
-    tripwire = FrameworkTripwire()
     unit = create_unit(vendor="square", profile="oauth-only", env={"VENDORFAKE_LOG_LEVEL": "error"})
 
     # Two codes, minted before the socket exists: one for the urlencoded
@@ -48,7 +47,7 @@ def main() -> int:
         )
         codes.append(parse_qs(urlsplit(response.headers["location"]).query)["code"][0])
 
-    app = create_app(unit, tripwire=tripwire)
+    app = create_app(unit)
 
     def announce(host: str, port: int) -> None:
         sys.stdout.write(

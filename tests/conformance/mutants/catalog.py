@@ -1,4 +1,4 @@
-"""Fifty-seven units, each broken in exactly one way, and the check each must trip.
+"""Fifty-six units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -18,7 +18,7 @@ check ids it must turn red. Two of them are not inventions:
 Everything else is labelled ``hypothetical`` and means it: a defect nobody has
 shipped in this lineage, written to give a contract something to catch.
 
-M21 through M30 were written against measured holes rather than imagined ones.
+M22 through M30 were written against measured holes rather than imagined ones.
 Each reproduces a mutation that was applied to this codebase and left the whole
 suite green: authentication deleted, a capability gate skipped for one
 operation, the journal recording the version it read, the webhooks gate removed
@@ -767,46 +767,6 @@ report's anti-vacuity rule is what catches it: ``report.ok`` is False when any
 check passed on no profile at all. This mutant is how that rule is exercised,
 and it is the reason the rule is asserted at the report level rather than being
 inferred from a count of failures.
-"""
-
-
-# ---------------------------------------------------------------------------
-# C01, C04 -- the framework tripwire is a measurement, not a constant.
-# ---------------------------------------------------------------------------
-
-
-def _framework_answered_a_request(document: dict[str, Any]) -> dict[str, Any]:
-    return {**document, "framework_answered": 1}
-
-
-register(
-    Mutant(
-        id="M21",
-        name="the-framework-answered-a-consumer",
-        defect="GET /__unit/health reports framework_answered=1: some request was answered above the unit.",
-        provenance=Provenance.HYPOTHETICAL,
-        trips=frozenset({"C01"}),
-        also_trips=frozenset({"C04"}),
-        cascade=(
-            "C01 and C04 assert the same number for two different reasons -- C01 that a quiet unit "
-            "reports zero, C04 that three deliberately wrong requests still report zero -- so a "
-            "non-zero counter is a genuine violation of both. That both were previously satisfied "
-            "by a literal 0 is the defect this mutant exists alongside: tests/conformance/"
-            "harness.py now builds the served unit with framework_answered=tripwire.get and hands "
-            "create_app the same tripwire, so the number is measured rather than assumed."
-        ),
-        control=replace_control_route("GET", "/__unit/health", rewrite_document(_framework_answered_a_request)),
-    )
-)
-"""Why this one is a document mutant, and why that is the right shape.
-
-The counter is incremented by the ASGI application and read from the unit; over
-the in-process transport there is no framework at all, so a *behavioural*
-mutant here would be a mutant of the web framework rather than of the unit. The
-wiring that makes the number real is pinned separately, by
-``tests/conformance/test_harness_wiring.py``, which drives a verb the catch-all
-does not claim and watches the number the unit reports move. This mutant pins
-the other half: that a non-zero value is not tolerated by either contract.
 """
 
 

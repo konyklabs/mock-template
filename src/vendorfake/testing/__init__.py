@@ -52,10 +52,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, AbstractContextManager, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from vendorfake.asgi import FrameworkTripwire
+from typing import Any, Generic, Literal, TypeVar, overload
 
 import httpx
 
@@ -584,11 +581,6 @@ class StartedUnit(Driver[SeedT]):
     """
 
     unit: Unit = field(kw_only=True)
-    #: The counter behind ``framework_answered`` in ``/__unit/health``. Wired
-    #: at construction and handed to :func:`serve_in_thread`'s application,
-    #: because a counter wired at neither end reports a literal 0 -- the
-    #: regression tests/conformance/harness.py records as a real incident.
-    tripwire: FrameworkTripwire = field(kw_only=True)
     #: The transport behind :attr:`Driver.client`, kept so :attr:`async_client`
     #: can share it rather than build a second one. Optional so that a caller
     #: constructing a ``StartedUnit`` by hand -- there are none here, but the
@@ -1015,14 +1007,6 @@ def _unit(
     if seed_overlay is not None:
         environ["VENDORFAKE_SEED_OVERLAY"] = _seed_overlay_env_value(seed_overlay)
     environ.update(env or {})
-    # This import brings the web framework in (FrameworkTripwire lives in
-    # vendorfake.asgi), and it is paid deliberately: `framework_answered` must
-    # be wired at unit construction or `/__unit/health` reports a literal 0
-    # rather than a measurement. No *application* is built until
-    # `serve_in_thread` asks for one.
-    from vendorfake.asgi import FrameworkTripwire
-
-    tripwire = FrameworkTripwire()
     built = create_unit(
         vendor=vendor,
         profile=profile,
@@ -1030,7 +1014,6 @@ def _unit(
         env=environ,
         sink=sink,
         logger=JsonLogger("warn") if logger is None else logger,
-        framework_answered=tripwire.get,
     )
     transport = UnitTransport(built, unmatched=unmatched)
     started: StartedUnit[Any] | None = None
@@ -1089,7 +1072,6 @@ def _unit(
                 client=client,
                 seed=resolved_seed,
                 unit=built,
-                tripwire=tripwire,
                 _transport=transport,
             )
             yield started
@@ -1228,7 +1210,7 @@ def async_unit(
     meaning for every one of them: this delegates to :func:`unit` rather than
     repeating its construction, so there is one code path and two entry points.
     A second copy would be a second place for the environment layering, the
-    seed and the tripwire wiring to drift, and the drift would be silent.
+    seed wiring to drift, and the drift would be silent.
 
     The overloads mirror :func:`unit`'s, so ``async_unit("clover")`` yields a
     ``StartedUnit[CloverSeed]`` to a checker for the same reason. There is one
@@ -1298,16 +1280,12 @@ def serve_in_thread(started: StartedUnit[SeedT], *, host: str = "127.0.0.1", por
 
     Yields a second :class:`Driver` onto the *same* unit, so state written
     through either client is visible through the other.
-
-    The application is handed the unit's own tripwire, so
-    ``framework_answered`` in ``/__unit/health`` is a measurement here: a
-    request the framework answers instead of the unit moves it.
     """
     from vendorfake.asgi import create_app
     from vendorfake.asgi import serve_in_thread as serve_app
 
     with (
-        serve_app(create_app(started.unit, tripwire=started.tripwire), host=host, port=port) as base_url,
+        serve_app(create_app(started.unit), host=host, port=port) as base_url,
         httpx.Client(base_url=base_url, timeout=CLIENT_TIMEOUT_S) as client,
     ):
         yield Driver(

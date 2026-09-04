@@ -232,7 +232,7 @@ def build_unit(mutant: Mutant, profile: str, *, seed_overlay: Mapping[str, Any] 
     )
 
     def control(binding: ControlBinding) -> Sequence[Route]:
-        routes = control_plane_routes(binding, framework_answered=None)
+        routes = control_plane_routes(binding)
         return routes if mutant.control is None else mutant.control(routes)
 
     # The overlay is applied HERE rather than through the `VENDORFAKE_SEED_

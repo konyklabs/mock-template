@@ -14,14 +14,9 @@ consumer testing their error handling against it would be testing Starlette.
 A framework 422 would be worse: it would mean the framework parsed a body,
 which is the leak the core exists to prevent.
 
-That the property *holds* is not left to reading. Handlers are registered for
-the two exceptions a framework answers with -- ``HTTPException`` and
-``RequestValidationError`` -- and each one increments a counter before handing
-the request to the unit anyway. The counter is reported by
-``GET /__unit/health`` as ``framework_answered``, so it is readable over HTTP
-from the parent of an out-of-process test, which a module-level list inside the
-serving process would not be. Its correct value is 0, forever; a non-zero one
-means the catch-all has a hole and names the request that found it.
+Handlers are registered for the two exceptions a framework answers with --
+``HTTPException`` and ``RequestValidationError`` -- and each logs at ``error``
+and hands the request to the unit anyway.
 
 Two more shapes worth stating, because both are easy to undo by accident:
 
@@ -43,7 +38,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import FastAPI
@@ -63,7 +57,6 @@ from vendorfake.core.util.json import dump_json
 __all__ = [
     "HTTP_METHODS",
     "OPENAPI_PATH",
-    "FrameworkTripwire",
     "TransportFaultAbort",
     "create_app",
     "registered_methods",
@@ -84,9 +77,9 @@ HTTP_METHODS: tuple[str, ...] = (
 Complete on purpose and pinned by a test. A verb missing from this tuple is
 answered by Starlette with a 405 that never reaches the unit -- which is the
 one way the catch-all can have a hole while still looking like a catch-all.
-An exotic method outside this set (``PROPFIND``, say) is what the tripwire
-below exists to catch, and is the only request in this design a framework can
-still answer first."""
+An exotic method outside this set (``PROPFIND``, say) is the only request in
+this design a framework can still answer first; the exception handler hands it
+to the unit."""
 
 OPENAPI_PATH = "/__unit/openapi.json"
 """Where the generated description of the surface is served.
@@ -98,34 +91,6 @@ same document is printed by ``vendorfake openapi`` with no server running, from
 the generator in the core -- which is why the framework's own generator is
 switched off entirely rather than merely ignored: pointed at a single catch-all
 route it would publish one wildcard entry and call it a description."""
-
-
-@dataclass
-class FrameworkTripwire:
-    """A counter of requests the web framework tried to answer by itself.
-
-    Not a log and not a list: a number, because the only place it can be read
-    is over HTTP from another process, and a number survives that trip. Each
-    hit also carries a description into the unit's logger at ``error`` level,
-    so the number tells you *that* the catch-all has a hole and the log tells
-    you which request found it.
-    """
-
-    count: int = 0
-    #: The most recent few hits, for a test failure message that says what
-    #: happened. Bounded, because an unbounded list in a long-running server is
-    #: a leak, and because after the first hit the invariant is already broken.
-    recent: list[str] = field(default_factory=list)
-    limit: int = 8
-
-    def get(self) -> int:
-        """The count, as the callable ``/__unit/health`` reports through."""
-        return self.count
-
-    def record(self, description: str) -> None:
-        self.count += 1
-        if len(self.recent) < self.limit:
-            self.recent.append(description)
 
 
 class TransportFaultAbort(Exception):
@@ -197,7 +162,6 @@ def _directive_response(status: int, headers: dict[str, str], directive: Transpo
 def create_app(
     unit: Unit,
     *,
-    tripwire: FrameworkTripwire | None = None,
     logger: Logger | None = None,
 ) -> FastAPI:
     """Build the ASGI application in front of ``unit``.
@@ -207,13 +171,7 @@ def create_app(
     test collecting a neighbouring module, by anything that touched this
     package -- and would need a unit to exist before anyone asked for one,
     which means a global unit, which means one test's state reaching another's.
-
-    ``tripwire`` is the same object whose ``get`` was handed to ``create_unit``
-    as ``framework_answered``. Passing it here and there is the whole wiring:
-    the unit reports the number, this application increments it, and neither
-    knows anything else about the other.
     """
-    fired = FrameworkTripwire() if tripwire is None else tripwire
     log = unit.context.log if logger is None else logger
     vendor = unit.context.vendor
 
@@ -228,7 +186,6 @@ def create_app(
         redoc_url=None,
     )
     app.state.unit = unit
-    app.state.tripwire = fired
     app.state.methods = HTTP_METHODS
 
     document = document_for_unit(unit)
@@ -260,15 +217,7 @@ def create_app(
         return to_response(response)
 
     async def framework_answered(request: Request, exc: Exception) -> Response:
-        """What to do when the framework tried to answer -- which it should not.
-
-        Recording and then dispatching anyway, rather than returning the
-        framework's own document. The consumer still gets a vendor-shaped
-        response, so a hole in the catch-all cannot present as "your error
-        handling is broken"; and the counter, not the response, is where the
-        hole is reported.
-        """
-        fired.record(f"{request.method} {request.url.path}: {type(exc).__name__}: {exc}")
+        """The framework tried to answer; log it and dispatch to the unit anyway."""
         log.error(
             "the web framework answered a request instead of the unit",
             {
@@ -276,7 +225,6 @@ def create_app(
                 "path": request.url.path,
                 "exception": type(exc).__name__,
                 "detail": str(exc),
-                "framework_answered": fired.count,
             },
         )
         return await dispatch(request)

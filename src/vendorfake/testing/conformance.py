@@ -200,18 +200,11 @@ def open_with_seed_overlay(vendor: str, profile: str, overlay: Mapping[str, Any]
 def _http(vendor: str, profile: str) -> Iterator[ConformanceClient]:
     # Local import: the target must be resolvable -- and `inprocess` runnable --
     # without the web framework ever loading.
-    from vendorfake.asgi import FrameworkTripwire, create_app, serve_in_thread
+    from vendorfake.asgi import create_app, serve_in_thread
 
-    tripwire = FrameworkTripwire()
-    built = create_unit(
-        vendor=vendor,
-        profile=profile,
-        sink=MemorySink(),
-        logger=JsonLogger("warn"),
-        framework_answered=tripwire.get,
-    )
+    built = create_unit(vendor=vendor, profile=profile, sink=MemorySink(), logger=JsonLogger("warn"))
     try:
-        with serve_in_thread(create_app(built, tripwire=tripwire)) as base_url:
+        with serve_in_thread(create_app(built)) as base_url:
             client = HttpConformanceClient(base_url)
             try:
                 yield client

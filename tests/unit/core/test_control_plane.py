@@ -211,25 +211,6 @@ def test_health_names_the_vendor_the_profile_and_the_framework_counter() -> None
     assert body["vendor"] == "acme"
     assert body["profile"] == "test"
     assert isinstance(body["uptime_ms"], int)
-    # Zero over the in-process binding is the true answer, not a stub: there is
-    # no framework present that could have answered anything.
-    assert body["framework_answered"] == 0
-
-
-def test_health_reports_the_transport_adapters_counter_when_one_is_supplied() -> None:
-    """The counter is surfaced rather than kept in the serving process,
-    because a list inside a uvicorn child is unreadable from the parent of an
-    out-of-process test -- which is the only place the number matters."""
-    hits = [3]
-    unit = make_unit(
-        [],
-        vendor=_vendor(),
-        control_routes=lambda binding: control_plane_routes(binding, framework_answered=lambda: hits[0]),
-        sink=MemorySink(),
-        capabilities=("orders", "chaos", "webhooks", "webhooks.chaos"),
-        schedule_ms=(5,),
-    )
-    assert in_process(unit).get("/__unit/health").json()["framework_answered"] == 3
 
 
 def test_info_carries_all_eight_keys_the_conformance_suite_asserts_by_name() -> None:

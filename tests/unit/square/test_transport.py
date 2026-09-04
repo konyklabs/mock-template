@@ -13,7 +13,7 @@ import pytest
 
 from tests.unit.square.harness import LEDGER, SURFACE, Harness, Silent
 from vendorfake import create_unit
-from vendorfake.asgi import FrameworkTripwire, create_app
+from vendorfake.asgi import create_app
 from vendorfake.fidelity.validate import ValidatingClient
 from vendorfake.square.config import SQUARE_API_VERSION
 from vendorfake.square.seed.constants import (
@@ -42,24 +42,17 @@ class Bound(Harness):
 
 @pytest.fixture
 def h() -> Iterator[Bound]:
-    """A full-profile unit plus its ASGI application, sharing one tripwire.
-
-    Built here rather than through the shared harness because this file needs
-    the application object as well as the in-process client, and the tripwire
-    has to exist before the unit so the control plane can close over it.
-    """
-    tripwire = FrameworkTripwire()
+    """A full-profile unit plus its ASGI application."""
     unit = create_unit(
         vendor="square",
         profile="full",
         logger=Silent(),
-        framework_answered=tripwire.get,
     )
     try:
         yield Bound(
             unit=unit,
             api=ValidatingClient(unit, SURFACE, LEDGER),
-            app=create_app(unit, tripwire=tripwire, logger=Silent()),
+            app=create_app(unit, logger=Silent()),
         )
     finally:
         unit.stop()
@@ -112,12 +105,6 @@ def test_the_vendor_stamps_its_own_headers_on_the_http_path(h: Bound) -> None:
     )
     assert response.headers["square-version"] == SQUARE_API_VERSION
     assert response.headers["x-unit-vendor"] == "square"
-
-
-def test_the_framework_answered_nothing(h: Bound) -> None:
-    over_http(h.app, "GET", "/no/such/path")
-    over_http(h.app, "TRACE", f"/v2/orders/{SEED_OPEN_ORDER_ID}")
-    assert h.api.get("/__unit/health").json()["framework_answered"] == 0
 
 
 # ---------------------------------------------------------------------------

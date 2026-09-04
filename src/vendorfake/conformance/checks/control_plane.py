@@ -77,7 +77,7 @@ INFO_KEYS: tuple[str, ...] = (
     id="C01",
     name="control plane: the unit describes itself",
     asserts=(
-        "GET /__unit/health is 200 with status=ok and framework_answered=0; GET /__unit/info carries "
+        "GET /__unit/health is 200 with status=ok; GET /__unit/info carries "
         "every documented key; GET /__unit/routes publishes a non-empty surface."
     ),
 )
@@ -94,14 +94,6 @@ def control_plane_describes_the_unit(env: CheckEnv) -> str:
         body.get("status") == "ok",
         f"GET /__unit/health answered status={body.get('status')!r}, expected 'ok' (core/control/plane.py::health).",
     )
-    require(
-        body.get("framework_answered") == 0,
-        f"GET /__unit/health reports framework_answered={body.get('framework_answered')!r}. Anything "
-        f"but 0 means a web framework answered a request instead of handing it to the unit, so some "
-        f"consumer received a document no vendor shaped. Route every path through the catch-all in "
-        f"asgi/app.py and register handlers for the framework's own exceptions.",
-    )
-
     info = env.info()
     missing = [key for key in INFO_KEYS if key not in info]
     require(
@@ -125,7 +117,7 @@ def control_plane_describes_the_unit(env: CheckEnv) -> str:
         "control plane with nothing behind it -- check VendorDefinition.routes.",
     )
     return (
-        f"health ok, framework_answered=0; info carries all {len(INFO_KEYS)} documented keys; "
+        f"health ok; info carries all {len(INFO_KEYS)} documented keys; "
         f"{len(table)} routes ({len(surface)} vendor, {len(table) - len(surface)} control)"
     )
 

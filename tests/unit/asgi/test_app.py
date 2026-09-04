@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from tests.unit.asgi.test_adapt import call
-from vendorfake.asgi import HTTP_METHODS, OPENAPI_PATH, FrameworkTripwire, create_app, registered_methods
+from vendorfake.asgi import HTTP_METHODS, OPENAPI_PATH, create_app, registered_methods
 from vendorfake.core.transport.inprocess import in_process
 
 EXPECTED_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"})
@@ -116,7 +116,7 @@ def test_no_middleware_is_installed(app: Any) -> None:
     Every middleware is a chance to rewrite the bytes the unit produced, and
     byte-for-byte agreement between bindings is a conformance contract. The
     framework's own exception middleware is the exception, in both senses: it
-    is what routes to the tripwire handlers below.
+    is what routes to the exception handlers.
     """
     installed = [entry.cls.__name__ for entry in app.user_middleware]
     assert installed == []
@@ -179,69 +179,17 @@ def test_the_vendor_decorate_hook_survives_the_transport(app: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# The tripwire.
+# The exception handler.
 # ---------------------------------------------------------------------------
 
 
-def test_framework_answered_is_zero_after_ordinary_traffic(app: Any, tripwire: FrameworkTripwire) -> None:
-    """The number the whole design is trying to keep at zero.
-
-    Read over the wire rather than off the object, because over the wire is the
-    only place a parent process can read it -- and reading it the same way here
-    means the out-of-process test is asserting the same thing this one is.
-    """
-    for method, path in (
-        ("GET", "/v2/orders/abc"),
-        ("POST", "/v2/orders/abc"),
-        ("GET", "/nope"),
-        ("HEAD", "/v2/plain"),
-    ):
-        call(app, method, path)
-    assert tripwire.count == 0, tripwire.recent
-    assert call(app, "GET", "/__unit/health").json()["framework_answered"] == 0
-
-
-def test_an_exotic_verb_trips_the_wire_and_still_gets_the_vendor_s_answer(
-    app: Any, tripwire: FrameworkTripwire
-) -> None:
-    """A method outside the registered set is the one hole left, by design.
-
-    Starlette raises its 405 before the catch-all is reached. The handler
-    records that it happened and then dispatches to the unit anyway, so the
-    consumer still gets a vendor-shaped body and the counter -- not the
-    response -- is where the hole is reported. Both halves are asserted,
-    because a fix that silenced the counter would look like a pass.
-    """
+def test_an_exotic_verb_still_gets_the_vendor_s_answer(app: Any) -> None:
+    """Starlette raises its 405 before the catch-all is reached; the exception
+    handler dispatches to the unit anyway, so the consumer still gets a
+    vendor-shaped body."""
     response = call(app, "PROPFIND", "/no/such/path")
     assert response.status_code == 404
     assert response.json() == {"error": {"code": "no_route", "path": "/no/such/path"}}
-    assert tripwire.count == 1
-    assert "PROPFIND" in tripwire.recent[0]
-    assert call(app, "GET", "/__unit/health").json()["framework_answered"] == 1
-
-
-def test_a_unit_built_without_a_tripwire_reports_zero(unit: Any) -> None:
-    """The default is the true answer, not a stub.
-
-    With no framework in front of the unit, nothing could have answered ahead
-    of it, so 0 is a fact rather than a placeholder -- which matters because
-    the in-process conformance run asserts the same field.
-    """
-    assert in_process(unit).get("/__unit/health").json()["framework_answered"] == 0
-
-
-def test_the_tripwire_bounds_what_it_remembers(app: Any) -> None:
-    """A counter, plus a bounded sample. Not an unbounded log.
-
-    A long-running server that recorded every hit would leak; and after the
-    first hit the invariant is already broken, so the sample only has to be
-    big enough to say what happened.
-    """
-    wire = FrameworkTripwire(limit=2)
-    for index in range(5):
-        wire.record(f"hit {index}")
-    assert wire.count == 5
-    assert wire.recent == ["hit 0", "hit 1"]
 
 
 # ---------------------------------------------------------------------------

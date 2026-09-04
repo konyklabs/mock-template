@@ -163,11 +163,7 @@ _MEMORY_SINK_KIND = "memory"
 :attr:`MemorySink.kind` by a test, so a rename cannot silently orphan it."""
 
 
-def control_plane_routes(
-    binding: ControlBinding,
-    *,
-    framework_answered: Callable[[], int] | None = None,
-) -> tuple[Route, ...]:
+def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
     """Build the control plane against one unit's :class:`ControlBinding`.
 
     A factory rather than a module-level table because two of the routes need
@@ -176,15 +172,6 @@ def control_plane_routes(
     exactly those. The reference reached them through a
     ``WeakMap<UnitContext, ControlBinding>``; a typed argument is the same
     guarantee without a global side table.
-
-    ``framework_answered`` is the transport adapter's tripwire: a counter of
-    requests the *web framework* answered by itself instead of handing to the
-    unit. It is reported at ``/__unit/health`` rather than kept in the serving
-    process, because a list inside a uvicorn child is unreadable from the
-    parent of an out-of-process test, and the only place the number matters is
-    over HTTP. The default reports ``0``, which is not a stub but the true
-    answer: with no framework in the picture there is nothing that could have
-    answered.
     """
     started = time.monotonic()
     #: Distinct per-unit, so two units in one process do not mint the same
@@ -221,7 +208,6 @@ def control_plane_routes(
                 "vendor": ctx.vendor.name,
                 "profile": ctx.config.profile,
                 "uptime_ms": round((time.monotonic() - started) * 1000),
-                "framework_answered": 0 if framework_answered is None else framework_answered(),
             }
         )
 
