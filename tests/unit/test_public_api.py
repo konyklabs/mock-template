@@ -261,18 +261,6 @@ belongs in a list somebody edits.
 """
 
 
-# ---------------------------------------------------------------------------
-# Attribute docstrings.
-#
-# `SquareSeed.__doc__` is readable at run time; `paths.OBTAIN_TOKEN` is a
-# `str`, and the string literal underneath it -- the PEP 258 attribute
-# docstring this code base uses everywhere -- is not readable at run time at
-# all. So the source is parsed. A public constant with no explanation is
-# exactly as undocumented as an unexplained function, and exempting constants
-# would have exempted three quarters of the surface.
-# ---------------------------------------------------------------------------
-
-
 def _import_statements_paid_on_import(tree: ast.Module) -> Iterator[ast.Import | ast.ImportFrom]:
     """The imports a consumer pays for by importing the module at all.
 
