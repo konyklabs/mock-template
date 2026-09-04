@@ -102,7 +102,8 @@ if [ "$QUICK" -eq 0 ]; then
   done
 fi
 if [ "$QUICK" -eq 0 ]; then
-  step "pytest"          uv run pytest
+  # Coverage floor: the measured number, only ever raised (docs/testing.md).
+  step "pytest"          uv run pytest --cov=vendorfake --cov-report=term:skip-covered --cov-fail-under=90
 fi
 step "wheel data"        uv run python tools/check_wheel_data.py
 step "docs"              _docs_step

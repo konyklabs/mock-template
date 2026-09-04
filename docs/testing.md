@@ -2,15 +2,17 @@
 
 How this repository's suite is organised, what each tier protects, and the two
 rules that decide whether a test exists. `tools/self-test.sh` runs all of it;
-`uv run pytest` runs the pytest tiers, about four minutes.
+`uv run pytest` runs the pytest tiers, about four minutes. A pull request's CI
+runs the static checks only (`--quick`); the suites run on the laptop before a
+push and on main after the merge.
 
 ## Tiers
 
 | Tier | Where | Protects | Runs |
 |---|---|---|---|
-| **Vendor behaviour** | `tests/unit/<vendor>/` | What a vendor's surface answers: the documented status, body, header, state transition, signature, retry interval. Each test names the behaviour and, where the vendor documents it, the page. | every PR, ~6 s together |
-| **Kernel** | `tests/unit/core/`, `tests/unit/asgi/` | The invariants the vendor-independent core states about itself: the pipeline order, the request lock, deterministic ids, the journal as event source, copy discipline, chaos selection, delivery and retry, config resolution, the ASGI adapter's byte-for-byte conversion. | every PR |
-| **Consumer surface** | `tests/unit/testing/`, `tests/unit/test_*.py`, `tests/parity/` | What a consumer imports: `unit()`, `async_unit()`, `served()`, `serve_in_thread()`, the pytest plugin, seeds, the CLI, the public-API pin, and the parity of one behaviour across the three bindings. | every PR |
+| **Vendor behaviour** | `tests/unit/<vendor>/` | What a vendor's surface answers: the documented status, body, header, state transition, signature, retry interval. Each test names the behaviour and, where the vendor documents it, the page. | full self-test; proposed for every PR (workflow diff pending) |
+| **Kernel** | `tests/unit/core/`, `tests/unit/asgi/` | The invariants the vendor-independent core states about itself: the pipeline order, the request lock, deterministic ids, the journal as event source, copy discipline, chaos selection, delivery and retry, config resolution, the ASGI adapter's byte-for-byte conversion. | full self-test |
+| **Consumer surface** | `tests/unit/testing/`, `tests/unit/test_*.py`, `tests/parity/` | What a consumer imports: `unit()`, `async_unit()`, `served()`, `serve_in_thread()`, the pytest plugin, seeds, the CLI, the public-API pin, and the parity of one behaviour across the three bindings. | full self-test; the parity suite is proposed for every PR |
 | **Conformance** | `tests/conformance/`, `src/vendorfake/conformance/checks/` | That any vendor module composes with the core: the C-numbered contracts run over every profile and binding, plus one mutant per contract proving the contract can go red. Says nothing about fidelity to the real vendor. | full self-test |
 | **Fidelity** | `tests/fidelity/`, `src/vendorfake/<vendor>/fidelity/` | That answers validate against the vendor's published schema and that the documented corpus cases hold. See [fidelity](concepts/fidelity.md) for what that does and does not mean. | full self-test |
 | **Integration** | `tests/integration/` (marker `integration`) | Only what needs a real socket: the served binding's parity with the in-process one, transport faults over uvicorn, form bodies through a real parser. | full self-test |
@@ -47,6 +49,7 @@ change to what vendorfake promises is a reviewable diff rather than a surprise.
   marked `xfail(strict=True)` with the finding it tracks until the contract
   holds, so the divergence is on record and its fix is a one-line change.
 - Coverage is measured in the self-test's pytest step with a floor
-  (`--cov-fail-under`) set at the measured number and only ever raised.
+  (`--cov-fail-under=90`, the number measured on 2026-09-04) that is only ever
+  raised.
 - Fidelity ledgers and conformance reports print in the self-test output; a
   claim about fidelity cites that output, never the test count.
