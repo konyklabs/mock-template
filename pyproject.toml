@@ -1,6 +1,6 @@
 [project]
 name = "vendorfake"
-version = "0.1.0"
+version = "0.3.0"
 description = "High-fidelity fakes of third-party vendor APIs: stateful flows, signed webhooks, deterministic fault injection."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -35,6 +35,15 @@ dependencies = [
   "openapi-schema-validator>=0.6",
   "referencing>=0.30",
   "pyyaml>=6",
+  # Declared because vendorfake.testing.transport imports it directly, for the
+  # async half of the in-process seam: an `httpx.AsyncClient` is meant to be
+  # usable under any anyio backend, so the deliberate `delay_ms` wait is
+  # `anyio.sleep` (exercised on asyncio in this suite). Nothing new is
+  # installed by this line -- httpx has depended
+  # on anyio unconditionally since 0.23 -- but an import we make ourselves is
+  # named here rather than inherited, so a future httpx that drops it fails
+  # resolution instead of failing at a consumer's first async request.
+  "anyio>=4.0",
 ]
 
 [project.urls]
@@ -54,6 +63,15 @@ toast = "vendorfake.toast:VENDOR"
 [project.entry-points.pytest11]
 vendorfake_conformance = "vendorfake.conformance.plugin"
 vendorfake_fidelity = "vendorfake.fidelity.plugin"
+# The consumer-facing fixtures. Registered as an entry point rather than left
+# for a consumer's `pytest_plugins` line, because "installed and the fixtures
+# are there" is the experience being offered; the module imports nothing
+# expensive at load time, so a suite that never requests a fixture pays only
+# this module's own small cost. The conformance plugin is deliberately NOT
+# registered here -- load it with `-p vendorfake.conformance.plugin` -- so a
+# consumer's suite gains no options or session hooks it did not ask for. See
+# vendorfake.pytest's docstring for the measurement.
+vendorfake = "vendorfake.pytest"
 
 [dependency-groups]
 dev = [
@@ -63,6 +81,24 @@ dev = [
   "import-linter>=2.0",
   "types-jsonschema>=4.18",
   "types-PyYAML>=6",
+  # Not used by a single test in this repository directly. It is installed so
+  # that tests/unit/test_pytest_plugin_async.py can run a *consumer's* suite
+  # under it, in both strict and auto mode, and prove the claim the README
+  # makes -- that vendorfake_async_unit works under whichever async runner a
+  # consumer already has. anyio's plugin arrives with httpx and covers the
+  # other half. Without this the claim would be reasoning, not evidence.
+  "pytest-asyncio>=0.23",
+]
+# The docs site. Kept out of `dev` deliberately: `uv sync` (no group flags,
+# what CI's non-docs jobs and a plain contributor checkout run, including
+# `uv sync --frozen` in .github/workflows/self-test.yml) has never needed to
+# resolve or install a static-site generator to run the tests, and this group
+# not existing in that closure is the proof. `tools/self-test.sh`'s docs step
+# runs `uv run --group docs mkdocs build --strict`, not plain `uv run`, so
+# that one step syncs this group itself regardless of how the caller synced.
+docs = [
+  "mkdocs>=1.6",
+  "mkdocs-material>=9.5",
 ]
 
 [build-system]
@@ -73,7 +109,7 @@ build-backend = "hatchling.build"
 packages = ["src/vendorfake"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/", "tests/", "tools/", "README.md", "LICENSE"]
+include = ["src/", "tests/", "tools/", "docs/", "README.md", "LICENSE"]
 
 # ---------------------------------------------------------------------------
 # ruff
@@ -107,7 +143,15 @@ known-first-party = ["vendorfake"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["src", "tools"]
+# `tests/typing` is evidence, not tests: `assert_type` modules that only a type
+# checker executes, so they belong in the strict run rather than under the
+# `tests.*` override below. It is deliberately not a package (no __init__.py),
+# which keeps its modules out of `tests.*` and out of pytest collection.
+# `tests/typing/negative` is the half that must FAIL, so the ordinary run must
+# not see it; tests/unit/testing/test_seed_typing.py runs mypy on it and
+# asserts the error.
+files = ["src", "tools", "tests/typing"]
+exclude = ["^tests/typing/negative/"]
 warn_unreachable = true
 enable_error_code = ["redundant-expr", "possibly-undefined", "truthy-bool"]
 

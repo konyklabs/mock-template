@@ -1,15 +1,39 @@
 name: self-test
 
+# A pull request runs `check`: one Python, `tools/self-test.sh --quick`, under
+# two minutes. The full matrix and the image build run on a push to main and
+# on demand (konyklabs/roadmap#103) -- the conformance runs they add are what a
+# laptop runs before a push, not what every push has to wait for.
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync
+        run: uv sync --frozen --python 3.13
+
+      - name: Quick self-test
+        run: bash tools/self-test.sh --quick
+
   test:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -52,6 +76,7 @@ jobs:
   # the container. This is the only run that can catch a data file the wheel
   # does not carry: everything above works from the checkout.
   image:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

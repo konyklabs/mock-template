@@ -1,0 +1,98 @@
+site_name: vendorfake
+site_description: >-
+  High-fidelity fakes of third-party vendor APIs for testing an integration
+  without a vendor sandbox.
+site_author: Oleg Konyk
+repo_url: https://github.com/konyklabs/vendorfake
+repo_name: konyklabs/vendorfake
+edit_uri: edit/main/docs/
+docs_dir: docs
+
+# Not deployed anywhere yet (no `site_url`, no publish workflow -- see
+# konyklabs/roadmap#74's F1 report for the follow-up). `uv run mkdocs serve`
+# is how this site is read today; `uv run mkdocs build --strict` is the check
+# tools/self-test.sh runs.
+
+copyright: >-
+  Unofficial. Not affiliated with, endorsed by, or connected to any vendor
+  named in this documentation. Every behaviour described here is derived
+  from publicly published API documentation.
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      # Lets docs/changelog.md embed the repository-root CHANGELOG.md
+      # (`--8<-- "CHANGELOG.md"`) instead of a second, drifting copy of it.
+      # pymdown-extensions ships transitively with mkdocs-material, so this
+      # costs no extra dependency.
+      base_path: ["."]
+      check_paths: true
+
+nav:
+  - Home: index.md
+  - Start here:
+      - Install: start/install.md
+      - Sixty-second quickstart: start/quickstart.md
+      - Which binding to use: start/bindings.md
+  - Recipes:
+      - Sync pytest: pytest-plugin.md
+      - Async pytest: async-consumers.md
+      - Vitest: recipes/vitest.md
+      - Playwright: recipes/playwright.md
+      - Docker compose: recipes/docker-compose.md
+      - CI: recipes/ci.md
+  - Concepts:
+      - Unit: concepts/unit.md
+      - Profile: concepts/profile.md
+      - Capability and roles: concepts/capability-and-roles.md
+      - Seed: concepts/seed.md
+      - Seeded scenario: seeded-scenario.md
+      - Driver: concepts/driver.md
+      - Journal and request log: concepts/journal-and-request-log.md
+      - Clock: concepts/clock.md
+      - Fidelity: concepts/fidelity.md
+      - Chaos rules and faults: concepts/chaos-rules-and-faults.md
+      - Provenance labels: concepts/provenance-labels.md
+  - Reference:
+      - Square routes: reference/routes-square.md
+      - Clover routes: reference/routes-clover.md
+      - Toast routes: reference/routes-toast.md
+      - Profiles: reference/profiles.md
+      - Faults: reference/faults.md
+      - Environment variables: reference/env.md
+      - Control plane: reference/control-plane.md
+      - CLI: reference/cli.md
+  - For agents: for-agents.md
+  - Contract: api-contract.md
+  - Changelog: changelog.md

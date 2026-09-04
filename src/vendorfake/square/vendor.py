@@ -142,6 +142,19 @@ consumer's real client library can drive a fault.
 https://developer.squareup.com/docs/devtools/sandbox/testing
 """
 
+SQUARE_ROLES: Mapping[str, str] = {
+    "auth": "oauth",
+    "orders": "order-lifecycle",
+    "webhooks": "webhooks",
+    "chaos": "chaos",
+}
+"""The neutral role vocabulary, mapped to Square's own capability names.
+
+Square spells its order surface ``order-lifecycle`` and its login surface
+``oauth``; the two role names a consumer actually needs to remember
+(``auth``, ``orders``) resolve here rather than by luck of naming matching
+another vendor's. See ``VendorDefinition.roles``."""
+
 _VOLATILE_FIELDS: tuple[str, ...] = (
     "expires_at",
     "refresh_token_expires_at",
@@ -276,6 +289,10 @@ class SquareVendor:
     @property
     def not_supported(self) -> Mapping[str, str]:
         return SQUARE_NOT_SUPPORTED
+
+    @property
+    def roles(self) -> Mapping[str, str]:
+        return SQUARE_ROLES
 
     @property
     def routes(self) -> Sequence[Route]:

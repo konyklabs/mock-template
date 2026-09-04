@@ -20,12 +20,20 @@ def fake_ctx(
     chaos_seed: int = 1,
     vendor_name: str = "toast",
     clock: Clock | None = None,
+    error_sidecar_mode: str = "both",
 ) -> Any:
+    """``error_sidecar_mode`` defaults to ``"both"``, not the profile default
+    of ``"headers"`` (konyklabs/roadmap#71): these shaper tests assert on the
+    sidecar's *content*, a concern the wire placement does not change, and
+    ``"both"`` keeps `shaped.body["unit_error"]` populated so that content is
+    still readable as a plain dict rather than a JSON-encoded header value.
+    """
     return SimpleNamespace(
         config=SimpleNamespace(
             profile=profile,
             vendor_config=vendor_config or {},
             chaos=SimpleNamespace(seed=chaos_seed),
+            errors=SimpleNamespace(sidecar=error_sidecar_mode),
         ),
         vendor=SimpleNamespace(name=vendor_name),
         clock=clock if clock is not None else Clock("virtual", "2026-08-30T12:00:00.000Z"),

@@ -12,6 +12,7 @@ from vendorfake.core.kernel.router import (
     NoRoute,
     Router,
     assert_no_reserved_paths,
+    is_control_path,
     split_path,
 )
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
@@ -139,6 +140,28 @@ def test_the_bare_prefix_without_a_trailing_slash_is_reserved_too() -> None:
 
 def test_a_path_that_merely_starts_with_the_letters_is_not_reserved() -> None:
     Router([route("GET", "/__units-of-measure", _ok)])
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/__unit", True),
+        ("/__unit/", True),
+        ("/__unit/health", True),
+        ("/__unit/requests", True),
+        ("/__units-of-measure", False),
+        ("/__unitx", False),
+        ("/v2/orders", False),
+        ("/", False),
+        ("", False),
+    ],
+)
+def test_is_control_path_truth_table(path: str, expected: bool) -> None:
+    """The one predicate both the route-reservation check and the request
+    log's exclusion share -- including the bare prefix with no trailing
+    slash, which matches no registered route but is still the control
+    plane's own address, and a merely-similar prefix, which is not."""
+    assert is_control_path(path) is expected
 
 
 def test_assert_no_reserved_paths_names_every_offender_at_once() -> None:

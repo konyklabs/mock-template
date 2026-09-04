@@ -129,6 +129,7 @@ class VendorOverlay:
         errors: ErrorShaper | None = None,
         auth: AuthAdapter | None = None,
         hydrate: Callable[[VendorDefinition, UnitContext, object], None] | None = None,
+        roles: Mapping[str, str] | None = None,
     ) -> None:
         self._inner = inner
         self._auth = auth
@@ -140,6 +141,7 @@ class VendorOverlay:
         self._signer = inner.signer if signer is None else signer
         self._errors = inner.errors if errors is None else errors
         self._hydrate = hydrate
+        self._roles = dict(inner.roles) if roles is None else dict(roles)
 
     # -- identity ----------------------------------------------------------
 
@@ -204,6 +206,10 @@ class VendorOverlay:
     @property
     def not_supported(self) -> Mapping[str, str]:
         return self._inner.not_supported
+
+    @property
+    def roles(self) -> Mapping[str, str]:
+        return self._roles
 
     @property
     def volatile_fields(self) -> Sequence[str]:

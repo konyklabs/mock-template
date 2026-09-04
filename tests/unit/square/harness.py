@@ -119,8 +119,18 @@ def _form_value(value: Any) -> str:
 
 
 def harness(profile: str = "oauth-only", **kwargs: Any) -> Iterator[Harness]:
-    """Start a unit, yield it, and stop it however the test ends."""
-    unit = create_unit(vendor="square", profile=profile, logger=Silent(), **kwargs)
+    """Start a unit, yield it, and stop it however the test ends.
+
+    Defaults ``VENDORFAKE_ERROR_SIDECAR=both`` unless the caller's own ``env``
+    already names it: this suite reads `unit_error` out of the body to assert
+    on the *content* of a refusal (which field, which reason), a concern the
+    sidecar's wire placement (konyklabs/roadmap#71; default ``headers`` since)
+    does not change. A test of the placement itself builds its own unit --
+    with :func:`vendorfake.testing.unit` or ``create_unit`` directly -- rather
+    than through this harness.
+    """
+    env = {"VENDORFAKE_ERROR_SIDECAR": "both", **kwargs.pop("env", {})}
+    unit = create_unit(vendor="square", profile=profile, logger=Silent(), env=env, **kwargs)
     try:
         yield Harness(unit=unit, api=ValidatingClient(unit, SURFACE, LEDGER))
     finally:

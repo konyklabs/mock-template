@@ -15,6 +15,9 @@ venv/
 .coverage
 htmlcov/
 
+# mkdocs build output (`uv run mkdocs build`); the source lives in docs/
+site/
+
 # Local working notes — never committed (see workspace CLAUDE.md)
 .local/
 
@@ -27,3 +30,5 @@ examples/*/node_modules/
 # must never enter the repository (roadmap#56); belt to the wheel check's braces.
 src/vendorfake/toast/fidelity/extract.json
 src/vendorfake/*/fidelity/DRIFT
+# git worktrees of this repository, checked out beside it by parallel sessions
+.wt-*/

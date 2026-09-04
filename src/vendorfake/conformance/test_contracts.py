@@ -1,8 +1,11 @@
-"""What ``pytest --pyargs vendorfake.conformance`` collects.
+"""What ``pytest --pyargs vendorfake.conformance -p vendorfake.conformance.plugin``
+collects.
 
 One test, because the matrix is already the registry: every contract, on every
 profile the target declares, arrives as a parameter from
-:func:`vendorfake.conformance.plugin.pytest_generate_tests`. A red run names
+:func:`vendorfake.conformance.plugin.pytest_generate_tests` -- which is why
+the ``-p`` flag is part of the command: ``--pyargs`` only selects this file,
+and nothing here loads the plugin that parametrizes it. A red run names
 ``test_contract[C13-full-inprocess]`` and prints the contract's own prose.
 
 This module is shipped inside the package rather than kept beside it, because

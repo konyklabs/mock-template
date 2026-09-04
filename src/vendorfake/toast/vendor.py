@@ -75,7 +75,7 @@ from vendorfake.toast.surface.restaurants import restaurant_routes
 from vendorfake.toast.surface.stock import stock_routes
 from vendorfake.toast.surface.webhooks import webhook_routes
 
-__all__ = ["TOAST_MAGIC", "ToastVendor", "create_toast_vendor"]
+__all__ = ["TOAST_MAGIC", "TOAST_ROLES", "ToastVendor", "create_toast_vendor"]
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
@@ -90,6 +90,19 @@ writable fields (toast-orders-api.yaml), and ``pageToken`` is the config API's
 documented paging parameter. Prior art is Square's sandbox magic values; Toast
 publishes no equivalent, so the mechanism is this project's, flagged by the
 ``chaos:`` prefix no real value would carry."""
+
+TOAST_ROLES: Mapping[str, str] = {
+    "auth": "auth",
+    "orders": "orders",
+    "webhooks": "webhooks",
+    "chaos": "chaos",
+}
+"""The neutral role vocabulary, mapped to Toast's own capability names.
+Toast already spells its login and order surfaces ``auth`` and ``orders``, so
+every role here is the identity map -- stated explicitly rather than left
+implicit, because the mapping is part of the contract every vendor answers
+the same way, not an accident of this vendor's naming. See
+``VendorDefinition.roles``."""
 
 _VOLATILE_FIELDS: tuple[str, ...] = (
     "expires_at_ms",
@@ -211,6 +224,10 @@ class ToastVendor:
     @property
     def not_supported(self) -> Mapping[str, str]:
         return TOAST_NOT_SUPPORTED
+
+    @property
+    def roles(self) -> Mapping[str, str]:
+        return TOAST_ROLES
 
     @property
     def routes(self) -> Sequence[Route]:

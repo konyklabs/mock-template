@@ -164,3 +164,29 @@ def test_the_login_route_is_the_first_and_the_only_route_of_the_auth_capability(
     assert vendor_routes[0]["capability"] == "auth"
     assert "auth" not in vendor_routes[0]  # the login itself needs no bearer
     assert "example_body" not in vendor_routes[0]
+
+
+# ---------------------------------------------------------------------------
+# VENDORFAKE_CLOCK_START (konyklabs/roadmap#71, D1)
+# ---------------------------------------------------------------------------
+
+
+def test_clock_start_makes_the_minted_jwt_s_iat_reproducible_across_units() -> None:
+    """Toast answers a *relative* `expiresIn` (the documented 19168 s), not an
+    absolute instant, so there is no documented expiry to assert `start +
+    something` against the way Square's and Clover's tests do. What
+    `clock_start` does promise here: on a virtual clock frozen at
+    `clock_start`, the minted JWT's `iat` is exactly `start` in Unix seconds,
+    reproducibly across independently built units.
+    """
+    start = "2026-01-01T00:00:00Z"
+    expected_iat = 1767225600  # start, in Unix seconds
+    env = {"VENDORFAKE_CLOCK": "virtual", "VENDORFAKE_CLOCK_START": start}
+
+    seen: list[int] = []
+    for _ in range(2):  # two independently built units
+        for h in harness(env=env):
+            token = h.api.post(LOGIN_PATH, LOGIN).json()["token"]["accessToken"]
+            seen.append(int(decode_jwt_payload(token)["iat"]))
+
+    assert seen == [expected_iat, expected_iat]
