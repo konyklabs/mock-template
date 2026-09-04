@@ -109,6 +109,14 @@ health-check path produced. A caller written against that older, slower
 failure mode — catching a connection or startup-timeout error around
 `with served(...)` — now sees an unhandled `UnitError` instead.
 
+The parent resolves that profile from the layers the **child** will resolve
+from, not from the profile document alone: the ambient `VENDORFAKE_VENDOR_*`
+block, and `VENDORFAKE_SEED` where it is set. So a seed overlay is checked
+against the document the child will actually load — a house scenario exported
+for a whole suite included — rather than against the profile's own seed.
+`VENDORFAKE_PROFILE` is deliberately not among them, because the child is
+given `--profile` as a flag and the CLI prefers a flag to the variable.
+
 ### `vendorfake.registry` — discovery and construction
 
 The five names above, plus `ProfileInfo`, `RouteInfo`, `ROLE_NAMES`,

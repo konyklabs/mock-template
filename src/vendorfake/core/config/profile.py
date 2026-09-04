@@ -77,6 +77,7 @@ from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
 __all__ = [
     "ENV_PREFIX",
+    "ENV_SEED",
     "ENV_TABLE",
     "ENV_VENDOR_PREFIX",
     "EnvVar",
@@ -89,6 +90,14 @@ __all__ = [
 
 ENV_PREFIX = "VENDORFAKE_"
 ENV_VENDOR_PREFIX = "VENDORFAKE_VENDOR_"
+ENV_SEED = "VENDORFAKE_SEED"
+"""The variable that replaces the profile's own seed document.
+
+Named as a constant because two modules have to agree on it: this one reads
+it into :attr:`ResolvedConfig.seed_path`, and ``vendorfake.testing.served()``
+has to include it in the mapping it validates a seed overlay against, or its
+parent-side check merges over a different document than the child does.
+"""
 
 DEFAULT_PROFILE_NAME = "full"
 ENV_SUBSCRIBER_ID = "wbhk_env"
@@ -131,7 +140,7 @@ ENV_TABLE: tuple[EnvVar, ...] = (
         "capabilities",
         "Absolute list, or a +add,-remove delta against the profile's list.",
     ),
-    EnvVar("VENDORFAKE_SEED", "UNIT_SEED", "seed_path", "Seed document path, overriding the profile's."),
+    EnvVar(ENV_SEED, "UNIT_SEED", "seed_path", "Seed document path, overriding the profile's."),
     EnvVar(
         "VENDORFAKE_SEED_OVERLAY",
         None,
@@ -489,7 +498,7 @@ def resolve_config(
     return ResolvedConfig(
         profile=document.name or name,
         capabilities=tuple(capabilities),
-        seed_path=environ.get("VENDORFAKE_SEED") or document.seed,
+        seed_path=environ.get(ENV_SEED) or document.seed,
         # A locator, not a document: `load_profile` reads it, because reading
         # is a filesystem act and this function is documented to touch none.
         # There is no profile-document key for it on purpose -- an overlay is

@@ -439,3 +439,105 @@ def test_served_hands_the_overlay_to_the_child() -> None:
         reported = child.client.get("/__unit/info").json()["seed_overlay"]
     assert body["program"]["terminology"]["one"] == "Overlaid Point"
     assert reported == {"active": True, "digest": seed_overlay_digest(OVERLAY)}
+
+
+# ---------------------------------------------------------------------------
+# The parent checks the overlay against the document the CHILD will load.
+#
+# `served()` validates the overlay in this process so a misspelled collection
+# is refused where the caller can see it. That promise only holds if the
+# parent merges over the same base the child will -- and the deep review lens
+# measured it merging over the profile's own seed while the child merged over
+# the document `VENDORFAKE_SEED` named, in both directions: an overlay the
+# parent passed killed the child before it announced a port, and an overlay
+# the child would have taken was refused here with a listing of collections
+# the child never uses.
+# ---------------------------------------------------------------------------
+
+
+def _house_scenario(tmp_path: Path) -> Path:
+    """The shipped Square seed with ``orders`` taken out, written to disk.
+
+    Stands in for a container image that exports ``VENDORFAKE_SEED`` for a
+    whole suite -- a documented, first-class variable, not a contrivance. It
+    is derived from the real document rather than hand-written so that the
+    unit it produces still authenticates and still hydrates; only the one
+    collection under test is missing.
+    """
+    document = json.loads(_SHIPPED_SEED.read_text(encoding="utf-8"))
+    del document["orders"]
+    house = tmp_path / "house.seed.json"
+    house.write_text(json.dumps(document), encoding="utf-8")
+    return house
+
+
+def test_served_checks_the_overlay_against_the_document_ambient_seed_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A collection the ambient scenario dropped is refused HERE, and the
+    listing is that document's collections rather than the profile's."""
+    monkeypatch.setenv("VENDORFAKE_SEED", str(_house_scenario(tmp_path)))
+
+    with pytest.raises(UnitError) as refused, served("square", seed_overlay={"orders": []}) as child:
+        pytest.fail(f"served() spawned a child at {child.base_url} for an overlay the child would refuse")
+    message = str(refused.value)
+    assert "'orders'" in message
+    _, marker, listing = message.partition("Valid collections: ")
+    assert marker, message
+    assert "orders" not in listing
+    assert "catalog" in listing
+
+
+@pytest.mark.integration
+def test_served_accepts_an_overlay_the_ambient_document_supports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other direction: an overlay valid against the document the child
+    will load must not be refused by the parent, and the child is asked what
+    it hydrated, so the two are pinned to the same document.
+
+    HONESTLY, this half is a regression guard rather than a discriminating
+    test, and the reason is worth writing down: the fully discriminating case
+    needs an ambient document carrying a collection the profile's own seed
+    lacks, and no such document exists -- every vendor's seed schema is closed
+    (an unknown top-level key is "Extra inputs are not permitted"), so an
+    alternate scenario can only ever be a subset. What this does pin is that
+    widening the parent's view did not break the working call, and that the
+    child hydrated the ambient scenario (no orders) rather than the profile's.
+    """
+    monkeypatch.setenv("VENDORFAKE_SEED", str(_house_scenario(tmp_path)))
+
+    with served("square", seed_overlay=OVERLAY) as child:
+        entities = child.client.get("/__unit/state").json()["entities"]
+        reported = child.client.get("/__unit/info").json()["seed_overlay"]
+        terminology = child.client.get(
+            f"/v2/loyalty/programs/{child.seed.loyalty_program_id}", headers=child.seed.auth
+        ).json()["program"]["terminology"]
+    assert entities.get("orders", 0) == 0
+    assert terminology["one"] == "Overlaid Point"
+    assert reported == {"active": True, "digest": seed_overlay_digest(OVERLAY)}
+
+
+# ---------------------------------------------------------------------------
+# A profile with no seed document at all.
+# ---------------------------------------------------------------------------
+
+
+def test_an_empty_overlay_on_a_seedless_profile_changes_nothing(tmp_path: Path) -> None:
+    """``None`` stays ``None``: an overlay that names nothing must not turn a
+    legal seedless profile into one carrying an empty document.
+
+    Toast's hydrator takes ``None`` as "load nothing, legal" and rejects
+    ``{}`` as a document missing its required collections, so this starts
+    either way only if the merge left the seed absent -- which is the whole
+    of the claim.
+    """
+    seedless = tmp_path / "seedless.json"
+    seedless.write_text(json.dumps({"name": "seedless", "capabilities": ["auth"]}), encoding="utf-8")
+
+    with unit("toast", str(seedless)) as plain, unit("toast", str(seedless), seed_overlay={}) as overlaid:
+        assert (
+            overlaid.client.get("/__unit/state").json()["entities"]
+            == (plain.client.get("/__unit/state").json()["entities"])
+        )
+        assert overlaid.client.get("/__unit/info").json()["seed_overlay"]["active"] is True

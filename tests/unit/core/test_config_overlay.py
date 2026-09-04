@@ -213,5 +213,20 @@ def test_an_empty_overlay_is_accepted_and_changes_nothing() -> None:
     assert apply_seed_overlay({"merchant": {"id": "M1"}}, {}, profile="full") == {"merchant": {"id": "M1"}}
 
 
+def test_an_empty_overlay_on_a_seedless_profile_leaves_the_seed_absent() -> None:
+    """``None`` in, ``None`` out -- not ``{}``.
+
+    The one combination the refusal above cannot catch: no seed document and
+    an overlay that names nothing, so there is no offending key to report.
+    Returning the merge result would hand the vendor ``{}`` where it had
+    ``None``, and those are different things to every hydrator here -- ``None``
+    means "load nothing, legal" and ``{}`` is a document missing its required
+    collections. A helper writing ``seed_overlay=overlay or {}`` would then
+    fail a legal seedless profile with a message about a document nobody
+    wrote.
+    """
+    assert apply_seed_overlay(None, {}, profile="seedless") is None
+
+
 def test_unknown_collections_reports_in_sorted_order() -> None:
     assert unknown_collections({"a": 1}, {"z": 1, "b": 2, "a": 3}) == ("b", "z")

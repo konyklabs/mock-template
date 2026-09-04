@@ -48,6 +48,16 @@ Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
   units (a remote `--base-url` one) leaves unset to skip rather than pass
   unmeasured. Mutant **M57** swallows the refusal, so the clause is
   falsifiable (#85).
+* **conformance:** **C01 now requires the `seed_overlay` key** at
+  `GET /__unit/info`, alongside the seven it already required. This widens an
+  existing contract: a target that implements it -- a third-party fake run
+  through `--base-url`, say -- must publish
+  `seed_overlay: {"active": bool, "digest": "sha256:<hex>" | null}` on that
+  document, reporting `{"active": false, "digest": null}` when the unit was
+  built with no overlay. A fake that was green on C01 before this release and
+  has not added the key fails it with `GET /__unit/info omits
+  ['seed_overlay']`; the fix is the key, not a change to the fake's
+  behaviour (#85).
 
 ### Bug fixes
 

@@ -137,13 +137,22 @@ def apply_seed_overlay(
     overlay: Mapping[str, Any],
     *,
     profile: str,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     """Check ``overlay`` against ``base``, then merge it. Start-time or never.
 
     ``base`` is ``None`` for a profile that names no seed document at all, in
     which case *every* overlay key is unknown and the refusal says so rather
     than reporting an empty list of valid collections, which would read as a
     vendor with no collections rather than a profile with no seed.
+
+    ``None`` COMES BACK for the one case that leaves: no seed document and an
+    EMPTY overlay, which names nothing and so cannot be refused. This used to
+    return ``{}``, and ``{}`` is not "no seed" -- every shipped vendor's
+    hydrator takes ``None`` as "load nothing, legal" and rejects ``{}`` as a
+    document missing its required collections. So a helper passing
+    ``seed_overlay=overlay or {}`` turned a legal seedless profile into a unit
+    that failed to construct, with a message about a document the caller never
+    wrote. An overlay that says nothing changes nothing, absence included.
 
     ``base`` is typed ``object`` because a seed document is whatever JSON the
     profile pointed at decoded to (``LoadedProfile.seed``), and a document
@@ -169,6 +178,8 @@ def apply_seed_overlay(
             field="seed_overlay",
             info={"unknown": sorted(overlay), "available": []},
         )
+    if base is None and not overlay:
+        return None
     document: Mapping[str, Any] = {} if base is None else dict(base)
     unknown = unknown_collections(document, overlay)
     if unknown:

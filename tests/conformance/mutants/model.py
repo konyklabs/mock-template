@@ -134,7 +134,7 @@ class Mutant:
     #: partial against -- so a mutant that swallows the refusal has to replace
     #: it. ``None`` (every other mutant) uses the real one, which is why the
     #: overlay contract passes under the null mutant.
-    overlay: Callable[[object | None, Mapping[str, Any]], dict[str, Any]] | None = None
+    overlay: Callable[[object | None, Mapping[str, Any]], dict[str, Any] | None] | None = None
 
     @property
     def expected_red(self) -> frozenset[str]:
@@ -217,7 +217,16 @@ def build_unit(mutant: Mutant, profile: str, *, seed_overlay: Mapping[str, Any] 
             if mutant.overlay is None
             else mutant.overlay(seed, seed_overlay)
         )
-        config = config.model_copy(update={"seed_overlay_digest": seed_overlay_digest(seed_overlay)})
+        config = config.model_copy(
+            update={
+                "seed_overlay_digest": seed_overlay_digest(seed_overlay),
+                # Laid on with the digest, exactly as `load_profile` does it:
+                # this branch stands in for that function, and a field it
+                # forgot would be a difference between the mutant harness and
+                # the shipped loader that nothing here would notice.
+                "seed_overlay_collections": tuple(sorted(seed_overlay)),
+            }
+        )
 
     unit = Unit(
         vendor=definition,

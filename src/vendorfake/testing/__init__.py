@@ -61,7 +61,7 @@ import httpx
 
 from vendorfake import registry
 from vendorfake.core.config.models import ResolvedConfig, UnmatchedPolicy
-from vendorfake.core.config.profile import ENV_VENDOR_PREFIX, load_profile
+from vendorfake.core.config.profile import ENV_SEED, ENV_VENDOR_PREFIX, load_profile
 from vendorfake.core.control.plane import DEFAULT_REQUEST_LIMIT
 from vendorfake.core.kernel.types import Logger, UnitError, UnitErrorKind, VendorDefinition
 from vendorfake.core.kernel.unit import Unit
@@ -1497,27 +1497,45 @@ def _served(
     # points the traceback at a line inside a connected client rather than at
     # the vendor argument that is actually wrong.
     #
-    # `env=vendor_env` -- not the no-`env=` this call used before -- because
-    # the child below is *not* built from `profile` alone: it inherits this
-    # process's whole `os.environ` (see the `Popen` call further down), and
-    # `cli.py`'s own `_serve` layers every `VENDORFAKE_VENDOR_*` variable in
-    # it onto the profile's `vendor` block before building its unit. Loading
-    # the profile here with no `env=` (the previous shape of this call)
-    # computed a `vendor_config` that quietly stopped matching the child's the
-    # moment such a variable was set -- review found this: a suite exporting
-    # `VENDORFAKE_VENDOR_APPLICATION_ID` for the whole run got a seed here
-    # that still carried the profile document's own id, while the served
-    # unit answered with the overridden one. `vendor_env` is filtered to just
-    # that one prefix rather than passed as the whole of `os.environ`,
-    # because `resolve_config` also reads `VENDORFAKE_CAPABILITIES`,
-    # `VENDORFAKE_CLOCK*` and the webhook-URL variables from `env=`, and
-    # nothing here needs them: only `loaded.config.vendor_config` is read
-    # below, and pulling in the rest would let an unrelated ambient variable
-    # (a stray `VENDORFAKE_CLOCK_START` without `VENDORFAKE_CLOCK=virtual` in
-    # the caller's shell, say) fail this call for a reason that has nothing
-    # to do with the seed it computes -- a failure `served()`'s own
-    # `clock_start=` handling below is deliberately the only thing that
-    # should be able to trigger, and did before this change.
+    # `env=resolution_env` -- not the no-`env=` this call used before --
+    # because the child below is *not* built from `profile` alone: it inherits
+    # this process's whole `os.environ` (see the `Popen` call further down),
+    # and `cli.py`'s own `_serve` layers every `VENDORFAKE_VENDOR_*` variable
+    # in it onto the profile's `vendor` block before building its unit.
+    # Loading the profile here with no `env=` (the previous shape of this
+    # call) computed a `vendor_config` that quietly stopped matching the
+    # child's the moment such a variable was set -- review found this: a suite
+    # exporting `VENDORFAKE_VENDOR_APPLICATION_ID` for the whole run got a
+    # seed here that still carried the profile document's own id, while the
+    # served unit answered with the overridden one.
+    #
+    # `resolution_env` is a NARROW selection rather than the whole of
+    # `os.environ`, and the selection is exactly "what decides the two things
+    # this call reads back": the vendor block (`VENDORFAKE_VENDOR_*`) and the
+    # seed document the overlay is checked against (`VENDORFAKE_SEED`). The
+    # rest is deliberately left out -- `resolve_config` also reads
+    # `VENDORFAKE_CAPABILITIES`, `VENDORFAKE_CLOCK*` and the webhook-URL
+    # variables from `env=`, and pulling those in would let an unrelated
+    # ambient variable (a stray `VENDORFAKE_CLOCK_START` without
+    # `VENDORFAKE_CLOCK=virtual` in the caller's shell, say) fail this call
+    # for a reason that has nothing to do with the seed it computes -- a
+    # failure `served()`'s own `clock_start=` handling below is deliberately
+    # the only thing that should be able to trigger.
+    #
+    # `VENDORFAKE_SEED` joined the selection because the deep review lens
+    # measured the eager overlay check validating against the WRONG DOCUMENT:
+    # with `VENDORFAKE_SEED` set in the ambient environment, the parent merged
+    # the overlay over the profile's own seed while the child merged it over
+    # the document that variable names. Both directions were wrong. An overlay
+    # naming a collection the house scenario drops passed here and killed the
+    # child before it announced a port -- verbatim the outcome this check
+    # exists to prevent -- and an overlay valid against the house scenario was
+    # refused here with a listing of collections the child would never use.
+    # `VENDORFAKE_PROFILE` is NOT included, and that is not an oversight: the
+    # child is given `--profile` as an explicit flag, the CLI prefers a flag
+    # to the variable (which is why an `env=` entry naming it is refused
+    # above), and this call already passes the same `name=profile`. Including
+    # it would make the parent resolve a profile the child ignores.
     #
     # This is a narrow, deliberate second exception to `cli.py`'s "the only
     # module that reads `os.environ`" invariant (see that module's docstring)
@@ -1527,7 +1545,7 @@ def _served(
     # process" means), so the parent-side computation that has to agree with
     # what that child resolves cannot be built from an empty mapping the way
     # `unit()`'s can. Reading a name *to pass to the child unchanged* and
-    # reading the one prefix of it *this process also needs to agree with*
+    # reading the few names of it *this process also needs to agree with*
     # are the same underlying fact about `served()`, not two different
     # invariant violations.
     #
@@ -1610,7 +1628,10 @@ def _served(
             "as explicit flags, and the CLI prefers a flag to the variable, so the entry would change nothing. "
             "Use the parameter instead."
         )
-    vendor_env = {key: value for key, value in {**os.environ, **layer}.items() if key.startswith(ENV_VENDOR_PREFIX)}
+    child_view = {**os.environ, **layer}
+    resolution_env = {
+        key: value for key, value in child_view.items() if key.startswith(ENV_VENDOR_PREFIX) or key == ENV_SEED
+    }
     if seed_overlay is not None:
         # Encoded once and used twice: the child reads it from its environment
         # (below), and THIS process reads it too, through the `load_profile`
@@ -1619,19 +1640,19 @@ def _served(
         # overlay naming a collection the vendor does not have raises the same
         # `UnitError` `unit()` raises, here, before `Popen`, instead of
         # surfacing as a child that exited before announcing a port with the
-        # real message buried in its stderr. It is added to `vendor_env` --
-        # otherwise filtered to `VENDORFAKE_VENDOR_*` for the reason above --
-        # because it comes from this call's own parameter and not from the
-        # ambient environment, so it cannot import an unrelated shell variable
-        # into a computation that is meant to be about the seed alone.
+        # real message buried in its stderr. It is added to `resolution_env`
+        # -- otherwise the narrow selection described above -- because it
+        # comes from this call's own parameter and not from the ambient
+        # environment, so it cannot import an unrelated shell variable into a
+        # computation that is meant to be about the seed alone.
         overlay_value = _seed_overlay_env_value(seed_overlay)
-        vendor_env["VENDORFAKE_SEED_OVERLAY"] = overlay_value
+        resolution_env["VENDORFAKE_SEED_OVERLAY"] = overlay_value
         layer["VENDORFAKE_SEED_OVERLAY"] = overlay_value
     loaded = load_profile(
         profile_dir=definition.profile_dir,
         name=profile,
         base_dir=definition.base_dir,
-        env=vendor_env,
+        env=resolution_env,
         defaults=definition.retry_defaults,
     )
     # Before `Popen`, like every other refusal `served()` makes: the child
@@ -1659,7 +1680,7 @@ def _served(
     # `cli.py` is documented as the only module that reads `os.environ` to
     # resolve a unit *built in that process*, so that a stray shell variable
     # cannot silently change which profile a unit in *this* process resolves
-    # to -- `vendor_env` above is `served()`'s one narrow, documented
+    # to -- `resolution_env` above is `served()`'s one narrow, documented
     # exception to that, and this is the other: reading it here is for a
     # different reason with the opposite failure mode. `Popen(argv)` with no
     # `env=` already inherits the whole of `os.environ` for the child
@@ -1684,7 +1705,7 @@ def _served(
                 # `resolved_seed` is built above, before the child exists, from
                 # the same profile document and the same `VENDORFAKE_VENDOR_*`
                 # environment layer the child resolves its own config from
-                # (`vendor_env`, above) -- not the child's profile read back
+                # (`resolution_env`, above) -- not the child's profile read back
                 # over the wire, which no route publishes. A custom profile's
                 # overrides, and an ambient `VENDORFAKE_VENDOR_*` override,
                 # both reach this seed the same way they reach the served
