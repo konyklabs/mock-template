@@ -268,3 +268,39 @@ def test_the_delivered_payload_is_the_customers_own_wire_shape(h: Harness) -> No
 
 def test_a_seeded_customer_announces_nothing(h: Harness) -> None:
     assert h.deliveries() == []
+
+
+# -- a deleted customer stays readable and stops being writable ---------------
+
+
+def test_a_deleted_customer_is_still_readable(h: Harness) -> None:
+    """The delete is SOFT, so the row keeps its id and ``?deleted=true`` still
+    lists it. Nothing here changes; it is the premise of the two tests
+    below."""
+    assert h.delete(h.path(f"{CUSTOMERS}/{c.SEED_CUSTOMER_BLAKE_ID}")).status == 204
+    read = h.get(h.path(f"{CUSTOMERS}/{c.SEED_CUSTOMER_BLAKE_ID}"))
+    assert read.status == 200
+    assert read.json()["data"]["deleted_at"]
+
+
+def test_updating_a_deleted_customer_is_a_404(h: Harness) -> None:
+    """JUDGMENT. It used to answer 200 and fire another ``customer.update``,
+    leaving the caller's own state saying the customer exists and is current
+    while every default list omitted it. A retry or a race on a cleanup path
+    is exactly how a consumer meets that, and no response distinguished it
+    from a successful update of a live customer."""
+    assert h.delete(h.path(f"{CUSTOMERS}/{c.SEED_CUSTOMER_BLAKE_ID}")).status == 204
+    answered = h.put(h.path(f"{CUSTOMERS}/{c.SEED_CUSTOMER_BLAKE_ID}"), json.dumps(NEW))
+    assert answered.status == 404
+    assert answered.json()["unit_error"]["field"] == "customer_id"
+    # And the row is untouched: no second `deleted_at`, no new version.
+    assert h.get(h.path(f"{CUSTOMERS}/{c.SEED_CUSTOMER_BLAKE_ID}")).json()["data"]["last_name"] != NEW["last_name"]
+
+
+def test_deleting_a_deleted_customer_is_a_404(h: Harness) -> None:
+    """A repeat delete is not a second 204: it would re-stamp ``deleted_at``
+    and announce a change that did not happen."""
+    assert h.delete(h.path(f"{CUSTOMERS}/{c.SEED_CUSTOMER_BLAKE_ID}")).status == 204
+    stamped = h.get(h.path(f"{CUSTOMERS}/{c.SEED_CUSTOMER_BLAKE_ID}")).json()["data"]["deleted_at"]
+    assert h.delete(h.path(f"{CUSTOMERS}/{c.SEED_CUSTOMER_BLAKE_ID}")).status == 404
+    assert h.get(h.path(f"{CUSTOMERS}/{c.SEED_CUSTOMER_BLAKE_ID}")).json()["data"]["deleted_at"] == stamped

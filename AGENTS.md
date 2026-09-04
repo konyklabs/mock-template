@@ -127,7 +127,10 @@ enforces it mechanically the way the C-id manifest does.
 Never write a real company's name, an internal codename, or any other
 employer-identifying term into any commit, branch, file name, issue, or PR in
 this repository -- vendor names used to describe a publicly documented API
-(`square`, `clover`, `toast`) are the one deliberate exception this project
-exists to make. Describe a consumer generically ("a consumer", "an async
+(`square`, `clover`, `toast`, `lightspeed`, ...) are the one deliberate
+exception this project exists to make. The list is open-ended, like the one the
+boundary rules use: a vendor added to this distribution is covered by the
+exception the moment its package exists, and a closed list would read as
+forbidding the next one. Describe a consumer generically ("a consumer", "an async
 FastAPI-style service", "a service under test") rather than naming the real
 system a test or an example is modelled on.

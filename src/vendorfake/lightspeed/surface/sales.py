@@ -369,6 +369,7 @@ class LightspeedSalesSurface:
         now = wire_time(ctx.clock)
         register = self._register(ctx, request.source.register_id)
         outlet_id = self._outlet_id(request, register)
+        self._check_outlet(request, outlet_id)
         self._check_customer(ctx, request.customer_id)
         lines = self._line_items(ctx, request.line_items, previous=previous)
         payments = self._payments(ctx, request, register=register, now=now)
@@ -580,6 +581,41 @@ class LightspeedSalesSurface:
         if register is not None:
             return register.outlet_id
         return request.fulfillment_outlet_id
+
+    def _check_outlet(self, request: SaleUpdateRequest, outlet_id: str | None) -> None:
+        """A sale that CLOSES must say which outlet each of its lines comes out
+        of, because closing is what moves stock.
+
+        JUDGMENT, and it is a refusal rather than a silent no-op. Neither
+        ``SaleRequestSource`` (``author_id`` is its one required member) nor
+        ``SaleRequestBase`` makes an outlet required, so a body carrying no
+        ``source.register_id``, no ``fulfillment_outlet_id`` and no line-level
+        ``fulfilment_outlet_id`` is schema-legal -- and closing it used to
+        answer 200 while moving nothing and firing no ``inventory.update``. A
+        consumer's stock-decrement test then passed while exercising nothing,
+        which is a failure wearing the shape of a success on the one side
+        effect closing a sale has. So an unresolvable outlet joins the other
+        unresolvable references on this surface (``product.id``,
+        ``customer_id``, ``payments[n].type.config_id``) and is a 422.
+
+        ONLY ON A CLOSE, and only for a line that resolves to nothing: a
+        parked or pending sale moves no stock, and a line naming its own
+        ``fulfilment_outlet_id`` resolves whatever the sale does.
+        """
+        if request.state != SaleState.CLOSED.value:
+            return
+        for index, line in enumerate(request.line_items):
+            if line.fulfilment_outlet_id or outlet_id:
+                continue
+            raise UnitError(
+                UnitErrorKind.INVALID_VALUE,
+                detail=(
+                    f"line_items[{index}] resolves to no outlet, so closing this sale could not move its "
+                    f"stock. Name a register in source.register_id, a sale-level fulfillment_outlet_id, or "
+                    f"this line's own fulfilment_outlet_id."
+                ),
+                field=f"line_items[{index}].fulfilment_outlet_id",
+            )
 
     def _check_customer(self, ctx: UnitContext, customer_id: str | None) -> None:
         """A named customer must exist -- when the scenario knows any customers.

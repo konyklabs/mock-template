@@ -468,3 +468,29 @@ def test_a_delete_still_carries_the_entity_because_the_delete_is_soft(h: Harness
 def test_a_seeded_product_announces_nothing(h: Harness) -> None:
     assert h.deliveries() == []
     assert h.unit.context.store.collection(COL.products).size == len(SEEDED_IDS)
+
+
+# -- a deleted product stays readable and stops being writable ----------------
+
+
+def test_updating_a_deleted_product_is_a_404(h: Harness) -> None:
+    """The same judgment ``test_surface_customers.py`` records: the soft delete
+    leaves the row READABLE -- ``GET`` answers it and ``?deleted=true`` lists
+    it, which is what the ``deleted`` parameter is for -- and stops it being
+    WRITABLE."""
+    assert h.delete(h.path(f"{PRODUCTS}/{c.SEED_PRODUCT_BOTTLE_ID}")).status == 200
+    assert h.get(h.path(f"{PRODUCTS}/{c.SEED_PRODUCT_BOTTLE_ID}")).json()["data"]["deleted_at"]
+    answered = h.put(
+        h.path(f"{PRODUCTS}/{c.SEED_PRODUCT_BOTTLE_ID}"),
+        json.dumps({"common": {"name": "Renamed after deletion"}}),
+    )
+    assert answered.status == 404
+    assert answered.json()["unit_error"]["field"] == "product_id"
+    assert h.get(h.path(f"{PRODUCTS}/{c.SEED_PRODUCT_BOTTLE_ID}")).json()["data"]["name"] != "Renamed after deletion"
+
+
+def test_deleting_a_deleted_product_is_a_404(h: Harness) -> None:
+    assert h.delete(h.path(f"{PRODUCTS}/{c.SEED_PRODUCT_BOTTLE_ID}")).status == 200
+    stamped = h.get(h.path(f"{PRODUCTS}/{c.SEED_PRODUCT_BOTTLE_ID}")).json()["data"]["deleted_at"]
+    assert h.delete(h.path(f"{PRODUCTS}/{c.SEED_PRODUCT_BOTTLE_ID}")).status == 404
+    assert h.get(h.path(f"{PRODUCTS}/{c.SEED_PRODUCT_BOTTLE_ID}")).json()["data"]["deleted_at"] == stamped

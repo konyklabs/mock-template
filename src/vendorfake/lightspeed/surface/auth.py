@@ -97,8 +97,8 @@ class LightspeedAuthSurface:
         # No `auth` on either: one issues the credential and the other
         # exchanges it. No `example_body`: the conformance suite aims its
         # committed-mutation contracts at the first example route, and a token
-        # is a mutation the webhook mapper rightly never announces -- closing a
-        # register is that route (`surface/registers.py`).
+        # is a mutation the webhook mapper rightly never announces -- creating
+        # a sale is that route (`surface/sales.py`).
         return (
             Route(
                 method="GET",
@@ -148,10 +148,18 @@ class LightspeedAuthSurface:
                 field="response_type",
                 info={"supplied": response_type},
             )
-        # Absence is what is recorded, not the fallback: the exchange only has
-        # to match a redirect_uri when the authorization request supplied one.
-        supplied_redirect = args.query("redirect_uri")
-        redirect_uri = supplied_redirect or config.redirect_uri
+        # THE EFFECTIVE URL IS WHAT IS RECORDED -- the one supplied, or the
+        # unit's configured default when the request names none. An earlier
+        # version recorded absence and the exchange then skipped its
+        # comparison entirely, so an authorize with no redirect_uri produced a
+        # code that any redirect_uri whatsoever could redeem. That taught a
+        # consumer the weaker rule: Lightspeed documents redirect_uri as one
+        # of the five exchange parameters and matches it, so a consumer whose
+        # redirect-mismatch test passed here failed in production. The build
+        # contract for this surface says the code is bound to
+        # "client_id + scope + redirect_uri", and now it is -- all three,
+        # always.
+        redirect_uri = args.query("redirect_uri") or config.redirect_uri
         if not redirect_uri:
             raise UnitError(
                 UnitErrorKind.MISSING_FIELD,
@@ -175,7 +183,7 @@ class LightspeedAuthSurface:
                 client_id=client_id,
                 scopes=scopes,
                 expires_at_ms=int(args.ctx.clock.now()) + config.authorization_code_ttl_ms,
-                redirect_uri=supplied_redirect,
+                redirect_uri=redirect_uri,
                 state=state,
             ).to_entity(),
             {"operation_id": "Connect"},
@@ -228,10 +236,14 @@ class LightspeedAuthSurface:
                 detail="The authorization code expired.",
                 field="code",
             )
-        if record.redirect_uri is not None and grant.redirect_uri != record.redirect_uri:
+        if grant.redirect_uri != record.redirect_uri:
             # "redirect_uri" is one of the five documented exchange parameters
             # and the authorize URL carries it too; checking them against each
-            # other is the whole reason the parameter exists.
+            # other is the whole reason the parameter exists. UNCONDITIONALLY:
+            # the code always carries the effective URL it was issued for (see
+            # `connect`), so there is no branch a caller can take to skip the
+            # comparison -- including omitting the parameter at the exchange,
+            # which no longer matches a code that was bound to a default.
             raise UnitError(
                 UnitErrorKind.UNAUTHORIZED,
                 detail="redirect_uri does not match the one the authorization code was issued for.",

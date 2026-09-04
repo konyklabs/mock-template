@@ -273,6 +273,21 @@ LIGHTSPEED_NOT_MODELED: Mapping[str, str] = {
         "subdomain. A unit serves one origin, so GET /connect here is a stand-in at the documented path and "
         "approval is automatic: there is nobody to click a consent screen."
     ),
+    "register-close-declared-totals": (
+        "RegisterCloseRequest.payments -- the per-payment-type totals a closing cashier declares -- are "
+        "validated (an unknown payment_type_id is a 422) and are NOT reported. The payments summary answers "
+        "what the register OBSERVED, because the declared count and the rung-up money are the same money and "
+        "summing them reports a till twice over. The specification gives RegisterClosePaymentType and "
+        "RegisterPaymentSummaryPaymentType one `total` each, described identically, with no expected/counted "
+        "pair to map two halves onto -- so one number out means one reading, and the observed one is the only "
+        "one this API can see. JUDGMENT; see surface/registers.py."
+    ),
+    "register-closure-excludes-voided-sales": (
+        "A voided sale keeps its payment rows (an update rebuilds the whole sale document), and those "
+        "payments are excluded from every closure and payments summary. No page says what a cancelled sale "
+        "does to a till total; counting it would report cash for a sale that never completed. JUDGMENT, "
+        "beside the closure window in surface/registers.py."
+    ),
     "button-layouts": (
         "GET /button_layouts and GET /button_layouts/{id} carry the registers:read scope and are part of the "
         "Registers tag, but they describe the POS's own quick-key grid rather than the till lifecycle issue "

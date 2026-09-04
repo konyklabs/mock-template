@@ -83,7 +83,14 @@ def decimal_text(value: object, *, field: str, allow_negative: bool = False) -> 
             UnitErrorKind.INVALID_VALUE,
             detail=f"{field} must not be negative.",
             field=field,
-            info={"supplied": value},
+            # COERCED THE WAY `_refuse` COERCES, and for a reason a caller
+            # never sees: `value` is not always the caller's own JSON. This
+            # helper is called on values the package COMPUTED (a projection's
+            # `average_cost * level` is a `Decimal`), and the error sidecar
+            # serialises `info` with `json.dumps`, which has no Decimal
+            # encoder -- so an uncoerced Decimal turns a shaped 422 into an
+            # unhandled TypeError inside the error pipeline.
+            info={"supplied": value if isinstance(value, str | int | float) else str(value)},
         )
     return _canonical(amount, field=field, supplied=value)
 

@@ -90,8 +90,8 @@ class LightspeedWebhooksSurface:
     def routes(self) -> tuple[Route, ...]:
         # No `example_body`: registering a subscriber is a mutation the
         # dispatcher deliberately does not deliver, so a conformance contract
-        # aimed at it would watch for a webhook that cannot arrive. Closing a
-        # register is this vendor's example route.
+        # aimed at it would watch for a webhook that cannot arrive. Creating a
+        # sale is this vendor's example route (`surface/sales.py`).
         return (
             Route(
                 method="GET",

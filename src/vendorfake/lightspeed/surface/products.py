@@ -306,7 +306,7 @@ class LightspeedProductsSurface:
         # product it named. See `surface/registers.py::open_register`.
         body = validate_body(ProductUpdateBody, args.body())
         refuse_both_prices(body.details.price_excluding_tax, body.details.price_including_tax, where="details.")
-        stored = self._require(args)
+        stored = self._require_live(args)
         product = ProductEntity.from_entity(stored)
         deps = self._deps
         common = body.common
@@ -386,7 +386,9 @@ class LightspeedProductsSurface:
         return json_(single(project_product(updated)))
 
     def delete_product(self, args: HandlerArgs) -> ReplyInit:
-        stored = self._require(args)
+        # `_require_live`, so a REPEAT delete is a 404 rather than a second
+        # 200 that re-stamps `deleted_at` and fires another `product.update`.
+        stored = self._require_live(args)
         product = ProductEntity.from_entity(stored)
         deleted_at = wire_time(args.ctx.clock)
         deps = self._deps
@@ -580,6 +582,26 @@ class LightspeedProductsSurface:
         stored = args.ctx.store.collection(COL.products).get(product_id)
         if stored is None:
             raise UnitError(UnitErrorKind.NOT_FOUND, detail=f"Product {product_id} was not found.", field="product_id")
+        return stored
+
+    def _require_live(self, args: HandlerArgs) -> dict[str, Any]:
+        """The row a WRITE addresses: present, and not already deleted.
+
+        The soft delete leaves the row READABLE -- ``GET`` answers it and
+        ``?deleted=true`` lists it, which is the whole point of the
+        ``deleted`` parameter -- and stops it being WRITABLE. The same
+        judgment ``surface/customers.py::_require_live`` records, for the same
+        reason: a ``PUT`` that answered 200 on a deleted product told the
+        caller its update had landed on a live record while every default list
+        omitted it.
+        """
+        stored = self._require(args)
+        if stored.get("deleted_at") is not None:
+            raise UnitError(
+                UnitErrorKind.NOT_FOUND,
+                detail=f"Product {args.params['product_id']} was deleted and can no longer be written.",
+                field="product_id",
+            )
         return stored
 
 

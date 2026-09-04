@@ -138,3 +138,30 @@ def test_not_found_names_the_control_route_that_lists_the_surface() -> None:
 def test_http_date_matches_the_documented_example(epoch_ms: int, expected: str) -> None:
     """The second row is the page's own example value, to the second."""
     assert http_date(epoch_ms) == expected
+
+
+def test_a_refusal_carrying_a_computed_decimal_shapes_under_the_shipped_sidecar() -> None:
+    """``model/scalars.py``'s helpers are called on values this package
+    COMPUTED as well as on a caller's JSON -- a projection's ``average_cost x
+    level`` is a ``Decimal``.
+
+    The default sidecar placement is ``headers`` (konyklabs/roadmap#71), and a
+    header value is built with ``json.dumps``, which has no ``Decimal``
+    encoder. So an uncoerced ``Decimal`` in ``UnitError.info`` did not become
+    a 422: it raised ``TypeError`` out of the error pipeline itself, which
+    over the ASGI binding is a 500 with a traceback in place of any documented
+    Lightspeed body. The refusal coerces the same way ``_refuse`` does, and
+    this pins it.
+    """
+    from decimal import Decimal
+
+    from vendorfake.core.kernel.shaping import ERROR_INFO_HEADER
+    from vendorfake.lightspeed.model.scalars import decimal_text
+
+    with pytest.raises(UnitError) as raised:
+        decimal_text(Decimal("-1.50"), field="total_cost")
+    shaped = LightspeedErrorShaper().shape(raised.value, fake_ctx(error_sidecar_mode="headers"))
+    assert shaped.status == 422
+    assert shaped.body["message"] == "total_cost must not be negative."
+    assert shaped.headers[ERROR_INFO_HEADER] == '{"supplied":"-1.50"}'
+    assert shaped.headers[ERROR_INFO_HEADER].isascii()

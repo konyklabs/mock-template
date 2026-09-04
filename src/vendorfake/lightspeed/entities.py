@@ -175,6 +175,12 @@ def _rows(value: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _texts(value: Any) -> list[str]:
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return [str(item) for item in value]
+    return []
+
+
 @dataclass(frozen=True, slots=True)
 class RetailerEntity:
     """The one retailer, stored in the documented ``Retailer`` shape.
@@ -398,6 +404,11 @@ class RegisterClosureEntity:
     ``register_open_time`` and the per-payment-type ``payments`` totals. The
     ``register_id`` and the closing instant are this unit's, so the closure can
     be found again and carried into the ``register_closure.create`` webhook.
+
+    ``counted_payment_ids`` is INTERNAL and deliberately not projected: it is
+    the bookkeeping that stops the next closure on the same register counting
+    money this one already reported, which the second-resolution timestamps
+    cannot do on their own. See ``surface/registers.py::_amounts_taken``.
     """
 
     id: str
@@ -407,6 +418,7 @@ class RegisterClosureEntity:
     register_open_time: str | None
     register_close_time: str
     payments: list[dict[str, Any]] = field(default_factory=list)
+    counted_payment_ids: list[str] = field(default_factory=list)
     object_version: int = 0
 
     @classmethod
@@ -419,6 +431,7 @@ class RegisterClosureEntity:
             register_open_time=_opt_str(entity.get("register_open_time")),
             register_close_time=_str(entity.get("register_close_time")),
             payments=_rows(entity.get("payments")),
+            counted_payment_ids=_texts(entity.get("counted_payment_ids")),
             object_version=_int(entity.get(OBJECT_VERSION)),
         )
 
@@ -432,6 +445,7 @@ class RegisterClosureEntity:
                 "register_open_time": self.register_open_time,
                 "register_close_time": self.register_close_time,
                 "payments": list(self.payments),
+                "counted_payment_ids": list(self.counted_payment_ids),
                 OBJECT_VERSION: self.object_version,
             }
         )

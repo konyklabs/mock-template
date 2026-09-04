@@ -173,7 +173,7 @@ class LightspeedCustomersSurface:
     def update_customer(self, args: HandlerArgs) -> ReplyInit:
         # The body first, then the 404. See `surface/registers.py::open_register`.
         body = validate_body(CustomerBody, args.body())
-        stored = self._require(args)
+        stored = self._require_live(args)
         customer = CustomerEntity.from_entity(stored)
         group_id = self._resolve_group(args.ctx, body.customer_group_id, fallback=customer.customer_group_id)
         code = body.customer_code or customer.customer_code
@@ -198,7 +198,9 @@ class LightspeedCustomersSurface:
         return json_(single(project_customer(updated)))
 
     def delete_customer(self, args: HandlerArgs) -> ReplyInit:
-        stored = self._require(args)
+        # `_require_live`, so a REPEAT delete is a 404 rather than a second
+        # 204 that re-stamps `deleted_at` and fires another `customer.update`.
+        stored = self._require_live(args)
         customer = CustomerEntity.from_entity(stored)
         deleted_at = wire_time(args.ctx.clock)
         deps = self._deps
@@ -246,6 +248,28 @@ class LightspeedCustomersSurface:
         if stored is None:
             raise UnitError(
                 UnitErrorKind.NOT_FOUND, detail=f"Customer {customer_id} was not found.", field="customer_id"
+            )
+        return stored
+
+    def _require_live(self, args: HandlerArgs) -> dict[str, Any]:
+        """The row a WRITE addresses: present, and not already deleted.
+
+        JUDGMENT: a soft delete leaves the row addressable -- ``GET`` still
+        answers it and ``?deleted=true`` still lists it, which is what the
+        ``deleted`` list parameter is for -- but it stops being writable. The
+        alternative this replaces answered 200 to a ``PUT`` on a deleted
+        customer and fired another ``customer.update``, leaving the caller's
+        own state saying the customer exists and is current while every
+        default list omits it. A retry or a race on a cleanup path is exactly
+        how a consumer meets that, and no response distinguished it from a
+        successful update of a live customer.
+        """
+        stored = self._require(args)
+        if stored.get("deleted_at") is not None:
+            raise UnitError(
+                UnitErrorKind.NOT_FOUND,
+                detail=f"Customer {args.params['customer_id']} was deleted and can no longer be written.",
+                field="customer_id",
             )
         return stored
 

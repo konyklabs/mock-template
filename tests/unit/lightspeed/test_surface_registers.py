@@ -92,13 +92,15 @@ def test_an_empty_close_body_is_legal(h: Harness) -> None:
     assert h.put(h.path(CLOSE_REGISTER), "{}").status == 200
 
 
-def test_closing_records_the_declared_totals_as_wire_strings(h: Harness) -> None:
-    """DOCUMENTED: ``RegisterClosePaymentType.total`` is typed ``string``, and
-    every example prints two decimal places.
+def test_a_declared_total_is_validated_and_not_added_to_the_observed_one(h: Harness) -> None:
+    """The close request's declared totals are the cashier's till count, which
+    is the SAME money the register already rang up -- so adding them would
+    report the till twice over (see the module docstring).
 
-    The declared total is SUMMED WITH the payments the register actually took
-    (see the module docstring): the scenario's layby put $10.00 of cash through
-    this register, so a declared $255 is reported as $265.00.
+    The scenario's layby put $10.00 of cash through this register. Declaring
+    $255 of counted cash does not change what the summary reports, and the
+    wire shape is still the documented one: ``total`` is a ``string`` with two
+    decimal places.
     """
     answered = h.put(
         h.path(CLOSE_REGISTER),
@@ -110,8 +112,23 @@ def test_closing_records_the_declared_totals_as_wire_strings(h: Harness) -> None
     assert totals[c.SEED_PAYMENT_TYPE_CASH_ID] == {
         "payment_type_id": c.SEED_PAYMENT_TYPE_CASH_ID,
         "payment_type_name": "Cash",
-        "total": "265.00",
+        "total": "10.00",
     }
+
+
+def test_a_declared_total_for_a_type_the_till_never_took_is_not_reported(h: Harness) -> None:
+    """The corollary: the summary reports the money the API can SEE. A payment
+    type nobody paid with does not appear because a closing cashier typed a
+    number against it."""
+    assert (
+        h.put(
+            h.path(CLOSE_REGISTER),
+            json.dumps({"payments": [{"payment_type_id": c.SEED_PAYMENT_TYPE_INTERNAL_ID, "total": "40.00"}]}),
+        ).status
+        == 200
+    )
+    summary = h.get(h.path(SUMMARY)).json()["data"]
+    assert c.SEED_PAYMENT_TYPE_INTERNAL_ID not in {row["payment_type_id"] for row in summary["payments"]}
 
 
 def test_a_type_the_close_did_not_declare_is_still_reported(h: Harness) -> None:
@@ -193,6 +210,111 @@ def test_a_closure_is_stored_as_its_own_entity(h: Harness) -> None:
     assert closure.outlet_id == c.SEED_OUTLET_MAIN_ID
 
 
+# -- one closure's money is not the next one's -------------------------------
+
+
+def _cash_sale(h: Harness, amount: float) -> str:
+    """A closed cash sale of ``amount`` on the main register, and its id."""
+    answered = h.post(
+        h.path("/sales"),
+        json.dumps(
+            {
+                "state": "closed",
+                "source": {"author_id": c.SEED_USER_ID, "register_id": c.SEED_REGISTER_MAIN_ID},
+                "line_items": [
+                    {
+                        "product": {"id": c.SEED_PRODUCT_TRAIL_MIX_ID},
+                        "quantity": 1,
+                        "pricing": {"price": amount},
+                        "tax": {"id": c.SEED_TAX_ID, "amount": 0},
+                    }
+                ],
+                "payments": [{"amount": amount, "type": {"config_id": c.SEED_PAYMENT_TYPE_CASH_ID}}],
+            }
+        ),
+    )
+    assert answered.status == 200, answered.text
+    return str(answered.json()["data"]["id"])
+
+
+def _cash_total(h: Harness) -> str:
+    totals = {row["payment_type_id"]: row for row in h.get(h.path(SUMMARY)).json()["data"]["payments"]}
+    return str(totals.get(c.SEED_PAYMENT_TYPE_CASH_ID, {}).get("total", "0.00"))
+
+
+def test_a_second_closure_in_the_same_second_reports_only_its_own_session(h: Harness) -> None:
+    """THE REGRESSION: ``wire_time`` spells instants to the SECOND, so a
+    close, a reopen and a second close driven in a few milliseconds all carry
+    one instant. Windowing on those alone gave the second closure ``[T, T]``
+    and re-admitted the first session's money, which is the ordinary case for
+    a consumer's end-of-day test rather than a race.
+
+    The scenario's layby already put $10.00 of cash through this register, so
+    the first session is 10.00 + 12.50 and the second is 3.25 and nothing
+    else.
+    """
+    _cash_sale(h, 12.50)
+    assert h.put(h.path(CLOSE_REGISTER), "{}").status == 200
+    assert _cash_total(h) == "22.50"
+
+    assert h.put(h.path(f"/registers/{c.SEED_REGISTER_MAIN_ID}/actions/open"), "{}").status == 200
+    _cash_sale(h, 3.25)
+    assert h.put(h.path(CLOSE_REGISTER), "{}").status == 200
+    summary = h.get(h.path(SUMMARY)).json()["data"]
+    assert summary["register_closure_sequence_number"] == 2
+    assert _cash_total(h) == "3.25"
+
+
+def test_a_voided_sales_payments_are_not_money_the_till_took(h: Harness) -> None:
+    """JUDGMENT beside the window: an update rebuilds the whole sale document
+    including ``payments``, so a cancelled sale keeps its payment rows.
+    Counting them would tell a consumer's cancel-a-sale test that the drawer
+    holds cash for a sale that never completed."""
+    parked = h.post(
+        h.path("/sales"),
+        json.dumps(
+            {
+                "state": "parked",
+                "source": {"author_id": c.SEED_USER_ID, "register_id": c.SEED_REGISTER_MAIN_ID},
+                "line_items": [
+                    {
+                        "product": {"id": c.SEED_PRODUCT_TRAIL_MIX_ID},
+                        "quantity": 1,
+                        "pricing": {"price": 12.50},
+                        "tax": {"id": c.SEED_TAX_ID, "amount": 0},
+                    }
+                ],
+                "payments": [{"amount": 12.50, "type": {"config_id": c.SEED_PAYMENT_TYPE_CASH_ID}}],
+            }
+        ),
+    )
+    assert parked.status == 200, parked.text
+    sale = parked.json()["data"]
+    voided = h.put(
+        h.path(f"/sales/{sale['id']}"),
+        json.dumps(
+            {
+                "state": "voided",
+                "source": {"author_id": c.SEED_USER_ID, "register_id": c.SEED_REGISTER_MAIN_ID},
+                "line_items": [
+                    {
+                        "product": {"id": c.SEED_PRODUCT_TRAIL_MIX_ID},
+                        "quantity": 1,
+                        "pricing": {"price": 12.50},
+                        "tax": {"id": c.SEED_TAX_ID, "amount": 0},
+                    }
+                ],
+                "payments": [{"amount": 12.50, "type": {"config_id": c.SEED_PAYMENT_TYPE_CASH_ID}}],
+            }
+        ),
+    )
+    assert voided.status == 200, voided.text
+    assert voided.json()["data"]["state"] == "voided"
+    assert h.put(h.path(CLOSE_REGISTER), "{}").status == 200
+    # The seeded layby's 10.00 and nothing from the cancelled sale.
+    assert _cash_total(h) == "10.00"
+
+
 # -- the webhook -------------------------------------------------------------
 
 
@@ -228,14 +350,25 @@ def test_the_payload_is_the_closure_as_json(h: Harness) -> None:
     payload = json.loads(fields[PAYLOAD_FIELD])
     assert payload["register_id"] == c.SEED_REGISTER_MAIN_ID
     assert payload["register_closure_sequence_number"] == 1
-    # 12.50 declared by this close, plus the 10.00 of cash the scenario's layby
-    # put through this register while it was open.
-    assert payload["payments"][0] == {
+    # The 10.00 of cash the scenario's layby put through this register while
+    # it was open. The 12.50 this close DECLARES is the same money counted
+    # again, so it is validated and not added.
+    totals = {row["payment_type_id"]: row for row in payload["payments"]}
+    assert totals[c.SEED_PAYMENT_TYPE_CASH_ID] == {
         "payment_type_id": c.SEED_PAYMENT_TYPE_CASH_ID,
         "payment_type_name": "Cash",
-        "total": "22.50",
+        "total": "10.00",
     }
     assert isinstance(payload["version"], int)
+
+
+def test_the_delivered_closure_does_not_carry_the_internal_bookkeeping(h: Harness) -> None:
+    """``counted_payment_ids`` is how one closure stops the next counting its
+    money twice; it is not a member of anything the vendor prints, so it must
+    not reach a subscriber."""
+    assert h.put(h.path(CLOSE_REGISTER), "{}").status == 200
+    fields = dict(parse_qsl(h.deliveries()[0].body.decode("utf-8")))
+    assert "counted_payment_ids" not in json.loads(fields[PAYLOAD_FIELD])
 
 
 def test_the_delivery_carries_a_verifiable_signature(h: Harness) -> None:

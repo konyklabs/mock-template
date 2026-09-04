@@ -256,7 +256,14 @@ def project_inventory_level(entity: Mapping[str, Any], product: Mapping[str, Any
         # A variant reports its parent as the root; a product with no parent is
         # its own root.
         "root_product_id": typed.variant_parent_id or typed.id,
-        "total_cost": wire_number(decimal_text(average * level, field="total_cost")),
+        # `allow_negative=True`, matching the two writers -- `surface/sales.py`
+        # closing an oversold sale and `surface/inventory.py` applying a
+        # shrinkage adjustment both write `current_inventory_level` with it.
+        # A negative level is a state this unit deliberately permits, so the
+        # READ has to be able to report it: refusing here would make one
+        # negative row take down `GET /inventory_levels/{product_id}` and the
+        # whole retailer's `POST /inventory_levels` report.
+        "total_cost": wire_number(decimal_text(average * level, field="total_cost", allow_negative=True)),
     }
     for key in ("brand_id", "product_type_id", "supplier_id"):
         value = document.get(key)

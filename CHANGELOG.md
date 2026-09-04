@@ -80,6 +80,52 @@
   nothing. A declaration that names no annotation gets a byte-identical cut,
   so no existing extract or pin moves.
 
+* **lightspeed:** the local review round on konyklabs/roadmap#94, fixed before
+  any of the above shipped. Each of these is a defect a consumer would have
+  met, not a tidy-up:
+
+  - **caller extremes answer 422, never a 500.** A line item whose price and
+    quantity are each individually valid can have a PRODUCT that overflows the
+    decimal context; the sale money funnel did not guard its `quantize` the
+    way `to_minor` and `decimal_text` already did, so `POST /sales` answered a
+    500 carrying `decimal.InvalidOperation`'s own name. It is now the
+    documented refusal, raised while the sale is being built so nothing is
+    stored or announced (konyklabs/roadmap#41's lesson, third funnel).
+  - **a negative inventory level is readable.** `total_cost` is
+    `average_cost × current_inventory_level` and refused to go negative, so
+    one oversell or shrinkage write-down took down
+    `GET /inventory_levels/{product_id}` *and* the retailer-wide
+    `POST /inventory_levels` for every other product. Both writers already
+    allowed the negative level; the read now agrees with them.
+  - **an error whose value this package computed shapes correctly.** A
+    `Decimal` reached `UnitError.info` uncoerced, and the default header
+    sidecar's JSON encoder cannot serialise one -- so the refusal escaped the
+    error pipeline as a `TypeError` instead of becoming a response.
+  - **one closure's money is not the next one's.** Instants are spelled to the
+    second, so a close, a reopen and a second close inside one wall-clock
+    second -- four requests in a few milliseconds, the ordinary case in a
+    test -- gave the second closure a window that re-admitted the first
+    session's payments. A closure now records the payment ids it consumed.
+  - **a closure reports the money the register OBSERVED**, and no longer adds
+    the totals the close request declared on top: they are the same money, and
+    summing them reported a till twice over. The declared totals are still
+    validated. A voided sale's payments are excluded from both the closure and
+    the summary. Both readings are recorded in `capabilities.py`. This
+    supersedes "plus whatever the close request declared" in the Sales bullet
+    above.
+  - **the authorization code is bound to the redirect URI it was issued for**
+    -- the effective one, so an authorize request that names none and takes
+    the unit's default no longer mints a code any redirect URI can redeem.
+  - **closing a sale that resolves to no outlet is a 422.** It used to answer
+    200 while moving no stock and firing no `inventory.update`, so a
+    consumer's stock-decrement test passed while exercising nothing.
+  - **a soft-deleted product or customer is no longer writable**: `PUT` and a
+    repeat `DELETE` are 404. The row stays readable, which is what the
+    `deleted` list parameter is for.
+  - **two guards nothing held in place** now have tests: the authorization
+    code's ten-minute expiry, and the token endpoint's `client_id` check on
+    both grants. Deleting either left the whole suite green.
+
 * **core:** `vendorfake.core.webhooks.models.BodyEncodingSigner` -- an
   optional, structurally discovered protocol (the same shape as
   `SeedingVendor`) letting a vendor whose delivery body is not JSON encode it
