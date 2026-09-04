@@ -432,5 +432,5 @@ def test_fetch_with_no_network_and_no_cache_is_a_named_skip_not_a_usage_error(
     assert main(["fetch", "--target", f"{__name__}:_fetch_target"], fetcher=offline) == 3
     assert offline.calls == [URL]
     err = capsys.readouterr().err
-    assert f"fidelity fetch: {name} UNAVAILABLE" in err
+    assert "fidelity fetch: " in err and " UNAVAILABLE -- " in err and name in err
     assert "its fidelity leg is skipped in this run" in err

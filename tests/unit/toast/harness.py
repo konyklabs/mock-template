@@ -67,6 +67,14 @@ except Unavailable as exc:
     FIDELITY_UNAVAILABLE_REASON = str(exc)
 
 
+def validating_client(unit: Unit, *, strict_undeclared: bool = True) -> InProcessClient:
+    """The client every Toast test drives a unit with: validating when the extract
+    is available, the plain in-process client when it is not (T1)."""
+    if SURFACE is None:
+        return InProcessClient(unit)
+    return ValidatingClient(unit, SURFACE, LEDGER, strict_undeclared=strict_undeclared)
+
+
 @dataclass(frozen=True, slots=True)
 class Harness:
     """A started unit, the client that drives it, and the seeded headers."""

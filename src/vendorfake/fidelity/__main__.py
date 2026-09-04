@@ -128,6 +128,27 @@ def main(
     args = parser.parse_args(argv)
     if args.command == "run" and (args.base_url or args.manifest):
         return _run_remote(parser, args)
+    try:
+        return _dispatch(parser, args, refresh=refresh, client_factory=client_factory, fetcher=fetcher)
+    except Unavailable as exc:
+        # A named skip (T1, konyklabs/roadmap#116) on every subcommand that needs
+        # the extract: tools/self-test.sh's skippable steps report SKIP on exit 3.
+        # No vendor slug here (tools/boundary.toml scans this module); the target names it.
+        print(
+            f"fidelity {args.command}: {args.target} UNAVAILABLE -- {exc}; its fidelity leg is skipped in this run",
+            file=sys.stderr,
+        )
+        return 3
+
+
+def _dispatch(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    *,
+    refresh: RefreshFn | None,
+    client_factory: ClientFactory | None,
+    fetcher: Fetcher | None,
+) -> int:
 
     if not args.target:
         parser.error(f"--target is required (or set {TARGET_ENV_VAR}); this package never guesses a vendor")
@@ -277,15 +298,8 @@ def _fetch(target: FidelityTarget, *, fetcher: Fetcher | None) -> int:
         return 0
     try:
         result = populate(target.anchor, declaration, fetcher=fetcher)
-    except Unavailable as exc:
-        # A named skip (T1, konyklabs/roadmap#116): tools/self-test.sh's fetch
-        # step reports SKIP and keeps exit 0. No vendor slug here -- this
-        # module is scanned (tools/boundary.toml) -- `target.anchor` names it.
-        print(
-            f"fidelity fetch: {target.anchor} UNAVAILABLE -- {exc}; its fidelity leg is skipped in this run",
-            file=sys.stderr,
-        )
-        return 3
+    except Unavailable:
+        raise  # handled in main(): exit 3, the named skip
     except (LookupError, ValueError) as exc:
         return _fail(f"fetch: {exc}")
     print(result.summary)

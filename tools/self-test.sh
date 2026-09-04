@@ -22,26 +22,36 @@ names=()
 codes=()
 kinds=()
 
-# Exit 3 is a named, deliberate skip (T1, konyklabs/roadmap#116): a step that
-# cannot run for a reason outside this script's control (no network and no
-# cache for a fetched-not-committed fidelity extract) rather than a defect.
-# It prints SKIP in the summary, in yellow, and never trips the script's own
-# exit code the way a FAIL does -- only `step`'s caller decides a command
-# means "skip" by exiting 3; every other non-zero exit is still a FAIL.
-step() {
-  local name="$1"; shift
-  printf '\n\033[1m== %s ==\033[0m\n' "$name"
-  "$@"
-  local code=$?
+# Every non-zero exit is a FAIL. `skippable_step` is the one exception, opted
+# into per step: exit 3 means a named, deliberate skip (T1,
+# konyklabs/roadmap#116) -- no network and no cache for a fetched-not-committed
+# fidelity extract -- printed as SKIP in yellow and never counted as a FAIL.
+# pytest exits 3 on an internal error, so an ordinary `step` must not read it
+# as a skip.
+_record_step() {
+  local name="$1" code="$2" skippable="$3"
   names+=("$name")
   codes+=("$code")
   if [ "$code" -eq 0 ]; then
     kinds+=("PASS")
-  elif [ "$code" -eq 3 ]; then
+  elif [ "$skippable" -eq 1 ] && [ "$code" -eq 3 ]; then
     kinds+=("SKIP")
   else
     kinds+=("FAIL")
   fi
+}
+step() {
+  local name="$1"; shift
+  printf '\n\033[1m== %s ==\033[0m\n' "$name"
+  "$@"
+  _record_step "$name" $? 0
+  return 0
+}
+skippable_step() {
+  local name="$1"; shift
+  printf '\n\033[1m== %s ==\033[0m\n' "$name"
+  "$@"
+  _record_step "$name" $? 1
   return 0
 }
 
@@ -111,7 +121,7 @@ if [ "$QUICK" -eq 0 ]; then
   for entry in "${FIDELITY_FETCH_TARGETS[@]}"; do
     vendor="${entry%%=*}"
     TARGET="${entry#*=}"
-    step "fidelity fetch ($vendor)" \
+    skippable_step "fidelity fetch ($vendor)" \
       uv run python -m vendorfake.fidelity fetch --target "$TARGET"
   done
 fi
@@ -234,9 +244,12 @@ for entry in "${FIDELITY_TARGETS[@]}"; do
     printf '\n\033[1m== fidelity (%s) ==\033[0m\nskipped under --quick: the extract is fetched, never committed\n' "$vendor"
     continue
   fi
-  step "fidelity pin ($vendor)" \
+  # A fetched-not-committed extract may be unavailable (exit 3): SKIP, not FAIL.
+  runner=step
+  if printf '%s\n' "${FIDELITY_FETCH_TARGETS[@]}" | grep -qx "$entry"; then runner=skippable_step; fi
+  "$runner" "fidelity pin ($vendor)" \
     uv run python -m vendorfake.fidelity pin --check --offline --target "$TARGET"
-  step "fidelity report ($vendor)" \
+  "$runner" "fidelity report ($vendor)" \
     uv run python -m vendorfake.fidelity report --target "$TARGET"
 done
 
