@@ -62,7 +62,13 @@ def to_cents(value: object, *, field: str, allow_negative: bool = False) -> int:
         raise _refuse(field, value) from None
     if not amount.is_finite():
         raise _refuse(field, value)
-    cents = int(amount.quantize(_CENT, rounding=ROUND_HALF_UP).scaleb(2))
+    try:
+        # Outside the parse guard above until konyklabs/roadmap#41: a FINITE
+        # value needing more than the context's 28 significant digits (1e308,
+        # "1e999") raises InvalidOperation here, not at Decimal().
+        cents = int(amount.quantize(_CENT, rounding=ROUND_HALF_UP).scaleb(2))
+    except InvalidOperation:
+        raise _refuse(field, value) from None
     if cents < 0 and not allow_negative:
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,

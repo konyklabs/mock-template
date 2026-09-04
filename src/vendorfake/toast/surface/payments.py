@@ -380,7 +380,10 @@ def add_payment(
         "externalId": request.externalId,
         "paidDate": paid_at,
         "paidBusinessDate": business_date(
-            paid_at, time_zone=restaurant.time_zone, closeout_hour=restaurant.closeout_hour
+            paid_at,
+            time_zone=restaurant.time_zone,
+            closeout_hour=restaurant.closeout_hour,
+            field=None if request.paidDate is None else f"{field}paidDate",
         ),
         "type": kind,
         "amount": amount,

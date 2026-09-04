@@ -99,17 +99,34 @@ def parse_business_date(text: str, *, field: str) -> int:
     )
 
 
-def business_date(epoch_ms: float, *, time_zone: str, closeout_hour: int) -> int:
+def business_date(epoch_ms: float, *, time_zone: str, closeout_hour: int, field: str | None = None) -> int:
     """The restaurant's business date for an instant. JUDGMENT; module docstring.
 
     An unknown zone falls back to UTC rather than raising: a scenario author
     who misspelt a zone gets a business date off by hours, which a test sees,
     where a 500 on every order create would hide the order.
+
+    The zone shift and the closeout subtraction can each leave the calendar --
+    the date regex admits year 0001, and an instant within ``closeout_hour``
+    plus the zone offset of ``datetime.min`` underflows. When the instant was
+    caller input the caller names ``field`` and gets the documented 400; a
+    clock- or seed-driven instant leaves ``field`` unset, because there the
+    crash is a unit bug and hiding it would help nobody
+    (konyklabs/roadmap#41).
     """
     try:
         zone = ZoneInfo(time_zone)
     except (ZoneInfoNotFoundError, ValueError):
         zone = ZoneInfo("UTC")
-    moment = (_EPOCH + timedelta(milliseconds=math.floor(epoch_ms))).astimezone(zone)
-    shifted = moment - timedelta(hours=closeout_hour)
+    try:
+        moment = (_EPOCH + timedelta(milliseconds=math.floor(epoch_ms))).astimezone(zone)
+        shifted = moment - timedelta(hours=closeout_hour)
+    except (OverflowError, ValueError, OSError):
+        if field is None:
+            raise
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"{field} is too far in the past or future for a business date to exist for it.",
+            field=field,
+        ) from None
     return shifted.year * 10000 + shifted.month * 100 + shifted.day
