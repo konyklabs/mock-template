@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "python",
+  "packages": {
+    ".": {
+      "extra-files": [
+        "README.md",
+        "docs/index.md",
+        "docs/start/install.md",
+        "src/vendorfake/__init__.py"
+      ]
+    }
+  }
+}

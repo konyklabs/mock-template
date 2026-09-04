@@ -14,30 +14,29 @@ documentation. Four vendors ship today: Square (Connect v2), Clover
 - [README](https://github.com/konyklabs/vendorfake/blob/main/README.md):
   what vendorfake is, the vendors it covers, the sixty-second quickstart, and
   links into the docs site for everything else.
-- [For agents](https://github.com/konyklabs/vendorfake/blob/main/docs/for-agents.md):
-  the working contract for a coding agent writing or fixing tests against an
-  installed vendorfake -- bindings, vocabulary, discovery commands, and the
-  evidence habit.
+- [Unit](https://github.com/konyklabs/vendorfake/blob/main/docs/concepts/unit.md):
+  the vocabulary a consumer needs -- unit, profile, capabilities and roles,
+  driver, journal and request log, clock -- plus the discovery commands that
+  answer what a unit serves without starting one.
 - [API contract](https://github.com/konyklabs/vendorfake/blob/main/docs/api-contract.md):
   what is public and covered by the deprecation policy, what is internal and
   may move without notice -- the one page that answers "if I import it, will
   it still be there next release?"
-- [Seeded scenario](https://github.com/konyklabs/vendorfake/blob/main/docs/seeded-scenario.md):
-  the exact ids, credentials and entities every profile starts with, per
-  vendor.
+- [Seed](https://github.com/konyklabs/vendorfake/blob/main/docs/concepts/seed.md):
+  the typed `.seed` attribute, seed overlays, and the exact ids, credentials
+  and entities every profile starts with, per vendor.
+- [Chaos](https://github.com/konyklabs/vendorfake/blob/main/docs/concepts/chaos.md):
+  chaos rules and the fault catalogue, the in-band `chaos:` triggers a vendor
+  SDK can reach, and the provenance labels every answer carries.
 - [Lightspeed Retail X-Series](https://github.com/konyklabs/vendorfake/blob/main/docs/vendors/lightspeed.md):
   the per-vendor page for the newest surface -- what it covers, transcripts
   from a served unit, the five places the vendor's own document contradicts
   itself and this fake reproduces it, the capability table, and every judgment
   call with the page that is silent about it.
-- [Async consumers](https://github.com/konyklabs/vendorfake/blob/main/docs/async-consumers.md):
-  every async entry point (`async_client`, `async_unit`, the
-  `vendorfake_async_unit` fixture) and what a deliberate delay does on each
-  binding.
-- [The pytest plugin](https://github.com/konyklabs/vendorfake/blob/main/docs/pytest-plugin.md):
-  the `vendorfake` marker and its three fixtures (`vendorfake_unit`,
-  `vendorfake_async_unit`, `vendorfake_webhook_receiver`) -- the whole surface
-  installing the wheel registers.
+- [Which binding to use](https://github.com/konyklabs/vendorfake/blob/main/docs/start/bindings.md):
+  the four bindings (in-process sync, in-process async, served, container),
+  the `vendorfake` pytest marker and its three fixtures, docker compose, CI,
+  and TLS termination.
 - [Changelog](https://github.com/konyklabs/vendorfake/blob/main/CHANGELOG.md):
   what changed, release by release.
 

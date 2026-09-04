@@ -3,18 +3,18 @@
 Python 3.11 or newer. Not on PyPI yet — install from the tag:
 
 ```sh
-pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.2.0"
+pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.5.0"  # x-release-please-version
 # or, in a uv project:
-uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.2.0"
+uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.5.0"  # x-release-please-version
 
-vendorfake vendors            # -> clover, square, toast
+vendorfake vendors            # -> clover, lightspeed, square, toast
 vendorfake serve --vendor square
 ```
 
 The `serve` extra pulls in the ASGI stack (`fastapi`, `uvicorn`) that `vendorfake
 serve` and the served/container bindings need; the in-process bindings
 (`unit()`, `async_unit()`) never import it, so a plain `pip install vendorfake`
-is enough for a test suite that only uses those. Drop the `@v0.2.0` to track
+is enough for a test suite that only uses those. Drop the <!-- x-release-please-start-version -->`@v0.5.0`<!-- x-release-please-end --> to track
 `main`. From a checkout of this repository: `uv sync && uv run vendorfake
 serve --vendor square` (`uv sync`'s `dev` group carries the extra's packages
 too, so nothing extra to ask for there).
@@ -55,7 +55,7 @@ and will POST webhooks at any URL it is told — so a fake published to the
 network is an outbound-request primitive for anyone who can route to your
 host. When another container or machine must reach it deliberately, put both
 on a Docker network (or use Testcontainers, as the [docker compose
-recipe](../recipes/docker-compose.md) does) rather than widening the host
+section](bindings.md#docker-compose) does) rather than widening the host
 bind.
 
 The image runs as a non-root user, listens on 8080, and carries a

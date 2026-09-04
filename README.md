@@ -36,8 +36,8 @@ inconsistencies it reproduces and every judgment call it makes:
 Python 3.11 or newer. Not on PyPI yet — install from the tag:
 
 ```sh
-pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
-# or, in a uv project: uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
+pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.5.0"  # x-release-please-version
+# or, in a uv project: uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.5.0"  # x-release-please-version
 # or, from a checkout of this repository: uv sync
 
 vendorfake vendors                       # -> clover, lightspeed, square, toast
@@ -58,7 +58,7 @@ curl -s http://127.0.0.1:8080/__unit/health
 
 Every command names a vendor (`--vendor square|clover|toast|lightspeed`, or
 `VENDORFAKE_VENDOR`); with none installed it refuses and lists what it found.
-Drop the `@v0.1.0` to track `main` instead of a release tag. A container image
+Drop the <!-- x-release-please-start-version -->`@v0.5.0`<!-- x-release-please-end --> to track `main` instead of a release tag. A container image
 is also available (one image, every vendor, chosen at run time) — see
 [Install → As a container](docs/start/install.md#as-a-container).
 
@@ -69,19 +69,22 @@ Everything past the first request lives in the docs site under `docs/`:
 - **[Start here](docs/start/install.md)** — install, the sixty-second
   quickstart above in full, and which binding to use for a test suite
   (in-process sync, in-process async, served, container).
-- **[Recipes](docs/pytest-plugin.md)** — pytest (sync and async), docker
-  compose, CI.
-- **[Concepts](docs/concepts/unit.md)** — unit, profile, capability and
-  roles, seed, driver, journal and request log, clock, chaos rules and
-  faults, provenance labels.
+  The pytest plugin, docker compose, CI and TLS are on that same binding
+  page.
+- **[Concepts](docs/concepts/unit.md)** — four pages:
+  [unit](docs/concepts/unit.md) (profile, capabilities and roles, driver,
+  journal and request log, clock), [seed](docs/concepts/seed.md) (overlays
+  and the seeded scenario per vendor), [chaos](docs/concepts/chaos.md)
+  (rules, faults, in-band triggers, provenance labels), and
+  [fidelity](docs/concepts/fidelity.md).
 - **[Reference](docs/reference/routes-square.md)** — generated from the
   code: every route per vendor, every profile, every fault, every
   environment variable, the control plane, the CLI's own `--help`.
 - **[Vendors](docs/vendors/lightspeed.md)** — a page per vendor where the
   surface has one: what it covers, transcripts from a served unit, the
   vendor's own inconsistencies, and the judgment calls with their citations.
-- **[For agents](docs/for-agents.md)** and **[Contract](docs/api-contract.md)**
-  — the agent-facing surface and the public API contract.
+- **[Testing](docs/testing.md)** and **[Contract](docs/api-contract.md)** —
+  the tiers this repository's own suite runs, and the public API contract.
 - **[Changelog](docs/changelog.md)**.
 
 Read the pages directly on GitHub, or render the site locally from a

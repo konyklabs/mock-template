@@ -65,25 +65,12 @@ nav:
       - Install: start/install.md
       - Sixty-second quickstart: start/quickstart.md
       - Which binding to use: start/bindings.md
-  - Recipes:
-      - Sync pytest: pytest-plugin.md
-      - Async pytest: async-consumers.md
-      - Docker compose: recipes/docker-compose.md
-      - CI: recipes/ci.md
   - Concepts:
       - Unit: concepts/unit.md
-      - Profile: concepts/profile.md
-      - Capability and roles: concepts/capability-and-roles.md
       - Seed: concepts/seed.md
-      - Seeded scenario: seeded-scenario.md
-      - Driver: concepts/driver.md
-      - Journal and request log: concepts/journal-and-request-log.md
-      - Clock: concepts/clock.md
+      - Chaos: concepts/chaos.md
       - Fidelity: concepts/fidelity.md
-      - Chaos rules and faults: concepts/chaos-rules-and-faults.md
-      - Provenance labels: concepts/provenance-labels.md
-  - Vendors:
-      - Lightspeed Retail X-Series: vendors/lightspeed.md
+  - Testing: testing.md
   - Reference:
       - Square routes: reference/routes-square.md
       - Clover routes: reference/routes-clover.md
@@ -95,7 +82,7 @@ nav:
       - Control plane: reference/control-plane.md
       - Manifest: reference/manifest.md
       - CLI: reference/cli.md
-  - For agents: for-agents.md
+  - Vendors:
+      - Lightspeed Retail X-Series: vendors/lightspeed.md
   - Contract: api-contract.md
-  - Testing: testing.md
   - Changelog: changelog.md

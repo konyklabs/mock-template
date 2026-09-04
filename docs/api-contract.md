@@ -88,7 +88,9 @@ collection the seed does not have are in
 
 **An overlay may not name the collections `.seed` is built from.** `tokens`,
 and the vendor's identity collection (`merchant` on Square and Clover,
-`restaurant` on Toast), are refused with `UnitError` when the unit starts —
+`restaurant` on Toast, `retailer` on Lightspeed, which also refuses
+`personal_tokens` and `refresh_tokens`), are refused with `UnitError` when the
+unit starts —
 on all three bindings, and in the parent process before `served()` spawns a
 child. `.seed` carries the shipped credentials and tenant id from this
 distribution's constants rather than from the loaded document, so an overlay
@@ -135,8 +137,9 @@ loaded explicitly with `-p vendorfake.conformance.plugin`.
 
 ### The per-vendor path constants
 
-`vendorfake.square.paths`, `vendorfake.clover.paths` and
-`vendorfake.toast.paths` — one `UPPER_SNAKE` constant per route carrying an
+`vendorfake.square.paths`, `vendorfake.clover.paths`,
+`vendorfake.toast.paths` and `vendorfake.lightspeed.paths` — one
+`UPPER_SNAKE` constant per route carrying an
 `operation_id`, named after that `operation_id`, which is the same identifier
 `registry.routes` and `GET /__unit/routes` publish.
 `tests/unit/test_paths_drift.py` asserts every constant against the live route
@@ -279,3 +282,21 @@ A behaviour change to a symbol that keeps its name is not a deprecation and
 does not get a grace release; it is announced under Behaviour changes or
 Breaking changes with a migration note saying what to do instead. The 0.2.0
 entries are written that way, and they are the model.
+
+## Compatibility policy for 0.x
+
+While the major version is 0, a minor release may change or remove public
+behaviour, every such change is listed under "Breaking changes" in the
+release notes with the removal and the replacement, the deprecation policy
+above applies within a minor series (0.6.x), and the public surface is the
+`__all__` of the modules this page names, pinned by
+`tests/unit/test_public_api.py`; a consumer pins a tag and reads the
+breaking-changes section before each bump.
+
+0.6.0 is the release this round cuts, and its breaking changes are the
+removals of konyklabs/vendorfake#49 and #51: `agent-setup`, the file-drop
+transport, `VENDORFAKE_TRANSPORT`/`VENDORFAKE_TRANSPORT_DIR`,
+`VENDORFAKE_UNMATCHED`, `FrameworkTripwire`/`framework_answered`,
+`MutableResponse`, the `Unit` constructor seams, `served()` raising on
+unmatched by default, the `serve` extra, and the body limit and collection
+caps.

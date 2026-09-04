@@ -12,7 +12,7 @@ from vendorfake.registry import (
     routes,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.5.0"  # x-release-please-version
 """The imported code's version, which a source checkout's metadata may not be."""
 
 __all__ = [

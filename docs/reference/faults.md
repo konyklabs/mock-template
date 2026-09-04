@@ -2,7 +2,7 @@
 
 # Faults
 
-Every built-in fault. `provenance: vendor` reproduces a failure mode the vendor documents; `provenance: transport` is a transport-level failure mode no vendor documents. `phase: request` fires instead of the handler, so nothing is committed; `phase: response` fires on the answer *after* the handler committed, so a retry does not start clean; `phase: delivery` is a webhook delivery. See [Chaos rules and faults](../concepts/chaos-rules-and-faults.md) and [Provenance labels](../concepts/provenance-labels.md).
+Every built-in fault. `provenance: vendor` reproduces a failure mode the vendor documents; `provenance: transport` is a transport-level failure mode no vendor documents. `phase: request` fires instead of the handler, so nothing is committed; `phase: response` fires on the answer *after* the handler committed, so a retry does not start clean; `phase: delivery` is a webhook delivery. See [Chaos](../concepts/chaos.md) and [Provenance labels](../concepts/chaos.md#provenance).
 
 | Fault | Scope | Provenance | Phase | Params | Description |
 | --- | --- | --- | --- | --- | --- |
