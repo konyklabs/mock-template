@@ -30,6 +30,7 @@ src/vendorfake/
   registry.py   vendor discovery and the one create_unit() constructor.
 tests/
   unit/         fast, no server, no vendor-specific fixtures required.
+  parity/       one behaviour asserted across unit(), served() and the CLI.
   integration/  needs a running server (marker: integration).
   conformance/  the suite that exercises tests/conformance's own harness
                 against the checks in src/vendorfake/conformance/checks/.
@@ -37,6 +38,9 @@ tools/          self-test.sh, boundary_check.py, boundary.toml, and the
                 other scripts self-test.sh's steps call.
 docs/           the docs site's source (see mkdocs.yml if present).
 ```
+
+`docs/testing.md` is the testing strategy: the tiers, and the two rules that
+decide whether a test exists.
 
 ## The one command
 

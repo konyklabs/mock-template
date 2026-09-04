@@ -87,6 +87,7 @@ dev = [
   # consumer already has. anyio's plugin arrives with httpx and covers the
   # other half. Without this the claim would be reasoning, not evidence.
   "pytest-asyncio>=0.23",
+  "pytest-cov>=5",
 ]
 # The docs site. Kept out of `dev` deliberately: `uv sync` (no group flags,
 # what CI's non-docs jobs and a plain contributor checkout run, including
@@ -146,11 +147,7 @@ strict = true
 # checker executes, so they belong in the strict run rather than under the
 # `tests.*` override below. It is deliberately not a package (no __init__.py),
 # which keeps its modules out of `tests.*` and out of pytest collection.
-# `tests/typing/negative` is the half that must FAIL, so the ordinary run must
-# not see it; tests/unit/testing/test_seed_typing.py runs mypy on it and
-# asserts the error.
 files = ["src", "tools", "tests/typing"]
-exclude = ["^tests/typing/negative/"]
 warn_unreachable = true
 enable_error_code = ["redundant-expr", "possibly-undefined", "truthy-bool"]
 

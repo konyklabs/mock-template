@@ -8,6 +8,7 @@ why each one names the thing that would be there if the property broke.
 
 from __future__ import annotations
 
+import inspect
 import json
 from typing import Any
 
@@ -30,6 +31,15 @@ def test_the_verb_set_is_complete(app: Any) -> None:
     """
     assert set(HTTP_METHODS) == EXPECTED_METHODS
     assert registered_methods(app) == EXPECTED_METHODS
+
+
+def test_the_catch_all_declares_no_typed_parameter(app: Any) -> None:
+    """The route takes the raw request and nothing else: a ``Depends``, ``Header``,
+    ``Body`` or ``Cookie`` parameter would let the framework validate, parse or
+    reject before the unit sees the request."""
+    catch_all = next(r for r in app.routes if getattr(r, "path", None) == "/{full_path:path}")
+    parameters = list(inspect.signature(catch_all.endpoint).parameters)
+    assert parameters == ["request"], parameters
 
 
 def test_there_is_exactly_one_catch_all_route(app: Any) -> None:

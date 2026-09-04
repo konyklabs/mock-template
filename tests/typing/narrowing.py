@@ -7,10 +7,9 @@ if an inferred type drifts, so a regression in the overloads shows up as a red
 type-check rather than as a consumer's ``isinstance`` coming back.
 
 Not collected by pytest -- the file is not named ``test_*`` and this directory
-is not a package -- because there is nothing here to execute. The one dynamic
-half of the evidence, that the *negative* case really is rejected, is
-``tests/typing/negative/`` driven from
-``tests/unit/testing/test_seed_typing.py``.
+is not a package -- because there is nothing here to execute. The negatives are
+here too, as ``# type: ignore[<code>]`` lines: ``warn_unused_ignores`` under
+``--strict`` turns each one red the day the error it expects stops occurring.
 
 ``served`` is checked alongside ``unit`` because it carries the same overloads
 for the same reason, and an overload set that is never exercised rots.
@@ -120,9 +119,6 @@ def a_child_process_narrows_too() -> None:
 # The positives only. That an overlay naming a collection the vendor does NOT
 # have is *rejected* is a negative, and a negative cannot be asserted by a
 # type check that passes -- it is asserted by running mypy on
-# `tests/typing/negative/square_overlay_unknown_collection.py` from
-# `tests/unit/testing/test_seed_typing.py`.
-# ---------------------------------------------------------------------------
 
 
 def a_square_overlay_takes_squares_own_collections() -> None:
@@ -177,3 +173,26 @@ def served_and_async_unit_carry_the_same_overlay_types() -> None:
         assert_type(child, ServedUnit[ToastSeed])
     holder: AbstractAsyncContextManager[StartedUnit[SquareSeed]] = async_unit("square", seed_overlay={"locations": []})
     del holder
+
+
+# ---------------------------------------------------------------------------
+# The negatives: each ignore below is an error mypy MUST report.
+# ---------------------------------------------------------------------------
+
+
+def toast_has_no_merchant_id() -> None:
+    with unit("toast") as started:
+        tenant: str = started.seed.merchant_id  # type: ignore[attr-defined]
+        del tenant
+
+
+def a_square_overlay_rejects_a_collection_square_does_not_have() -> None:
+    overlay: SquareSeedOverlay = {"merchants": {}}  # type: ignore[typeddict-unknown-key]
+    del overlay
+
+
+def a_bad_overlay_at_the_call_site_loses_the_vendor_narrowing() -> None:
+    # A literal "square" with an untyped overlay resolves to the ``vendor: str``
+    # fallback overload, so the seed comes back as the structural ``Seed``.
+    with unit("square", seed_overlay={"merchants": {}}) as started:
+        assert_type(started, StartedUnit[Seed])

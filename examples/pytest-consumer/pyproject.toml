@@ -18,7 +18,7 @@ dependencies = [
 container = ["testcontainers>=4.0"]
 
 [tool.uv.sources]
-vendorfake = { path = "../..", editable = false }
+vendorfake = { path = "../..", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["."]
