@@ -213,8 +213,9 @@ def test_toast_in_a_container_pays_a_check_in_dollars(
     assert created.status_code == 200, created.text
     order = created.json()
     check = order["checks"][0]
-    # Dollars over the socket too: one menu item billed in cents would be a
-    # three-figure integer here, not a sum a diner would recognise.
+    # Dollars over the socket too: Toast's money is a decimal number, so a total
+    # billed in cents would arrive as a JSON integer rather than a float.
+    assert isinstance(check["totalAmount"], float), check["totalAmount"]
     assert 0 < check["totalAmount"] < 100, check["totalAmount"]
     paid = toast_http.post(
         f"/orders/v2/orders/{order['guid']}/checks/{check['guid']}/payments",
