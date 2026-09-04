@@ -364,6 +364,51 @@ def test_a_fault_fires_before_the_key_is_consumed() -> None:
     assert calls == ["ok"]
 
 
+def test_a_response_phase_fault_records_the_handlers_clean_answer() -> None:
+    """A response-phase fault runs *after* the handler committed, so the key
+    must carry that commit.
+
+    ``connection_reset`` (and the other four response-phase faults) leaves the
+    handler's real body untouched and attaches a ``UnitResponse.transport``
+    directive plus the ``vendorfake-fault`` header (``core/chaos/faults.py``'s
+    ``_directive``). Unlike a request-scope fault, which raises before
+    ``route.handler(args)`` ever runs, this one fires at step 9 with the
+    entity already created and journalled -- and the store has no rollback.
+    So the record written against the key is the handler's pre-fault answer:
+    the retry replays it, the handler does not run twice, and no
+    ``vendorfake-fault`` header or transport directive reaches
+    ``IdempotencyRecord``.
+
+    See ``tests/unit/test_idempotency_under_faults.py`` for the same claim end
+    to end against Square's ``POST /v2/payments``, where "the handler ran
+    twice" means a second real payment.
+    """
+    calls: list[str] = []
+    unit = make_unit(
+        [route("POST", "/v2/orders", _handler(calls), idempotency=_IDEM)],
+        chaos_rules=[
+            {
+                "id": "r1",
+                "scope": "request",
+                "fault": "connection_reset",
+                "match": {"route": "POST /v2/orders"},
+                "when": {"times": 1},
+            }
+        ],
+    )
+    api = in_process(unit)
+    first = api.post("/v2/orders", {"idempotency_key": "k1"})
+    assert first.status == 200
+    assert first.header("vendorfake-fault") == "connection_reset"
+    second = api.post("/v2/orders", {"idempotency_key": "k1"})
+    assert second.status == 200
+    assert second.body == first.body
+    assert second.header("x-unit-idempotent-replay") == "true"
+    assert second.header("vendorfake-fault") is None
+    assert second.header("vendorfake-rule") is None
+    assert calls == ["ok"]
+
+
 def test_a_non_2xx_response_is_not_stored_against_the_key() -> None:
     calls: list[str] = []
 

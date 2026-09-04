@@ -12,17 +12,17 @@ from collections.abc import Iterator
 
 import pytest
 
-from vendorfake.testing import StartedUnit, WebhookReceiver, unit, webhook_receiver
+from vendorfake.testing import CloverSeed, SquareSeed, StartedUnit, WebhookReceiver, unit, webhook_receiver
 
 
 @pytest.fixture
-def square() -> Iterator[StartedUnit]:
+def square() -> Iterator[StartedUnit[SquareSeed]]:
     with unit("square") as started:
         yield started
 
 
 @pytest.fixture
-def clover() -> Iterator[StartedUnit]:
+def clover() -> Iterator[StartedUnit[CloverSeed]]:
     with unit("clover") as started:
         yield started
 

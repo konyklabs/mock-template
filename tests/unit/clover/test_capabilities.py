@@ -53,7 +53,15 @@ def test_a_disabled_capability_answers_explicitly_and_never_with_a_404() -> None
     from vendorfake import create_unit
     from vendorfake.core.transport.inprocess import in_process
 
-    unit = create_unit(vendor="clover", profile="full", logger=Silent(), env={"VENDORFAKE_CAPABILITIES": "-oauth"})
+    # errors.sidecar=both, not the default `headers` (konyklabs/roadmap#71):
+    # this test reads `unit_error` out of the body to assert on its content,
+    # a concern the sidecar's wire placement does not change.
+    unit = create_unit(
+        vendor="clover",
+        profile="full",
+        logger=Silent(),
+        env={"VENDORFAKE_CAPABILITIES": "-oauth", "VENDORFAKE_ERROR_SIDECAR": "both"},
+    )
     try:
         api = in_process(unit)
         response = api.call(method="GET", path="/oauth/v2/authorize", query={"client_id": CLIENT_ID})

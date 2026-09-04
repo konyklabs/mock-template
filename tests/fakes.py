@@ -151,6 +151,7 @@ class FakeVendor:
     routes: tuple[Route, ...] = ()
     capabilities: tuple[CapabilityDecl, ...] = DEFAULT_CAPABILITIES
     not_supported: Mapping[str, str] = field(default_factory=lambda: dict(DEFAULT_NOT_SUPPORTED))
+    roles: Mapping[str, str] = field(default_factory=dict)
     auth: FakeAuth = field(default_factory=FakeAuth)
     errors: FakeErrors = field(default_factory=FakeErrors)
     magic: MagicTriggerSpec | None = None
@@ -176,6 +177,32 @@ class FakeVendor:
         res.headers["acme-version"] = self.api_version or ""
 
 
+class VendorWithoutRoles:
+    """A v0.1.0-vintage third-party vendor: every ``VendorDefinition`` member
+    except ``roles``, which did not exist when it was written.
+
+    ``VendorDefinition.roles`` arrived in 0.2 as a *required* protocol member,
+    so a vendor registered through the ``vendorfake.vendors`` entry-point group
+    and built against 0.1.0 has no such attribute. This stands in for one, to
+    pin that the two runtime read sites -- ``registry._translate_capability_names``
+    and the control plane's ``info`` handler -- fail legibly rather than with an
+    ``AttributeError`` from somewhere the caller cannot connect to anything.
+
+    Delegation rather than a subclass with the field deleted, because a
+    dataclass field cannot be un-declared and ``del`` on the instance would
+    still leave the class attribute in place; ``__getattr__`` only fires for
+    what is genuinely absent, which is exactly the shape being modelled.
+    """
+
+    def __init__(self, inner: FakeVendor) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "roles":
+            raise AttributeError(name)
+        return getattr(self._inner, name)
+
+
 def make_config(
     *,
     profile: str = "test",
@@ -185,22 +212,28 @@ def make_config(
     chaos_strict_rules: bool = False,
     clock_mode: str = "real",
     clock_start: str | None = None,
+    error_sidecar: str = "headers",
     log_level: str = "error",
     schedule_ms: Sequence[int] = (),
     time_scale: float = 1.0,
     timeout_ms: int = 10_000,
     subscribers: Sequence[Mapping[str, object]] = (),
     disable_delivery: bool = False,
+    request_log_capacity: int | None = None,
+    unmatched: str | None = None,
 ) -> object:
     """A ``ResolvedConfig`` for a kernel test, with the knobs those tests move."""
     from vendorfake.core.config.models import (
         ClockSection,
+        ErrorsSection,
+        RequestsSection,
         ResolvedChaos,
         ResolvedConfig,
         ResolvedWebhooks,
         RetryPolicy,
         SubscriberConfig,
         TransportSection,
+        UnmatchedSection,
     )
 
     return ResolvedConfig(
@@ -215,7 +248,10 @@ def make_config(
             seed=chaos_seed, rules=tuple(dict(r) for r in chaos_rules), strict_rules=chaos_strict_rules
         ),
         clock=ClockSection(mode=clock_mode, start=clock_start),  # type: ignore[arg-type]
+        errors=ErrorsSection(sidecar=error_sidecar),  # type: ignore[arg-type]
         transport=TransportSection(),
+        requests=RequestsSection() if request_log_capacity is None else RequestsSection(capacity=request_log_capacity),
+        unmatched=UnmatchedSection(policy=unmatched),  # type: ignore[arg-type]
         log_level=log_level,
     )
 
