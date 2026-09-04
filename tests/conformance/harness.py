@@ -61,6 +61,8 @@ from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.registry import create_unit
 from vendorfake.testing.conformance import CLOVER_EXPECTED_SKIPS as _CLOVER_EXPECTED_SKIPS
 from vendorfake.testing.conformance import CLOVER_INAPPLICABLE as _CLOVER_INAPPLICABLE
+from vendorfake.testing.conformance import LIGHTSPEED_EXPECTED_SKIPS as _LIGHTSPEED_EXPECTED_SKIPS
+from vendorfake.testing.conformance import LIGHTSPEED_INAPPLICABLE as _LIGHTSPEED_INAPPLICABLE
 from vendorfake.testing.conformance import TOAST_EXPECTED_SKIPS as _TOAST_EXPECTED_SKIPS
 from vendorfake.testing.conformance import TOAST_INAPPLICABLE as _TOAST_INAPPLICABLE
 
@@ -419,4 +421,36 @@ def toast_target(
         out_of_process=out_of_process,
         expected_skips=TOAST_EXPECTED_SKIPS,
         inapplicable=TOAST_INAPPLICABLE,
+    )
+
+
+LIGHTSPEED_VENDOR = "lightspeed"
+LIGHTSPEED_PROFILES: tuple[str, ...] = PROFILES
+"""The same six names again, so one matrix shape covers all four vendors."""
+
+LIGHTSPEED_EXPECTED_SKIPS = _LIGHTSPEED_EXPECTED_SKIPS
+LIGHTSPEED_INAPPLICABLE = _LIGHTSPEED_INAPPLICABLE
+"""Lightspeed's skip matrix, owned by the wheel's own target for the same
+reason as Clover's and Toast's above."""
+
+
+def lightspeed_target(
+    *,
+    profiles: tuple[str, ...] = LIGHTSPEED_PROFILES,
+    transports: tuple[str, ...] = ("inprocess", "http"),
+    out_of_process: tuple[str, ...] = (OUT_OF_PROCESS_TRANSPORT,),
+) -> ConformanceTarget:
+    """The fourth vendor. No ``path_params``: a Lightspeed unit serves exactly
+    one retailer -- tenancy is the per-retailer subdomain
+    (``{domain_prefix}.retail.lightspeed.app``), not a path segment and not a
+    header -- so every probe path stays the probe."""
+    return ConformanceTarget(
+        name=LIGHTSPEED_VENDOR,
+        open_client=functools.partial(open_client, vendor=LIGHTSPEED_VENDOR),
+        open_with_seed_overlay=functools.partial(open_with_seed_overlay, vendor=LIGHTSPEED_VENDOR),
+        profiles=profiles,
+        transports=transports,
+        out_of_process=out_of_process,
+        expected_skips=LIGHTSPEED_EXPECTED_SKIPS,
+        inapplicable=LIGHTSPEED_INAPPLICABLE,
     )

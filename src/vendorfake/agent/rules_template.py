@@ -100,7 +100,7 @@ HTTP receiver on loopback. Requesting a fixture on a test with no
 
 ## Vocabulary
 
-- **vendor** -- which API is faked: `square`, `clover`, `toast`
+- **vendor** -- which API is faked: `square`, `clover`, `toast`, `lightspeed`
   (`vendorfake vendors` lists what is installed).
 - **profile** -- a named JSON document choosing which capabilities are on,
   the seed, the clock mode, retry timing, and more (`vendorfake profiles

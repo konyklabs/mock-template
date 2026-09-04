@@ -63,6 +63,7 @@ TARGETS=(
   "square=tests.conformance.harness:target"
   "clover=tests.conformance.harness:clover_target"
   "toast=tests.conformance.harness:toast_target"
+  "lightspeed=tests.conformance.harness:lightspeed_target"
 )
 
 # Fidelity to the vendor (D-006), the targets. Only vendors with a fidelity
@@ -76,6 +77,11 @@ TARGETS=(
 FIDELITY_TARGETS=(
   "square=vendorfake.testing.fidelity:square_target"
   "toast=vendorfake.testing.fidelity:toast_target"
+  # lightspeed is deliberately NOT in FIDELITY_FETCH_TARGETS below: its extract
+  # is committed (`vendored: true` -- api-2026-07.yaml is published under
+  # Apache 2.0), so both steps run offline, on `--quick` as well as on a full
+  # run, and neither depends on the vendor's site answering.
+  "lightspeed=vendorfake.testing.fidelity:lightspeed_target"
 )
 FIDELITY_FETCH_TARGETS=(
   "toast=vendorfake.testing.fidelity:toast_target"

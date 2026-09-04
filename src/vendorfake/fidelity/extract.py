@@ -66,7 +66,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from vendorfake.fidelity.types import SpecSource, route_key, template_shape
+from vendorfake.fidelity.types import Annotation, SpecSource, route_key, template_shape
 
 
 class _StrictSafeLoader(yaml.SafeLoader):
@@ -714,6 +714,7 @@ def cut_extract(
     fetched: str,
     extension_map: Mapping[str, str] | None = None,
     error_schema: str | None = None,
+    annotations: Sequence[Annotation] = (),
 ) -> dict[str, Any]:
     """The scoped extract, as a plain document ready for :func:`render_json`.
 
@@ -725,6 +726,11 @@ def cut_extract(
     declaration's: vendor extension keys to rename to their OAS keyword, and
     the schema kept as a root of the closure whether or not any operation
     references it (an error when no source defines it).
+
+    ``annotations`` are the declaration's :class:`~vendorfake.fidelity.types.Annotation`
+    rows: facts read out of each kept operation's ``description`` *before* the
+    prose is stripped, recorded under ``x-vendorfake.annotations``. None
+    declared means the key is absent and the cut is unchanged.
     """
     if not sources:
         raise ValueError("cut_extract needs at least one spec source")
@@ -737,6 +743,7 @@ def cut_extract(
     kept_keys: list[str] = []
     missing: list[str] = []
     roots: dict[int, set[str]] = {}
+    annotated: dict[str, dict[str, list[str]]] = {}
 
     for method, spec_path in modeled:
         method_upper = method.upper()
@@ -750,6 +757,14 @@ def cut_extract(
             upstream_path, raw = hit
             operation = _cut_operation(cut, item.document, raw)
             out_path = item.base_path + upstream_path
+            # Read the prose annotations before ``_cut_operation``'s strip
+            # threw the description away; keyed by the SPEC's spelling of the
+            # route, which is what the extract's own ``modeled`` list uses.
+            described = raw.get("description")
+            for annotation in annotations:
+                values = annotation.read(described) if isinstance(described, str) else ()
+                if values:
+                    annotated.setdefault(annotation.name, {})[route_key(method_upper, out_path)] = list(values)
             paths.setdefault(out_path, {})[method_upper.lower()] = operation
             origin[(out_path, method_upper.lower())] = position
             kept_keys.append(route_key(method_upper, out_path))
@@ -785,6 +800,15 @@ def cut_extract(
             }
         )
 
+    metadata: dict[str, Any] = {}
+    if annotations:
+        # Every declared name is present even when nothing matched, so a
+        # vendor's check can tell "the annotation found nothing" from "the
+        # declaration no longer asks for it".
+        metadata["annotations"] = {
+            annotation.name: dict(sorted(annotated.get(annotation.name, {}).items())) for annotation in annotations
+        }
+
     return {
         "openapi": str(first_document.get("openapi")),
         "info": info,
@@ -799,5 +823,6 @@ def cut_extract(
             "namespaced": dict(sorted(namespaced.items())),
             "rewritten": {"nullable_ref": cut.nullable_refs, "extensions": dict(sorted(cut.renamed.items()))},
             "stripped": sorted(cut.stripped),
+            **metadata,
         },
     }

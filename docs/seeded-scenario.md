@@ -3,7 +3,8 @@
 Every profile ships the same scenario, so a fresh unit needs no setup. The
 values are readable and obviously fake by design. In Python they are
 `.seed.*` attributes on a started unit (`vendorfake.testing.SquareSeed`,
-`CloverSeed`, `ToastSeed`), which is the form to use in a test. The vendor
+`CloverSeed`, `ToastSeed`, `LightspeedSeed`), which is the form to use in a
+test. The vendor
 name narrows the type: `unit("toast").seed` is a `ToastSeed` to a type
 checker, so a field belonging to another vendor is a type error rather than
 a runtime surprise.
@@ -11,7 +12,7 @@ a runtime surprise.
 ## The three fields every vendor has
 
 A test parametrized over vendors reads the seed through
-`vendorfake.testing.Seed`, which is what the three have in common:
+`vendorfake.testing.Seed`, which is what the four have in common:
 `credentials`, `auth`, `read_only_auth` and `event_types`. Everything else in
 the tables below is vendor-specific and reached through the vendor's own seed
 type.
@@ -25,12 +26,15 @@ Clover and Toast spell it `client_id`:
 | Square | `application_id` | `application_secret` | `refresh_token` |
 | Clover | `client_id` | `client_secret` | `refresh_token` |
 | Toast | `client_id` | `client_secret` | `client_credentials` |
+| Lightspeed | `client_id` | `client_secret` | `refresh_token` |
 
 `grant` names the token lifecycle, which is the one difference a consumer's
-session handling genuinely has to branch on: Square and Clover issue a
-refresh token and rotate it, Toast issues a bearer with no refresh and
+session handling genuinely has to branch on: Square, Clover and Lightspeed
+issue a refresh token and rotate it, Toast issues a bearer with no refresh and
 expects a fresh login when it expires. That is also why `refresh_token` is
-not on the shared type — Toast has none.
+not on the shared type — Toast has none. Lightspeed rotates hardest: a refresh
+revokes the access token that was issued *with* the consumed refresh token, so
+the old bearer is dead the instant the new one arrives.
 
 The values come from the profile's `vendor` block, so a profile that
 overrides the app credentials is reported as it actually ran rather than as
@@ -84,11 +88,40 @@ the default below.
 | Webhooks | subscriber `sub_seed_quickstart` (secret `unit-seeded-toast-webhook-secret`, `Toast-Signature` HMAC), **disabled**; register through `POST /__unit/webhooks/subscriptions` |
 | Event types | `order_updated`, `in_stock`, `out_of_stock`, `low_quantity`, `menus_updated` |
 
-The guids in the table above are truncated to their last four characters. They come
+The guids in the Toast table above are truncated to their last four characters. They come
 in four families, each with its own fixed prefix and the same
 `-0000-4000-8000-` middle: `e6a4a8d2…` the restaurant and its management
 group, `3c9a1f00…` the menu and everything on it, `5d0e2b11…` restaurant
 configuration (dining options, payment types, tax rates), `9a7b6c5d…`
 orders and checks. So the dine-in dining option in full is
-`5d0e2b11-0000-4000-8000-00000000d001`. Every value is also an attribute on
-the seed object, which is the form to use in a test.
+`5d0e2b11-0000-4000-8000-00000000d001`.
+
+## Lightspeed Retail X-Series
+
+| | |
+|---|---|
+| App credentials | `unit-lightspeed-client-id` / `unit-lightspeed-client-secret` |
+| OAuth shape | authorize stand-in `GET /connect` + form-encoded code exchange at `POST /api/1.0/token`; refresh rotates AND revokes the access token it came with |
+| Full-access bearer | `seedfullscopeaccesstoken000000000000001A` (refresh `seedfullscoperefreshtoken00000000000001A`) |
+| Read-only bearer | `seedreadonlyaccesstoken0000000000000001A` |
+| Personal token | `seedpersonalaccesstoken0000000000000001A` — full scopes, never expires, Plus-plan only at the real vendor |
+| Tenant, and how requests name it | retailer `…0001` ("Ridgeline Provisions"), `domain_prefix` `unit-lightspeed` (implicit in the token; the real API puts it in the host) |
+| Outlets and registers | outlets `…0101` (main), `…0102` (quay); registers `…0201` (open) and `…0202` (closed), one per outlet |
+| Payment types | cash `…0301`, credit card `…0302`, and one **internal** type `…0303` that `payment_types:read` excludes |
+| Catalog | Trail Mix 500g `…0701` (`TRAIL-500`, 12.50), Merino Socks `…0702` (24.90), Insulated Bottle 1L `…0703` (`BOTL-1L`, inactive), and the Ridgeline Tee family `…0704` with variants `…0705` (small) and `…0706` (large) |
+| Inventory | ten records across the two outlets, plus two adjustment reasons (`…0921` found, `…0922` spoiled) and two logged adjustments |
+| Customers | Ada Whitcombe `…0911`, Blake `…0912`, Noor `…0913` (a null `last_name`, which is legal), in group `…0901` |
+| Sales | parked `…0a01`, closed `…0a02` (card payment, invoice `MAIN-1042-NZ`), layby `…0a03` |
+| Payment plumbing | payments are **inline on the sale**; there is no payment operation anywhere in this API |
+| Rate limit | `300 × registers + 50` = 650 per five minutes, on every profile, with `x-ratelimit-limit`/`-remaining` on every response |
+| Webhooks | subscriber `…0401` on `register_closure.create` to `https://consumer.example/hooks/lightspeed`, **enabled**; register through the vendor's own `POST /api/2026-07/webhooks` |
+| Event types | `sale.update`, `product.update`, `customer.update`, `inventory.update`, `register_closure.create`, and the two consignment events, which are declared and never fired |
+
+Lightspeed's ids are one block: `1a000000-0000-1000-8000-0000000000NN`, in the
+version-1 UUID layout the vendor's own examples use, numbered by entity kind —
+`01` the retailer, `01xx` outlets, `02xx` registers, `03xx` payment types,
+`04xx` webhooks, `05xx` tokens, `07xx` products, `09xx` customers, `0axx`
+sales. So the main register in full is
+`1a000000-0000-1000-8000-000000000201`. The whole surface, with transcripts, is
+on the [Lightspeed page](vendors/lightspeed.md). Every value is also an
+attribute on the seed object, which is the form to use in a test.

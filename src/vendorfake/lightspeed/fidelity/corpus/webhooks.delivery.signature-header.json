@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "id": "webhooks.delivery.signature-header",
+  "title": "A delivery is application/x-www-form-urlencoded with payload=<JSON>, and carries X-Signature: signature=<hex>,algorithm=HMAC-SHA256",
+  "source": {
+    "url": "https://x-series-api.lightspeedhq.com/docs/webhooks",
+    "fetched": "2026-09-04",
+    "provenance": "documented",
+    "note": "Three documented facts, all asserted: the delivery is a POST of application/x-www-form-urlencoded whose required field is `payload`, \"a JSON-encoded object with entity details\", with domain_prefix and environment optional beside it; the header format is exactly \"X-Signature: signature=897hRT893qkA783M093ha903f,algorithm=HMAC-SHA256\", comma-separated key=value pairs in one header value. What the page does NOT settle is what is hashed -- \"generate a signature by hashing the webhook request body\" over a form body with JSON inside a field has two readings -- nor the encoding, since its sample value is neither hex nor base64. This unit signs the raw form bytes and encodes hex; both are JUDGMENT and both are published at GET /__unit/info under signer.payload_provenance and signer.encoding_provenance, which this case reads rather than asserting a signature value."
+  },
+  "routes": [
+    "PUT /api/2026-07/registers/{register_id}/actions/close"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "the unit publishes the documented header and format",
+      "request": {
+        "method": "GET",
+        "path": "/__unit/info"
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "signer": {
+            "header": "X-Signature",
+            "format": "signature=<hex>,algorithm=HMAC-SHA256 (comma-separated key=value pairs, one header)",
+            "bindings": {
+              "body_bound": true,
+              "secret_bound": true,
+              "signature_headers": [
+                "x-signature"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "produce a delivery",
+      "request": {
+        "method": "PUT",
+        "path": "/api/2026-07/registers/${vars.register_main_id}/actions/close",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {}
+      },
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "name": "wait for the delivery",
+      "request": {
+        "method": "POST",
+        "path": "/__unit/webhooks/drain",
+        "body": {}
+      },
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "name": "the delivery is form-encoded and signed in the documented shape",
+      "request": {
+        "method": "GET",
+        "path": "/__unit/webhooks/deliveries"
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "count": 1,
+          "deliveries": [
+            {
+              "attempt": 1,
+              "headers": {
+                "content-type": "application/x-www-form-urlencoded",
+                "X-Signature": "${re:signature=[0-9a-f]{64},algorithm=HMAC-SHA256}"
+              },
+              "body_preview": "${re:payload=%7B%22register_closure_id%22.*}"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -2,6 +2,145 @@
 
 ## Unreleased
 
+The fourth vendor, Lightspeed Retail X-Series (konyklabs/roadmap#94), and the
+fidelity leg and review round that came with it.
+
+### Features
+
+* **lightspeed:** a fourth vendor -- **Lightspeed Retail X-Series, API
+  2026-07** (konyklabs/roadmap#94). Thirty-seven routes on one retailer: the
+  token endpoint (`POST /api/1.0/token`) with both documented grants, a
+  stand-in `GET /connect`, the retailer, outlets, registers and payment types,
+  products with inline variants, inventory, customers, sales, and the five
+  documented webhook operations. `vendorfake vendors` now answers `clover,
+  lightspeed, square, toast`; six profiles, one seeded scenario, the unit's own
+  test suite, and the conformance matrix green on every profile and both
+  transports.
+
+  **Rotation that revokes.** A refresh call retires the consumed refresh token
+  *and* revokes the access token that was returned with it, which is both
+  halves of what the authorization page documents. A consumer that keeps the
+  pre-refresh bearer fails here, which is the defect this endpoint exists to
+  catch.
+
+  **Three cross-cutting mechanics, all vendor-side because the core has no
+  seam for any of them.** The retailer-global **version counter** -- one
+  monotonically increasing integer per retailer across every resource type --
+  and the list envelope built on it (`{"data": [...], "version": {"max": …,
+  "min": …}}`, ascending, with `after`/`before`/`page_size`/`deleted`). The
+  documented fixed-window **rate limiter**: `300 × registers + 50` per five
+  minutes, `X-RateLimit-Limit` and `X-RateLimit-Remaining` on every response,
+  and a 429 whose `Retry-After` is an RFC 1123 HTTP-date rather than
+  delta-seconds -- vendor behaviour, not chaos, so no profile switches it off.
+  And **form-encoded webhook delivery**: `payload=<JSON>` plus `domain_prefix`
+  and `environment`, signed `X-Signature:
+  signature=<hex>,algorithm=HMAC-SHA256`, retried on the documented
+  twenty-attempt ladder inside 48 hours.
+
+  **Sales carry their payments inline**, as the specification declares them:
+  there is no payment sub-resource anywhere in this API version. With them a
+  published `parked | pending | voided | closed` state machine (`closed` and
+  `voided` terminal), totals computed from the line items and never taken from
+  the request, a return action, a close that draws the outlet's stock, and
+  payment refusals in `PaymentErrorResponse` -- the only error schema the
+  specification names.
+
+  **Five of the vendor's own inconsistencies are reproduced rather than
+  smoothed over**, because a consumer will meet all five: money is a JSON
+  number on the catalogue and a JSON string on the register surface; the four
+  inventory reads answer a bare array rather than the envelope, two of them as
+  POSTs whose paging travels in the body; `POST /customers` is a 201 and its
+  delete a 204 while `POST /products` is a 200 answering an array of ids and
+  its delete an empty 200; `GET /stock_adjustments` sits behind
+  `inventory:write`, a read gated on a write scope, which is the operation's
+  own annotation; and `include_images=false` produces a body the vendor's own
+  schema rejects, because `images` and `skuImages` are two of `Product`'s
+  twenty-one required members while the parameter documents removing them.
+
+  **Fidelity (D-006), and a second vendored extract.** `api-2026-07.yaml` is
+  published under Apache 2.0, so the scoped, prose-stripped `extract.json` is
+  committed beside the declaration and `pin.json` ties it to the upstream bytes
+  (sha256 `5660c174…`, 519 895 bytes, version `2026-07`). Both fidelity steps
+  therefore run offline -- there is no `fetch` to pay for, unlike Toast -- and
+  `tools/self-test.sh` runs them on `--quick` as well as on a full run. The
+  corpus is thirteen cases, every one `provenance: documented`. Every response
+  the unit's own test suite produces is now schema-validated too, through the
+  same validating client the Toast and Square suites use.
+
+  **Documentation**: `docs/vendors/lightspeed.md` -- the first per-vendor page
+  -- with transcripts taken from a served unit, the inconsistencies above, the
+  full JUDGMENT list with the page that is silent about each, the capability
+  table, and the deferred surface (konyklabs/roadmap#107). Consumer examples
+  for both suites: `examples/pytest-consumer/test_lightspeed.py` and
+  `examples/vitest-consumer/tests/lightspeed.test.ts`, the latter with pinned
+  parity vectors for the form-encoded HMAC signer.
+
+* **fidelity:** a declaration may now name **prose annotations** --
+  `{"name", "select", "item"}` rows whose regular expressions the cutter runs
+  over each modeled operation's `description` *before* it strips it, recording
+  what they found under `x-vendorfake.annotations` in the extract, where the
+  pin's sha256 covers it. For a vendor that states a required scope as a line
+  of prose rather than as an OAuth2 security scheme, that is the difference
+  between a scope table checked against the document and one checked against
+  nothing. A declaration that names no annotation gets a byte-identical cut,
+  so no existing extract or pin moves.
+
+* **lightspeed:** the local review round on konyklabs/roadmap#94, fixed before
+  any of the above shipped. Each of these is a defect a consumer would have
+  met, not a tidy-up:
+
+  - **caller extremes answer 422, never a 500.** A line item whose price and
+    quantity are each individually valid can have a PRODUCT that overflows the
+    decimal context; the sale money funnel did not guard its `quantize` the
+    way `to_minor` and `decimal_text` already did, so `POST /sales` answered a
+    500 carrying `decimal.InvalidOperation`'s own name. It is now the
+    documented refusal, raised while the sale is being built so nothing is
+    stored or announced (konyklabs/roadmap#41's lesson, third funnel).
+  - **a negative inventory level is readable.** `total_cost` is
+    `average_cost × current_inventory_level` and refused to go negative, so
+    one oversell or shrinkage write-down took down
+    `GET /inventory_levels/{product_id}` *and* the retailer-wide
+    `POST /inventory_levels` for every other product. Both writers already
+    allowed the negative level; the read now agrees with them.
+  - **an error whose value this package computed shapes correctly.** A
+    `Decimal` reached `UnitError.info` uncoerced, and the default header
+    sidecar's JSON encoder cannot serialise one -- so the refusal escaped the
+    error pipeline as a `TypeError` instead of becoming a response.
+  - **one closure's money is not the next one's.** Instants are spelled to the
+    second, so a close, a reopen and a second close inside one wall-clock
+    second -- four requests in a few milliseconds, the ordinary case in a
+    test -- gave the second closure a window that re-admitted the first
+    session's payments. A closure now records the payment ids it consumed.
+  - **a closure reports the money the register OBSERVED**, and no longer adds
+    the totals the close request declared on top: they are the same money, and
+    summing them reported a till twice over. The declared totals are still
+    validated. A voided sale's payments are excluded from both the closure and
+    the summary. Both readings are recorded in `capabilities.py`. This
+    supersedes "plus whatever the close request declared" in the Sales bullet
+    above.
+  - **the authorization code is bound to the redirect URI it was issued for**
+    -- the effective one, so an authorize request that names none and takes
+    the unit's default no longer mints a code any redirect URI can redeem.
+  - **closing a sale that resolves to no outlet is a 422.** It used to answer
+    200 while moving no stock and firing no `inventory.update`, so a
+    consumer's stock-decrement test passed while exercising nothing.
+  - **a soft-deleted product or customer is no longer writable**: `PUT` and a
+    repeat `DELETE` are 404. The row stays readable, which is what the
+    `deleted` list parameter is for.
+  - **two guards nothing held in place** now have tests: the authorization
+    code's ten-minute expiry, and the token endpoint's `client_id` check on
+    both grants. Deleting either left the whole suite green.
+
+* **core:** `vendorfake.core.webhooks.models.BodyEncodingSigner` -- an
+  optional, structurally discovered protocol (the same shape as
+  `SeedingVendor`) letting a vendor whose delivery body is not JSON encode it
+  itself. The dispatcher's default is unchanged; a signer that does not
+  implement it is declaring "JSON" exactly as before. Without it a vendor
+  could set a content type through `DeliveryHeaderProvider` and then send
+  bytes contradicting it, which is the one shape a fake must not ship.
+
+---
+
 Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
 2026-09-01 batch (konyklabs/roadmap#53: the conformance-coverage stack #15,
 #46, #42 and the fidelity legs #55, #56).
@@ -22,13 +161,14 @@ Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
   `vendorfake.core.config.overlay.merge_seed`. A top-level key that is not one
   of the seed document's collections fails the unit at construction, naming
   the key and the collections that exist; on a vendor named as a literal the
-  new `SquareSeedOverlay`, `CloverSeedOverlay` and `ToastSeedOverlay` types
-  make a checker say so first (a non-literal vendor gets the untyped
-  `SeedOverlay`). `GET /__unit/info` and `vendorfake info` gain
+  new `SquareSeedOverlay`, `CloverSeedOverlay`, `ToastSeedOverlay` and
+  `LightspeedSeedOverlay` types make a checker say so first (a non-literal
+  vendor gets the untyped `SeedOverlay`). `GET /__unit/info` and `vendorfake info` gain
   `seed_overlay: {"active": bool, "digest": "sha256:<hex>" | null}` -- the
   digest of the overlay's canonical JSON, never its contents. An overlay may
-  not name the two collections `.seed` is built from -- `tokens`, and the
-  vendor's identity collection (`merchant`, `restaurant`) -- because the seed
+  not name the collections `.seed` is built from -- the vendor's credentials
+  (`tokens`, and on Lightspeed `personal_tokens` and `refresh_tokens` too) and
+  its identity collection (`merchant`, `restaurant`, `retailer`) -- because the seed
   handed back carries the shipped credentials and tenant id from this
   distribution's constants rather than from the loaded document, so such an
   overlay would make `.seed.auth` answer 401 against a unit that started

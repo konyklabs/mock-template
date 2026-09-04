@@ -201,7 +201,12 @@ def refresh(
 
     blobs = [(source, fetch(source, fetcher=fetcher)) for source in declaration.sources]
     document = cut_extract(
-        blobs, modeled, fetched=fetched, extension_map=declaration.extension_map, error_schema=declaration.error_schema
+        blobs,
+        modeled,
+        fetched=fetched,
+        extension_map=declaration.extension_map,
+        error_schema=declaration.error_schema,
+        annotations=declaration.annotations,
     )
 
     lines: list[str] = []

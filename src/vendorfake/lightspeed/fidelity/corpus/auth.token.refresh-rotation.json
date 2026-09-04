@@ -1,0 +1,126 @@
+{
+  "schema": 1,
+  "id": "auth.token.refresh-rotation",
+  "title": "The refresh grant answers the same seven fields, issues a NEW refresh token, and revokes the access token that came with the consumed one",
+  "source": {
+    "url": "https://x-series-api.lightspeedhq.com/docs/authorization",
+    "fetched": "2026-09-04",
+    "provenance": "documented",
+    "note": "Two sentences, and both halves matter: \"Using a refresh token will revoke the access token that was returned with it\" and \"You must save this new refresh token and use it the next time\". A consumer that keeps sending the pre-refresh access token is the defect this case pins. The STATUS a revoked token then gets is not documented; this unit answers the 401 the rest of the document uses for a credential that does not check out, so the case asserts the refusal and its status is recorded as JUDGMENT in lightspeed/errors.py."
+  },
+  "routes": [
+    "POST /api/1.0/token",
+    "GET /api/2026-07/retailer"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "the pre-issued access token works",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/retailer",
+        "headers": {
+          "authorization": "Bearer ${vars.access_token}"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": {
+            "domain_prefix": "${vars.domain_prefix}"
+          }
+        }
+      }
+    },
+    {
+      "name": "refresh",
+      "request": {
+        "method": "POST",
+        "path": "/api/1.0/token",
+        "headers": {
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        "body": "grant_type=refresh_token&refresh_token=${vars.refresh_token}&client_id=${vars.client_id}&client_secret=${vars.client_secret}"
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "access_token": "${re:[A-Za-z0-9]+}",
+          "token_type": "Bearer",
+          "expires": "${re:[0-9]+}",
+          "expires_in": "${re:[0-9]+}",
+          "refresh_token": "${re:[A-Za-z0-9]+}",
+          "domain_prefix": "${vars.domain_prefix}",
+          "scope": "${re:.+}"
+        }
+      },
+      "capture": {
+        "rotated_access": "/access_token",
+        "rotated_refresh": "/refresh_token"
+      }
+    },
+    {
+      "name": "the access token issued with the consumed refresh token is revoked",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/retailer",
+        "headers": {
+          "authorization": "Bearer ${vars.access_token}"
+        }
+      },
+      "expect": {
+        "status": 401
+      }
+    },
+    {
+      "name": "the new access token works",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/retailer",
+        "headers": {
+          "authorization": "Bearer ${cap.rotated_access}"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": {
+            "domain_prefix": "${vars.domain_prefix}"
+          }
+        }
+      }
+    },
+    {
+      "name": "the consumed refresh token is retired, and the new one is what works",
+      "request": {
+        "method": "POST",
+        "path": "/api/1.0/token",
+        "headers": {
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        "body": "grant_type=refresh_token&refresh_token=${vars.refresh_token}&client_id=${vars.client_id}&client_secret=${vars.client_secret}"
+      },
+      "expect": {
+        "status": 401
+      }
+    },
+    {
+      "name": "the rotated refresh token is accepted",
+      "request": {
+        "method": "POST",
+        "path": "/api/1.0/token",
+        "headers": {
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        "body": "grant_type=refresh_token&refresh_token=${cap.rotated_refresh}&client_id=${vars.client_id}&client_secret=${vars.client_secret}"
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "token_type": "Bearer",
+          "domain_prefix": "${vars.domain_prefix}"
+        }
+      }
+    }
+  ]
+}

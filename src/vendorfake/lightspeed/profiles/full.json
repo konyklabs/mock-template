@@ -1,0 +1,28 @@
+{
+  "name": "full",
+  "summary": "Every capability on. The default profile. Seeds the whole scenario: one retailer, two outlets, a register in each, three payment types (one internal), six products in four families with stock at both outlets, three customers, three sales (one parked, one closed, one layby), an OAuth access/refresh pair, a read-only token, a personal token and one webhook subscription on register_closure.create.",
+  "capabilities": [
+    "auth",
+    "retailer",
+    "outlets",
+    "registers",
+    "payment_types",
+    "products",
+    "inventory",
+    "customers",
+    "sales",
+    "webhooks",
+    "chaos",
+    "webhooks.chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "unit-lightspeed-client-id",
+    "client_secret": "unit-lightspeed-client-secret"
+  },
+  "chaos": {
+    "seed": 20260904,
+    "strict_rules": true,
+    "rules": []
+  }
+}

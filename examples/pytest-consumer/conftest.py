@@ -34,6 +34,12 @@ def toast() -> Iterator[StartedUnit]:
 
 
 @pytest.fixture
+def lightspeed() -> Iterator[StartedUnit]:
+    with unit("lightspeed") as started:
+        yield started
+
+
+@pytest.fixture
 def receiver() -> Iterator[WebhookReceiver]:
     with webhook_receiver() as listening:
         yield listening

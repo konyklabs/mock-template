@@ -75,6 +75,8 @@ from vendorfake.testing.seeds import (
     CloverSeed,
     CloverSeedOverlay,
     Credentials,
+    LightspeedSeed,
+    LightspeedSeedOverlay,
     Seed,
     SeedOverlay,
     SquareSeed,
@@ -100,6 +102,8 @@ __all__ = [
     "Credentials",
     "Delivery",
     "Driver",
+    "LightspeedSeed",
+    "LightspeedSeedOverlay",
     "RouteInfo",
     "Seed",
     "SeedOverlay",
@@ -237,7 +241,7 @@ class Driver(Generic[SeedT]):
     """A unit you can talk to, however it was started.
 
     Generic in its seed. ``seed`` used to be
-    ``SquareSeed | CloverSeed | ToastSeed | None``, which meant that reading
+    ``SquareSeed | CloverSeed | ToastSeed | LightspeedSeed | None``, which meant that reading
     one field of it took an ``isinstance`` ladder *and* a ``None`` guard --
     per vendor, in every consumer, for a value that is never actually absent
     and whose type the caller already named in ``unit("square")``. The
@@ -659,7 +663,7 @@ class ServedUnit(Driver[SeedT]):
 
 
 NO_SEED_HINT = (
-    "vendorfake ships a seed for square, clover and toast. A vendor from the "
+    "vendorfake ships a seed for square, clover, toast and lightspeed. A vendor from the "
     "'vendorfake.vendors' entry-point group publishes its own by implementing "
     "vendorfake.core.kernel.types.SeedingVendor -- a seed(vendor_config) method "
     "returning an object with credentials, auth, read_only_auth and event_types. "
@@ -811,6 +815,22 @@ def unit(
     unmatched: UnmatchedPolicy | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[StartedUnit[ToastSeed]]: ...
+
+
+@overload
+def unit(
+    vendor: Literal["lightspeed"],
+    profile: str | None = ...,
+    *,
+    capabilities: Sequence[str] | None = ...,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+    seed_overlay: LightspeedSeedOverlay | str | os.PathLike[str] | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
+) -> AbstractContextManager[StartedUnit[LightspeedSeed]]: ...
 
 
 @overload
@@ -1159,6 +1179,22 @@ def async_unit(
 
 @overload
 def async_unit(
+    vendor: Literal["lightspeed"],
+    profile: str | None = ...,
+    *,
+    capabilities: Sequence[str] | None = ...,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+    seed_overlay: LightspeedSeedOverlay | str | os.PathLike[str] | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
+) -> AbstractAsyncContextManager[StartedUnit[LightspeedSeed]]: ...
+
+
+@overload
+def async_unit(
     vendor: str,
     profile: str | None = ...,
     *,
@@ -1326,6 +1362,21 @@ def served(
     clock_start: datetime | str | None = ...,
     seed_overlay: ToastSeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[ToastSeed]]: ...
+
+
+@overload
+def served(
+    vendor: Literal["lightspeed"],
+    profile: str = ...,
+    *,
+    port: int = ...,
+    host: str = ...,
+    log_level: str = ...,
+    timeout_s: float = ...,
+    env: Mapping[str, str] | None = ...,
+    clock_start: datetime | str | None = ...,
+    seed_overlay: LightspeedSeedOverlay | str | os.PathLike[str] | None = ...,
+) -> AbstractContextManager[ServedUnit[LightspeedSeed]]: ...
 
 
 @overload

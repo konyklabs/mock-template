@@ -137,8 +137,9 @@ hour later as "the fake ignored my scenario". Conformance clause **C36**
 asserts the refusal on every vendor.
 
 On a vendor named as a literal a type checker says so first, from the
-per-vendor `TypedDict`s `SquareSeedOverlay`, `CloverSeedOverlay` and
-`ToastSeedOverlay` — whose keys are that vendor's collections, all optional,
+per-vendor `TypedDict`s `SquareSeedOverlay`, `CloverSeedOverlay`,
+`ToastSeedOverlay` and `LightspeedSeedOverlay` — whose keys are that vendor's
+collections, all optional,
 with untyped values. A vendor passed as a plain `str` gets
 `vendorfake.testing.SeedOverlay` (`Mapping[str, Any]`), the honest answer when
 the call site does not know which vendor's collections apply; the unit still
@@ -146,9 +147,11 @@ refuses an unknown collection at start.
 
 ### The credentials and the identity cannot be overlaid
 
-Two collections are refused when the unit starts, on every binding: `tokens`,
-and the vendor's identity collection — `merchant` on Square and Clover,
-`restaurant` on Toast.
+The collections a vendor's `.seed` is built from are refused when the unit
+starts, on every binding: its credentials, and its identity collection. On
+Square and Clover that is `tokens` and `merchant`; on Toast, `tokens` and
+`restaurant`; on Lightspeed the three collections its credentials live in
+(`tokens`, `personal_tokens`, `refresh_tokens`) and `retailer`.
 
 ```text
 seed overlay names 'tokens', which is what square's .seed is built from. The seed

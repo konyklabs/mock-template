@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "id": "ratelimit.headers-and-429",
+  "title": "X-RateLimit-Limit is 300 x registers + 50 and rides every response; a 429 carries the documented title and an RFC 1123 Retry-After, not delta-seconds",
+  "source": {
+    "url": "https://x-series-api.lightspeedhq.com/docs/rate_limiting",
+    "fetched": "2026-09-04",
+    "provenance": "documented",
+    "note": "The quota formula is \"300 x <number of registers> + 50\"; the shipped scenario has two registers, so 650. X-RateLimit-Limit and X-RateLimit-Remaining are documented as present on EVERY response, and the page's Retry-After example is an absolute HTTP-date (\"Wed, 15 Jul 2020 15:04:05 GMT\"), NOT the delta-seconds every other vendor here uses. The 429 in step 4 is injected by the chaos-demo profile's own rule rather than by spending 650 requests inside one case, so its `message` is the injected fault's and is matched loosely; the documented body sentence (\"Rate limiting enforced\") belongs to the real limiter and is pinned by tests/unit/lightspeed/test_ratelimit.py. Everything else asserted here -- the status, the `error` title, both headers, and the Retry-After shape -- is the vendor's and is the unit's own. The exact instant is stable because chaos-demo runs on a virtual clock started at 2026-09-04T12:00:00Z and the documented window is five minutes."
+  },
+  "routes": [
+    "GET /api/2026-07/retailer",
+    "PUT /api/2026-07/registers/{register_id}/actions/close"
+  ],
+  "profile": "chaos-demo",
+  "steps": [
+    {
+      "name": "both headers ride an ordinary read",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/retailer",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "x-ratelimit-limit": "650",
+          "x-ratelimit-remaining": "${re:[0-9]+}"
+        }
+      }
+    },
+    {
+      "name": "close the register",
+      "request": {
+        "method": "PUT",
+        "path": "/api/2026-07/registers/${vars.register_main_id}/actions/close",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {}
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "x-ratelimit-limit": "650"
+        }
+      }
+    },
+    {
+      "name": "closing it again is a conflict, and still carries the headers",
+      "request": {
+        "method": "PUT",
+        "path": "/api/2026-07/registers/${vars.register_main_id}/actions/close",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {}
+      },
+      "expect": {
+        "status": 409,
+        "headers": {
+          "x-ratelimit-limit": "650",
+          "x-ratelimit-remaining": "${re:[0-9]+}"
+        }
+      }
+    },
+    {
+      "name": "a rate-limited answer",
+      "request": {
+        "method": "PUT",
+        "path": "/api/2026-07/registers/${vars.register_main_id}/actions/close",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {}
+      },
+      "expect": {
+        "status": 429,
+        "headers": {
+          "retry-after": "Fri, 04 Sep 2026 12:05:00 GMT",
+          "x-ratelimit-limit": "650",
+          "x-ratelimit-remaining": "${re:[0-9]+}"
+        },
+        "body": {
+          "error": "Too Many Requests",
+          "message": "${re:.+}"
+        }
+      }
+    }
+  ]
+}

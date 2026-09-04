@@ -81,6 +81,32 @@ REQUIRED = (
     "vendorfake/toast/profiles/orders-only.json",
     "vendorfake/toast/profiles/chaos-demo.json",
     "vendorfake/toast/seed/default.seed.json",
+    "vendorfake/lightspeed/profiles/full.json",
+    "vendorfake/lightspeed/profiles/no-chaos.json",
+    "vendorfake/lightspeed/profiles/no-faults.json",
+    "vendorfake/lightspeed/profiles/oauth-only.json",
+    "vendorfake/lightspeed/profiles/orders-only.json",
+    "vendorfake/lightspeed/profiles/chaos-demo.json",
+    "vendorfake/lightspeed/seed/default.seed.json",
+    # Lightspeed's extract IS committed (`vendored: true`): api-2026-07.yaml is
+    # published under Apache 2.0 (`info.license`), so a structural extract of it
+    # may live here and there is no fetch step before a check can run.
+    "vendorfake/lightspeed/fidelity/declaration.json",
+    "vendorfake/lightspeed/fidelity/extract.json",
+    "vendorfake/lightspeed/fidelity/pin.json",
+    "vendorfake/lightspeed/fidelity/corpus/auth.token.authorization-code.json",
+    "vendorfake/lightspeed/fidelity/corpus/auth.token.refresh-rotation.json",
+    "vendorfake/lightspeed/fidelity/corpus/customers.status-codes.json",
+    "vendorfake/lightspeed/fidelity/corpus/inventory.bare-array.json",
+    "vendorfake/lightspeed/fidelity/corpus/pagination.forward-walk.json",
+    "vendorfake/lightspeed/fidelity/corpus/products.list.envelope.json",
+    "vendorfake/lightspeed/fidelity/corpus/ratelimit.headers-and-429.json",
+    "vendorfake/lightspeed/fidelity/corpus/registers.close.register-closure-event.json",
+    "vendorfake/lightspeed/fidelity/corpus/sales.create.inline-payments.json",
+    "vendorfake/lightspeed/fidelity/corpus/sales.payment-error.json",
+    "vendorfake/lightspeed/fidelity/corpus/webhooks.create.duplicate-409.json",
+    "vendorfake/lightspeed/fidelity/corpus/webhooks.delivery.signature-header.json",
+    "vendorfake/lightspeed/fidelity/corpus/webhooks.retry.schedule.json",
 )
 
 

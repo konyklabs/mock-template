@@ -73,6 +73,7 @@ the registry rather than to configuration."""
 
 _BUILTIN: Mapping[str, str] = {
     "clover": "vendorfake.clover:VENDOR",
+    "lightspeed": "vendorfake.lightspeed:VENDOR",
     "square": "vendorfake.square:VENDOR",
     "toast": "vendorfake.toast:VENDOR",
 }

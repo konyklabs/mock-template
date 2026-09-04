@@ -6,8 +6,8 @@
 
 Unofficial. Not affiliated with, endorsed by, or connected to any vendor
 named here. Every behaviour is derived from publicly published API
-documentation. Three vendors ship today: Square (Connect v2), Clover
-(REST v3), Toast (REST v2/v3).
+documentation. Four vendors ship today: Square (Connect v2), Clover
+(REST v3), Toast (REST v2/v3), Lightspeed Retail X-Series (API 2026-07).
 
 ## Docs
 
@@ -25,6 +25,11 @@ documentation. Three vendors ship today: Square (Connect v2), Clover
 - [Seeded scenario](https://github.com/konyklabs/vendorfake/blob/main/docs/seeded-scenario.md):
   the exact ids, credentials and entities every profile starts with, per
   vendor.
+- [Lightspeed Retail X-Series](https://github.com/konyklabs/vendorfake/blob/main/docs/vendors/lightspeed.md):
+  the per-vendor page for the newest surface -- what it covers, transcripts
+  from a served unit, the five places the vendor's own document contradicts
+  itself and this fake reproduces it, the capability table, and every judgment
+  call with the page that is silent about it.
 - [Async consumers](https://github.com/konyklabs/vendorfake/blob/main/docs/async-consumers.md):
   every async entry point (`async_client`, `async_unit`, the
   `vendorfake_async_unit` fixture) and what a deliberate delay does on each

@@ -27,6 +27,8 @@ from vendorfake.testing import (
     CloverSeedOverlay,
     Credentials,
     Driver,
+    LightspeedSeed,
+    LightspeedSeedOverlay,
     Seed,
     ServedUnit,
     SquareSeed,
@@ -153,11 +155,14 @@ def an_overlay_variable_of_the_declared_type_is_accepted() -> None:
     square: SquareSeedOverlay = {"merchant": {"business_name": "Overlaid"}}
     clover: CloverSeedOverlay = {"merchant": {}}
     toast: ToastSeedOverlay = {"restaurant": {}}
+    lightspeed: LightspeedSeedOverlay = {"inventory": []}
     with unit("square", seed_overlay=square) as a, unit("clover", seed_overlay=clover) as b:
         assert_type(a.seed, SquareSeed)
         assert_type(b.seed, CloverSeed)
     with unit("toast", seed_overlay=toast) as c:
         assert_type(c.seed, ToastSeed)
+    with unit("lightspeed", seed_overlay=lightspeed) as d:
+        assert_type(d.seed, LightspeedSeed)
 
 
 def a_vendor_that_is_not_a_literal_takes_any_object_as_an_overlay(vendor: str) -> None:

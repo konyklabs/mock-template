@@ -21,7 +21,7 @@ import pytest
 import yaml
 
 from vendorfake.fidelity.extract import cut_extract, render_json
-from vendorfake.fidelity.types import Extract, SpecSource
+from vendorfake.fidelity.types import Annotation, Extract, SpecSource
 
 URL = "https://example.test/spec.json"
 SOURCE = SpecSource(kind="openapi3", url=URL)
@@ -822,3 +822,67 @@ def test_yaml_yes_and_no_stay_strings() -> None:
     props = cut["components"]["schemas"]["Thing"]["properties"]
     assert props["charge"]["enum"] == ["YES", "NO"]
     assert props["on"]["default"] is True
+
+
+# ---------------------------------------------------------------------------
+# Prose annotations (konyklabs/roadmap#94): facts a vendor writes into an
+# operation's description, kept as data before the description is stripped.
+# ---------------------------------------------------------------------------
+
+SCOPE_ANNOTATION = Annotation(name="scopes", select=r"Requires: (.+?) scopes?\s*$", item=r"`([^`]+)`")
+
+
+def annotated_document() -> dict[str, Any]:
+    document = synthetic()
+    document["paths"]["/v1/widgets"]["post"]["description"] = (
+        "Create a widget.\nRequires: `widgets:write` `audit:read` scopes\nMore prose."
+    )
+    document["paths"]["/v1/widgets/{widget_id}"]["get"]["description"] = "Requires: `widgets:read` scope"
+    return document
+
+
+def test_a_declared_annotation_survives_the_prose_strip_keyed_by_route() -> None:
+    cut = cut_extract(
+        [(SOURCE, blob(annotated_document()))], MODELED, fetched="2026-09-02", annotations=[SCOPE_ANNOTATION]
+    )
+    assert cut["x-vendorfake"]["annotations"] == {
+        "scopes": {
+            "GET /v1/widgets/{widget_id}": ["widgets:read"],
+            "POST /v1/widgets": ["widgets:write", "audit:read"],
+        }
+    }
+    # The description itself is still gone: the annotation is a copy, not a reprieve.
+    assert "description" not in cut["paths"]["/v1/widgets"]["post"]
+    assert Extract(cut).annotations("scopes")["POST /v1/widgets"] == ("widgets:write", "audit:read")
+
+
+def test_a_declared_annotation_that_matches_nothing_is_an_empty_map_not_an_absent_key() -> None:
+    cut = cut_extract([(SOURCE, blob(synthetic()))], MODELED, fetched="2026-09-02", annotations=[SCOPE_ANNOTATION])
+    assert cut["x-vendorfake"]["annotations"] == {"scopes": {}}
+    assert Extract(cut).annotations("scopes") == {}
+
+
+def test_declaring_no_annotation_leaves_the_cut_byte_identical() -> None:
+    """The one property every other vendor depends on: a feature nobody asked
+    for changes nobody's committed extract, so nobody's pin moves."""
+    without = render_json(cut_extract([(SOURCE, blob(annotated_document()))], MODELED, fetched="2026-09-02"))
+    with_empty = render_json(
+        cut_extract([(SOURCE, blob(annotated_document()))], MODELED, fetched="2026-09-02", annotations=[])
+    )
+    assert without == with_empty
+    assert "annotations" not in json.loads(without)["x-vendorfake"]
+
+
+def test_an_annotation_without_an_item_pattern_records_the_whole_selected_group() -> None:
+    whole = Annotation(name="scopes", select=r"Requires: (.+?) scopes?\s*$")
+    cut = cut_extract([(SOURCE, blob(annotated_document()))], MODELED, fetched="2026-09-02", annotations=[whole])
+    assert cut["x-vendorfake"]["annotations"]["scopes"]["POST /v1/widgets"] == ["`widgets:write` `audit:read`"]
+
+
+def test_an_annotation_whose_patterns_capture_nothing_is_refused_at_load() -> None:
+    with pytest.raises(ValueError, match="select must capture one group"):
+        Annotation.of({"name": "scopes", "select": "Requires: .+"})
+    with pytest.raises(ValueError, match="item must capture one group"):
+        Annotation.of({"name": "scopes", "select": "Requires: (.+)", "item": "`[^`]+`"})
+    with pytest.raises(ValueError, match="not a regular expression"):
+        Annotation.of({"name": "scopes", "select": "Requires: ([)"})

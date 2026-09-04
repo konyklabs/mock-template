@@ -1,0 +1,143 @@
+{
+  "schema": 1,
+  "id": "customers.status-codes",
+  "title": "Customers answer 201 on create and 204 on delete where Products answer 200 and 200, and a deleted customer returns only under ?deleted=true",
+  "source": {
+    "url": "https://x-series-api.lightspeedhq.com/openapi/api-2026-07.yaml",
+    "fetched": "2026-09-04",
+    "provenance": "documented",
+    "note": "Another of the vendor's own inconsistencies, reproduced. CreateCustomer declares 201 with CustomerResponse and DeleteCustomerByID declares 204 with no body; on the Products tag, CreateProduct declares 200 answering an ARRAY of ids and DeleteProduct declares an empty 200. Same document, same release, adjacent tags. The delete is soft because that is the only reading under which the documented `deleted` list parameter (\"include deleted items\") has anything to include; the row keeps its id, draws a new version, and so reaches a forward sync last rather than in its old position."
+  },
+  "routes": [
+    "POST /api/2026-07/customers",
+    "DELETE /api/2026-07/customers/{customer_id}",
+    "GET /api/2026-07/customers",
+    "POST /api/2026-07/products",
+    "DELETE /api/2026-07/products/{product_id}"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "creating a customer is 201",
+      "request": {
+        "method": "POST",
+        "path": "/api/2026-07/customers",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "first_name": "Wiremu",
+          "last_name": "Tane",
+          "email": "wiremu@consumer.example"
+        }
+      },
+      "expect": {
+        "status": 201,
+        "body": {
+          "data": {
+            "id": "${re:[0-9a-f-]{36}}",
+            "first_name": "Wiremu",
+            "last_name": "Tane"
+          }
+        }
+      },
+      "capture": {
+        "customer_id": "/data/id"
+      }
+    },
+    {
+      "name": "deleting one is 204 with no body",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/2026-07/customers/${cap.customer_id}",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 204
+      }
+    },
+    {
+      "name": "the deleted row is gone from the ordinary listing",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/customers",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": [
+            "${any}",
+            "${any}",
+            "${any}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "and comes back under ?deleted=true, last, because the delete drew a new version",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/customers?deleted=true",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": [
+            "${any}",
+            "${any}",
+            "${any}",
+            {
+              "id": "${cap.customer_id}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "creating a product on the same API is 200 and answers an array of ids",
+      "request": {
+        "method": "POST",
+        "path": "/api/2026-07/products",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "name": "Camp Mug",
+          "price_including_tax": 19.5
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": [
+            "${re:[0-9a-f-]{36}}"
+          ]
+        }
+      },
+      "capture": {
+        "product_id": "/data/0"
+      }
+    },
+    {
+      "name": "and deleting one is an empty 200, not a 204",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/2026-07/products/${cap.product_id}",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200
+      }
+    }
+  ]
+}

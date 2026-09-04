@@ -72,6 +72,7 @@ from vendorfake.core.util.json import dump_json, sha256_hex
 from vendorfake.core.util.numbers import as_float, as_int
 from vendorfake.core.webhooks.models import (
     SUBSCRIPTION_COLLECTION,
+    BodyEncodingSigner,
     DeliveryMetadata,
     DeliveryOutcome,
     DeliveryRecord,
@@ -599,7 +600,13 @@ class WebhookDispatcher:
         signer = ctx.vendor.signer
         if signer is None:
             return None
-        body = dump_json(queued.event.body)
+        # The vendor's own encoding when it declares one, JSON otherwise. These
+        # are the exact bytes signed below and sent by the sink, so a vendor
+        # whose content type is not application/json cannot end up with a
+        # header that contradicts its body. See `BodyEncodingSigner`.
+        body = (
+            signer.encode_body(queued.event) if isinstance(signer, BodyEncodingSigner) else dump_json(queued.event.body)
+        )
         meta = DeliveryMetadata(
             event=queued.event,
             subscription_id=queued.subscription.id,

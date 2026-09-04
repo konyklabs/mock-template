@@ -1,0 +1,110 @@
+{
+  "schema": 1,
+  "id": "pagination.forward-walk",
+  "title": "A forward walk drives `after` from the previous page's version.max and ends on an empty `data` with a null version pair",
+  "source": {
+    "url": "https://x-series-api.lightspeedhq.com/docs/pagination",
+    "fetched": "2026-09-04",
+    "provenance": "documented",
+    "note": "Four quotes from the page, all asserted below: \"By default, the value of the after parameter will be assumed as equal 0\" (the first page needs no cursor), \"The highest version number x from this collection (the max attribute above) should be used to request the next page\", the walk ends when \"all items of the collection have been returned\" -- an empty data array -- and Version.max/min are nullable, which is what an empty result set answers."
+  },
+  "routes": [
+    "GET /api/2026-07/products"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "page one needs no cursor",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/products?page_size=2",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": [
+            {
+              "id": "${vars.product_trail_mix_id}"
+            },
+            {
+              "id": "${vars.product_socks_id}"
+            }
+          ]
+        }
+      },
+      "capture": {
+        "after_one": "/version/max"
+      }
+    },
+    {
+      "name": "page two starts after page one's version.max",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/products?page_size=2&after=${cap.after_one}",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": [
+            "${any}",
+            "${any}"
+          ]
+        },
+        "absent": [
+          "/data/2"
+        ]
+      },
+      "capture": {
+        "after_two": "/version/max"
+      }
+    },
+    {
+      "name": "page three",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/products?page_size=2&after=${cap.after_two}",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": [
+            "${any}",
+            "${any}"
+          ]
+        }
+      },
+      "capture": {
+        "after_three": "/version/max"
+      }
+    },
+    {
+      "name": "the walk terminates on an empty page whose version pair is null",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/products?page_size=2&after=${cap.after_three}",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": [],
+          "version": {
+            "max": null,
+            "min": null
+          }
+        }
+      }
+    }
+  ]
+}

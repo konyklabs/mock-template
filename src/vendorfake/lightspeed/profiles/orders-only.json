@@ -1,0 +1,25 @@
+{
+  "name": "orders-only",
+  "summary": "The transactional surface -- sales, the registers they are rung up on, and the reference data a till reads: the product catalogue, its stock and the customers a sale can be attached to -- with no token endpoint: authenticate with a seeded token. A Lightspeed sale is this vendor's 'orders' role.",
+  "capabilities": [
+    "retailer",
+    "outlets",
+    "registers",
+    "payment_types",
+    "products",
+    "inventory",
+    "customers",
+    "sales",
+    "chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "unit-lightspeed-client-id",
+    "client_secret": "unit-lightspeed-client-secret"
+  },
+  "chaos": {
+    "seed": 20260904,
+    "strict_rules": true,
+    "rules": []
+  }
+}

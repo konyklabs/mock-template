@@ -1,0 +1,125 @@
+{
+  "schema": 1,
+  "id": "sales.create.inline-payments",
+  "title": "POST /sales takes line items and payments inline on the sale, computes the totals, and answers SaleCreateResponse",
+  "source": {
+    "url": "https://x-series-api.lightspeedhq.com/openapi/api-2026-07.yaml",
+    "fetched": "2026-09-04",
+    "provenance": "documented",
+    "note": "CreateSale's requestBody carries line_items and payments as members of the sale itself -- there is no separate payment operation anywhere in the document -- and its 200 is SaleCreateResponse. Sale.totals declares price, price_incl_tax, tax, loyalty and surcharge; SalePayment carries type.config_id and amount, and the payment's type name is filled from the retailer's payment types. The arithmetic asserted here is the seeded catalogue's own: the trail mix lists at 12.50 including tax, which is 10.87 + 1.63 at the retailer's single 15% rate."
+  },
+  "routes": [
+    "POST /api/2026-07/sales",
+    "GET /api/2026-07/sales/{sale_id}"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "ring up one line and pay for it in cash",
+      "request": {
+        "method": "POST",
+        "path": "/api/2026-07/sales",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "state": "closed",
+          "customer_id": "${vars.customer_ada_id}",
+          "source": {
+            "author_id": "${vars.user_id}",
+            "register_id": "${vars.register_main_id}"
+          },
+          "line_items": [
+            {
+              "product": {
+                "id": "${vars.product_trail_mix_id}"
+              },
+              "quantity": 1,
+              "pricing": {
+                "price": 10.87
+              },
+              "tax": {
+                "id": "${vars.tax_id}",
+                "amount": 1.63
+              }
+            }
+          ],
+          "payments": [
+            {
+              "type": {
+                "config_id": "${vars.payment_type_cash_id}"
+              },
+              "amount": 12.5
+            }
+          ]
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": {
+            "state": "closed",
+            "customer_id": "${vars.customer_ada_id}",
+            "source": {
+              "register_id": "${vars.register_main_id}",
+              "outlet_id": "${vars.outlet_main_id}"
+            },
+            "line_items": [
+              {
+                "product": {
+                  "id": "${vars.product_trail_mix_id}"
+                },
+                "quantity": 1,
+                "pricing": {
+                  "price": 10.87,
+                  "total": 10.87
+                }
+              }
+            ],
+            "payments": [
+              {
+                "amount": 12.5,
+                "type": {
+                  "config_id": "${vars.payment_type_cash_id}",
+                  "name": "Cash"
+                }
+              }
+            ],
+            "totals": {
+              "price": 10.87,
+              "price_incl_tax": 12.5,
+              "tax": 1.63
+            }
+          }
+        }
+      },
+      "capture": {
+        "sale_id": "/data/id"
+      }
+    },
+    {
+      "name": "the sale reads back with its payment still on it",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/sales/${cap.sale_id}",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": {
+            "id": "${cap.sale_id}",
+            "state": "closed",
+            "payments": [
+              {
+                "amount": 12.5
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

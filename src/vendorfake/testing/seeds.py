@@ -39,6 +39,8 @@ __all__ = [
     "CloverSeed",
     "CloverSeedOverlay",
     "Credentials",
+    "LightspeedSeed",
+    "LightspeedSeedOverlay",
     "Seed",
     "SeedOverlay",
     "SquareSeed",
@@ -354,6 +356,152 @@ class ToastSeed:
         return {"Authorization": f"Bearer {self.access_token}"}
 
 
+@dataclass(frozen=True, slots=True)
+class LightspeedSeed:
+    """The Lightspeed scenario: one retailer, two outlets, a register in each,
+    three payment types (one of them internal), six products in four families
+    with stock at both outlets, one customer group and three customers, three
+    sales over that catalogue -- parked, closed with a payment, and a layby --
+    a pre-issued OAuth access and refresh pair, a read-only token, a personal
+    token, and one webhook subscription on ``register_closure.create``.
+
+    Lightspeed scopes a request to its retailer by **subdomain** --
+    ``{domain_prefix}.retail.lightspeed.app`` -- and a unit serves exactly one
+    retailer, so there is no tenant header and no tenant path segment. What a
+    consumer needs instead is :attr:`api_path`, which prefixes a resource path
+    with the version segment every route sits under.
+    """
+
+    client_id: str
+    client_secret: str
+    redirect_uri: str
+    domain_prefix: str
+    #: Full scopes: reads, both register actions, and webhooks.
+    access_token: str
+    #: Rotates the pair above. A refresh retires it and revokes that access
+    #: token, which is the documented behaviour a consumer's session handling
+    #: has to get right.
+    refresh_token: str
+    #: Reads only; every write path answers 403 to it.
+    read_only_access_token: str
+    #: A personal token -- Plus-plan only, created in the web application, so a
+    #: unit can only ever be seeded with one. Full scopes, and no expiry.
+    personal_access_token: str
+    retailer_id: str
+    retailer_name: str
+    outlet_main_id: str
+    outlet_second_id: str
+    #: Seeded OPEN, so a close (and the webhook it fires) needs no setup.
+    register_main_id: str
+    #: Seeded CLOSED, so an open needs none either.
+    register_second_id: str
+    payment_type_cash_id: str
+    payment_type_card_id: str
+    #: ``internal: true``: absent from the payment-types list, because the
+    #: ``payment_types:read`` scope is documented as excluding internal types.
+    payment_type_internal_id: str
+    #: A standalone product, and the SKU it answers ``GET /products?sku=`` on.
+    product_trail_mix_id: str
+    product_trail_mix_sku: str
+    #: The second standalone product. Both it and the trail mix hold stock at
+    #: both outlets, which is what lets the seeded sales draw on real levels.
+    product_socks_id: str
+    #: Seeded INACTIVE, so ``include_inactive`` on the inventory-levels report
+    #: has something to include.
+    product_bottle_id: str
+    product_bottle_sku: str
+    #: The family: a parent with ``has_variants`` and no stock of its own, and
+    #: its two variants, which each hold stock at both outlets. ``?name=``
+    #: selects the whole family.
+    product_tee_id: str
+    product_tee_small_id: str
+    product_tee_large_id: str
+    #: The retailer's one customer group. There is no route to create another.
+    customer_group_id: str
+    #: Filled in completely: addresses, custom fields, a non-zero balance.
+    customer_ada_id: str
+    #: A company and nothing else.
+    customer_blake_id: str
+    #: ``last_name`` is null, which is legal: the member is required AND
+    #: nullable on the vendor's own schema.
+    customer_noor_id: str
+    #: The two reasons a ``CUSTOM`` stock adjustment may name, one of each
+    #: sign. The tag that would create a third is deferred.
+    adjustment_reason_found_id: str
+    adjustment_reason_spoiled_id: str
+    # -- sales (slice L2b of konyklabs/roadmap#94) --
+    #: The cashier every seeded sale names as its ``source.author_id``. It is
+    #: the retailer's id: nothing resolves it, because the Users tag is
+    #: outside the issue's scoped surface, and a stock adjustment's
+    #: ``user_id`` is the same id for the same reason.
+    cashier_user_id: str
+    #: Both outlets' ``default_tax_id``, and the ``tax.id`` on every seeded
+    #: line item. Nothing resolves it either -- the Taxes tag is out of scope.
+    tax_id: str
+    #: The seeded sales name :attr:`product_trail_mix_id` and
+    #: :attr:`product_socks_id` on their line items and
+    #: :attr:`customer_ada_id` as their customer.
+    #: ``state: "parked"`` -- still editable, so a ``PUT`` succeeds against it.
+    sale_saved_id: str
+    #: ``state: "closed"`` with a card payment on the open main register. The
+    #: state is terminal, so a ``PUT`` is a 409; the return action is what
+    #: works on it.
+    sale_closed_id: str
+    #: A layby: parked, carrying the ``layby`` attribute and a part payment.
+    #: There is no ``LAYBY`` state in the 2026-07 schema.
+    sale_layby_id: str
+    webhook_subscription_id: str
+    #: The HMAC secret behind the ``X-Signature`` header. Lightspeed signs with
+    #: the application's own ``client_secret``: ``WebhookRequest`` carries no
+    #: per-hook secret.
+    webhook_secret: str
+    #: ``/api/2026-07`` -- the version segment every resource route sits under.
+    api_prefix: str
+    #: The seven ``WebhookType`` values. Two of them (the consignment pair) are
+    #: subscribable and never fired here; see the vendor's capabilities.
+    event_types: tuple[str, ...]
+
+    @property
+    def credentials(self) -> Credentials:
+        """The application credential, under the neutral names.
+
+        DOCUMENTED, the ``grant``: Lightspeed issues a refresh token alongside
+        the access token and a consumer rotates it -- "Using a refresh token
+        will revoke the access token that was returned with it ... You must
+        save this new refresh token and use it the next time"
+        (https://x-series-api.lightspeedhq.com/docs/authorization).
+        """
+        return Credentials(app_id=self.client_id, app_secret=self.client_secret, grant="refresh_token")
+
+    @property
+    def token(self) -> Token:
+        """The seeded full-scope pair, under the neutral names. The tenant is
+        the retailer -- there is no narrower id a token can be scoped to."""
+        return Token(access_token=self.access_token, refresh_token=self.refresh_token, tenant_id=self.retailer_id)
+
+    @property
+    def auth(self) -> dict[str, str]:
+        """``Authorization: Bearer`` for the full-scope token. No second
+        header: one flat ``bearerAuth`` scheme is the whole of this vendor's
+        authentication."""
+        return {"Authorization": f"Bearer {self.access_token}"}
+
+    @property
+    def read_only_auth(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.read_only_access_token}"}
+
+    @property
+    def personal_auth(self) -> dict[str, str]:
+        """The personal token, which authenticates identically."""
+        return {"Authorization": f"Bearer {self.personal_access_token}"}
+
+    def api_path(self, suffix: str = "") -> str:
+        """``/api/2026-07`` plus ``suffix``: every resource route sits under
+        the version segment. The token endpoint does NOT -- it is
+        ``/api/1.0/token`` -- so this helper deliberately does not reach it."""
+        return f"{self.api_prefix}{suffix}"
+
+
 # ---------------------------------------------------------------------------
 # Seed overlays: the typed shape of ``unit(seed_overlay=...)``.
 #
@@ -372,7 +520,7 @@ class ToastSeed:
 # them here would mean a second description of every vendor entity that could
 # drift from the document. The key is the half a consumer gets wrong.
 #
-# ``_comment`` is deliberately absent from all three, though the unit accepts
+# ``_comment`` is deliberately absent from all four, though the unit accepts
 # it: it is the document's own annotation, not a collection, and offering it as
 # something to override would be a worse answer than not typing it.
 # ---------------------------------------------------------------------------
@@ -431,6 +579,27 @@ class ToastSeedOverlay(TypedDict, total=False):
     credit_authorizations: object
     stock: object
     webhook_subscriptions: object
+
+
+class LightspeedSeedOverlay(TypedDict, total=False):
+    """The collections ``vendorfake/lightspeed/seed/default.seed.json``
+    carries."""
+
+    retailer: object
+    outlets: object
+    registers: object
+    payment_types: object
+    products: object
+    inventory: object
+    adjustment_reasons: object
+    stock_adjustments: object
+    customer_groups: object
+    customers: object
+    tokens: object
+    personal_tokens: object
+    refresh_tokens: object
+    webhooks: object
+    sales: object
 
 
 SeedOverlay = Mapping[str, Any]
@@ -549,6 +718,59 @@ def _toast(vendor_config: Mapping[str, object]) -> ToastSeed:
     )
 
 
+def _lightspeed(vendor_config: Mapping[str, object]) -> LightspeedSeed:
+    from vendorfake.lightspeed.config import LightspeedConfig
+    from vendorfake.lightspeed.events import LIGHTSPEED_EVENT_TYPES
+    from vendorfake.lightspeed.seed import constants as c
+    from vendorfake.lightspeed.surface.common import API_PREFIX
+
+    config = LightspeedConfig.model_validate(dict(vendor_config))
+    return LightspeedSeed(
+        client_id=config.client_id,
+        client_secret=config.client_secret,
+        redirect_uri=config.redirect_uri,
+        domain_prefix=config.domain_prefix,
+        access_token=c.SEED_ACCESS_TOKEN,
+        refresh_token=c.SEED_REFRESH_TOKEN,
+        read_only_access_token=c.SEED_READ_ONLY_ACCESS_TOKEN,
+        personal_access_token=c.SEED_PERSONAL_ACCESS_TOKEN,
+        retailer_id=c.SEED_RETAILER_ID,
+        retailer_name=c.SEED_RETAILER_NAME,
+        outlet_main_id=c.SEED_OUTLET_MAIN_ID,
+        outlet_second_id=c.SEED_OUTLET_SECOND_ID,
+        register_main_id=c.SEED_REGISTER_MAIN_ID,
+        register_second_id=c.SEED_REGISTER_SECOND_ID,
+        payment_type_cash_id=c.SEED_PAYMENT_TYPE_CASH_ID,
+        payment_type_card_id=c.SEED_PAYMENT_TYPE_CARD_ID,
+        payment_type_internal_id=c.SEED_PAYMENT_TYPE_INTERNAL_ID,
+        product_trail_mix_id=c.SEED_PRODUCT_TRAIL_MIX_ID,
+        product_trail_mix_sku=c.SEED_PRODUCT_TRAIL_MIX_SKU,
+        product_socks_id=c.SEED_PRODUCT_SOCKS_ID,
+        product_bottle_id=c.SEED_PRODUCT_BOTTLE_ID,
+        product_bottle_sku=c.SEED_PRODUCT_BOTTLE_SKU,
+        product_tee_id=c.SEED_PRODUCT_TEE_ID,
+        product_tee_small_id=c.SEED_PRODUCT_TEE_SMALL_ID,
+        product_tee_large_id=c.SEED_PRODUCT_TEE_LARGE_ID,
+        customer_group_id=c.SEED_CUSTOMER_GROUP_ID,
+        customer_ada_id=c.SEED_CUSTOMER_ADA_ID,
+        customer_blake_id=c.SEED_CUSTOMER_BLAKE_ID,
+        customer_noor_id=c.SEED_CUSTOMER_NOOR_ID,
+        adjustment_reason_found_id=c.SEED_ADJUSTMENT_REASON_FOUND_ID,
+        adjustment_reason_spoiled_id=c.SEED_ADJUSTMENT_REASON_SPOILED_ID,
+        cashier_user_id=c.SEED_USER_ID,
+        tax_id=c.SEED_TAX_ID,
+        sale_saved_id=c.SEED_SALE_SAVED_ID,
+        sale_closed_id=c.SEED_SALE_CLOSED_ID,
+        sale_layby_id=c.SEED_SALE_LAYBY_ID,
+        webhook_subscription_id=c.SEED_WEBHOOK_ID,
+        # Lightspeed signs with the application's own secret; there is no
+        # per-subscription secret member on WebhookRequest.
+        webhook_secret=config.client_secret,
+        api_prefix=API_PREFIX,
+        event_types=tuple(LIGHTSPEED_EVENT_TYPES),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _BuiltInSeed:
     """One shipped vendor's seed, as the two facts this module has about it.
@@ -568,8 +790,8 @@ class _BuiltInSeed:
     """The seed collections this vendor's seed object speaks for.
 
     Its *credentials* (the bearer tokens a consumer authenticates with) and
-    its *identity* (the merchant or restaurant every scoped path is built
-    from) -- the two the seed publishes as concrete strings, from this
+    its *identity* (the merchant, restaurant or retailer every scoped path is
+    built from) -- the two the seed publishes as concrete strings, from this
     distribution's constants rather than from the document that was loaded.
     An overlay naming one of these would change what the unit hydrates
     without changing what ``.seed`` reports, which is a 401 or a 404 with
@@ -590,11 +812,19 @@ _BUILT_IN_SEEDS: Mapping[str, _BuiltInSeed] = {
     "square": _BuiltInSeed(build=_square, collections=frozenset({"tokens", "merchant"})),
     "clover": _BuiltInSeed(build=_clover, collections=frozenset({"tokens", "merchant"})),
     "toast": _BuiltInSeed(build=_toast, collections=frozenset({"tokens", "restaurant"})),
+    # Lightspeed keeps its three credential kinds in three collections --
+    # ``tokens`` (the full-scope and read-only OAuth pair), ``personal_tokens``
+    # and ``refresh_tokens`` -- and its identity in ``retailer``. All four are
+    # what `_lightspeed` above reads its constants for, so all four are bound.
+    "lightspeed": _BuiltInSeed(
+        build=_lightspeed,
+        collections=frozenset({"tokens", "personal_tokens", "refresh_tokens", "retailer"}),
+    ),
 }
-"""The three vendors this distribution ships, as data rather than a branch.
+"""The four vendors this distribution ships, as data rather than a branch.
 
 This module may name them: it is under ``testing/``, not ``core/`` or
-``conformance/``, and its whole job is to know what the three shipped
+``conformance/``, and its whole job is to know what the four shipped
 scenarios contain (``tools/boundary.toml`` draws the line in the same place).
 A vendor from the entry-point group is not here -- it publishes its own seed
 through the ``SeedingVendor`` hook and declares its own collections through
@@ -692,8 +922,8 @@ def seed_for(
     Resolution order, and why it is this way round. A vendor that implements
     the :class:`~vendorfake.core.kernel.types.SeedingVendor` hook is asked
     first, because that is the vendor's own statement about itself;
-    :data:`_BUILT_IN_SEEDS` below is only *this module's* knowledge of the
-    three vendors shipped here. None of the three implements the hook, so the
+    :data:`_BUILT_IN_SEEDS` above is only *this module's* knowledge of the
+    four vendors shipped here. None of the four implements the hook, so the
     ordering changes nothing for them -- a test pins that -- and it means a
     third-party vendor is never shadowed by a name collision with a built-in.
 

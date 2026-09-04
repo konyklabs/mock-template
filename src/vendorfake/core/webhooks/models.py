@@ -42,12 +42,13 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from vendorfake.core.kernel.types import PreparedEvent
 
 __all__ = [
     "SUBSCRIPTION_COLLECTION",
+    "BodyEncodingSigner",
     "DeliveryHeaderProvider",
     "DeliveryMetadata",
     "DeliveryOutcome",
@@ -223,6 +224,40 @@ class DeliveryHeaderProvider(Protocol):
         delivery with no content type -- which is a vendor's decision to make
         and not the core's to second-guess.
         """
+        ...
+
+
+@runtime_checkable
+class BodyEncodingSigner(Protocol):
+    """A vendor whose outbound delivery body is not JSON.
+
+    FOR: the vendors that document a delivery in some other media type. The
+    dispatcher's default is ``dump_json(event.body)``, which is what every
+    vendor shipped here before this hook needed -- but a delivery body is a
+    vendor's documented wire format like any other, and at least one vendor
+    documents it as ``application/x-www-form-urlencoded`` with the entity JSON
+    inside a named field. Without this hook such a vendor can set the content
+    type through :class:`DeliveryHeaderProvider` and then send bytes that
+    contradict it, which is the one shape a fake must never ship: a header
+    that lies about the body under it.
+
+    A SEPARATE, STRUCTURALLY DISCOVERED PROTOCOL, for exactly the reasons
+    :class:`~vendorfake.core.kernel.types.SeedingVendor` is one. Adding the
+    method to ``Signer`` would break every existing implementation, in this
+    distribution and outside it, to express something absence already
+    expresses: a signer that does not implement this is declaring "JSON", and
+    is precisely as valid as it was before this protocol existed. The
+    dispatcher asks ``isinstance(signer, BodyEncodingSigner)`` and falls back
+    to JSON.
+
+    THE RETURN IS THE EXACT BYTES SIGNED AND SENT. There is no second
+    encoding step: the dispatcher hands these bytes to ``Signer.sign`` as
+    ``SignInput.raw_body`` and to the sink as the request body, so a signature
+    scheme that covers the raw body covers what actually went out.
+    """
+
+    def encode_body(self, event: PreparedEvent) -> bytes:
+        """The delivery body for ``event``, already encoded."""
         ...
 
 

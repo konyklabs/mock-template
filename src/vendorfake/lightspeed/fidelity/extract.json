@@ -1,0 +1,5465 @@
+{
+  "components": {
+    "schemas": {
+      "AdjustmentAmount": {
+        "properties": {
+          "type": {
+            "enum": [
+              "FIXED",
+              "PERCENT"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AdjustmentSource": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AdjustmentTarget": {
+        "properties": {
+          "ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "method": {
+            "enum": [
+              "PROPORTIONED",
+              "EACH",
+              "SINGLE"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "type": "object"
+      },
+      "Attribute": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "type": "object"
+      },
+      "BrandSample": {
+        "nullable": true,
+        "properties": {
+          "deleted_at": {
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "Composite": {
+        "properties": {
+          "product_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "CreateStockAdjustmentItem": {
+        "additionalProperties": false,
+        "properties": {
+          "custom_inventory_adjustment_reason_id": {
+            "format": "uuid",
+            "maxLength": 36,
+            "minLength": 1,
+            "type": "string"
+          },
+          "outlet_id": {
+            "format": "uuid",
+            "maxLength": 36,
+            "minLength": 1,
+            "type": "string"
+          },
+          "product_id": {
+            "format": "uuid",
+            "maxLength": 36,
+            "minLength": 1,
+            "type": "string"
+          },
+          "quantity": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/StockAdjustmentReason"
+          }
+        },
+        "required": [
+          "product_id",
+          "outlet_id",
+          "quantity",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "CreateStockAdjustmentsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "stock_adjustments": {
+            "items": {
+              "$ref": "#/components/schemas/CreateStockAdjustmentItem"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "stock_adjustments"
+        ],
+        "type": "object"
+      },
+      "Customer": {
+        "properties": {
+          "balance": {
+            "format": "double",
+            "type": "number"
+          },
+          "company_name": {
+            "nullable": true,
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "custom_field_1": {
+            "nullable": true,
+            "type": "string"
+          },
+          "custom_field_2": {
+            "nullable": true,
+            "type": "string"
+          },
+          "custom_field_3": {
+            "nullable": true,
+            "type": "string"
+          },
+          "custom_field_4": {
+            "nullable": true,
+            "type": "string"
+          },
+          "customer_code": {
+            "type": "string"
+          },
+          "customer_group_id": {
+            "type": "string"
+          },
+          "date_of_birth": {
+            "nullable": true,
+            "type": "string"
+          },
+          "deleted_at": {
+            "nullable": true,
+            "type": "string"
+          },
+          "do_not_email": {
+            "default": false,
+            "type": "boolean"
+          },
+          "email": {
+            "nullable": true,
+            "type": "string"
+          },
+          "enable_loyalty": {
+            "type": "boolean"
+          },
+          "enable_promotional_sms": {
+            "default": false,
+            "type": "boolean"
+          },
+          "fax": {
+            "nullable": true,
+            "type": "string"
+          },
+          "first_name": {
+            "nullable": true,
+            "type": "string"
+          },
+          "gender": {
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_name": {
+            "nullable": true,
+            "type": "string"
+          },
+          "loyalty_balance": {
+            "format": "double",
+            "type": "number"
+          },
+          "mobile": {
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "deprecated": true,
+            "nullable": true,
+            "type": "string"
+          },
+          "note": {
+            "nullable": true,
+            "type": "string"
+          },
+          "on_account_limit": {
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "phone": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_address_1": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_address_2": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_city": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_country_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_postcode": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_state": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_suburb": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_address_1": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_address_2": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_city": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_country_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_postcode": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_state": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_suburb": {
+            "nullable": true,
+            "type": "string"
+          },
+          "tax_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "twitter": {
+            "nullable": true,
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "website": {
+            "nullable": true,
+            "type": "string"
+          },
+          "year_to_date": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "first_name",
+          "last_name"
+        ],
+        "type": "object"
+      },
+      "CustomerBase": {
+        "properties": {
+          "company_name": {
+            "nullable": true,
+            "type": "string"
+          },
+          "custom_field_1": {
+            "nullable": true,
+            "type": "string"
+          },
+          "custom_field_2": {
+            "nullable": true,
+            "type": "string"
+          },
+          "custom_field_3": {
+            "nullable": true,
+            "type": "string"
+          },
+          "custom_field_4": {
+            "nullable": true,
+            "type": "string"
+          },
+          "customer_code": {
+            "type": "string"
+          },
+          "customer_group_id": {
+            "type": "string"
+          },
+          "date_of_birth": {
+            "type": "string"
+          },
+          "do_not_email": {
+            "default": false,
+            "type": "boolean"
+          },
+          "email": {
+            "nullable": true,
+            "type": "string"
+          },
+          "enable_loyalty": {
+            "type": "boolean"
+          },
+          "enable_promotional_sms": {
+            "default": false,
+            "type": "boolean"
+          },
+          "fax": {
+            "nullable": true,
+            "type": "string"
+          },
+          "first_name": {
+            "nullable": true,
+            "type": "string"
+          },
+          "gender": {
+            "nullable": true,
+            "type": "string"
+          },
+          "last_name": {
+            "nullable": true,
+            "type": "string"
+          },
+          "mobile": {
+            "nullable": true,
+            "type": "string"
+          },
+          "note": {
+            "nullable": true,
+            "type": "string"
+          },
+          "on_account_limit": {
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "phone": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_address_1": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_address_2": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_city": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_country_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_postcode": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_state": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_suburb": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_address_1": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_address_2": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_city": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_country_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_postcode": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_state": {
+            "nullable": true,
+            "type": "string"
+          },
+          "postal_suburb": {
+            "nullable": true,
+            "type": "string"
+          },
+          "tax_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "twitter": {
+            "nullable": true,
+            "type": "string"
+          },
+          "website": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "first_name",
+          "last_name"
+        ],
+        "type": "object"
+      },
+      "CustomerCollection": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Customer"
+            },
+            "type": "array"
+          },
+          "version": {
+            "$ref": "#/components/schemas/Version"
+          }
+        },
+        "type": "object"
+      },
+      "CustomerResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Customer"
+          }
+        },
+        "type": "object"
+      },
+      "CustomizationFile": {
+        "properties": {
+          "filename": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "DailyAgenda": {
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "minutes_scheduled": {
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "EcomCustomCharge": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "tax_components": {
+            "items": {
+              "$ref": "#/components/schemas/EcomCustomChargeTaxComponent"
+            },
+            "type": "array"
+          },
+          "total": {
+            "format": "double",
+            "type": "number"
+          },
+          "total_incl": {
+            "format": "double",
+            "type": "number"
+          },
+          "total_tax": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "EcomCustomChargeTaxComponent": {
+        "properties": {
+          "rate_id": {
+            "type": "string"
+          },
+          "total_tax": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "FulfillmentDetail": {
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "shipping_address_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "shipping_address_token": {
+            "nullable": true,
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "DISPATCH",
+              "PICKUP"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GlobalPaymentType": {
+        "properties": {
+          "badge": {
+            "nullable": true,
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "configuration_url": {
+            "nullable": true,
+            "type": "string"
+          },
+          "description": {
+            "nullable": true,
+            "type": "string"
+          },
+          "header": {
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "internal": {
+            "type": "boolean"
+          },
+          "logo": {
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "online_only": {
+            "type": "boolean"
+          },
+          "platforms": {
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "type": "array"
+          },
+          "referred_inactive": {
+            "type": "boolean"
+          },
+          "show_banner": {
+            "type": "boolean"
+          },
+          "subcategory": {
+            "type": "string"
+          },
+          "subtext": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "internal",
+          "platforms",
+          "category",
+          "subcategory",
+          "referred_inactive",
+          "show_banner",
+          "online_only"
+        ],
+        "type": "object"
+      },
+      "ImageSample": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "Inventory": {
+        "properties": {
+          "average_cost": {
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "current_inventory_level": {
+            "format": "double",
+            "type": "number"
+          },
+          "deleted_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "outlet_id": {
+            "type": "string"
+          },
+          "product_id": {
+            "type": "string"
+          },
+          "quantity_to_procure": {
+            "format": "double",
+            "type": "number"
+          },
+          "reorder_amount": {
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "reorder_method": {
+            "enum": [
+              "FIXED",
+              "MIN_MAX",
+              null
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "reorder_point": {
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "reorder_target": {
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "InventoryLevel": {
+        "properties": {
+          "average_cost": {
+            "format": "double",
+            "type": "number"
+          },
+          "brand_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "current_inventory_level": {
+            "format": "double",
+            "type": "number"
+          },
+          "location_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "product_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "product_type_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quantity_to_procure": {
+            "format": "double",
+            "type": "number"
+          },
+          "reorder_amount": {
+            "format": "double",
+            "type": "number"
+          },
+          "reorder_method": {
+            "enum": [
+              "FIXED",
+              "MIN_MAX",
+              null
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "reorder_target": {
+            "format": "double",
+            "type": "number"
+          },
+          "reorder_threshold": {
+            "format": "double",
+            "type": "number"
+          },
+          "root_product_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "supplier_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "total_cost": {
+            "format": "double",
+            "type": "number"
+          }
+        }
+      },
+      "InventoryLevelsRequest": {
+        "properties": {
+          "group_variants": {
+            "default": false,
+            "type": "boolean"
+          },
+          "include_composites": {
+            "default": false,
+            "type": "boolean"
+          },
+          "include_inactive": {
+            "default": false,
+            "type": "boolean"
+          },
+          "location_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "offset": {
+            "default": 0,
+            "format": "int64",
+            "type": "integer"
+          },
+          "product_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "root_product_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "size": {
+            "default": 100,
+            "format": "int64",
+            "maximum": 10000,
+            "type": "integer"
+          },
+          "sort_direction": {
+            "default": "desc",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "type": "string"
+          },
+          "sort_type": {
+            "default": "total_count",
+            "enum": [
+              "total_count",
+              "total_cost",
+              "average_cost",
+              "reorder_point",
+              "reorder_amount",
+              "product_name",
+              "created_at"
+            ],
+            "type": "string"
+          },
+          "supplier_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          "to_be_procured_only": {
+            "default": false,
+            "type": "boolean"
+          }
+        }
+      },
+      "InventoryRequest": {
+        "properties": {
+          "after": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "before": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "include_deleted": {
+            "default": false,
+            "type": "boolean"
+          },
+          "product_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "size": {
+            "default": 1000,
+            "format": "int64",
+            "maximum": 5000,
+            "type": "integer"
+          },
+          "sort_direction": {
+            "default": "desc",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "type": "string"
+          },
+          "variants": {
+            "default": false,
+            "type": "boolean"
+          }
+        }
+      },
+      "ItemDetails": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "initial_condition": {
+            "type": "string"
+          },
+          "item_id": {
+            "type": "string"
+          },
+          "item_name": {
+            "type": "string"
+          },
+          "serial_number": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LineItemAdjustment": {
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/AdjustmentAmount"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AdjustmentSource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AdjustmentTarget"
+          },
+          "type": {
+            "enum": [
+              "NON_CASH_FEE",
+              "DISCOUNT",
+              "TIP"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "target"
+        ],
+        "type": "object"
+      },
+      "LineItemAttribute": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "type": "object"
+      },
+      "LineItemCustomization": {
+        "properties": {
+          "field_type": {
+            "type": "string"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/CustomizationFile"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LineItemMetadata": {
+        "properties": {
+          "fulfillment_method": {
+            "enum": [
+              "DISPATCH",
+              "PICKUP"
+            ],
+            "type": "string"
+          },
+          "is_price_override": {
+            "type": "boolean"
+          },
+          "sequence": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "LineItemPricing": {
+        "properties": {
+          "adjustments": {
+            "items": {
+              "$ref": "#/components/schemas/LineItemAdjustment"
+            },
+            "type": "array"
+          },
+          "cost": {
+            "format": "double",
+            "type": "number"
+          },
+          "discount": {
+            "format": "double",
+            "type": "number"
+          },
+          "loyalty_amount": {
+            "format": "double",
+            "type": "number"
+          },
+          "price": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "price"
+        ],
+        "type": "object"
+      },
+      "LineItemProduct": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "LineItemProductDetails": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LineItemPromotion": {
+        "properties": {
+          "amount": {
+            "format": "double",
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "promo_code": {
+            "type": "string"
+          },
+          "promo_code_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LineItemResponseMetadata": {
+        "properties": {
+          "is_price_override": {
+            "type": "boolean"
+          },
+          "sequence": {
+            "type": "integer"
+          },
+          "tax_components": {
+            "items": {
+              "$ref": "#/components/schemas/LineItemTaxComponentResponse"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "LineItemResponsePricing": {
+        "properties": {
+          "cost": {
+            "format": "double",
+            "type": "number"
+          },
+          "cost_total": {
+            "format": "double",
+            "type": "number"
+          },
+          "discount": {
+            "format": "double",
+            "type": "number"
+          },
+          "discount_total": {
+            "format": "double",
+            "type": "number"
+          },
+          "loyalty_amount": {
+            "format": "double",
+            "type": "number"
+          },
+          "loyalty_amount_total": {
+            "format": "double",
+            "type": "number"
+          },
+          "price": {
+            "format": "double",
+            "type": "number"
+          },
+          "total": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "LineItemResponseSource": {
+        "properties": {
+          "register_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LineItemResponseTax": {
+        "properties": {
+          "amount": {
+            "format": "double",
+            "type": "number"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "total": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "LineItemReturn": {
+        "properties": {
+          "is_return": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LineItemSource": {
+        "properties": {
+          "author_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "register_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "LineItemSurcharge": {
+        "properties": {
+          "tax_components": {
+            "items": {
+              "$ref": "#/components/schemas/LineItemTaxComponentResponse"
+            },
+            "type": "array"
+          },
+          "value": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "LineItemTax": {
+        "properties": {
+          "amount": {
+            "format": "double",
+            "type": "number"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "amount"
+        ],
+        "type": "object"
+      },
+      "LineItemTaxComponent": {
+        "properties": {
+          "rate_id": {
+            "type": "string"
+          },
+          "total_tax": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "rate_id",
+          "total_tax"
+        ],
+        "type": "object"
+      },
+      "LineItemTaxComponentResponse": {
+        "properties": {
+          "rate_id": {
+            "type": "string"
+          },
+          "total_tax": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "Outlet": {
+        "properties": {
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/Attribute"
+            },
+            "type": "array"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "currency_symbol": {
+            "type": "string"
+          },
+          "default_tax_id": {
+            "deprecated": true,
+            "type": "string"
+          },
+          "deleted_at": {
+            "nullable": true,
+            "type": "string"
+          },
+          "display_prices": {
+            "enum": [
+              "inclusive",
+              "exclusive"
+            ],
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "latitude": {
+            "nullable": true,
+            "type": "string"
+          },
+          "longitude": {
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_address_1": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_address_2": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_city": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_country_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_postcode": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_state": {
+            "nullable": true,
+            "type": "string"
+          },
+          "physical_suburb": {
+            "nullable": true,
+            "type": "string"
+          },
+          "time_zone": {
+            "nullable": true,
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "default_tax_id",
+          "currency",
+          "display_prices",
+          "time_zone",
+          "currency_symbol",
+          "attributes",
+          "version"
+        ],
+        "type": "object"
+      },
+      "OutletCollection": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Outlet"
+            },
+            "type": "array"
+          },
+          "version": {
+            "$ref": "#/components/schemas/Version"
+          }
+        },
+        "required": [
+          "data",
+          "version"
+        ],
+        "type": "object"
+      },
+      "OutletResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Outlet"
+          }
+        },
+        "type": "object"
+      },
+      "PaymentErrorResponse": {
+        "properties": {
+          "error": {
+            "properties": {
+              "code": {
+                "type": "integer"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "PaymentExternalApplication": {
+        "properties": {
+          "application_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PaymentExternalAttribute": {
+        "additionalProperties": true,
+        "properties": {
+          "card_last_four_digits": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "transaction_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PaymentResponseMetadata": {
+        "properties": {
+          "register_open_sequence_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PaymentResponseSource": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "outlet_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "register_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PaymentSource": {
+        "properties": {
+          "register_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PaymentSurcharge": {
+        "properties": {
+          "amount": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PaymentType": {
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "nullable": true,
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "deleted_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "gateway": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "internal": {
+            "type": "boolean"
+          },
+          "is_editable": {
+            "nullable": true,
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "name_changed_by_user": {
+            "type": "boolean"
+          },
+          "outlet_ids": {
+            "items": {
+              "type": "string"
+            },
+            "nullable": true,
+            "type": "array"
+          },
+          "payment_type": {
+            "$ref": "#/components/schemas/GlobalPaymentType"
+          },
+          "type_id": {
+            "type": "integer"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type_id",
+          "version",
+          "disabled",
+          "internal"
+        ],
+        "type": "object"
+      },
+      "PaymentTypeCollection": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PaymentType"
+            },
+            "type": "array"
+          },
+          "version": {
+            "$ref": "#/components/schemas/Version"
+          }
+        },
+        "required": [
+          "data",
+          "version"
+        ],
+        "type": "object"
+      },
+      "PaymentTypeConfig": {
+        "properties": {
+          "config_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "config_id"
+        ],
+        "type": "object"
+      },
+      "PaymentTypeDetails": {
+        "properties": {
+          "config_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Product": {
+        "properties": {
+          "account_code": {
+            "nullable": true,
+            "type": "string"
+          },
+          "account_code_purchase": {
+            "nullable": true,
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/ProductAttribute"
+            },
+            "type": "array"
+          },
+          "brand": {
+            "$ref": "#/components/schemas/BrandSample"
+          },
+          "brand_id": {
+            "format": "UUID",
+            "nullable": true,
+            "type": "string"
+          },
+          "button_order": {
+            "type": "integer"
+          },
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/Tag"
+            },
+            "type": "array"
+          },
+          "composite_bom": {
+            "type": "object"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "customizations": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "deleted_at": {
+            "nullable": true,
+            "type": "string"
+          },
+          "description": {
+            "nullable": true,
+            "type": "string"
+          },
+          "dimensions_unit": {
+            "enum": [
+              "IN",
+              "CM",
+              "MM",
+              "YD"
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "family_id": {
+            "format": "UUID",
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "has_inventory": {
+            "type": "boolean"
+          },
+          "has_variants": {
+            "type": "boolean"
+          },
+          "height": {
+            "nullable": true,
+            "type": "number"
+          },
+          "id": {
+            "format": "UUID",
+            "type": "string"
+          },
+          "image_thumbnail_url": {
+            "type": "string"
+          },
+          "image_url": {
+            "type": "string"
+          },
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/ImageSample"
+            },
+            "type": "array"
+          },
+          "is_composite": {
+            "type": "boolean"
+          },
+          "length": {
+            "nullable": true,
+            "type": "number"
+          },
+          "loyalty_amount": {
+            "nullable": true,
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "outlet_taxes": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "packaging": {
+            "properties": {
+              "breaks_into": {
+                "items": {
+                  "$ref": "#/components/schemas/ProductPackage"
+                },
+                "type": "array"
+              },
+              "made_from": {
+                "items": {
+                  "$ref": "#/components/schemas/ProductPackage"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "price_excluding_tax": {
+            "type": "number"
+          },
+          "price_including_tax": {
+            "nullable": true,
+            "type": "number"
+          },
+          "product_category": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ProductCategory"
+              }
+            ],
+            "nullable": true,
+            "type": "object"
+          },
+          "product_codes": {
+            "items": {
+              "$ref": "#/components/schemas/ProductCode"
+            },
+            "type": "array"
+          },
+          "product_suppliers": {
+            "items": {
+              "$ref": "#/components/schemas/ProductSupplier"
+            },
+            "type": "array"
+          },
+          "product_type_id": {
+            "format": "UUID",
+            "nullable": true,
+            "type": "string"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "skuImages": {
+            "items": {
+              "$ref": "#/components/schemas/ImageSample"
+            },
+            "type": "array"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "source_variant_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "supplier": {
+            "$ref": "#/components/schemas/SupplierSample"
+          },
+          "supplier_code": {
+            "nullable": true,
+            "type": "string"
+          },
+          "supplier_id": {
+            "format": "UUID",
+            "nullable": true,
+            "type": "string"
+          },
+          "supply_price": {
+            "format": "double",
+            "type": "number"
+          },
+          "tag_ids": {
+            "items": {
+              "format": "UUID",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tax_category": {
+            "nullable": true,
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ProductTypeSample"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "variant_count": {
+            "nullable": true,
+            "type": "integer"
+          },
+          "variant_name": {
+            "nullable": true,
+            "type": "string"
+          },
+          "variant_options": {
+            "items": {
+              "$ref": "#/components/schemas/VariantOption"
+            },
+            "type": "array"
+          },
+          "variant_parent_id": {
+            "format": "UUID",
+            "nullable": true,
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "weight": {
+            "nullable": true,
+            "type": "number"
+          },
+          "weight_unit": {
+            "enum": [
+              "CT",
+              "G",
+              "OZ",
+              "LB",
+              "KG"
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "width": {
+            "nullable": true,
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "handle",
+          "name",
+          "sku",
+          "active",
+          "is_composite",
+          "has_inventory",
+          "has_variants",
+          "version",
+          "variant_options",
+          "categories",
+          "tag_ids",
+          "images",
+          "skuImages",
+          "attributes",
+          "product_codes",
+          "product_suppliers",
+          "packaging",
+          "customizations",
+          "price_including_tax",
+          "price_excluding_tax"
+        ],
+        "type": "object"
+      },
+      "ProductAddImage": {
+        "properties": {
+          "index": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "location": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "s3",
+              "url",
+              "product-image",
+              "sku-image"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "location"
+        ],
+        "type": "object"
+      },
+      "ProductAddInventoryPayload": {
+        "properties": {
+          "current_amount": {
+            "format": "double",
+            "type": "number"
+          },
+          "outlet_id": {
+            "format": "UUID",
+            "type": "string"
+          },
+          "reorder_amount": {
+            "type": "number"
+          },
+          "reorder_point": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "outlet_id",
+          "current_amount"
+        ],
+        "type": "object"
+      },
+      "ProductAddOutletTax": {
+        "properties": {
+          "outlet_id": {
+            "format": "UUID",
+            "type": "string"
+          },
+          "tax_id": {
+            "format": "UUID",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outlet_id",
+          "tax_id"
+        ],
+        "type": "object"
+      },
+      "ProductAddVariantPayload": {
+        "properties": {
+          "all_outlets_tax": {
+            "properties": {
+              "is_default": {
+                "type": "boolean"
+              },
+              "tax_id": {
+                "format": "UUID",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "dimensions_unit": {
+            "enum": [
+              "IN",
+              "CM",
+              "MM",
+              "YD"
+            ],
+            "type": "string"
+          },
+          "height": {
+            "type": "number"
+          },
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/ProductAddImage"
+            },
+            "type": "array"
+          },
+          "inventory": {
+            "items": {
+              "$ref": "#/components/schemas/ProductAddInventoryPayload"
+            },
+            "type": "array"
+          },
+          "length": {
+            "type": "number"
+          },
+          "outlet_taxes": {
+            "items": {
+              "$ref": "#/components/schemas/ProductAddOutletTax"
+            },
+            "type": "array"
+          },
+          "price_excluding_tax": {
+            "type": "number"
+          },
+          "price_including_tax": {
+            "type": "number"
+          },
+          "product_codes": {
+            "items": {
+              "$ref": "#/components/schemas/ProductCode"
+            },
+            "type": "array"
+          },
+          "product_suppliers": {
+            "items": {
+              "$ref": "#/components/schemas/ProductSupplier"
+            },
+            "type": "array"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "supplier_code": {
+            "type": "string"
+          },
+          "supply_price": {
+            "format": "double",
+            "type": "number"
+          },
+          "variant_definitions": {
+            "items": {
+              "$ref": "#/components/schemas/VariantAttribute"
+            },
+            "type": "array"
+          },
+          "weight": {
+            "type": "number"
+          },
+          "weight_unit": {
+            "enum": [
+              "CT",
+              "G",
+              "OZ",
+              "LB",
+              "KG"
+            ],
+            "type": "string"
+          },
+          "width": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "ProductAttribute": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "type": "object"
+      },
+      "ProductCategory": {
+        "properties": {
+          "category_path": {
+            "items": {
+              "$ref": "#/components/schemas/ProductCategoryPath"
+            },
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "leaf_category": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_category_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "root_category_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ProductCategoryPath": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "ProductCode": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "CUSTOM",
+              "EAN",
+              "ISBN",
+              "ITF",
+              "JAN",
+              "UPC"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "id"
+        ],
+        "type": "object"
+      },
+      "ProductCollection": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Product"
+            },
+            "type": "array"
+          },
+          "version": {
+            "$ref": "#/components/schemas/Version"
+          }
+        },
+        "required": [
+          "data",
+          "version"
+        ],
+        "type": "object"
+      },
+      "ProductCreateBody": {
+        "properties": {
+          "account_code_purchase": {
+            "type": "string"
+          },
+          "account_code_sale": {
+            "type": "string"
+          },
+          "all_outlets_tax": {
+            "properties": {
+              "is_default": {
+                "type": "boolean"
+              },
+              "tax_id": {
+                "format": "UUID",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "attributes": {
+            "$ref": "#/components/schemas/Attribute"
+          },
+          "brand_id": {
+            "format": "UUID",
+            "type": "string"
+          },
+          "composite": {
+            "items": {
+              "$ref": "#/components/schemas/Composite"
+            },
+            "type": "array"
+          },
+          "description": {
+            "type": "string"
+          },
+          "dimensions_unit": {
+            "enum": [
+              "IN",
+              "CM",
+              "MM",
+              "YD"
+            ],
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "height": {
+            "type": "number"
+          },
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/ProductAddImage"
+            },
+            "type": "array"
+          },
+          "inventory": {
+            "items": {
+              "$ref": "#/components/schemas/ProductAddInventoryPayload"
+            },
+            "type": "array"
+          },
+          "is_active": {
+            "type": "boolean"
+          },
+          "length": {
+            "type": "number"
+          },
+          "loyalty_amount": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "outlet_taxes": {
+            "items": {
+              "$ref": "#/components/schemas/ProductAddOutletTax"
+            },
+            "type": "array"
+          },
+          "price_excluding_tax": {
+            "type": "number"
+          },
+          "price_including_tax": {
+            "type": "number"
+          },
+          "product_category_id": {
+            "format": "UUID",
+            "type": "string"
+          },
+          "product_codes": {
+            "items": {
+              "$ref": "#/components/schemas/ProductCode"
+            },
+            "type": "array"
+          },
+          "product_suppliers": {
+            "items": {
+              "$ref": "#/components/schemas/ProductSupplier"
+            },
+            "type": "array"
+          },
+          "product_type_id": {
+            "format": "UUID",
+            "type": "string"
+          },
+          "sku": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "source_variant_id": {
+            "type": "string"
+          },
+          "supplier_code": {
+            "type": "string"
+          },
+          "supplier_id": {
+            "format": "UUID",
+            "type": "string"
+          },
+          "supply_price": {
+            "format": "double",
+            "type": "number"
+          },
+          "tag_ids": {
+            "items": {
+              "format": "UUID",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "variants": {
+            "items": {
+              "$ref": "#/components/schemas/ProductAddVariantPayload"
+            },
+            "type": "array"
+          },
+          "weight": {
+            "type": "number"
+          },
+          "weight_unit": {
+            "enum": [
+              "CT",
+              "G",
+              "OZ",
+              "LB",
+              "KG"
+            ],
+            "type": "string"
+          },
+          "width": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ProductPackage": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "destination_product_id": {
+            "format": "UUID",
+            "type": "string"
+          },
+          "package_id": {
+            "format": "UUID",
+            "type": "string"
+          },
+          "source_product_id": {
+            "format": "UUID",
+            "type": "string"
+          }
+        },
+        "required": [
+          "package_id",
+          "amount"
+        ],
+        "type": "object"
+      },
+      "ProductResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Product"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "ProductSupplier": {
+        "properties": {
+          "code": {
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "format": "UUID",
+            "type": "string"
+          },
+          "price": {
+            "format": "double",
+            "nullable": true,
+            "type": "number"
+          },
+          "product_id": {
+            "format": "UUID",
+            "type": "string"
+          },
+          "supplier_id": {
+            "format": "UUID",
+            "nullable": true,
+            "type": "string"
+          },
+          "supplier_name": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "product_id",
+          "supplier_id",
+          "supplier_name"
+        ],
+        "type": "object"
+      },
+      "ProductTypeSample": {
+        "nullable": true,
+        "properties": {
+          "category_path": {
+            "items": {
+              "$ref": "#/components/schemas/ProductCategoryPath"
+            },
+            "type": "array"
+          },
+          "deleted_at": {
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "leaf_category": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ProductUpdate21Request": {
+        "properties": {
+          "common": {
+            "properties": {
+              "account_code_purchase": {
+                "type": "string"
+              },
+              "account_code_sale": {
+                "type": "string"
+              },
+              "brand_id": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "product_category_id": {
+                "type": "string"
+              },
+              "product_suppliers": {
+                "items": {
+                  "$ref": "#/components/schemas/ProductUpdate21Supplier"
+                },
+                "type": "array"
+              },
+              "tag_ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "track_inventory": {
+                "type": "boolean"
+              },
+              "variant_attributes": {
+                "items": {
+                  "properties": {
+                    "attribute_id": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "details": {
+            "properties": {
+              "all_outlets_tax": {
+                "properties": {
+                  "tax_id": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "composite_components": {
+                "items": {
+                  "properties": {
+                    "product_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "product_id",
+                    "quantity"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "dimensions_unit": {
+                "enum": [
+                  "IN",
+                  "CM",
+                  "MM",
+                  "YD"
+                ],
+                "type": "string"
+              },
+              "height": {
+                "type": "number"
+              },
+              "inventory": {
+                "items": {
+                  "properties": {
+                    "current_amount": {
+                      "type": "number"
+                    },
+                    "outlet_id": {
+                      "type": "string"
+                    },
+                    "reorder_amount": {
+                      "type": "number"
+                    },
+                    "reorder_point": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "outlet_id"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "is_active": {
+                "type": "boolean"
+              },
+              "length": {
+                "type": "number"
+              },
+              "loyalty_amount": {
+                "type": "number"
+              },
+              "outlet_taxes": {
+                "items": {
+                  "properties": {
+                    "outlet_id": {
+                      "type": "string"
+                    },
+                    "tax_id": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "packaging": {
+                "items": {
+                  "properties": {
+                    "amount": {
+                      "type": "number"
+                    },
+                    "destination_product_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    },
+                    "source_product_id": {
+                      "format": "uuid",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "price_excluding_tax": {
+                "type": "number"
+              },
+              "price_including_tax": {
+                "type": "number"
+              },
+              "product_codes": {
+                "items": {
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "enum": [
+                        "CUSTOM",
+                        "EAN",
+                        "ISBN",
+                        "ITF",
+                        "JAN",
+                        "UPC"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "product_suppliers": {
+                "items": {
+                  "$ref": "#/components/schemas/ProductUpdate21Supplier"
+                },
+                "type": "array"
+              },
+              "variant_attribute_values": {
+                "items": {
+                  "properties": {
+                    "attribute_id": {
+                      "type": "string"
+                    },
+                    "attribute_value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "attribute_id",
+                    "attribute_value"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "weight": {
+                "type": "number"
+              },
+              "weight_unit": {
+                "enum": [
+                  "CT",
+                  "G",
+                  "OZ",
+                  "LB",
+                  "KG"
+                ],
+                "type": "string"
+              },
+              "width": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ProductUpdate21Supplier": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "price": {
+            "type": "number"
+          },
+          "supplier_id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PromotionDescription": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Register": {
+        "properties": {
+          "ask_for_note_on_save": {
+            "format": "double",
+            "type": "number"
+          },
+          "ask_for_user_on_sale": {
+            "type": "boolean"
+          },
+          "button_layout_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "cash_managed_payment_type_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "deleted_at": {
+            "nullable": true,
+            "type": "string"
+          },
+          "email_receipt": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "invoice_prefix": {
+            "type": "string"
+          },
+          "invoice_sequence": {
+            "format": "double",
+            "type": "number"
+          },
+          "invoice_suffix": {
+            "type": "string"
+          },
+          "is_open": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "outlet_id": {
+            "type": "string"
+          },
+          "print_note_on_receipt": {
+            "type": "boolean"
+          },
+          "print_receipt": {
+            "type": "boolean"
+          },
+          "receipt_template_id": {
+            "type": "string"
+          },
+          "register_close_time": {
+            "nullable": true,
+            "type": "string"
+          },
+          "register_open_sequence_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "register_open_time": {
+            "nullable": true,
+            "type": "string"
+          },
+          "show_discounts_on_receipts": {
+            "type": "boolean"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "RegisterClosePaymentType": {
+        "properties": {
+          "payment_type_id": {
+            "type": "string"
+          },
+          "total": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RegisterCloseRequest": {
+        "properties": {
+          "payments": {
+            "items": {
+              "$ref": "#/components/schemas/RegisterClosePaymentType"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "RegisterCollection": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Register"
+            },
+            "type": "array"
+          },
+          "version": {
+            "$ref": "#/components/schemas/Version"
+          }
+        },
+        "type": "object"
+      },
+      "RegisterOpenRequest": {
+        "properties": {
+          "register_open_time": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RegisterPaymentSummaryPaymentType": {
+        "properties": {
+          "payment_type_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "payment_type_name": {
+            "type": "string"
+          },
+          "total": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RegisterPaymentsSummary": {
+        "properties": {
+          "payments": {
+            "items": {
+              "$ref": "#/components/schemas/RegisterPaymentSummaryPaymentType"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "RegisterPaymentsSummaryResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/RegisterPaymentsSummary"
+          }
+        },
+        "type": "object"
+      },
+      "RegisterResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Register"
+          }
+        },
+        "type": "object"
+      },
+      "Retailer": {
+        "properties": {
+          "account_status": {
+            "type": "string"
+          },
+          "account_type": {
+            "type": "string"
+          },
+          "activated_at": {
+            "nullable": true,
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "culture": {
+            "type": "string"
+          },
+          "currency": {
+            "$ref": "#/components/schemas/RetailerCurrency"
+          },
+          "discount_product_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "domain_prefix": {
+            "type": "string"
+          },
+          "embedded_barcode_option": {
+            "enum": [
+              "none",
+              "price",
+              "weight"
+            ],
+            "type": "string"
+          },
+          "enable_line_item_consolidation": {
+            "type": "boolean"
+          },
+          "gift_cards": {
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "never_enabled": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "loyalty": {
+            "properties": {
+              "claim_url": {
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "ratio": {
+                "type": "number"
+              },
+              "send_welcome_email": {
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          },
+          "no_tax_group_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "on_account": {
+            "properties": {
+              "default_limit": {
+                "nullable": true,
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "sku_sequence": {
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "value": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "sso_enabled": {
+            "type": "boolean"
+          },
+          "store_credit": {
+            "type": "boolean"
+          },
+          "store_url": {
+            "type": "string"
+          },
+          "tax_exclusive": {
+            "type": "boolean"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RetailerCurrency": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RetailerResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Retailer"
+          }
+        },
+        "type": "object"
+      },
+      "Sale": {
+        "properties": {
+          "_metadata": {
+            "$ref": "#/components/schemas/SaleResponseMetadata"
+          },
+          "adjustments": {
+            "items": {
+              "$ref": "#/components/schemas/SaleResponseAdjustment"
+            },
+            "type": "array"
+          },
+          "attributes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "customer_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "deleted_at": {
+            "type": "string"
+          },
+          "ecom_custom_charges": {
+            "items": {
+              "$ref": "#/components/schemas/EcomCustomCharge"
+            },
+            "type": "array"
+          },
+          "external_applications": {
+            "items": {
+              "$ref": "#/components/schemas/SaleExternalApplication"
+            },
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "invoice_number": {
+            "type": "string"
+          },
+          "line_items": {
+            "items": {
+              "$ref": "#/components/schemas/SaleResponseLineItem"
+            },
+            "type": "array"
+          },
+          "note": {
+            "type": "string"
+          },
+          "payments": {
+            "items": {
+              "$ref": "#/components/schemas/SaleResponsePayment"
+            },
+            "type": "array"
+          },
+          "receipt_number": {
+            "type": "string"
+          },
+          "return": {
+            "$ref": "#/components/schemas/SaleReturn"
+          },
+          "short_code": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SaleResponseSource"
+          },
+          "state": {
+            "enum": [
+              "parked",
+              "pending",
+              "voided",
+              "closed"
+            ],
+            "type": "string"
+          },
+          "taxes": {
+            "items": {
+              "$ref": "#/components/schemas/SaleResponseTax"
+            },
+            "type": "array"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/SaleTotals"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SaleAdjustment": {
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/AdjustmentAmount"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AdjustmentSource"
+          },
+          "type": {
+            "enum": [
+              "NON_CASH_FEE",
+              "DISCOUNT",
+              "TIP"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "SaleAuthor": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SaleCollection": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Sale"
+            },
+            "type": "array"
+          },
+          "version": {
+            "$ref": "#/components/schemas/Version"
+          }
+        },
+        "type": "object"
+      },
+      "SaleCreateResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Sale"
+          }
+        },
+        "type": "object"
+      },
+      "SaleExternalApplication": {
+        "properties": {
+          "application_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SaleLineItem": {
+        "properties": {
+          "_metadata": {
+            "$ref": "#/components/schemas/LineItemMetadata"
+          },
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/LineItemAttribute"
+            },
+            "type": "array"
+          },
+          "fulfilment_outlet_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/LineItemPricing"
+          },
+          "product": {
+            "$ref": "#/components/schemas/LineItemProduct"
+          },
+          "quantity": {
+            "format": "double",
+            "type": "number"
+          },
+          "source": {
+            "$ref": "#/components/schemas/LineItemSource"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tax": {
+            "$ref": "#/components/schemas/LineItemTax"
+          }
+        },
+        "required": [
+          "product",
+          "quantity",
+          "pricing",
+          "tax"
+        ],
+        "type": "object"
+      },
+      "SalePayment": {
+        "properties": {
+          "amount": {
+            "format": "double",
+            "type": "number"
+          },
+          "billing_address_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "billing_address_token": {
+            "nullable": true,
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PaymentSource"
+          },
+          "type": {
+            "$ref": "#/components/schemas/PaymentTypeConfig"
+          }
+        },
+        "required": [
+          "amount",
+          "type"
+        ],
+        "type": "object"
+      },
+      "SalePricing": {
+        "properties": {
+          "adjustments": {
+            "items": {
+              "$ref": "#/components/schemas/SaleAdjustment"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SaleRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SaleRequestBase"
+          },
+          {
+            "properties": {
+              "id": {
+                "format": "uuid",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "SaleRequestBase": {
+        "properties": {
+          "accounts_transaction_id": {
+            "type": "string"
+          },
+          "attributes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "customer_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "fulfillment_details": {
+            "items": {
+              "$ref": "#/components/schemas/FulfillmentDetail"
+            },
+            "type": "array"
+          },
+          "fulfillment_outlet_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "invoice_number": {
+            "type": "string"
+          },
+          "line_items": {
+            "items": {
+              "$ref": "#/components/schemas/SaleLineItem"
+            },
+            "type": "array"
+          },
+          "note": {
+            "type": "string"
+          },
+          "payments": {
+            "items": {
+              "$ref": "#/components/schemas/SalePayment"
+            },
+            "type": "array"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/SalePricing"
+          },
+          "service_fields": {
+            "properties": {
+              "service_action": {
+                "type": "string"
+              },
+              "service_agenda": {
+                "$ref": "#/components/schemas/DailyAgenda"
+              },
+              "service_items": {
+                "$ref": "#/components/schemas/ServiceItems"
+              },
+              "service_line_items": {
+                "items": {
+                  "$ref": "#/components/schemas/ServiceOrderLineItem"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "short_code": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SaleRequestSource"
+          },
+          "state": {
+            "enum": [
+              "parked",
+              "pending",
+              "voided",
+              "closed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "state"
+        ],
+        "type": "object"
+      },
+      "SaleRequestSource": {
+        "properties": {
+          "author_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "register_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "author_id"
+        ],
+        "type": "object"
+      },
+      "SaleResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/Sale"
+          }
+        },
+        "type": "object"
+      },
+      "SaleResponseAdjustment": {
+        "properties": {
+          "adjustment_type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tax_components": {
+            "items": {
+              "$ref": "#/components/schemas/LineItemTaxComponentResponse"
+            },
+            "type": "array"
+          },
+          "total": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "SaleResponseLineItem": {
+        "properties": {
+          "_metadata": {
+            "$ref": "#/components/schemas/LineItemResponseMetadata"
+          },
+          "customizations": {
+            "items": {
+              "$ref": "#/components/schemas/LineItemCustomization"
+            },
+            "type": "array"
+          },
+          "gift_card_number": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/LineItemResponsePricing"
+          },
+          "product": {
+            "$ref": "#/components/schemas/LineItemProductDetails"
+          },
+          "promotions": {
+            "items": {
+              "$ref": "#/components/schemas/LineItemPromotion"
+            },
+            "type": "array"
+          },
+          "quantity": {
+            "format": "double",
+            "type": "number"
+          },
+          "return": {
+            "$ref": "#/components/schemas/LineItemReturn"
+          },
+          "salesperson_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/LineItemResponseSource"
+          },
+          "status": {
+            "type": "string"
+          },
+          "surcharges": {
+            "items": {
+              "$ref": "#/components/schemas/LineItemSurcharge"
+            },
+            "type": "array"
+          },
+          "tax": {
+            "$ref": "#/components/schemas/LineItemResponseTax"
+          }
+        },
+        "type": "object"
+      },
+      "SaleResponseMetadata": {
+        "properties": {
+          "complete_open_sequence_id": {
+            "type": "string"
+          },
+          "has_unsynced_on_account_payments": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "xero_reference": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SaleResponsePayment": {
+        "properties": {
+          "_metadata": {
+            "$ref": "#/components/schemas/PaymentResponseMetadata"
+          },
+          "amount": {
+            "format": "double",
+            "type": "number"
+          },
+          "billing_address_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "deleted_at": {
+            "type": "string"
+          },
+          "external_applications": {
+            "items": {
+              "$ref": "#/components/schemas/PaymentExternalApplication"
+            },
+            "type": "array"
+          },
+          "external_attributes": {
+            "items": {
+              "$ref": "#/components/schemas/PaymentExternalAttribute"
+            },
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PaymentResponseSource"
+          },
+          "surcharge": {
+            "$ref": "#/components/schemas/PaymentSurcharge"
+          },
+          "type": {
+            "$ref": "#/components/schemas/PaymentTypeDetails"
+          }
+        },
+        "type": "object"
+      },
+      "SaleResponseSource": {
+        "properties": {
+          "author": {
+            "$ref": "#/components/schemas/SaleAuthor"
+          },
+          "id": {
+            "type": "string"
+          },
+          "outlet_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "register_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SaleResponseTax": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "tax": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "SaleReturn": {
+        "properties": {
+          "is_return": {
+            "type": "boolean"
+          },
+          "original_sale_id": {
+            "type": "string"
+          },
+          "return_sale_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SaleTotals": {
+        "properties": {
+          "loyalty": {
+            "format": "double",
+            "type": "number"
+          },
+          "price": {
+            "format": "double",
+            "type": "number"
+          },
+          "price_incl_tax": {
+            "format": "double",
+            "type": "number"
+          },
+          "surcharge": {
+            "format": "double",
+            "type": "number"
+          },
+          "tax": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "SaleUpdateRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SaleRequestBase"
+          }
+        ]
+      },
+      "ServiceItems": {
+        "properties": {
+          "item_details": {
+            "$ref": "#/components/schemas/ItemDetails"
+          },
+          "location": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ServiceOrderLineItem": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SaleLineItem"
+          },
+          {
+            "properties": {
+              "promotions": {
+                "items": {
+                  "$ref": "#/components/schemas/PromotionDescription"
+                },
+                "type": "array"
+              },
+              "tax_component": {
+                "items": {
+                  "$ref": "#/components/schemas/LineItemTaxComponent"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "StockAdjustment": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "custom_inventory_adjustment_reason_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "outlet_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "product_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "quantity": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/StockAdjustmentReason"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "product_id",
+          "outlet_id",
+          "quantity",
+          "reason",
+          "created_at",
+          "updated_at",
+          "version"
+        ],
+        "type": "object"
+      },
+      "StockAdjustmentBatchResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/StockAdjustment"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "type": "object"
+      },
+      "StockAdjustmentCollection": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/StockAdjustment"
+            },
+            "type": "array"
+          },
+          "version": {
+            "$ref": "#/components/schemas/Version"
+          }
+        },
+        "required": [
+          "data",
+          "version"
+        ],
+        "type": "object"
+      },
+      "StockAdjustmentReason": {
+        "enum": [
+          "DAMAGE",
+          "EXPIRY",
+          "INTERNAL_USE",
+          "THEFT",
+          "DONATION",
+          "STOCK_FOUND",
+          "SAMPLE_FOR_SALE",
+          "CUSTOM"
+        ],
+        "type": "string"
+      },
+      "SupplierSample": {
+        "nullable": true,
+        "properties": {
+          "deleted_at": {
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Tag": {
+        "properties": {
+          "deleted_at": {
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "VariantAttribute": {
+        "properties": {
+          "attribute_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "VariantOption": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Version": {
+        "properties": {
+          "max": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "min": {
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max",
+          "min"
+        ],
+        "type": "object"
+      },
+      "Webhook": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "retailer_id": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/WebhookType"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "WebhookRequest": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "type": {
+            "$ref": "#/components/schemas/WebhookType"
+          },
+          "url": {
+            "minLength": 3,
+            "type": "string"
+          }
+        },
+        "required": [
+          "active",
+          "type",
+          "url"
+        ],
+        "type": "object"
+      },
+      "WebhookType": {
+        "enum": [
+          "sale.update",
+          "product.update",
+          "customer.update",
+          "inventory.update",
+          "register_closure.create",
+          "consignment.send",
+          "consignment.receive"
+        ],
+        "type": "string"
+      }
+    }
+  },
+  "info": {
+    "title": "API 2026-07 (scoped extract)",
+    "version": "2026-07"
+  },
+  "openapi": "3.0.1",
+  "paths": {
+    "/api/2026-07/customers": {
+      "get": {
+        "operationId": "ListCustomers",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deleted",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerCollection"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      },
+      "post": {
+        "operationId": "CreateCustomer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerBase"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerResponse"
+                }
+              },
+              "new": {}
+            },
+            "description": "201"
+          }
+        }
+      }
+    },
+    "/api/2026-07/customers/{customer_id}": {
+      "delete": {
+        "operationId": "DeleteCustomerByID",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "customer_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "204"
+          }
+        }
+      },
+      "get": {
+        "operationId": "GetCustomerByID",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "customer_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      },
+      "put": {
+        "operationId": "UpdateCustomerByID",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "customer_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerBase"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/inventory": {
+      "post": {
+        "operationId": "ListInventoryRecords",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Inventory"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/inventory/{product_id}": {
+      "get": {
+        "operationId": "ListProductInventoryRecords",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "default": 1000,
+              "maximum": 5000,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "variants",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_deleted",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "order_direction",
+            "schema": {
+              "default": "asc",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Inventory"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/inventory_levels": {
+      "post": {
+        "operationId": "ListInventoryLevels",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InventoryLevelsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InventoryLevel"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/inventory_levels/{product_id}": {
+      "get": {
+        "operationId": "ListProductInventoryLevels",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_inactive",
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InventoryLevel"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/outlets": {
+      "get": {
+        "operationId": "ListOutlets",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deleted",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutletCollection"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/outlets/{outlet_id}": {
+      "get": {
+        "operationId": "GetOutletByID",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "outlet_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutletResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/payment_types": {
+      "get": {
+        "operationId": "ListPaymentTypes",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deleted",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "outlet_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "currency",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "only_lspay",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentTypeCollection"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/products": {
+      "get": {
+        "operationId": "ListProducts",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deleted",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sku",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "name",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "family_name",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "includes[]",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_images",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductCollection"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      },
+      "post": {
+        "operationId": "CreateProduct",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductCreateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "Example": {},
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/products/{product_id}": {
+      "delete": {
+        "operationId": "DeleteProduct",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "200"
+          }
+        }
+      },
+      "get": {
+        "operationId": "GetProductByID",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      },
+      "put": {
+        "operationId": "UpdateProduct",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductUpdate21Request"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "200"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "404"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "422"
+          }
+        }
+      }
+    },
+    "/api/2026-07/registers": {
+      "get": {
+        "operationId": "ListRegisters",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deleted",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterCollection"
+                }
+              },
+              "new": {}
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/registers/{register_id}": {
+      "get": {
+        "operationId": "GetRegisterByID",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "register_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/registers/{register_id}/actions/close": {
+      "put": {
+        "operationId": "CloseRegister",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "register_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterCloseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/registers/{register_id}/actions/open": {
+      "put": {
+        "operationId": "OpenRegister",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "register_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterOpenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/registers/{register_id}/payments_summary": {
+      "get": {
+        "operationId": "RegisterPaymentsSummary",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "register_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterPaymentsSummaryResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/retailer": {
+      "get": {
+        "operationId": "GetRetailer",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetailerResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/sales": {
+      "get": {
+        "operationId": "ListSales",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaleCollection"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      },
+      "post": {
+        "operationId": "CreateSale",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaleCreateResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/sales/{sale_id}": {
+      "get": {
+        "operationId": "GetSaleByID",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sale_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaleResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      },
+      "put": {
+        "operationId": "UpdateSale",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sale_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaleUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaleCreateResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/sales/{sale_id}/actions/return": {
+      "post": {
+        "operationId": "initReturnSale",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sale_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SaleResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
+    "/api/2026-07/stock_adjustments": {
+      "get": {
+        "operationId": "ListStockAdjustments",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockAdjustmentCollection"
+                }
+              }
+            },
+            "description": "200"
+          },
+          "401": {
+            "description": "401"
+          },
+          "403": {
+            "description": "403"
+          }
+        }
+      },
+      "post": {
+        "operationId": "CreateStockAdjustments",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateStockAdjustmentsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockAdjustmentBatchResponse"
+                }
+              }
+            },
+            "description": "201"
+          },
+          "400": {
+            "description": "400"
+          },
+          "401": {
+            "description": "401"
+          },
+          "403": {
+            "description": "403"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "422"
+          }
+        }
+      }
+    },
+    "/api/2026-07/webhooks": {
+      "get": {
+        "operationId": "get-webhooks",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "$ref": "#/components/schemas/Webhook"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "example-1": {}
+            },
+            "description": "200"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post-webhooks",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Webhook"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "201"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "409"
+          }
+        }
+      }
+    },
+    "/api/2026-07/webhooks/{webhookId}": {
+      "delete": {
+        "operationId": "delete-webhooks-webhookId",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "webhookId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "200"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "404"
+          }
+        }
+      },
+      "get": {
+        "operationId": "get-webhooks-id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "webhookId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Webhook"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "200"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "404"
+          }
+        }
+      },
+      "put": {
+        "operationId": "put-webhooks-id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "webhookId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Webhook"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "200"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "404"
+          }
+        }
+      }
+    }
+  },
+  "x-vendorfake": {
+    "annotations": {
+      "scopes": {
+        "DELETE /api/2026-07/customers/{customer_id}": [
+          "customers:write"
+        ],
+        "DELETE /api/2026-07/products/{product_id}": [
+          "products:write"
+        ],
+        "DELETE /api/2026-07/webhooks/{webhookId}": [
+          "webhooks"
+        ],
+        "GET /api/2026-07/customers": [
+          "customers:read"
+        ],
+        "GET /api/2026-07/customers/{customer_id}": [
+          "customers:read"
+        ],
+        "GET /api/2026-07/inventory/{product_id}": [
+          "inventory:read"
+        ],
+        "GET /api/2026-07/inventory_levels/{product_id}": [
+          "inventory:read"
+        ],
+        "GET /api/2026-07/outlets": [
+          "outlets:read"
+        ],
+        "GET /api/2026-07/outlets/{outlet_id}": [
+          "outlets:read"
+        ],
+        "GET /api/2026-07/payment_types": [
+          "payment_types:read"
+        ],
+        "GET /api/2026-07/products": [
+          "products:read"
+        ],
+        "GET /api/2026-07/products/{product_id}": [
+          "products:read"
+        ],
+        "GET /api/2026-07/registers": [
+          "registers:read"
+        ],
+        "GET /api/2026-07/registers/{register_id}": [
+          "registers:read"
+        ],
+        "GET /api/2026-07/registers/{register_id}/payments_summary": [
+          "payments:read"
+        ],
+        "GET /api/2026-07/retailer": [
+          "retailer:read",
+          "payment_types:read"
+        ],
+        "GET /api/2026-07/sales": [
+          "sales:read"
+        ],
+        "GET /api/2026-07/sales/{sale_id}": [
+          "sales:read"
+        ],
+        "GET /api/2026-07/stock_adjustments": [
+          "inventory:write"
+        ],
+        "GET /api/2026-07/webhooks": [
+          "webhooks"
+        ],
+        "GET /api/2026-07/webhooks/{webhookId}": [
+          "webhooks"
+        ],
+        "POST /api/2026-07/customers": [
+          "customers:write"
+        ],
+        "POST /api/2026-07/inventory": [
+          "inventory:read"
+        ],
+        "POST /api/2026-07/inventory_levels": [
+          "inventory:read"
+        ],
+        "POST /api/2026-07/products": [
+          "products:write"
+        ],
+        "POST /api/2026-07/sales": [
+          "sales:write"
+        ],
+        "POST /api/2026-07/sales/{sale_id}/actions/return": [
+          "sales:write",
+          "users:read"
+        ],
+        "POST /api/2026-07/stock_adjustments": [
+          "inventory:write"
+        ],
+        "POST /api/2026-07/webhooks": [
+          "webhooks"
+        ],
+        "PUT /api/2026-07/customers/{customer_id}": [
+          "customers:write"
+        ],
+        "PUT /api/2026-07/products/{product_id}": [
+          "products:write"
+        ],
+        "PUT /api/2026-07/registers/{register_id}/actions/close": [
+          "register:close",
+          "payment_types:read"
+        ],
+        "PUT /api/2026-07/registers/{register_id}/actions/open": [
+          "register:open"
+        ],
+        "PUT /api/2026-07/sales/{sale_id}": [
+          "sales:write"
+        ],
+        "PUT /api/2026-07/webhooks/{webhookId}": [
+          "webhooks"
+        ]
+      }
+    },
+    "missing": [
+      "GET /connect",
+      "POST /api/1.0/token"
+    ],
+    "modeled": [
+      "DELETE /api/2026-07/customers/{customer_id}",
+      "DELETE /api/2026-07/products/{product_id}",
+      "DELETE /api/2026-07/webhooks/{webhookId}",
+      "GET /api/2026-07/customers",
+      "GET /api/2026-07/customers/{customer_id}",
+      "GET /api/2026-07/inventory/{product_id}",
+      "GET /api/2026-07/inventory_levels/{product_id}",
+      "GET /api/2026-07/outlets",
+      "GET /api/2026-07/outlets/{outlet_id}",
+      "GET /api/2026-07/payment_types",
+      "GET /api/2026-07/products",
+      "GET /api/2026-07/products/{product_id}",
+      "GET /api/2026-07/registers",
+      "GET /api/2026-07/registers/{register_id}",
+      "GET /api/2026-07/registers/{register_id}/payments_summary",
+      "GET /api/2026-07/retailer",
+      "GET /api/2026-07/sales",
+      "GET /api/2026-07/sales/{sale_id}",
+      "GET /api/2026-07/stock_adjustments",
+      "GET /api/2026-07/webhooks",
+      "GET /api/2026-07/webhooks/{webhookId}",
+      "POST /api/2026-07/customers",
+      "POST /api/2026-07/inventory",
+      "POST /api/2026-07/inventory_levels",
+      "POST /api/2026-07/products",
+      "POST /api/2026-07/sales",
+      "POST /api/2026-07/sales/{sale_id}/actions/return",
+      "POST /api/2026-07/stock_adjustments",
+      "POST /api/2026-07/webhooks",
+      "PUT /api/2026-07/customers/{customer_id}",
+      "PUT /api/2026-07/products/{product_id}",
+      "PUT /api/2026-07/registers/{register_id}/actions/close",
+      "PUT /api/2026-07/registers/{register_id}/actions/open",
+      "PUT /api/2026-07/sales/{sale_id}",
+      "PUT /api/2026-07/webhooks/{webhookId}"
+    ],
+    "namespaced": {},
+    "rewritten": {
+      "extensions": {},
+      "nullable_ref": 0
+    },
+    "schema": 1,
+    "sources": [
+      {
+        "bytes": 519895,
+        "fetched": "2026-09-04",
+        "label": "api-2026-07",
+        "sha256": "5660c17452a2f678beaa6b611167c3164469ad405ba63dc391c366e1f0d5b6af",
+        "url": "https://x-series-api.lightspeedhq.com/openapi/api-2026-07.yaml",
+        "version": "2026-07"
+      }
+    ],
+    "stripped": [
+      "description",
+      "example",
+      "explode",
+      "style",
+      "summary",
+      "tags",
+      "title",
+      "x-examples"
+    ],
+    "stubbed": []
+  }
+}

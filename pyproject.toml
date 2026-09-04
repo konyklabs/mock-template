@@ -57,6 +57,7 @@ vendorfake-fidelity = "vendorfake.fidelity.__main__:main"
 
 [project.entry-points."vendorfake.vendors"]
 clover = "vendorfake.clover:VENDOR"
+lightspeed = "vendorfake.lightspeed:VENDOR"
 square = "vendorfake.square:VENDOR"
 toast = "vendorfake.toast:VENDOR"
 

@@ -46,9 +46,10 @@ and `webhook_receiver()`; the `Driver`, `StartedUnit`, `ServedUnit`,
 `WebhookReceiver` and `Delivery` handles; `UnitTransport`; the
 `UnmatchedRequest` assertion error and `checked_unmatched`, the validation
 `unit()` applies to its `unmatched=` argument; `ClockInfo` and `RouteInfo`;
-the `Seed` protocol, the three per-vendor seed types, `Credentials` and
-`Token`; the three per-vendor seed-overlay types (`SquareSeedOverlay`,
-`CloverSeedOverlay`, `ToastSeedOverlay`) and the untyped `SeedOverlay`;
+the `Seed` protocol, the four per-vendor seed types, `Credentials` and
+`Token`; the four per-vendor seed-overlay types (`SquareSeedOverlay`,
+`CloverSeedOverlay`, `ToastSeedOverlay`, `LightspeedSeedOverlay`) and the
+untyped `SeedOverlay`;
 the `SeedT` type variable; and the tuning constants `CLIENT_TIMEOUT_S`, `DRAIN_TIMEOUT_S`,
 `DEFAULT_REQUEST_LIMIT`, `LOG_LINES`, `SERVE_COMMAND` and `NO_SEED_HINT`.
 

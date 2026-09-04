@@ -26,7 +26,7 @@ import { join, resolve } from "node:path";
 import { GenericContainer, TestContainers, Wait, type StartedTestContainer } from "testcontainers";
 import type { TestProject } from "vitest/node";
 
-const VENDORS = ["square", "clover", "toast"] as const;
+const VENDORS = ["square", "clover", "toast", "lightspeed"] as const;
 type Vendor = (typeof VENDORS)[number];
 
 declare module "vitest" {

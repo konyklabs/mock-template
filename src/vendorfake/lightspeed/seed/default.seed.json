@@ -1,0 +1,685 @@
+{
+  "_comment": [
+    "The shipped Lightspeed X-Series scenario. Every id is written by hand in an",
+    "obviously sequential pattern so a reader can tell a seeded id from a minted",
+    "one; the shapes are the vendor's, the values are not copies of any real",
+    "account's. seed/constants.py names each of them and tests/unit/lightspeed/",
+    "test_seed.py asserts the two agree.",
+    "",
+    "Two outlets and one register each: two rows make a list route's page",
+    "boundary crossable, and two registers put the documented rate-limit quota at",
+    "300 x 2 + 50 = 650 requests per five-minute window.",
+    "",
+    "Three payment types, one of them internal, because the payment_types:read",
+    "scope is documented as 'excluding internal payment types' and a scenario",
+    "with no internal type could not show that.",
+    "",
+    "Six products: three standalone and a family of three (the tee, which holds",
+    "no stock itself, plus its two variants, which do), so that ?sku=, ?name=",
+    "(which selects a FAMILY) and ?variants=true are all testable without",
+    "creating anything first. The bottle is seeded inactive, which is what makes",
+    "include_inactive on the inventory-levels report mean something.",
+    "",
+    "Ten inventory rows -- every stock-holding product at both outlets -- two",
+    "custom adjustment reasons (a CUSTOM adjustment can only ever name one of",
+    "these; the tag that would create a third is deferred), two adjustments",
+    "already in the log so GET /stock_adjustments has a page boundary, one",
+    "customer group and three customers.",
+    "",
+    "Money and quantities are decimal STRINGS here and JSON numbers on the wire:",
+    "a scenario file is read by people and diffed by machines, and a float in",
+    "JSON is neither exact nor stable. Prices are stated both ways at the same",
+    "0.15 rate the vendor config derives with, so nothing here depends on that",
+    "derivation.",
+    "",
+    "No 'version' anywhere: the Lightspeed version is drawn from the retailer's",
+    "one monotonically increasing counter at hydrate, in the order below.",
+    "",
+    "Three sales, in the three shapes a till produces: one parked (saved and",
+    "still editable), one closed with a card payment on the OPEN main register",
+    "-- so the return action and the register payments summary both have",
+    "something real to work on -- and one layby, which is a parked sale",
+    "carrying the 'layby' attribute and a part payment, because the 2026-07",
+    "schema has no LAYBY state (see machine.py).",
+    "",
+    "Every sale resolves against the ONE catalogue above: line items name the",
+    "trail mix and the socks, both of which hold stock at both outlets, and",
+    "the customer is Ada. A line's price is the product's own, tax-exclusive,",
+    "with the unit tax beside it: 10.87 + 1.63 = 12.50 and 21.65 + 3.25 =",
+    "24.90. The author of every sale is the retailer's id, for the same reason",
+    "a stock adjustment's user_id is: there is no users collection to name a",
+    "cashier in.",
+    "",
+    "The seeded closed sale did NOT draw down the seeded inventory levels --",
+    "the levels are stated outright and the sales are the history beside them,",
+    "the same way the seeded stock adjustments do not move them either. The",
+    "decrement is what CLOSING a sale through the API does.",
+    "Money here is the wire's number (4.5), not the store's minor units:",
+    "hydrate converts through model/money.py exactly as a request does.",
+    "",
+    "Every sale payment is dated inside the main register's open window",
+    "(register_open_time 2026-09-01T08:00:00Z), so closing that register",
+    "aggregates them into its closure's totals."
+  ],
+  "retailer": {
+    "id": "1a000000-0000-1000-8000-000000000001",
+    "name": "Ridgeline Provisions",
+    "domain_prefix": "unit-lightspeed",
+    "currency_code": "NZD",
+    "currency_symbol": "$",
+    "timezone": "Pacific/Auckland",
+    "country": "NZ",
+    "document": {
+      "account_status": "active",
+      "account_type": "standard",
+      "activated_at": "2026-01-05T09:00:00Z",
+      "created_at": "2026-01-05T09:00:00Z",
+      "culture": "en-NZ",
+      "embedded_barcode_option": "none",
+      "enable_line_item_consolidation": true,
+      "gift_cards": {
+        "enabled": false,
+        "never_enabled": true
+      },
+      "loyalty": {
+        "claim_url": "https://unit-lightspeed.example/loyalty",
+        "enabled": false,
+        "ratio": 0,
+        "send_welcome_email": false
+      },
+      "on_account": {
+        "default_limit": null
+      },
+      "sku_sequence": {
+        "enabled": false,
+        "value": 1000
+      },
+      "sso_enabled": false,
+      "store_credit": false,
+      "store_url": "https://unit-lightspeed.example",
+      "tax_exclusive": false
+    }
+  },
+  "outlets": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000101",
+      "name": "Ridgeline Main",
+      "default_tax_id": "1a000000-0000-1000-8000-0000000000a1",
+      "currency": "NZD",
+      "currency_symbol": "$",
+      "display_prices": "inclusive",
+      "time_zone": "Pacific/Auckland",
+      "attributes": [
+        {
+          "key": "order_reference_prefix",
+          "value": "MAIN"
+        },
+        {
+          "key": "order_reference",
+          "value": "1"
+        }
+      ],
+      "physical_address_1": "12 Ridgeline Road",
+      "physical_suburb": "Newmarket",
+      "physical_city": "Auckland",
+      "physical_state": "Auckland",
+      "physical_postcode": "1023",
+      "physical_country_id": "NZ",
+      "email": "main@unit-lightspeed.example"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000102",
+      "name": "Ridgeline Quay",
+      "default_tax_id": "1a000000-0000-1000-8000-0000000000a1",
+      "currency": "NZD",
+      "currency_symbol": "$",
+      "display_prices": "inclusive",
+      "time_zone": "Pacific/Auckland",
+      "attributes": [],
+      "physical_address_1": "3 Quay Street",
+      "physical_city": "Auckland",
+      "physical_country_id": "NZ"
+    }
+  ],
+  "registers": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000201",
+      "name": "Main Register",
+      "outlet_id": "1a000000-0000-1000-8000-000000000101",
+      "is_open": true,
+      "invoice_prefix": "MAIN-",
+      "invoice_suffix": "-NZ",
+      "invoice_sequence": 1041,
+      "ask_for_note_on_save": 1,
+      "email_receipt": true,
+      "print_receipt": true,
+      "cash_managed_payment_type_id": "1a000000-0000-1000-8000-000000000301",
+      "register_open_sequence_id": "1a000000-0000-1000-8000-000000000221",
+      "register_open_time": "2026-09-01T08:00:00Z"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000202",
+      "name": "Quay Register",
+      "outlet_id": "1a000000-0000-1000-8000-000000000102",
+      "is_open": false,
+      "invoice_prefix": "QUAY-",
+      "invoice_sequence": 12,
+      "ask_for_note_on_save": 0,
+      "print_receipt": false
+    }
+  ],
+  "payment_types": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000301",
+      "name": "Cash",
+      "type_id": 1
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000302",
+      "name": "Credit Card",
+      "type_id": 3,
+      "gateway": true,
+      "config": {
+        "print": true
+      },
+      "outlet_ids": [
+        "1a000000-0000-1000-8000-000000000101"
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000303",
+      "name": "Store Credit Redemption",
+      "type_id": 106,
+      "internal": true
+    }
+  ],
+  "products": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000701",
+      "name": "Trail Mix 500g",
+      "sku": "TRAIL-500",
+      "family_id": "1a000000-0000-1000-8000-000000000701",
+      "handle": "trail-mix-500g",
+      "description": "Roasted nuts, seeds and dried fruit, in a resealable pouch.",
+      "price_excluding_tax": "10.86957",
+      "price_including_tax": "12.50",
+      "supply_price": "6.00",
+      "tag_ids": [
+        "pantry"
+      ],
+      "attributes": [
+        {
+          "name": "origin",
+          "value": "New Zealand"
+        }
+      ],
+      "product_codes": [
+        {
+          "id": "1a000000-0000-1000-8000-0000000007a1",
+          "code": "9400000000017",
+          "type": "EAN"
+        }
+      ],
+      "outlet_taxes": [
+        {
+          "outlet_id": "1a000000-0000-1000-8000-000000000101",
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1"
+        },
+        {
+          "outlet_id": "1a000000-0000-1000-8000-000000000102",
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1"
+        }
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000702",
+      "name": "Merino Socks",
+      "sku": "SOCK-MER",
+      "family_id": "1a000000-0000-1000-8000-000000000702",
+      "handle": "merino-socks",
+      "price_excluding_tax": "21.65217",
+      "price_including_tax": "24.90",
+      "supply_price": "11.00",
+      "tag_ids": [
+        "apparel"
+      ],
+      "outlet_taxes": [
+        {
+          "outlet_id": "1a000000-0000-1000-8000-000000000101",
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1"
+        }
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000703",
+      "name": "Insulated Bottle 1L",
+      "sku": "BOTL-1L",
+      "family_id": "1a000000-0000-1000-8000-000000000703",
+      "handle": "insulated-bottle-1l",
+      "active": false,
+      "price_excluding_tax": "33.91304",
+      "price_including_tax": "39.00",
+      "supply_price": "18.00",
+      "tag_ids": [
+        "gear"
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000704",
+      "name": "Ridgeline Tee",
+      "sku": "TEE",
+      "family_id": "1a000000-0000-1000-8000-000000000704",
+      "handle": "ridgeline-tee",
+      "description": "The house tee, in two sizes.",
+      "price_excluding_tax": "39.13043",
+      "price_including_tax": "45.00",
+      "supply_price": "20.00",
+      "has_inventory": false,
+      "has_variants": true,
+      "variant_count": 2,
+      "tag_ids": [
+        "apparel"
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000705",
+      "name": "Ridgeline Tee",
+      "sku": "TEE-S",
+      "family_id": "1a000000-0000-1000-8000-000000000704",
+      "handle": "ridgeline-tee",
+      "variant_parent_id": "1a000000-0000-1000-8000-000000000704",
+      "variant_name": "Ridgeline Tee / Small",
+      "variant_options": [
+        {
+          "name": "Size",
+          "value": "Small"
+        }
+      ],
+      "price_excluding_tax": "39.13043",
+      "price_including_tax": "45.00",
+      "supply_price": "20.00",
+      "tag_ids": [
+        "apparel"
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000706",
+      "name": "Ridgeline Tee",
+      "sku": "TEE-L",
+      "family_id": "1a000000-0000-1000-8000-000000000704",
+      "handle": "ridgeline-tee",
+      "variant_parent_id": "1a000000-0000-1000-8000-000000000704",
+      "variant_name": "Ridgeline Tee / Large",
+      "variant_options": [
+        {
+          "name": "Size",
+          "value": "Large"
+        }
+      ],
+      "price_excluding_tax": "39.13043",
+      "price_including_tax": "45.00",
+      "supply_price": "20.00",
+      "tag_ids": [
+        "apparel"
+      ]
+    }
+  ],
+  "inventory": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000801",
+      "product_id": "1a000000-0000-1000-8000-000000000701",
+      "outlet_id": "1a000000-0000-1000-8000-000000000101",
+      "current_inventory_level": "24",
+      "average_cost": "6.00",
+      "reorder_point": "10",
+      "reorder_amount": "30",
+      "reorder_target": "40",
+      "reorder_method": "MIN_MAX"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000802",
+      "product_id": "1a000000-0000-1000-8000-000000000701",
+      "outlet_id": "1a000000-0000-1000-8000-000000000102",
+      "current_inventory_level": "12",
+      "average_cost": "6.00",
+      "reorder_point": "6",
+      "reorder_amount": "24",
+      "reorder_method": "FIXED"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000803",
+      "product_id": "1a000000-0000-1000-8000-000000000702",
+      "outlet_id": "1a000000-0000-1000-8000-000000000101",
+      "current_inventory_level": "40",
+      "average_cost": "11.00"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000804",
+      "product_id": "1a000000-0000-1000-8000-000000000702",
+      "outlet_id": "1a000000-0000-1000-8000-000000000102",
+      "current_inventory_level": "18",
+      "average_cost": "11.00"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000805",
+      "product_id": "1a000000-0000-1000-8000-000000000703",
+      "outlet_id": "1a000000-0000-1000-8000-000000000101",
+      "current_inventory_level": "6",
+      "average_cost": "18.00"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000806",
+      "product_id": "1a000000-0000-1000-8000-000000000703",
+      "outlet_id": "1a000000-0000-1000-8000-000000000102",
+      "current_inventory_level": "0",
+      "average_cost": "18.00"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000807",
+      "product_id": "1a000000-0000-1000-8000-000000000705",
+      "outlet_id": "1a000000-0000-1000-8000-000000000101",
+      "current_inventory_level": "9",
+      "average_cost": "20.00"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000808",
+      "product_id": "1a000000-0000-1000-8000-000000000705",
+      "outlet_id": "1a000000-0000-1000-8000-000000000102",
+      "current_inventory_level": "4",
+      "average_cost": "20.00"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000809",
+      "product_id": "1a000000-0000-1000-8000-000000000706",
+      "outlet_id": "1a000000-0000-1000-8000-000000000101",
+      "current_inventory_level": "7",
+      "average_cost": "20.00"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000810",
+      "product_id": "1a000000-0000-1000-8000-000000000706",
+      "outlet_id": "1a000000-0000-1000-8000-000000000102",
+      "current_inventory_level": "3",
+      "average_cost": "20.00"
+    }
+  ],
+  "adjustment_reasons": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000921",
+      "name": "Found during stocktake",
+      "type": "POSITIVE"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000922",
+      "name": "Spoiled on the shelf",
+      "type": "NEGATIVE"
+    }
+  ],
+  "stock_adjustments": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000931",
+      "product_id": "1a000000-0000-1000-8000-000000000701",
+      "outlet_id": "1a000000-0000-1000-8000-000000000101",
+      "quantity": "-2",
+      "reason": "DAMAGE"
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000932",
+      "product_id": "1a000000-0000-1000-8000-000000000702",
+      "outlet_id": "1a000000-0000-1000-8000-000000000101",
+      "quantity": "3",
+      "reason": "CUSTOM",
+      "custom_inventory_adjustment_reason_id": "1a000000-0000-1000-8000-000000000921"
+    }
+  ],
+  "customer_groups": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000901",
+      "name": "All Customers"
+    }
+  ],
+  "customers": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000911",
+      "first_name": "Ada",
+      "last_name": "Whitcombe",
+      "customer_code": "Ada-N4ZJ",
+      "customer_group_id": "1a000000-0000-1000-8000-000000000901",
+      "email": "ada@consumer.example",
+      "balance": "-42.50",
+      "loyalty_balance": "18.25",
+      "year_to_date": "612.40",
+      "document": {
+        "company_name": "Whitcombe Outfitters",
+        "custom_field_1": "trade account",
+        "date_of_birth": "1988-04-11",
+        "do_not_email": false,
+        "enable_loyalty": true,
+        "enable_promotional_sms": false,
+        "mobile": "+64 21 555 0101",
+        "note": "Prefers pickup at the Quay.",
+        "on_account_limit": "500.00",
+        "phone": "+64 9 555 0101",
+        "physical_address_1": "88 Parnell Road",
+        "physical_city": "Auckland",
+        "physical_country_id": "NZ",
+        "physical_postcode": "1052",
+        "physical_state": "Auckland",
+        "physical_suburb": "Parnell",
+        "website": "https://whitcombe.example"
+      }
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000912",
+      "first_name": "Blake",
+      "last_name": "Rivera",
+      "customer_code": "Blake-2K7P",
+      "customer_group_id": "1a000000-0000-1000-8000-000000000901",
+      "document": {
+        "company_name": "Rivera Trail Co"
+      }
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000913",
+      "first_name": "Noor",
+      "last_name": null,
+      "customer_code": "Noor-QX83",
+      "customer_group_id": "1a000000-0000-1000-8000-000000000901",
+      "email": "noor@consumer.example"
+    }
+  ],
+  "tokens": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000501",
+      "access_token": "seedfullscopeaccesstoken000000000000001A",
+      "scopes": [
+        "customers:read",
+        "customers:write",
+        "inventory:read",
+        "inventory:write",
+        "outlets:read",
+        "payments:read",
+        "payment_types:read",
+        "products:read",
+        "products:write",
+        "registers:read",
+        "register:close",
+        "register:open",
+        "retailer:read",
+        "sales:read",
+        "sales:write",
+        "users:read",
+        "webhooks"
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000502",
+      "access_token": "seedreadonlyaccesstoken0000000000000001A",
+      "scopes": [
+        "customers:read",
+        "inventory:read",
+        "outlets:read",
+        "payments:read",
+        "payment_types:read",
+        "products:read",
+        "registers:read",
+        "retailer:read",
+        "sales:read",
+        "users:read"
+      ]
+    }
+  ],
+  "personal_tokens": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000503",
+      "access_token": "seedpersonalaccesstoken0000000000000001A",
+      "scopes": [
+        "customers:read",
+        "customers:write",
+        "inventory:read",
+        "inventory:write",
+        "outlets:read",
+        "payments:read",
+        "payment_types:read",
+        "products:read",
+        "products:write",
+        "registers:read",
+        "register:close",
+        "register:open",
+        "retailer:read",
+        "sales:read",
+        "sales:write",
+        "users:read",
+        "webhooks"
+      ]
+    }
+  ],
+  "refresh_tokens": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000601",
+      "refresh_token": "seedfullscoperefreshtoken00000000000001A",
+      "access_token_id": "1a000000-0000-1000-8000-000000000501",
+      "scopes": [
+        "customers:read",
+        "customers:write",
+        "inventory:read",
+        "inventory:write",
+        "outlets:read",
+        "payments:read",
+        "payment_types:read",
+        "products:read",
+        "products:write",
+        "registers:read",
+        "register:close",
+        "register:open",
+        "retailer:read",
+        "sales:read",
+        "sales:write",
+        "users:read",
+        "webhooks"
+      ]
+    }
+  ],
+  "webhooks": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000401",
+      "type": "register_closure.create",
+      "url": "https://consumer.example/hooks/lightspeed",
+      "active": true
+    }
+  ],
+  "sales": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000a01",
+      "state": "parked",
+      "date": "2026-09-01T08:40:00Z",
+      "note": "Holding for pickup after lunch.",
+      "source": {
+        "author_id": "1a000000-0000-1000-8000-000000000001",
+        "register_id": "1a000000-0000-1000-8000-000000000201"
+      },
+      "line_items": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000b01",
+          "product_id": "1a000000-0000-1000-8000-000000000701",
+          "quantity": 1,
+          "price": "10.87",
+          "cost": "6.00",
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1",
+          "tax": "1.63"
+        }
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000a02",
+      "state": "closed",
+      "date": "2026-09-01T09:15:00Z",
+      "customer_id": "1a000000-0000-1000-8000-000000000911",
+      "source": {
+        "author_id": "1a000000-0000-1000-8000-000000000001",
+        "register_id": "1a000000-0000-1000-8000-000000000201"
+      },
+      "line_items": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000b02",
+          "product_id": "1a000000-0000-1000-8000-000000000701",
+          "quantity": 2,
+          "price": "10.87",
+          "cost": "6.00",
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1",
+          "tax": "1.63"
+        },
+        {
+          "id": "1a000000-0000-1000-8000-000000000b03",
+          "product_id": "1a000000-0000-1000-8000-000000000702",
+          "quantity": 1,
+          "price": "21.65",
+          "cost": "11.00",
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1",
+          "tax": "3.25"
+        }
+      ],
+      "payments": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000c01",
+          "payment_type_id": "1a000000-0000-1000-8000-000000000302",
+          "amount": "49.90",
+          "date": "2026-09-01T09:15:00Z"
+        }
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000a03",
+      "state": "parked",
+      "date": "2026-09-01T10:05:00Z",
+      "attributes": [
+        "layby"
+      ],
+      "customer_id": "1a000000-0000-1000-8000-000000000911",
+      "note": "Layby: balance due on collection.",
+      "source": {
+        "author_id": "1a000000-0000-1000-8000-000000000001",
+        "register_id": "1a000000-0000-1000-8000-000000000201"
+      },
+      "line_items": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000b04",
+          "product_id": "1a000000-0000-1000-8000-000000000702",
+          "quantity": 3,
+          "price": "21.65",
+          "cost": "11.00",
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1",
+          "tax": "3.25"
+        }
+      ],
+      "payments": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000c02",
+          "payment_type_id": "1a000000-0000-1000-8000-000000000301",
+          "amount": "10.00",
+          "date": "2026-09-01T10:05:00Z"
+        }
+      ]
+    }
+  ]
+}

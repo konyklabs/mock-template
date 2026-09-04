@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "id": "products.list.envelope",
+  "title": "A list answers {\"data\": [...], \"version\": {\"max\", \"min\"}}, ascending by version, and every entity carries its own version",
+  "source": {
+    "url": "https://x-series-api.lightspeedhq.com/openapi/api-2026-07.yaml",
+    "fetched": "2026-09-04",
+    "provenance": "documented",
+    "note": "The envelope is not paraphrased: GET /products' own 200 response carries the example {\"data\": [ ...3 products... ], \"version\": {\"max\": 59780757, \"min\": 59780745}}, and components.schemas.Version describes max/min as \"the highest and lowest version numbers for all items of the returned collection\", int64 and nullable. The pagination page adds the ordering: \"The version attribute is simply a monotonically increasing integer\", ascending. The numbers here are this unit's own sequence, not the vendor's example values."
+  },
+  "routes": [
+    "GET /api/2026-07/products"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "two products, oldest version first",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/products?page_size=2",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": [
+            {
+              "id": "${vars.product_trail_mix_id}",
+              "version": "${re:[0-9]+}"
+            },
+            {
+              "id": "${vars.product_socks_id}",
+              "version": "${re:[0-9]+}"
+            }
+          ],
+          "version": {
+            "max": "${re:[0-9]+}",
+            "min": "${re:[0-9]+}"
+          }
+        }
+      },
+      "capture": {
+        "envelope_max": "/version/max",
+        "envelope_min": "/version/min",
+        "first_row_version": "/data/0/version",
+        "second_row_version": "/data/1/version"
+      }
+    },
+    {
+      "name": "version.min is the first row's version and version.max the last",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/products?page_size=2",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": [
+            {
+              "version": "${cap.envelope_min}"
+            },
+            {
+              "version": "${cap.envelope_max}"
+            }
+          ],
+          "version": {
+            "max": "${cap.second_row_version}",
+            "min": "${cap.first_row_version}"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -49,6 +49,7 @@ from vendorfake.testing import (
     NO_SEED_HINT,
     CloverSeedOverlay,
     Credentials,
+    LightspeedSeedOverlay,
     Seed,
     SquareSeedOverlay,
     ToastSeedOverlay,
@@ -217,6 +218,7 @@ def test_every_overlay_type_names_exactly_its_vendors_seed_collections() -> None
         ("square", SquareSeedOverlay),
         ("clover", CloverSeedOverlay),
         ("toast", ToastSeedOverlay),
+        ("lightspeed", LightspeedSeedOverlay),
     ):
         definition = resolve_vendor(vendor)
         document = json.loads((definition.base_dir / "seed" / "default.seed.json").read_text(encoding="utf-8"))
