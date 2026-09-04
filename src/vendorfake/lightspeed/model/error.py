@@ -28,19 +28,27 @@ both are shapes the vendor really prints somewhere:
     keeps this one.
 
 :class:`PaymentErrorWire` -- ``{"error": {"code": int, "message": str}}``
-    Declared, named and required exactly so in ``PaymentErrorResponse``. No
-    route in this slice returns it; it is modelled here because it is the only
-    error schema the vendor names, and the payments surface a later slice adds
-    must not reinvent it.
+    Declared, named and required exactly so in ``PaymentErrorResponse``. It is
+    the only error schema the vendor names anywhere. The Sales surface answers
+    it for the refusals that are about a payment rather than about the sale's
+    own fields; :class:`PaymentErrorCode` is the code table, and every value in
+    it is this project's, because the vendor publishes none.
 """
 
 from __future__ import annotations
 
+from enum import IntEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-__all__ = ["ErrorWire", "PaymentErrorWire", "WebhookConflictWire"]
+__all__ = [
+    "PAYMENT_ERROR_INFO_KEY",
+    "ErrorWire",
+    "PaymentErrorCode",
+    "PaymentErrorWire",
+    "WebhookConflictWire",
+]
 
 _WIRE = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -78,3 +86,46 @@ class PaymentErrorWire(BaseModel):
 
     def wire(self) -> dict[str, Any]:
         return {"error": {"code": self.code, "message": self.message}}
+
+
+PAYMENT_ERROR_INFO_KEY = "lightspeed_payment_error_code"
+"""``UnitError.info`` key a handler sets to ask for the
+:class:`PaymentErrorWire` shape instead of the generalised two-member body,
+carrying the integer code the schema requires.
+
+An info key rather than a second shaper method, for the same reason
+``ONE_MEMBER_BODY_INFO_KEY`` in ``errors.py`` is one: the body shape is a
+property of the *refusal* -- which operation raised it, and about what -- and
+the shaper is handed the error, not the route.
+"""
+
+
+class PaymentErrorCode(IntEnum):
+    """``PaymentErrorResponse.error.code``. **Every value is JUDGMENT.**
+
+    ``PaymentErrorResponse`` declares ``code`` as ``"type": "integer"`` and
+    nothing else -- no enum, no example value, no range. The documentation site
+    has no error-codes page at all (its own ``llms.txt`` index says "No
+    dedicated error codes page listed" under "Error Handling & Codes", and
+    ``/docs/errors`` and ``/docs/error_handling`` answer 404), so there is no
+    published code to reproduce and no way to infer one.
+
+    These are therefore this project's, chosen to be obviously synthetic: a
+    four-digit block starting at 1001, dense and contiguous, which no real
+    vendor's sparse historical numbering would look like. A consumer must not
+    hard-code one of these expecting the real API to send it -- which is
+    precisely why they are grouped here, in one table, under this docstring,
+    rather than written as literals at five call sites.
+    """
+
+    #: The register the payment names exists but is closed. `register:open` is
+    #: documented as "Open a register to create sales and payments", which is
+    #: the closest the vendor comes to stating this rule.
+    REGISTER_NOT_OPEN = 1001
+    #: `SalePayment.type.config_id` names no payment type of this retailer.
+    UNKNOWN_PAYMENT_TYPE = 1002
+    #: `SalePayment.source.register_id` names no register of this retailer.
+    UNKNOWN_REGISTER = 1003
+    #: Neither the payment nor the sale named a register, so there is no till
+    #: to take the money at.
+    REGISTER_REQUIRED = 1004

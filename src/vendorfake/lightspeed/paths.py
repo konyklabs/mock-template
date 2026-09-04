@@ -44,19 +44,24 @@ from __future__ import annotations
 __all__ = [
     "CLOSE_REGISTER",
     "CONNECT",
+    "CREATE_SALE",
     "CREATE_WEBHOOK",
     "DELETE_WEBHOOK",
     "GET_OUTLET_BY_ID",
     "GET_REGISTER_BY_ID",
     "GET_RETAILER",
+    "GET_SALE_BY_ID",
     "GET_WEBHOOK",
+    "INIT_RETURN_SALE",
     "LIST_OUTLETS",
     "LIST_PAYMENT_TYPES",
     "LIST_REGISTERS",
+    "LIST_SALES",
     "LIST_WEBHOOKS",
     "OPEN_REGISTER",
     "REGISTER_PAYMENTS_SUMMARY",
     "TOKEN_EXCHANGE",
+    "UPDATE_SALE",
     "UPDATE_WEBHOOK",
 ]
 
@@ -72,6 +77,8 @@ CLOSE_REGISTER = _api("/registers/{register_id}/actions/close")
 """``PUT /api/2026-07/registers/{register_id}/actions/close`` -- ``operation_id="CloseRegister"``."""
 CONNECT = "/connect"
 """``GET /connect`` -- ``operation_id="Connect"``. A stand-in; see ``surface/auth.py``."""
+CREATE_SALE = _api("/sales")
+"""``POST /api/2026-07/sales`` -- ``operation_id="CreateSale"``."""
 CREATE_WEBHOOK = _api("/webhooks")
 """``POST /api/2026-07/webhooks`` -- ``operation_id="CreateWebhook"``."""
 DELETE_WEBHOOK = _api("/webhooks/{webhookId}")
@@ -82,14 +89,25 @@ GET_REGISTER_BY_ID = _api("/registers/{register_id}")
 """``GET /api/2026-07/registers/{register_id}`` -- ``operation_id="GetRegisterByID"``."""
 GET_RETAILER = _api("/retailer")
 """``GET /api/2026-07/retailer`` -- ``operation_id="GetRetailer"``."""
+GET_SALE_BY_ID = _api("/sales/{sale_id}")
+"""``GET /api/2026-07/sales/{sale_id}`` -- ``operation_id="GetSaleByID"``."""
 GET_WEBHOOK = _api("/webhooks/{webhookId}")
 """``GET /api/2026-07/webhooks/{webhookId}`` -- ``operation_id="GetWebhook"``."""
+INIT_RETURN_SALE = _api("/sales/{sale_id}/actions/return")
+"""``POST /api/2026-07/sales/{sale_id}/actions/return`` -- ``operation_id="initReturnSale"``.
+
+The specification's own operation id, camelCase with a lower-case first letter
+where the rest of the document capitalises: ``UPPER_SNAKE`` of it is
+``INIT_RETURN_SALE`` either way, so unlike the five webhook ids this one is
+kept exactly as the vendor spells it."""
 LIST_OUTLETS = _api("/outlets")
 """``GET /api/2026-07/outlets`` -- ``operation_id="ListOutlets"``."""
 LIST_PAYMENT_TYPES = _api("/payment_types")
 """``GET /api/2026-07/payment_types`` -- ``operation_id="ListPaymentTypes"``."""
 LIST_REGISTERS = _api("/registers")
 """``GET /api/2026-07/registers`` -- ``operation_id="ListRegisters"``."""
+LIST_SALES = _api("/sales")
+"""``GET /api/2026-07/sales`` -- ``operation_id="ListSales"``."""
 LIST_WEBHOOKS = _api("/webhooks")
 """``GET /api/2026-07/webhooks`` -- ``operation_id="ListWebhooks"``."""
 OPEN_REGISTER = _api("/registers/{register_id}/actions/open")
@@ -98,5 +116,7 @@ REGISTER_PAYMENTS_SUMMARY = _api("/registers/{register_id}/payments_summary")
 """``GET /api/2026-07/registers/{register_id}/payments_summary`` -- ``operation_id="RegisterPaymentsSummary"``."""
 TOKEN_EXCHANGE = f"{_TOKEN_PREFIX}/token"
 """``POST /api/1.0/token`` -- ``operation_id="TokenExchange"``."""
+UPDATE_SALE = _api("/sales/{sale_id}")
+"""``PUT /api/2026-07/sales/{sale_id}`` -- ``operation_id="UpdateSale"``."""
 UPDATE_WEBHOOK = _api("/webhooks/{webhookId}")
 """``PUT /api/2026-07/webhooks/{webhookId}`` -- ``operation_id="UpdateWebhook"``."""

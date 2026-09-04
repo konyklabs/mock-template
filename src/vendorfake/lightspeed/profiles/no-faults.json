@@ -7,6 +7,7 @@
     "outlets",
     "registers",
     "payment_types",
+    "sales",
     "webhooks"
   ],
   "seed": "seed/default.seed.json",

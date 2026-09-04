@@ -94,16 +94,24 @@ def test_an_empty_close_body_is_legal(h: Harness) -> None:
 
 def test_closing_records_the_declared_totals_as_wire_strings(h: Harness) -> None:
     """DOCUMENTED: ``RegisterClosePaymentType.total`` is typed ``string``, and
-    every example prints two decimal places."""
+    every example prints two decimal places.
+
+    The declared total is SUMMED WITH the payments the register actually took
+    (see the module docstring): the scenario's layby put $10.00 of cash through
+    this register, so a declared $255 is reported as $265.00.
+    """
     answered = h.put(
         h.path(CLOSE_REGISTER),
         json.dumps({"payments": [{"payment_type_id": c.SEED_PAYMENT_TYPE_CASH_ID, "total": "255"}]}),
     )
     assert answered.status == 200
     summary = h.get(h.path(SUMMARY)).json()["data"]
-    assert summary["payments"] == [
-        {"payment_type_id": c.SEED_PAYMENT_TYPE_CASH_ID, "payment_type_name": "Cash", "total": "255.00"}
-    ]
+    totals = {row["payment_type_id"]: row for row in summary["payments"]}
+    assert totals[c.SEED_PAYMENT_TYPE_CASH_ID] == {
+        "payment_type_id": c.SEED_PAYMENT_TYPE_CASH_ID,
+        "payment_type_name": "Cash",
+        "total": "265.00",
+    }
 
 
 def test_a_total_naming_an_unknown_payment_type_is_refused(h: Harness) -> None:
@@ -200,7 +208,13 @@ def test_the_payload_is_the_closure_as_json(h: Harness) -> None:
     payload = json.loads(fields[PAYLOAD_FIELD])
     assert payload["register_id"] == c.SEED_REGISTER_MAIN_ID
     assert payload["register_closure_sequence_number"] == 1
-    assert payload["payments"][0]["total"] == "12.50"
+    # 12.50 declared by this close, plus the 10.00 of cash the scenario's layby
+    # put through this register while it was open.
+    assert payload["payments"][0] == {
+        "payment_type_id": c.SEED_PAYMENT_TYPE_CASH_ID,
+        "payment_type_name": "Cash",
+        "total": "22.50",
+    }
     assert isinstance(payload["version"], int)
 
 

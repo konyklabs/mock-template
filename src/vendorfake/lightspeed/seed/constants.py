@@ -27,6 +27,7 @@ __all__ = [
     "SEED_ACCESS_TOKEN",
     "SEED_CLIENT_ID",
     "SEED_CLIENT_SECRET",
+    "SEED_CUSTOMER_ID",
     "SEED_DOMAIN_PREFIX",
     "SEED_OUTLET_MAIN_ID",
     "SEED_OUTLET_SECOND_ID",
@@ -34,12 +35,19 @@ __all__ = [
     "SEED_PAYMENT_TYPE_CASH_ID",
     "SEED_PAYMENT_TYPE_INTERNAL_ID",
     "SEED_PERSONAL_ACCESS_TOKEN",
+    "SEED_PRODUCT_BEANS_ID",
+    "SEED_PRODUCT_COFFEE_ID",
     "SEED_READ_ONLY_ACCESS_TOKEN",
     "SEED_REFRESH_TOKEN",
     "SEED_REGISTER_MAIN_ID",
     "SEED_REGISTER_SECOND_ID",
     "SEED_RETAILER_ID",
     "SEED_RETAILER_NAME",
+    "SEED_SALE_CLOSED_ID",
+    "SEED_SALE_LAYBY_ID",
+    "SEED_SALE_SAVED_ID",
+    "SEED_TAX_ID",
+    "SEED_USER_ID",
     "SEED_WEBHOOK_ID",
     "SEED_WEBHOOK_TYPE",
     "SEED_WEBHOOK_URL",
@@ -66,6 +74,41 @@ SEED_PAYMENT_TYPE_INTERNAL_ID = "1a000000-0000-1000-8000-000000000303"
 """Three payment types, one of them ``internal`` -- so that "the
 ``payment_types:read`` scope excludes internal payment types" is testable
 rather than merely documented."""
+
+# -- sales, and the minimum they reference (slice L2b of konyklabs/roadmap#94)
+# The products and customers here are the few a sale has to resolve against;
+# the sibling slice seeds the full collections and these ids stay valid.
+
+SEED_TAX_ID = "1a000000-0000-1000-8000-0000000000a1"
+"""The retailer's one tax, already named as both outlets' ``default_tax_id``.
+There is no ``taxes`` collection: the Taxes tag is outside issue #94's scoped
+surface, so a sale's ``LineItemTax.id`` is carried and never resolved."""
+
+SEED_USER_ID = "1a000000-0000-1000-8000-000000000701"
+"""The cashier every seeded sale names as its ``source.author_id``. There is no
+``users`` collection either -- the Users tag is out of scope -- so nothing
+resolves this id; it exists so the seeded sales carry the same author and a
+consumer has a plausible value to send."""
+
+SEED_PRODUCT_COFFEE_ID = "1a000000-0000-1000-8000-000000000801"
+SEED_PRODUCT_BEANS_ID = "1a000000-0000-1000-8000-000000000802"
+"""Two products, the minimum a sale needs to resolve a line item against."""
+
+SEED_CUSTOMER_ID = "1a000000-0000-1000-8000-000000000901"
+"""One customer, so a sale can name one."""
+
+SEED_SALE_SAVED_ID = "1a000000-0000-1000-8000-000000000a01"
+"""``state: "parked"`` -- a saved sale, still editable. Takes a ``PUT``."""
+
+SEED_SALE_CLOSED_ID = "1a000000-0000-1000-8000-000000000a02"
+"""``state: "closed"`` with a payment on the open main register, so the return
+action and the register payments summary both have something real to work on.
+Terminal: a ``PUT`` against it is the 409 this vendor's machine produces."""
+
+SEED_SALE_LAYBY_ID = "1a000000-0000-1000-8000-000000000a03"
+"""A layby: ``state: "parked"`` carrying the ``layby`` attribute and a part
+payment. There is no ``LAYBY`` state in the 2026-07 schema -- see
+``machine.py`` -- and ``attributes`` is how the schema expresses one."""
 
 SEED_WEBHOOK_ID = "1a000000-0000-1000-8000-000000000401"
 SEED_WEBHOOK_TYPE = "register_closure.create"

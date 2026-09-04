@@ -15,7 +15,26 @@
     "with no internal type could not show that.",
     "",
     "No 'version' anywhere: the Lightspeed version is drawn from the retailer's",
-    "one monotonically increasing counter at hydrate, in the order below."
+    "one monotonically increasing counter at hydrate, in the order below.",
+    "",
+    "Slice L2b added 'sales' and the 'products' and 'customers' a sale must",
+    "resolve against -- two products and one customer, the minimum. The sibling",
+    "slice of the same issue owns those two collections and extends both lists",
+    "with the rest of their documented members; these ids stay valid.",
+    "",
+    "Three sales, in the three shapes a till produces: one parked (saved and",
+    "still editable), one closed with a card payment on the OPEN main register",
+    "-- so the return action and the register payments summary both have",
+    "something real to work on -- and one layby, which is a parked sale",
+    "carrying the 'layby' attribute and a part payment, because the 2026-07",
+    "schema has no LAYBY state (see machine.py).",
+    "",
+    "Money here is the wire's number (4.5), not the store's minor units:",
+    "hydrate converts through model/money.py exactly as a request does.",
+    "",
+    "Every sale payment is dated inside the main register's open window",
+    "(register_open_time 2026-09-01T08:00:00Z), so closing that register",
+    "aggregates them into its closure's totals."
   ],
   "retailer": {
     "id": "1a000000-0000-1000-8000-000000000001",
@@ -161,6 +180,9 @@
         "register:close",
         "register:open",
         "retailer:read",
+        "sales:read",
+        "sales:write",
+        "users:read",
         "webhooks"
       ]
     },
@@ -172,7 +194,9 @@
         "payments:read",
         "payment_types:read",
         "registers:read",
-        "retailer:read"
+        "retailer:read",
+        "sales:read",
+        "users:read"
       ]
     }
   ],
@@ -188,6 +212,9 @@
         "register:close",
         "register:open",
         "retailer:read",
+        "sales:read",
+        "sales:write",
+        "users:read",
         "webhooks"
       ]
     }
@@ -205,7 +232,133 @@
         "register:close",
         "register:open",
         "retailer:read",
+        "sales:read",
+        "sales:write",
+        "users:read",
         "webhooks"
+      ]
+    }
+  ],
+  "products": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000801",
+      "name": "Ridgeline Roast 250g",
+      "sku": "RR-250",
+      "handle": "ridgeline-roast-250g",
+      "price_excluding_tax": 4.5,
+      "price_including_tax": 5.18,
+      "supply_price": 2.1
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000802",
+      "name": "Cold Brew Bottle 500ml",
+      "sku": "CB-500",
+      "handle": "cold-brew-bottle-500ml",
+      "price_excluding_tax": 6.0,
+      "price_including_tax": 6.9,
+      "supply_price": 2.75
+    }
+  ],
+  "customers": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000901",
+      "first_name": "Ada",
+      "last_name": "Rivers",
+      "email": "ada.rivers@unit-lightspeed.example",
+      "customer_code": "RIV-1001"
+    }
+  ],
+  "sales": [
+    {
+      "id": "1a000000-0000-1000-8000-000000000a01",
+      "state": "parked",
+      "date": "2026-09-01T08:40:00Z",
+      "note": "Holding for pickup after lunch.",
+      "source": {
+        "author_id": "1a000000-0000-1000-8000-000000000701",
+        "register_id": "1a000000-0000-1000-8000-000000000201"
+      },
+      "line_items": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000b01",
+          "product_id": "1a000000-0000-1000-8000-000000000801",
+          "quantity": 1,
+          "price": 4.5,
+          "cost": 2.1,
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1",
+          "tax": 0.68
+        }
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000a02",
+      "state": "closed",
+      "date": "2026-09-01T09:15:00Z",
+      "customer_id": "1a000000-0000-1000-8000-000000000901",
+      "source": {
+        "author_id": "1a000000-0000-1000-8000-000000000701",
+        "register_id": "1a000000-0000-1000-8000-000000000201"
+      },
+      "line_items": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000b02",
+          "product_id": "1a000000-0000-1000-8000-000000000801",
+          "quantity": 2,
+          "price": 4.5,
+          "cost": 2.1,
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1",
+          "tax": 0.68
+        },
+        {
+          "id": "1a000000-0000-1000-8000-000000000b03",
+          "product_id": "1a000000-0000-1000-8000-000000000802",
+          "quantity": 1,
+          "price": 6.0,
+          "cost": 2.75,
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1",
+          "tax": 0.9
+        }
+      ],
+      "payments": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000c01",
+          "payment_type_id": "1a000000-0000-1000-8000-000000000302",
+          "amount": 17.26,
+          "date": "2026-09-01T09:15:00Z"
+        }
+      ]
+    },
+    {
+      "id": "1a000000-0000-1000-8000-000000000a03",
+      "state": "parked",
+      "date": "2026-09-01T10:05:00Z",
+      "attributes": [
+        "layby"
+      ],
+      "customer_id": "1a000000-0000-1000-8000-000000000901",
+      "note": "Layby: balance due on collection.",
+      "source": {
+        "author_id": "1a000000-0000-1000-8000-000000000701",
+        "register_id": "1a000000-0000-1000-8000-000000000201"
+      },
+      "line_items": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000b04",
+          "product_id": "1a000000-0000-1000-8000-000000000802",
+          "quantity": 3,
+          "price": 6.0,
+          "cost": 2.75,
+          "tax_id": "1a000000-0000-1000-8000-0000000000a1",
+          "tax": 0.9
+        }
+      ],
+      "payments": [
+        {
+          "id": "1a000000-0000-1000-8000-000000000c02",
+          "payment_type_id": "1a000000-0000-1000-8000-000000000301",
+          "amount": 10.0,
+          "date": "2026-09-01T10:05:00Z"
+        }
       ]
     }
   ],

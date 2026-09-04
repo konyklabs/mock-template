@@ -33,11 +33,18 @@ WHAT FIRES WHAT
                               tracking enabled")
 ============================  ==============================================
 
-The last four collections are populated by later slices of
-konyklabs/roadmap#94. They are keyed here now, with the generic projection
-below, so that adding a surface is one projection function rather than a
-second place to remember the event vocabulary; each slice replaces
-:func:`_generic` for its own collection with its own model's wire shape.
+``sales`` carries ``model/sale.py``'s own projection, so the entity a
+``sale.update`` delivery carries and the entity ``GET /sales/{sale_id}``
+answers are one function. ``products``, ``customers`` and ``inventory`` are
+still on the generic projection below and are the sibling slice's to replace,
+which is the pattern: adding a surface is one projection function rather than
+a second place to remember the event vocabulary.
+
+A ``sale.update`` payload carries no payment-type NAME
+(``PaymentTypeDetails.name``): the mapper projects from the journal entry and
+has no reason to reach into the payment types collection for a label the
+request itself did not carry. The payment's ``config_id`` is there, which is
+the id a consumer resolves against ``GET /payment_types``.
 
 THE PAYLOAD SHAPE is the 2026-07 entity as this unit stores it. DOCUMENTED
 DEVIATION, and UNVERIFIED: the webhooks page says "The payload objects you'll
@@ -63,6 +70,7 @@ from typing import Any
 
 from vendorfake.core.kernel.types import EventMeta, JournalEntry, MappedEvent, UnitContext
 from vendorfake.lightspeed.entities import COL, OBJECT_VERSION
+from vendorfake.lightspeed.model.sale import project_sale
 from vendorfake.lightspeed.model.webhooks import (
     DOMAIN_PREFIX_FIELD,
     ENVIRONMENT_FIELD,
@@ -119,6 +127,15 @@ def _generic(entity: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _project(collection: str, stored: Mapping[str, Any]) -> dict[str, Any]:
+    """One committed entity as its own surface puts it on the wire."""
+    if collection == COL.register_closures:
+        return project_register_closure(stored)
+    if collection == COL.sales:
+        return project_sale(stored)
+    return _generic(stored)
+
+
 class LightspeedEventMapper:
     """Satisfies ``EventMapper``. Holds the vendor for its configured
     ``domain_prefix`` and environment name."""
@@ -139,7 +156,7 @@ class LightspeedEventMapper:
             # whose event is documented to fire on delete -- a later slice
             # that models the deletion carries the tombstone it needs.
             return ()
-        payload = project_register_closure(stored) if entry.collection == COL.register_closures else _generic(stored)
+        payload = _project(entry.collection, stored)
         config = self._deps.config
 
         def build(_meta: EventMeta) -> object:

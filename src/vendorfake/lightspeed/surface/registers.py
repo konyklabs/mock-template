@@ -36,17 +36,26 @@ JUDGMENT, at their sites:
   The documented example prints ``"register_closure_sequence_number": 5`` and
   nothing says what it counts; per-register is the reading that makes the
   number useful.
-* **``payments_summary`` reports the register's most recent closure**, and
-  falls back to the totals declared at the last close. The endpoint is
-  documented as "payment totals for all payments types defined in the account
-  for a single register" and its example prints a ``register_closure_id``, so
-  it is a view of a closure; this unit has no sales yet (a later slice), so the
-  totals it reports are the ones the close request declared.
+* **``payments_summary`` reports the register's most recent closure.** The
+  endpoint is documented as "payment totals for all payments types defined in
+  the account for a single register" and its example prints a
+  ``register_closure_id``, a sequence number and a ``register_open_time``, so
+  it is a view of ONE till session rather than an all-time total.
+
+WHAT A CLOSURE'S TOTALS ARE MADE OF, since slice L2b of konyklabs/roadmap#94
+put real sales behind them: the payments the register actually took while it
+was open, summed per payment type, PLUS whatever totals the close request
+itself declared. Both halves are needed. The taken payments are the money the
+API can see; the declared ones are the cash count a closing cashier types in,
+which is the only thing ``RegisterCloseRequest`` carries and therefore the only
+thing the vendor documents as an input to this action. Summing them means a
+close with an empty body reports what the till rang up, and a close that
+declares a float reports both -- and the response schema is unchanged either
+way.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 from vendorfake.core.kernel.reply import json_
@@ -58,11 +67,12 @@ from vendorfake.lightspeed.config import (
     SCOPE_REGISTER_OPEN,
     SCOPE_REGISTERS_READ,
 )
-from vendorfake.lightspeed.entities import COL, PaymentTypeEntity, RegisterClosureEntity, RegisterEntity
+from vendorfake.lightspeed.entities import COL, PaymentTypeEntity, RegisterClosureEntity, RegisterEntity, SaleEntity
 from vendorfake.lightspeed.model.common import validate_body
-from vendorfake.lightspeed.model.money import to_amount, to_minor
+from vendorfake.lightspeed.model.money import to_minor
 from vendorfake.lightspeed.model.payment_type import project_payments_summary
 from vendorfake.lightspeed.model.retailer import RegisterCloseRequest, RegisterOpenRequest, project_register
+from vendorfake.lightspeed.model.sale import aggregate_payments_by_type
 from vendorfake.lightspeed.paths import (
     CLOSE_REGISTER,
     GET_REGISTER_BY_ID,
@@ -118,11 +128,15 @@ class LightspeedRegistersSurface:
                 operation_id="OpenRegister",
                 summary="Open a register. 409 if it is already open.",
             ),
-            # The example body and params are what let a language-independent
-            # conformance check drive a committed mutation and watch the
-            # webhook it produces: this is the one route in this slice that
-            # commits AND announces. `example_params` names the seeded register
-            # so the probe addresses a real entity.
+            # NO `example_body` HERE, and its absence is deliberate. This route
+            # carried the vendor's published example through the chassis slice,
+            # which made conformance C18 -- "drive the example mutation three
+            # times on one unit, with webhooks on, off and on again" --
+            # unaskable: closing an already-closed register is a 409 (see the
+            # module docstring), so the second drive was refused and the check
+            # failed on all four webhook-enabled profiles. The example moved to
+            # `POST /sales`, which commits, announces `sale.update`, and can be
+            # driven any number of times. See surface/sales.py.
             Route(
                 method="PUT",
                 path=CLOSE_REGISTER,
@@ -130,8 +144,6 @@ class LightspeedRegistersSurface:
                 handler=self.close_register,
                 auth=BEARER_AUTH,
                 scopes=(SCOPE_REGISTER_CLOSE, SCOPE_PAYMENT_TYPES_READ),
-                example_body={"payments": []},
-                example_params=self._example_params(),
                 operation_id="CloseRegister",
                 summary="Close a register and record its totals; fires register_closure.create. 409 if closed.",
             ),
@@ -146,14 +158,6 @@ class LightspeedRegistersSurface:
                 summary="Payment totals for a register's most recent closure.",
             ),
         )
-
-    def _example_params(self) -> Mapping[str, str]:
-        # Imported here rather than at module scope: the seed constants module
-        # imports nothing from the surfaces, but keeping the dependency inside
-        # the one function that needs it makes the direction obvious.
-        from vendorfake.lightspeed.seed.constants import SEED_REGISTER_MAIN_ID
-
-        return {"register_id": SEED_REGISTER_MAIN_ID}
 
     # -- reads --------------------------------------------------------------
 
@@ -212,8 +216,14 @@ class LightspeedRegistersSurface:
                 field="register_id",
                 info={"is_open": False},
             )
-        payments = self._declared_totals(args.ctx, request)
         closed_at = wire_time(args.ctx.clock)
+        payments = aggregate_payments_by_type(
+            [
+                *self._declared_amounts(args.ctx, request),
+                *self._amounts_taken(args.ctx, register, closed_at),
+            ],
+            names=self._payment_type_names(args.ctx),
+        )
         deps = self._deps
 
         def mutate(draft: dict[str, Any]) -> None:
@@ -283,9 +293,12 @@ class LightspeedRegistersSurface:
             )
         return stored
 
-    def _declared_totals(self, ctx: UnitContext, request: RegisterCloseRequest) -> list[dict[str, Any]]:
-        """The close request's totals, each resolved to a payment type that
-        exists and rendered as the wire's decimal string.
+    def _payment_type_names(self, ctx: UnitContext) -> dict[str, str]:
+        return {str(row["id"]): str(row.get("name", "")) for row in ctx.store.collection(COL.payment_types).all()}
+
+    def _declared_amounts(self, ctx: UnitContext, request: RegisterCloseRequest) -> list[dict[str, Any]]:
+        """The close request's own declared totals, in the internal
+        minor-unit shape the aggregator sums.
 
         A total naming a payment type this retailer does not have is a 422:
         the summary reports the type's *name*, so an unresolvable id would
@@ -294,7 +307,7 @@ class LightspeedRegistersSurface:
         payment_types = {
             row["id"]: PaymentTypeEntity.from_entity(row) for row in ctx.store.collection(COL.payment_types).all()
         }
-        totals: list[dict[str, Any]] = []
+        amounts: list[dict[str, Any]] = []
         for index, declared in enumerate(request.payments):
             found = payment_types.get(declared.payment_type_id)
             if found is None:
@@ -303,15 +316,44 @@ class LightspeedRegistersSurface:
                     detail=f"payments[{index}].payment_type_id {declared.payment_type_id!r} is not a payment type.",
                     field=f"payments[{index}].payment_type_id",
                 )
-            minor = to_minor(declared.total, field=f"payments[{index}].total", allow_negative=True)
-            totals.append(
+            amounts.append(
                 {
                     "payment_type_id": found.id,
-                    "payment_type_name": found.name,
-                    "total": to_amount(minor),
+                    "amount_minor": to_minor(declared.total, field=f"payments[{index}].total", allow_negative=True),
                 }
             )
-        return totals
+        return amounts
+
+    def _amounts_taken(self, ctx: UnitContext, register: RegisterEntity, closed_at: str) -> list[dict[str, Any]]:
+        """Every payment this register actually took while it was open.
+
+        THE WINDOW is the register's own: from ``register_open_time`` (or from
+        the beginning of the scenario, when the register carries none) to the
+        instant of this close. A payment stored against this register outside
+        that window belongs to an earlier closure and is not counted twice.
+        JUDGMENT on the boundary, because no page describes how the summary and
+        a closure relate -- but the endpoint's documented example prints a
+        ``register_closure_id`` and a ``register_open_time`` beside the totals,
+        which is a view of ONE till session and is the reading taken here.
+
+        Instants compare as strings because ``surface/common.py``'s
+        :func:`wire_time` spells every one of them the same way -- RFC 3339 to
+        the second, with a ``Z`` -- so lexical order is chronological order.
+        Recorded rather than assumed: a scenario that seeds a sale payment with
+        an offset spelling (``+00:00``) sorts differently, which is why the
+        shipped seed spells them the vendor's ``Z`` way.
+        """
+        opened = register.register_open_time
+        taken: list[dict[str, Any]] = []
+        for row in ctx.store.collection(COL.sales).all():
+            for payment in SaleEntity.from_entity(row).payments:
+                if str(payment.get("register_id", "")) != register.id:
+                    continue
+                when = str(payment.get("date", ""))
+                if (opened is not None and when < opened) or when > closed_at:
+                    continue
+                taken.append(payment)
+        return taken
 
 
 def register_routes(deps: LightspeedDeps) -> tuple[Route, ...]:

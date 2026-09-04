@@ -65,9 +65,14 @@ def test_connect_refuses_an_unknown_client(h: Harness) -> None:
 
 
 def test_connect_refuses_a_scope_the_application_does_not_carry(h: Harness) -> None:
+    """``consignments:read`` is a real scope on the vendor's own 58-scope page
+    and one this application deliberately never carries: consignments are
+    outside issue #94's scoped surface. Named here rather than an invented
+    string, so the refusal is about the APPLICATION's grant and not about the
+    scope being unrecognisable."""
     answered = h.api.get(
         "/connect",
-        query={"client_id": SEED_CLIENT_ID, "redirect_uri": REDIRECT, "scope": "retailer:read sales:write"},
+        query={"client_id": SEED_CLIENT_ID, "redirect_uri": REDIRECT, "scope": "retailer:read consignments:read"},
     )
     assert answered.status == 422
     assert answered.json()["unit_error"]["field"] == "scope"

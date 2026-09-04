@@ -45,6 +45,7 @@ __all__ = [
     "RegisterClosureEntity",
     "RegisterEntity",
     "RetailerEntity",
+    "SaleEntity",
     "TokenEntity",
 ]
 
@@ -625,5 +626,133 @@ class RefreshTokenEntity:
                 "access_token_id": self.access_token_id,
                 "retired_at_ms": self.retired_at_ms,
                 "created_at_ms": self.created_at_ms,
+            }
+        )
+
+
+# ---------------------------------------------------------------------------
+# SALES (slice L2b of konyklabs/roadmap#94). Added as one block so that the
+# sibling slice's products/inventory/customers entities merge beside it rather
+# than through it.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SaleEntity:
+    """One sale, in the documented ``Sale`` shape, with money in minor units.
+
+    WHY THE NESTED ROWS ARE PLAIN DICTS. ``line_items``, ``payments``,
+    ``source`` and ``return`` are stored as the dicts ``model/sale.py`` builds,
+    the same way :class:`RegisterClosureEntity` stores its ``payments``: they
+    are computed wholesale by the surface on every write (a sale's totals are a
+    function of its line items, so there is no partial update of one), and a
+    second dataclass layer per row would be a shape to keep in step with the
+    projection for no reader's benefit.
+
+    MONEY IS MINOR UNITS IN THE STORE and JSON **numbers** on the wire, which
+    is the opposite of the register close totals. Both are the vendor's:
+    ``RegisterClosePaymentType.total`` is typed ``string``, while every money
+    member of a sale (``SaleTotals.price``, ``LineItemPricing.price``,
+    ``SalePayment.amount``, ``LineItemTax.amount``) is typed ``number`` with
+    ``format: double``. ``model/money.py`` owns both conversions.
+
+    ``state`` is the four-value enum ``machine.py`` enforces. ``deleted_at`` is
+    carried because ``Sale`` declares it and because the shared list filter in
+    ``versioning.py`` reads it, not because any route in this slice sets one:
+    the Sales tag has no delete operation.
+    """
+
+    id: str
+    state: str
+    source: dict[str, Any] = field(default_factory=dict)
+    line_items: list[dict[str, Any]] = field(default_factory=list)
+    payments: list[dict[str, Any]] = field(default_factory=list)
+    attributes: tuple[str, ...] = ()
+    customer_id: str | None = None
+    note: str | None = None
+    short_code: str | None = None
+    invoice_number: str | None = None
+    receipt_number: str | None = None
+    accounts_transaction_id: str | None = None
+    #: RFC 3339. ``SaleRequestBase.date`` -- "If not provided will be added as
+    #: the time the sale reached the server". This one is the VENDOR's: it is
+    #: an editable member of the request body.
+    date: str = ""
+    #: ``created_at`` and ``updated_at`` are the CORE STORE's, not this
+    #: package's, and that is why they are empty by default here.
+    #: ``Collection.insert`` stamps both unless the caller supplies them, and
+    #: ``Collection.update`` restores ``created_at`` and rewrites
+    #: ``updated_at`` after every mutator -- so a vendor that also wrote them
+    #: would have its value silently replaced on the first update, leaving a
+    #: sale whose two timestamps were spelled to different precisions. The seed
+    #: DOES supply both (an insert honours them, which is how a scenario states
+    #: that a sale happened last Tuesday); a live create supplies neither.
+    created_at: str = ""
+    updated_at: str = ""
+    deleted_at: str | None = None
+    #: ``SaleReturn``: whether this sale IS a return, the sale it returns, and
+    #: the returns made from it.
+    is_return: bool = False
+    original_sale_id: str | None = None
+    return_sale_ids: tuple[str, ...] = ()
+    object_version: int = 0
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> SaleEntity:
+        returns = _mapping(entity.get("return"))
+        return cls(
+            id=_str(entity["id"]),
+            state=_str(entity.get("state")),
+            source=_mapping(entity.get("source")),
+            line_items=_rows(entity.get("line_items")),
+            payments=_rows(entity.get("payments")),
+            attributes=_str_tuple(entity.get("attributes")),
+            customer_id=_opt_str(entity.get("customer_id")),
+            note=_opt_str(entity.get("note")),
+            short_code=_opt_str(entity.get("short_code")),
+            invoice_number=_opt_str(entity.get("invoice_number")),
+            receipt_number=_opt_str(entity.get("receipt_number")),
+            accounts_transaction_id=_opt_str(entity.get("accounts_transaction_id")),
+            date=_str(entity.get("date")),
+            created_at=_str(entity.get("created_at")),
+            updated_at=_str(entity.get("updated_at")),
+            deleted_at=_opt_str(entity.get("deleted_at")),
+            is_return=_bool(returns.get("is_return")),
+            original_sale_id=_opt_str(returns.get("original_sale_id")),
+            return_sale_ids=_str_tuple(returns.get("return_sale_ids")),
+            object_version=_int(entity.get(OBJECT_VERSION)),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "state": self.state,
+                "source": dict(self.source),
+                "line_items": [dict(row) for row in self.line_items],
+                "payments": [dict(row) for row in self.payments],
+                "attributes": list(self.attributes),
+                "customer_id": self.customer_id,
+                "note": self.note,
+                "short_code": self.short_code,
+                "invoice_number": self.invoice_number,
+                "receipt_number": self.receipt_number,
+                "accounts_transaction_id": self.accounts_transaction_id,
+                "date": self.date,
+                # Empty means "the store owns this one"; see the field comment.
+                "created_at": self.created_at or None,
+                "updated_at": self.updated_at or None,
+                "deleted_at": self.deleted_at,
+                # Compacted in its own right: `compact` is shallow by design,
+                # so a nested projection compacts itself or the "absence is
+                # absence" invariant stops at the first level.
+                "return": compact(
+                    {
+                        "is_return": self.is_return,
+                        "original_sale_id": self.original_sale_id,
+                        "return_sale_ids": list(self.return_sale_ids),
+                    }
+                ),
+                OBJECT_VERSION: self.object_version,
             }
         )

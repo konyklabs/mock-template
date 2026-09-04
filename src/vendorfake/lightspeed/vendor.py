@@ -29,15 +29,17 @@ function of the scenario -- which does not exist when the vendor is
 constructed. Recomputing it per request would be a store scan on the hot path
 for a number that only a re-seed can change.
 
-THE ROLE MAPPING, and the one JUDGMENT in it. ``VendorDefinition.roles`` must
-map all four neutral roles to capabilities this vendor declares. ``auth``,
-``webhooks`` and ``chaos`` map to themselves. ``orders`` maps to
-``registers``: Lightspeed's order-equivalent resource is a *sale*, and the
-Sales tag arrives in a later slice of konyklabs/roadmap#94, so the transactional
-surface this slice actually serves is the till lifecycle -- open, close, and
-the payment totals a closure carries. The mapping moves to ``sales`` when that
-surface lands, which is a change to this one line and to the ``orders-only``
-profile.
+THE ROLE MAPPING. ``VendorDefinition.roles`` must map all four neutral roles to
+capabilities this vendor declares. ``auth``, ``webhooks`` and ``chaos`` map to
+themselves, and ``orders`` maps to ``sales``: a Lightspeed *sale* is this
+vendor's order-equivalent resource, so a consumer asking a unit for its orders
+role gets the surface that creates, reads, updates and returns one.
+
+It pointed at ``registers`` in the chassis slice of konyklabs/roadmap#94, when
+the Sales tag did not exist here yet and the till lifecycle was the only
+transactional surface the unit served. That was recorded as a JUDGMENT to
+revisit, pinned by a test whose name said so; slice L2b revisits it, and this
+line and the ``orders-only`` profile's capability list move together.
 """
 
 from __future__ import annotations
@@ -72,6 +74,7 @@ from vendorfake.lightspeed.errors import (
 )
 from vendorfake.lightspeed.events import LightspeedEventMapper
 from vendorfake.lightspeed.ids import LightspeedCredentialIds, LightspeedIds
+from vendorfake.lightspeed.machine import SALE_MACHINE, SALE_MACHINE_NAME
 from vendorfake.lightspeed.ratelimit import LightspeedRateLimiter
 from vendorfake.lightspeed.retry import lightspeed_retry_defaults
 from vendorfake.lightspeed.seed.hydrate import hydrate_lightspeed
@@ -81,6 +84,7 @@ from vendorfake.lightspeed.surface.outlets import outlet_routes
 from vendorfake.lightspeed.surface.payment_types import payment_type_routes
 from vendorfake.lightspeed.surface.registers import register_routes
 from vendorfake.lightspeed.surface.retailer import retailer_routes
+from vendorfake.lightspeed.surface.sales import sale_routes
 from vendorfake.lightspeed.surface.webhooks import webhook_routes
 from vendorfake.lightspeed.versioning import LightspeedVersions
 
@@ -107,13 +111,13 @@ publishes no equivalent, so the mechanism is this project's, flagged by the
 
 LIGHTSPEED_ROLES: Mapping[str, str] = {
     "auth": "auth",
-    "orders": "registers",
+    "orders": "sales",
     "webhooks": "webhooks",
     "chaos": "chaos",
 }
 """The neutral role vocabulary, mapped to this vendor's own capability names.
-See the module docstring for why ``orders`` points at ``registers`` in this
-slice."""
+See the module docstring for why ``orders`` points at ``sales``, and what it
+pointed at before."""
 
 _VOLATILE_FIELDS: tuple[str, ...] = (
     "expires_at_ms",
@@ -246,6 +250,7 @@ class LightspeedVendor:
                 + outlet_routes(self)
                 + register_routes(self)
                 + payment_type_routes(self)
+                + sale_routes(self)
                 + webhook_routes(self)
             )
         return self._routes
@@ -276,13 +281,15 @@ class LightspeedVendor:
 
     @property
     def machines(self) -> Mapping[str, MachineDef]:
-        """None. A register is open or closed and the two actions are the only
-        transitions; that is a boolean rather than a lifecycle, and declaring a
-        two-state machine for it would publish a vocabulary no route uses. The
-        sale lifecycle (``parked``/``pending``/``voided``/``closed``, an
-        ``enum`` on ``SaleRequestBase``) is a real machine and arrives with the
-        Sales surface."""
-        return {}
+        """One: the sale lifecycle.
+
+        A REGISTER IS DELIBERATELY NOT A MACHINE. It is open or closed and the
+        two actions are the only transitions; that is a boolean rather than a
+        lifecycle, and declaring a two-state machine for it would publish a
+        vocabulary no route uses. A sale's ``state`` is a real enum on a real
+        schema, with edges worth publishing -- see ``machine.py``.
+        """
+        return {SALE_MACHINE_NAME: SALE_MACHINE}
 
     @property
     def retry_defaults(self) -> ProfileDocument:

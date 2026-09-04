@@ -17,6 +17,11 @@ Every route lightspeed's surface serves -- vendor-facing only. The `/__unit/*` c
 | PUT | `/api/2026-07/registers/{register_id}/actions/close` | CloseRegister | registers | Close a register and record its totals; fires register_closure.create. 409 if closed. |
 | GET | `/api/2026-07/registers/{register_id}/payments_summary` | RegisterPaymentsSummary | registers | Payment totals for a register's most recent closure. |
 | GET | `/api/2026-07/payment_types` | ListPaymentTypes | payment_types | Payment types, ascending by version; internal types excluded, as the scope says. |
+| GET | `/api/2026-07/sales` | ListSales | sales | Sales, ascending by version; after/before/page_size. No resource filter is documented. |
+| POST | `/api/2026-07/sales` | CreateSale | sales | Create a sale; line items and payments are inline. Fires sale.update. |
+| GET | `/api/2026-07/sales/{sale_id}` | GetSaleByID | sales | One sale by id. |
+| PUT | `/api/2026-07/sales/{sale_id}` | UpdateSale | sales | Replace a sale's editable attributes. 409 once it is closed or voided. |
+| POST | `/api/2026-07/sales/{sale_id}/actions/return` | initReturnSale | sales | Open a return against a closed sale; answers the new parked return sale. |
 | GET | `/api/2026-07/webhooks` | ListWebhooks | webhooks | All webhooks: {"data": [...]}, with no version envelope. Vendor operationId: get-webhooks. |
 | POST | `/api/2026-07/webhooks` | CreateWebhook | webhooks | Create a webhook; 201, or 409 when the type and URL pair already exists. Vendor: post-webhooks. |
 | GET | `/api/2026-07/webhooks/{webhookId}` | GetWebhook | webhooks | One webhook by id; 404 otherwise. Vendor operationId: get-webhooks-id. |

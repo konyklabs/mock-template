@@ -15,13 +15,16 @@ two units stamp the same sequence -- and the token expiries, which come from
 the unit's clock.
 
 THE ORDER IS THE VERSION ORDER. Entities are inserted retailer, outlets,
-registers, payment types, so the version numbers ascend in that order and a
-consumer paging ``/outlets`` sees them in the order the document lists them.
-Changing the order here renumbers every entity, which is why it is stated
-rather than incidental.
+registers, payment types, products, customers, sales -- so the version numbers
+ascend in that order and a consumer paging ``/outlets`` sees them in the order
+the document lists them. Changing the order here renumbers every entity, which
+is why it is stated rather than incidental. Sales come last because a sale
+refers to everything before it.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from vendorfake.core.kernel.types import UnitContext
 from vendorfake.core.util.json import compact
@@ -35,9 +38,11 @@ from vendorfake.lightspeed.entities import (
     RefreshTokenEntity,
     RegisterEntity,
     RetailerEntity,
+    SaleEntity,
     TokenEntity,
 )
-from vendorfake.lightspeed.seed.document import SeedDocument, parse_seed_document
+from vendorfake.lightspeed.model.money import to_minor
+from vendorfake.lightspeed.seed.document import SeedDocument, SeedSale, parse_seed_document
 from vendorfake.lightspeed.versioning import LightspeedVersions
 
 __all__ = ["SEED_META", "hydrate_lightspeed"]
@@ -59,6 +64,9 @@ def hydrate_lightspeed(
     _insert_outlets(ctx, doc, versions)
     _insert_registers(ctx, doc, versions)
     _insert_payment_types(ctx, doc, versions)
+    _insert_products(ctx, doc, versions)
+    _insert_customers(ctx, doc, versions)
+    _insert_sales(ctx, doc, versions)
     _insert_tokens(ctx, doc, config)
     _insert_webhooks(ctx, doc, config)
     return doc
@@ -156,6 +164,132 @@ def _insert_payment_types(ctx: UnitContext, doc: SeedDocument, versions: Lightsp
             ).to_entity(),
             SEED_META,
         )
+
+
+# -- sales, and the minimum they reference (slice L2b of konyklabs/roadmap#94).
+# The two loaders below insert the documented wire shape as a plain dict rather
+# than through an entity dataclass, because `products` and `customers` are the
+# sibling slice's collections: this slice seeds only what a sale must resolve
+# against, and the surfaces that own those collections bring their own typed
+# entity when they land.
+
+
+def _insert_products(ctx: UnitContext, doc: SeedDocument, versions: LightspeedVersions) -> None:
+    products = ctx.store.collection(COL.products)
+    for product in doc.products:
+        products.insert(
+            compact({**product.model_dump(), OBJECT_VERSION: versions.bump()}),
+            SEED_META,
+        )
+
+
+def _insert_customers(ctx: UnitContext, doc: SeedDocument, versions: LightspeedVersions) -> None:
+    customers = ctx.store.collection(COL.customers)
+    for customer in doc.customers:
+        customers.insert(
+            compact({**customer.model_dump(), OBJECT_VERSION: versions.bump()}),
+            SEED_META,
+        )
+
+
+def _insert_sales(ctx: UnitContext, doc: SeedDocument, versions: LightspeedVersions) -> None:
+    """Seeded sales, through the same stored shape a request produces.
+
+    The money conversion is ``model/money.py``'s, the same call the surface
+    makes, so a seeded sale and a posted one are indistinguishable in the store
+    -- which is what lets a test drive the seeded closed sale through the
+    return action.
+
+    ``outlet_id`` and ``invoice_number`` are DERIVED here exactly as
+    ``surface/sales.py`` derives them: the register's outlet, and the
+    register's ``invoice_prefix``/``invoice_sequence``/``invoice_suffix`` with
+    the sequence advanced by the number of sales already seeded on that
+    register. A scenario may state its own ``invoice_number`` and then that
+    wins.
+    """
+    registers = {register.id: register for register in doc.registers}
+    taken: dict[str, int] = {}
+    sales = ctx.store.collection(COL.sales)
+    for index, sale in enumerate(doc.sales):
+        register = registers.get(sale.source.register_id or "")
+        outlet_id = register.outlet_id if register is not None else None
+        invoice = sale.invoice_number
+        if invoice is None and register is not None:
+            offset = taken.get(register.id, 0)
+            invoice = f"{register.invoice_prefix}{register.invoice_sequence + offset}{register.invoice_suffix}"
+            taken[register.id] = offset + 1
+        sales.insert(
+            SaleEntity(
+                id=sale.id,
+                state=sale.state,
+                source=compact(
+                    {
+                        "author_id": sale.source.author_id,
+                        "register_id": sale.source.register_id,
+                        "outlet_id": outlet_id,
+                        "id": sale.source.id,
+                        "type": sale.source.type,
+                    }
+                ),
+                line_items=_seed_line_items(sale, index),
+                payments=_seed_payments(sale, index),
+                attributes=tuple(sale.attributes),
+                customer_id=sale.customer_id,
+                note=sale.note,
+                short_code=sale.short_code,
+                invoice_number=invoice,
+                receipt_number=invoice,
+                date=sale.date,
+                created_at=sale.date,
+                updated_at=sale.date,
+                object_version=versions.bump(),
+            ).to_entity(),
+            SEED_META,
+        )
+
+
+def _seed_line_items(sale: SeedSale, index: int) -> list[dict[str, Any]]:
+    return [
+        compact(
+            {
+                "id": line.id,
+                "product_id": line.product_id,
+                "quantity": line.quantity,
+                "price_minor": to_minor(line.price, field=f"sales[{index}].line_items[{position}].price"),
+                "cost_minor": None
+                if line.cost is None
+                else to_minor(line.cost, field=f"sales[{index}].line_items[{position}].cost"),
+                "discount_minor": None
+                if line.discount is None
+                else to_minor(line.discount, field=f"sales[{index}].line_items[{position}].discount"),
+                "loyalty_minor": None
+                if line.loyalty_amount is None
+                else to_minor(line.loyalty_amount, field=f"sales[{index}].line_items[{position}].loyalty_amount"),
+                "tax_id": line.tax_id,
+                "tax_minor": to_minor(line.tax, field=f"sales[{index}].line_items[{position}].tax"),
+                "fulfilment_outlet_id": line.fulfilment_outlet_id,
+                "sequence": position,
+            }
+        )
+        for position, line in enumerate(sale.line_items)
+    ]
+
+
+def _seed_payments(sale: SeedSale, index: int) -> list[dict[str, Any]]:
+    return [
+        compact(
+            {
+                "id": payment.id,
+                "payment_type_id": payment.payment_type_id,
+                "amount_minor": to_minor(
+                    payment.amount, field=f"sales[{index}].payments[{position}].amount", allow_negative=True
+                ),
+                "register_id": payment.register_id or sale.source.register_id,
+                "date": payment.date or sale.date,
+            }
+        )
+        for position, payment in enumerate(sale.payments)
+    ]
 
 
 def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: LightspeedConfig) -> None:

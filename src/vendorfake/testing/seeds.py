@@ -353,8 +353,10 @@ class ToastSeed:
 class LightspeedSeed:
     """The Lightspeed scenario: one retailer, two outlets, a register in each,
     three payment types (one of them internal), a pre-issued OAuth access and
-    refresh pair, a read-only token, a personal token, and one webhook
-    subscription on ``register_closure.create``.
+    refresh pair, a read-only token, a personal token, one webhook
+    subscription on ``register_closure.create``, and three sales -- parked,
+    closed with a payment, and a layby -- over the two products and one
+    customer they resolve against.
 
     Lightspeed scopes a request to its retailer by **subdomain** --
     ``{domain_prefix}.retail.lightspeed.app`` -- and a unit serves exactly one
@@ -391,6 +393,27 @@ class LightspeedSeed:
     #: ``internal: true``: absent from the payment-types list, because the
     #: ``payment_types:read`` scope is documented as excluding internal types.
     payment_type_internal_id: str
+    # -- sales (slice L2b of konyklabs/roadmap#94) --
+    #: The cashier every seeded sale names as its ``source.author_id``. Nothing
+    #: resolves it: the Users tag is outside the issue's scoped surface.
+    cashier_user_id: str
+    #: Both outlets' ``default_tax_id``, and the ``tax.id`` on every seeded
+    #: line item. Nothing resolves it either -- the Taxes tag is out of scope.
+    tax_id: str
+    #: The two products a seeded sale's line items name.
+    product_coffee_id: str
+    product_beans_id: str
+    #: The one seeded customer.
+    customer_id: str
+    #: ``state: "parked"`` -- still editable, so a ``PUT`` succeeds against it.
+    sale_saved_id: str
+    #: ``state: "closed"`` with a card payment on the open main register. The
+    #: state is terminal, so a ``PUT`` is a 409; the return action is what
+    #: works on it.
+    sale_closed_id: str
+    #: A layby: parked, carrying the ``layby`` attribute and a part payment.
+    #: There is no ``LAYBY`` state in the 2026-07 schema.
+    sale_layby_id: str
     webhook_subscription_id: str
     #: The HMAC secret behind the ``X-Signature`` header. Lightspeed signs with
     #: the application's own ``client_secret``: ``WebhookRequest`` carries no
@@ -572,6 +595,14 @@ def _lightspeed(vendor_config: Mapping[str, object]) -> LightspeedSeed:
         payment_type_cash_id=c.SEED_PAYMENT_TYPE_CASH_ID,
         payment_type_card_id=c.SEED_PAYMENT_TYPE_CARD_ID,
         payment_type_internal_id=c.SEED_PAYMENT_TYPE_INTERNAL_ID,
+        cashier_user_id=c.SEED_USER_ID,
+        tax_id=c.SEED_TAX_ID,
+        product_coffee_id=c.SEED_PRODUCT_COFFEE_ID,
+        product_beans_id=c.SEED_PRODUCT_BEANS_ID,
+        customer_id=c.SEED_CUSTOMER_ID,
+        sale_saved_id=c.SEED_SALE_SAVED_ID,
+        sale_closed_id=c.SEED_SALE_CLOSED_ID,
+        sale_layby_id=c.SEED_SALE_LAYBY_ID,
         webhook_subscription_id=c.SEED_WEBHOOK_ID,
         # Lightspeed signs with the application's own secret; there is no
         # per-subscription secret member on WebhookRequest.

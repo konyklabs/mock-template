@@ -98,6 +98,20 @@ class LightspeedIds(_UuidStream):
         as the same UUID shape as every other id here (JUDGMENT)."""
         return self.uuid()
 
+    def sale(self) -> str:
+        """``Sale.id`` -- ``format: uuid``, "Auto-generated object ID"."""
+        return self.uuid()
+
+    def sale_line_item(self) -> str:
+        """``SaleResponseLineItem.id`` -- ``format: uuid``. A caller MAY supply
+        its own (``SaleLineItem.id``, "Existing line item ID"), in which case
+        nothing is drawn."""
+        return self.uuid()
+
+    def sale_payment(self) -> str:
+        """``SaleResponsePayment.id`` -- "Auto-generated payment ID"."""
+        return self.uuid()
+
     def sequence_id(self) -> str:
         """``register_open_sequence_id`` -- "**internal** The ID of the current
         register closure object"."""
