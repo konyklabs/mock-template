@@ -392,10 +392,11 @@ def test_pin_offline_on_a_non_vendored_anchor_verifies_the_cache_or_notes_there_
         raise AssertionError("offline pin reached refresh")
 
     name, cache, fetcher = not_vendored()
-    # An empty cache verifies nothing, and says so with exit 1 (adversarial A6).
-    assert main(["pin", "--offline", "--target", HERE], refresh=explode) == 1
-    printed = capsys.readouterr().out
-    assert "no cache" in printed and "cannot be verified offline" in printed and "INCONSISTENT" in printed
+    # An empty cache verifies nothing: the named skip (exit 3), the same one
+    # `fetch` and `report` answer, so a self-test step reads SKIP rather than FAIL.
+    assert main(["pin", "--offline", "--target", HERE], refresh=explode) == 3
+    captured = capsys.readouterr()
+    assert "UNAVAILABLE" in captured.err and "no cached extract" in captured.err
     assert main(["fetch", "--target", HERE], fetcher=fetcher) == 0
     capsys.readouterr()
     assert main(["pin", "--offline", "--target", HERE], refresh=explode) == 0

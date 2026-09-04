@@ -390,7 +390,13 @@ def _response_validator(unit: Unit) -> ResponseValidator:
         raise SystemExit(f"{PROG}: {unit.name} has no fidelity leg, so --validate has nothing to check against")
     # Not strict: a route the declaration has not caught up with is counted, never turned into a 500 on a
     # unit somebody is developing against.
-    return ResponseValidator(unit, surface_for(target), strict_undeclared=False)
+    from vendorfake.fidelity.cache import Unavailable
+
+    try:
+        surface = surface_for(target)
+    except Unavailable as exc:
+        raise SystemExit(f"{PROG}: --validate: {exc}") from None
+    return ResponseValidator(unit, surface, strict_undeclared=False)
 
 
 def _info(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:

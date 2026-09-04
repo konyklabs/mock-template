@@ -255,9 +255,15 @@ def load_goldens(directory: str | Path) -> tuple[tuple[str, Golden], ...]:
     return tuple(out)
 
 
-def run_goldens(directory: str | Path, signer: Signer) -> tuple[GoldenResult, ...]:
-    """Load and verify every golden in ``directory``."""
-    return tuple(GoldenResult(name, golden, verify_golden(golden, signer)) for name, golden in load_goldens(directory))
+def run_goldens(directory: str | Path, signer: Signer, *, vendor: str | None = None) -> tuple[GoldenResult, ...]:
+    """Load and verify every golden in ``directory``. A golden naming another vendor than
+    ``vendor`` is refused: a divergence is a statement about one scheme."""
+    results = []
+    for name, golden in load_goldens(directory):
+        if vendor is not None and golden.vendor != vendor:
+            raise GoldenError(f"{name}: golden is for {golden.vendor!r}, the target is {vendor!r}")
+        results.append(GoldenResult(name, golden, verify_golden(golden, signer)))
+    return tuple(results)
 
 
 def format_goldens(results: Sequence[GoldenResult]) -> str:

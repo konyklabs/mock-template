@@ -33,7 +33,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from vendorfake.fidelity.cache import Unavailable, populate
+from vendorfake.fidelity.cache import EXTRACT_FILE, Unavailable, cache_path, populate
 from vendorfake.fidelity.corpus import Case, load_corpus
 from vendorfake.fidelity.pin import Fetcher
 from vendorfake.fidelity.report import format_cases, format_matrix
@@ -229,7 +229,7 @@ def _webhooks(target: FidelityTarget, directory: str) -> int:
             f"set FidelityTarget.signer to the vendor's Signer.sign"
         )
     try:
-        results = run_goldens(directory, target.signer)
+        results = run_goldens(directory, target.signer, vendor=target.name)
     except (GoldenError, OSError) as exc:
         return _fail(f"webhooks: {exc}")
     if not results:
@@ -281,6 +281,8 @@ def _pin_offline(target: FidelityTarget) -> int:
     from vendorfake.fidelity.pin import verify
 
     declaration: FidelityDeclaration = load_declaration(target.anchor)
+    if not declaration.vendored and not (cache_path(target.anchor) / EXTRACT_FILE).is_file():
+        raise Unavailable(f"{target.anchor}: no cached extract to verify the pin against offline; run fetch first")
     result = verify(Path(str(resources.files(target.anchor))), declaration)
     print(result.diff_summary)
     print(

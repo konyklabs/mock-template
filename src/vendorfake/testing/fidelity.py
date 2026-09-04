@@ -6,8 +6,10 @@ re-exports them rather than defining its own.
 
 from __future__ import annotations
 
+import importlib.util
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
+from importlib import resources
 
 from vendorfake import registry
 from vendorfake.core.kernel.types import SignInput
@@ -91,19 +93,20 @@ def toast_target() -> FidelityTarget:
     )
 
 
-_TARGETS: dict[str, Callable[[], FidelityTarget]] = {
-    _SQUARE: square_target,
-    _TOAST: toast_target,
-    _LIGHTSPEED: lightspeed_target,
-}
-"""Every vendor here with a fidelity leg. A vendor is absent because it has no
-declaration and corpus, never because a list was not updated."""
-
-
 def target_for(vendor: str) -> FidelityTarget | None:
-    """The target for a vendor name, or ``None`` when that vendor has no fidelity leg."""
-    factory = _TARGETS.get(vendor)
-    return factory() if factory is not None else None
+    """The target for a vendor name, or ``None`` when that vendor has no fidelity leg.
+    Discovered from the tree: a leg is a ``vendorfake.<vendor>.fidelity`` package
+    carrying ``declaration.json``, never a hand-kept list."""
+    anchor = f"vendorfake.{vendor}.fidelity"
+    if importlib.util.find_spec(anchor) is None or not resources.files(anchor).joinpath("declaration.json").is_file():
+        return None
+    return FidelityTarget(
+        name=vendor,
+        anchor=anchor,
+        open_unit=_opener(vendor, _DEFAULT_PROFILE),
+        default_profile=_DEFAULT_PROFILE,
+        signer=_signer(vendor),
+    )
 
 
 def surface_for(target: FidelityTarget) -> Surface:

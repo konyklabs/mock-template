@@ -5,8 +5,10 @@ vendor sandbox: real state (orders have a lifecycle, tokens expire, refresh
 tokens rotate), webhooks signed the way the vendor signs them and retried on
 the vendor's schedule, and fault injection that is deterministic, so a retry
 loop is rehearsed the same way every run. Fidelity is checked, not claimed:
-every JSON response these fakes produce in process is validated against the
-vendor's own published OpenAPI schema for that operation and status, and a
+in this repository's own vendor suites every JSON response is validated
+against the vendor's published OpenAPI schema for that operation and status
+(a consumer's suite validates when it opts in: `served(validate=True)`,
+`vendorfake serve --validate`, or the fidelity `ValidatingClient`), and a
 corpus of documented request/response facts is asserted, each citing the page
 and date it was read from — but nothing here has yet been compared against a
 real vendor's traffic (the corpus schema carries a `recorded` provenance for

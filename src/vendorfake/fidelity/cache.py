@@ -44,6 +44,7 @@ from vendorfake.fidelity.types import CORPUS_DIR, DECLARATION_FILE, EXTRACT_FILE
 __all__ = [
     "CACHE_ENV_VAR",
     "DRIFT_FILE",
+    "EXTRACT_FILE",
     "CacheResult",
     "DriftRow",
     "ProseLeak",

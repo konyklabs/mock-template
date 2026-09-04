@@ -2,9 +2,11 @@
 
 The [conformance suite](../reference/control-plane.md) proves the unit composes with the core. It says
 nothing about whether the unit answers what the *vendor* says it answers.
-That is a second, separate check (D-006) -- honest about its own reach: every
-JSON response validated here is checked against the vendor's own published
-OpenAPI schema for that operation and status, in process, and a corpus of
+That is a second, separate check (D-006) -- honest about its own reach: in
+this repository's own vendor suites every JSON response is validated against
+the vendor's published OpenAPI schema for that operation and status (a
+consumer opts in with `served(validate=True)`, `vendorfake serve --validate`
+or the `ValidatingClient`), and a corpus of
 documented request/response facts is asserted, each citing the page and date
 it was read from -- but nothing has yet been compared against a real vendor's
 live traffic (the corpus schema carries a `recorded` provenance for exactly

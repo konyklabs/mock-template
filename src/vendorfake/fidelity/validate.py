@@ -25,8 +25,8 @@ from referencing.jsonschema import DRAFT4
 from vendorfake.core.kernel.reply import decode_body
 from vendorfake.core.kernel.router import Match, Router
 from vendorfake.core.kernel.types import UnitRequest, UnitResponse
-from vendorfake.core.kernel.unit import Unit, make_request
-from vendorfake.core.transport.inprocess import TRANSPORT, InProcessClient, InProcessResponse
+from vendorfake.core.kernel.unit import Unit
+from vendorfake.core.transport.inprocess import InProcessClient, InProcessResponse
 from vendorfake.fidelity.types import Operation, Surface, route_key
 
 __all__ = [
@@ -514,33 +514,10 @@ class ValidatingClient(InProcessClient):
         """Response validators constructed so far. The cache test reads this; so may a report."""
         return self._validator.built
 
-    def call(
-        self,
-        *,
-        method: str,
-        path: str,
-        query: Mapping[str, str] | None = None,
-        headers: Mapping[str, str] | None = None,
-        body: object = None,
-        raw_body: bytes | str | None = None,
-        transport: str = TRANSPORT,
-        request_id: str | None = None,
-    ) -> InProcessResponse:
-        # Built here rather than left to the base class, because the observer is given the very request the unit
-        # answered -- the one carrying the serialised body a ``requestBody`` schema is checked against.
-        request = make_request(
-            method=method,
-            path=path,
-            query=query,
-            headers=headers,
-            body=body,
-            raw_body=raw_body,
-            transport=transport,
-            request_id=request_id,
-        )
-        raw = self._unit.handle(request)
-        response = InProcessResponse(status=raw.status, headers=dict(raw.headers), raw=raw)
-        self._validator.observe(request, raw)
+    def dispatch(self, request: UnitRequest) -> InProcessResponse:
+        """The base client's seam: the observer is given the very request the unit answered."""
+        response = super().dispatch(request)
+        self._validator.observe(request, response.raw)
         return response
 
 
