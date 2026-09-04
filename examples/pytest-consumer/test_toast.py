@@ -116,7 +116,12 @@ def test_machine_client_login_then_an_order_is_quoted_created_and_paid(toast: St
 
     # A fresh read sees the consequence: the check is settled.
     fetched = client.get(f"/orders/v2/orders/{order['guid']}", headers=auth).json()
-    assert fetched["checks"][0]["paymentStatus"] == "PAID"
+    # DOCUMENTED: an OTHER payment covering the total closes the check -- the
+    # payment walkthrough's own result answers CLOSED
+    # (doc.toasttab.com/doc/devguide/apiCreatingAnOrderWithPaymentInformation.html);
+    # PAID is a card charge whose tip is still unadjusted. The unit answered
+    # PAID here before the fidelity corpus caught it (konyklabs/roadmap#56).
+    assert fetched["checks"][0]["paymentStatus"] == "CLOSED"
     assert fetched["checks"][0]["payments"][0]["guid"] == payment["guid"]
 
 
@@ -204,7 +209,7 @@ def test_a_single_payment_is_still_sent_as_an_array(toast: StartedUnit) -> None:
 
     accepted = toast.client.post(path, headers=seed.auth, json=[payment])
     assert accepted.status_code == 200, accepted.text
-    assert accepted.json()["checks"][0]["paymentStatus"] == "PAID"
+    assert accepted.json()["checks"][0]["paymentStatus"] == "CLOSED"  # an OTHER payment closes the check, as above
 
 
 # ---------------------------------------------------------------------------

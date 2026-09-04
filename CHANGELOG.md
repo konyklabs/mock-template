@@ -19,8 +19,18 @@ Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
   child gets the first four as explicit flags and `serve` only binds HTTP, so
   the entry changed nothing and was documented as silently beaten (#105).
 
+* **examples:** both consumer examples now assert the documented status a
+  Toast check lands in after an OTHER payment covering its total: `CLOSED`,
+  as the payment walkthrough's own result shows (`PAID` is a card charge
+  whose tip is still unadjusted). The fidelity corpus corrected the unit in
+  0.3.x (#56); the examples had asserted the old answer and nothing ran them
+  (#105).
+
 ### Tooling
 
+* `tools/self-test.sh` runs the pytest consumer example as its own uv project
+  against the checkout, in full mode -- the step that would have caught the
+  example regression above (#105).
 * `tools/self-test.sh` runs `pip-audit` over the runtime dependencies and
   `bandit -ll` over the package in its full mode (main and a laptop before a
   push; not `--quick`). Bandit's one finding, the wildcard-bind comparison in

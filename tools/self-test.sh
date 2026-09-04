@@ -120,6 +120,19 @@ if [ "$QUICK" -eq 0 ]; then
   step "bandit"            uvx bandit -q -r src/vendorfake -ll
 fi
 
+# The pytest consumer example, run as its own uv project against THIS
+# checkout (konyklabs/roadmap#105). It is what a consumer copies, and until
+# this step existed a documented behaviour change (a paid Toast check answers
+# CLOSED, not PAID) broke both examples on main with every other step green.
+# `--reinstall-package vendorfake` because the example pins vendorfake as a
+# non-editable path dependency, which uv would otherwise serve from its cache.
+_example_step() {
+  (cd examples/pytest-consumer && uv sync -q --reinstall-package vendorfake && uv run pytest -q -p no:randomly)
+}
+if [ "$QUICK" -eq 0 ]; then
+  step "example (pytest)"  _example_step
+fi
+
 # The conformance suite through its own entry points, which pytest does not
 # exercise: the framework-free CLI a container healthcheck calls, and the
 # pytest plugin an installed wheel exposes. `--strict` makes any skip that

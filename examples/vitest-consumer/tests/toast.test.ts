@@ -252,7 +252,12 @@ describe("toast", () => {
     // undocumented (this unit says CAPTURED). What settles the check is.
 
     const fetched = await asSeed.get<Order>(`/orders/v2/orders/${created.body.guid}`);
-    expect(fetched.body.checks[0].paymentStatus).toBe("PAID");
+    // DOCUMENTED: an OTHER payment covering the total closes the check -- the
+    // payment walkthrough's own result answers CLOSED
+    // (doc.toasttab.com/doc/devguide/apiCreatingAnOrderWithPaymentInformation.html);
+    // PAID is a card charge whose tip is still unadjusted. The unit answered
+    // PAID here before the fidelity corpus caught it (konyklabs/roadmap#56).
+    expect(fetched.body.checks[0].paymentStatus).toBe("CLOSED");
     expect(fetched.body.checks[0].payments[0].guid).toBe(payment.guid);
   });
 
