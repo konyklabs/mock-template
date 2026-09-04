@@ -59,7 +59,6 @@ from vendorfake.core.kernel.types import (
     ErrorShaper,
     EventMapper,
     MagicTriggerSpec,
-    MutableResponse,
     Route,
     Signer,
     UnitContext,
@@ -410,7 +409,7 @@ class SquareVendor:
         self._errors = self._build_errors()
         self._ids.reseed(ctx.config.chaos.seed)
 
-    def decorate(self, res: MutableResponse, ctx: UnitContext, req: UnitRequest) -> None:
+    def decorate(self, headers: dict[str, str], ctx: UnitContext, req: UnitRequest) -> None:
         """Stamp the API version on every response, success or error.
 
         "Regardless of whether you explicitly specify a version in the request,
@@ -431,8 +430,8 @@ class SquareVendor:
         the failure mode a fake exists to surface.
         """
         requested = req.headers.get("square-version")
-        res.headers["square-version"] = self._config.api_version if requested is None else requested
-        res.headers["x-unit-vendor"] = ctx.vendor.name
+        headers["square-version"] = self._config.api_version if requested is None else requested
+        headers["x-unit-vendor"] = ctx.vendor.name
 
 
 def create_square_vendor(

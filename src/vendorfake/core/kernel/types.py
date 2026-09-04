@@ -82,7 +82,6 @@ __all__ = [
     "Logger",
     "MagicTriggerSpec",
     "MappedEvent",
-    "MutableResponse",
     "NearMiss",
     "PaginationSpec",
     "PreparedEvent",
@@ -332,15 +331,6 @@ class UnitResponse:
     #: ordinary response. See :class:`TransportDirective`. Additive, default
     #: ``None``, so every existing construction site keeps working unchanged.
     transport: TransportDirective | None = None
-
-
-@dataclass(slots=True)
-class MutableResponse:
-    """The response while ``finish()`` and the vendor's ``decorate`` still hold it."""
-
-    status: int
-    headers: dict[str, str]
-    body: bytes
 
 
 @dataclass(frozen=True, slots=True)
@@ -1372,11 +1362,11 @@ class VendorDefinition(Protocol):
         """Load a seed document into an empty store."""
         ...
 
-    def decorate(self, res: MutableResponse, ctx: UnitContext, req: UnitRequest) -> None:
-        """Last chance to add vendor-wide response headers (API version, ...).
+    def decorate(self, headers: dict[str, str], ctx: UnitContext, req: UnitRequest) -> None:
+        """Add vendor-wide response headers (API version, ...) in place.
 
-        Applied to error responses on a matched non-internal route as well as
-        to successes, and never to a 404, where no route matched.
+        Applied to every response on a matched non-internal route, success or
+        error, and never to a 404, where no route matched.
         """
         ...
 

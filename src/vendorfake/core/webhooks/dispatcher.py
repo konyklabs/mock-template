@@ -104,6 +104,7 @@ a drain into a hang; twelve attempts need twelve passes, so hitting five hundred
 means something is wrong rather than slow."""
 
 _REAL_MODE_POLL_MS = 250.0
+_FIRST_ATTEMPT_POLL_S = 0.005
 """How long :meth:`WebhookDispatcher.drain` sleeps at most between passes on a
 real clock. The reference's ``Math.min(next + 1, 250)``: long enough not to
 spin, short enough that a ten-millisecond retry is not waited out for a
@@ -813,6 +814,23 @@ class WebhookDispatcher:
                 self._clock.advance(next_due, settle=self.settle)
             else:
                 time.sleep(min(max(next_due + 1.0, 1.0), _REAL_MODE_POLL_MS) / 1000.0)
+
+    def await_first_attempt(self, event_id: str, subscription_id: str, *, timeout_ms: float) -> DeliveryRecord | None:
+        """The first delivery record for ``event_id`` to ``subscription_id``,
+        or ``None`` once ``timeout_ms`` of wall-clock time has passed.
+
+        Waits for the worker's first attempt only and never moves the clock,
+        so a caller holding the request lock is held for at most one attempt's
+        timeout and a virtual clock's retry cascade stays pending behind it.
+        """
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        while True:
+            for record in self.deliveries():
+                if record.event_id == event_id and record.subscription_id == subscription_id:
+                    return record
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(_FIRST_ATTEMPT_POLL_S)
 
     def settle(self) -> None:
         """The callable to hand to ``Clock.advance(ms, settle=...)``.

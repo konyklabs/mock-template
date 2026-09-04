@@ -42,7 +42,6 @@ from vendorfake.core.kernel.types import (
     ErrorShaper,
     EventMapper,
     MagicTriggerSpec,
-    MutableResponse,
     Route,
     Signer,
     UnitContext,
@@ -307,9 +306,9 @@ class ToastVendor:
         self._request_ids.reseed(ctx.config.chaos.seed)
         self._errors = self._build_errors()
 
-    def decorate(self, res: MutableResponse, ctx: UnitContext, req: UnitRequest) -> None:
+    def decorate(self, headers: dict[str, str], ctx: UnitContext, req: UnitRequest) -> None:
         """Stamp only ``x-unit-vendor``: Toast has no version header."""
-        res.headers["x-unit-vendor"] = ctx.vendor.name
+        headers["x-unit-vendor"] = ctx.vendor.name
 
 
 def create_toast_vendor(*, vendor_config: dict[str, Any] | None = None, seed: int = 1) -> VendorDefinition:

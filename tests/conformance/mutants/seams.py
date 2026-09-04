@@ -68,7 +68,6 @@ from vendorfake.core.kernel.types import (
     HandlerArgs,
     JournalEntry,
     MagicTriggerSpec,
-    MutableResponse,
     ReplyInit,
     Route,
     ShapedError,
@@ -229,8 +228,8 @@ class VendorOverlay:
             return
         self._hydrate(self._inner, ctx, seed)
 
-    def decorate(self, res: MutableResponse, ctx: UnitContext, req: UnitRequest) -> None:
-        self._inner.decorate(res, ctx, req)
+    def decorate(self, headers: dict[str, str], ctx: UnitContext, req: UnitRequest) -> None:
+        self._inner.decorate(headers, ctx, req)
 
 
 class ErrorShaperOverlay:

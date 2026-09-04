@@ -45,42 +45,18 @@ token register a subscriber and read subscribers back.
 vendor and fails on any that authenticates without naming one, so a surface
 written later -- for this vendor or another -- cannot repeat it.
 
-``POST .../test`` DECLARES ``serialized=False``
------------------------------------------------
-It is the one vendor route that blocks inside its handler on machinery another
-request must feed: it enqueues an event and then waits for the delivery worker.
-Under the pipeline's request lock that would hold the entire unit for the
-delivery timeout times the retry schedule against an unreachable subscriber.
-The reference gets away with it because Node's loop yields at its ``await``; a
-lock does not. See ``Route.serialized`` and ``WebhookDispatcher.drain``.
+``POST .../test`` WAITS FOR ONE ATTEMPT UNDER THE REQUEST LOCK
+--------------------------------------------------------------
+It enqueues an event and waits for the delivery worker's first attempt, at
+most the delivery timeout, without moving the clock; the retries stay pending
+behind it. Every shipped route therefore runs serialized, which is what the
+request log's journal window relies on.
 
 JUDGMENT -- **the test route reports the first attempt, not the eventual
 outcome.** Square documents TestWebhookSubscription as sending a test event and
 reporting the subscriber's status code, and publishes nothing about how long it
 waits. Reporting the first attempt is the closest answer to that, and it beats
 the ``status_code: 0`` the reference produces for "no attempt was recorded".
-
-KNOWN DEFECT, tracked as konyklabs/roadmap#26 -- **the bound this drain passes
-does not hold on a virtual clock, so the call runs the whole retry cascade.**
-``drain``'s deadline is wall-clock (``time.monotonic()``), and ``Clock.advance``
-costs no wall time, so on a virtual-clock profile nothing trips it: all eleven
-retries run inside this one request and the unit's clock jumps by their sum.
-``test_the_test_route_reports_a_subscriber_that_never_answers`` demonstrates
-it -- one call to this route, and the delivery log holds twelve records ending
-in ``exhausted``.
-
-An earlier version of this paragraph asserted the bound as a guarantee. It was
-wrong, two reviews said so, and it is written out here rather than quietly
-softened, because a contributor reusing this pattern for a new blocking
-endpoint would inherit the clock side-effect and have been told by this
-docstring that it could not happen. The behavioural fix is deferred, not the
-warning.
-
-SHRINK (prototype): ``UpdateWebhookSubscription`` (PUT), the enabled/disabled
-toggle endpoint and ``UpdateWebhookSubscriptionSignatureKey`` are not
-implemented. None of them changes delivery behaviour, and a rotated signature
-key is a fixture change a consumer can make by registering a second
-subscriber.
 """
 
 from __future__ import annotations
@@ -208,8 +184,6 @@ class WebhooksSurface:
                 scopes=(WEBHOOK_SUBSCRIPTIONS_SCOPE,),
                 operation_id="TestWebhookSubscription",
                 summary="Send a signed test event and report the subscriber status code.",
-                # Blocks on the delivery worker; see the module docstring.
-                serialized=False,
             ),
         )
 
@@ -354,10 +328,8 @@ class WebhooksSurface:
             ),
             subscription.id,
         )
-        ctx.webhooks.drain(timeout_ms=float(ctx.webhooks.retry_policy.timeout_ms))
-        attempt = next(
-            (d for d in ctx.webhooks.deliveries() if d.event_id == event_id and d.subscription_id == subscription.id),
-            None,
+        attempt = ctx.webhooks.await_first_attempt(
+            event_id, subscription.id, timeout_ms=float(ctx.webhooks.retry_policy.timeout_ms)
         )
         now = ctx.clock.iso_ms()
         return json_(

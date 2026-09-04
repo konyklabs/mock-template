@@ -8,7 +8,6 @@ import vendorfake.square as square
 from tests.unit.square.conftest import fake_ctx
 from vendorfake.core.capability.gates import CORE_GATED_CAPABILITIES, check_capability_declarations
 from vendorfake.core.kernel.types import (
-    MutableResponse,
     UnitError,
     UnitErrorKind,
     UnitRequest,
@@ -154,26 +153,26 @@ def test_magic_triggers_name_fields_a_consumer_can_actually_set() -> None:
 
 
 def test_decorate_stamps_the_api_version_it_implements() -> None:
-    res = MutableResponse(status=200, headers={}, body=b"{}")
-    create_square_vendor().decorate(res, fake_ctx(), request())
-    assert res.headers["square-version"] == square.SQUARE_API_VERSION
-    assert res.headers["x-unit-vendor"] == "square"
+    headers: dict[str, str] = {}
+    create_square_vendor().decorate(headers, fake_ctx(), request())
+    assert headers["square-version"] == square.SQUARE_API_VERSION
+    assert headers["x-unit-vendor"] == "square"
 
 
 def test_decorate_echoes_the_requested_version() -> None:
     """ "Regardless of whether you explicitly specify a version in the request,
     the response always returns the Square-Version header.\""""
-    res = MutableResponse(status=200, headers={}, body=b"{}")
-    create_square_vendor().decorate(res, fake_ctx(), request({"square-version": "2021-05-13"}))
-    assert res.headers["square-version"] == "2021-05-13"
+    headers: dict[str, str] = {}
+    create_square_vendor().decorate(headers, fake_ctx(), request({"square-version": "2021-05-13"}))
+    assert headers["square-version"] == "2021-05-13"
 
 
 def test_decorate_echoes_even_an_empty_requested_version() -> None:
     """`??` in the reference is nullish, not falsy: a header that was sent is
     echoed, and only an absent one is replaced by the default."""
-    res = MutableResponse(status=200, headers={}, body=b"{}")
-    create_square_vendor().decorate(res, fake_ctx(), request({"square-version": ""}))
-    assert res.headers["square-version"] == ""
+    headers: dict[str, str] = {}
+    create_square_vendor().decorate(headers, fake_ctx(), request({"square-version": ""}))
+    assert headers["square-version"] == ""
 
 
 def test_decorate_echoes_an_unsupported_version_verbatim() -> None:
@@ -188,10 +187,10 @@ def test_decorate_echoes_an_unsupported_version_verbatim() -> None:
     alternative, substituting the configured version whenever the value is
     unrecognised, would quietly hide a typo instead.
     """
-    res = MutableResponse(status=200, headers={}, body=b"{}")
-    create_square_vendor().decorate(res, fake_ctx(), request({"square-version": "not-a-version"}))
-    assert res.headers["square-version"] == "not-a-version"
-    assert res.headers["square-version"] != square.SQUARE_API_VERSION
+    headers: dict[str, str] = {}
+    create_square_vendor().decorate(headers, fake_ctx(), request({"square-version": "not-a-version"}))
+    assert headers["square-version"] == "not-a-version"
+    assert headers["square-version"] != square.SQUARE_API_VERSION
 
 
 # ---------------------------------------------------------------------------
@@ -330,13 +329,9 @@ def test_the_webhook_seams_are_filled() -> None:
     assert isinstance(vendor.events, SquareEventMapper)
 
 
-def test_only_the_test_route_opts_out_of_the_request_lock() -> None:
-    """`serialized=False` is not a style choice: the route blocks on the
-    delivery worker, which nothing inside its own request can advance. Any
-    other route declaring it would be running outside the lock that makes id
-    minting and journal ordering deterministic."""
+def test_every_route_runs_under_the_request_lock() -> None:
     unserialized = [route.key for route in create_square_vendor().routes if not route.serialized]
-    assert unserialized == ["POST /v2/webhooks/subscriptions/{subscription_id}/test"]
+    assert unserialized == []
 
 
 def test_hydrate_refuses_a_missing_scenario_rather_than_leaving_an_empty_store() -> None:

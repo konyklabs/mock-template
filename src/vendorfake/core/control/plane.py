@@ -23,14 +23,11 @@ and idempotency. That is not a convenience: a control call must never be the
 thing that trips the fault it is trying to configure, and a chaos rule matching
 ``*`` would otherwise make a unit unrecoverable through its own control plane.
 
-THE THREE ROUTES THAT DECLARE ``serialized=False``
---------------------------------------------------
+THE TWO ROUTES THAT DECLARE ``serialized=False``
+------------------------------------------------
 ``POST /__unit/webhooks/drain`` and ``POST /__unit/clock/advance`` block inside
-the handler on machinery *another request must feed*. The reference gets away
-without the distinction because Node's event loop yields at every ``await``; a
-real lock does not, and either route would hold the whole unit for the full
-delivery timeout against an unreachable subscriber. The third is a vendor's
-"send a test event and tell me what happened", which is phase 4's to declare.
+the handler on machinery *another request must feed*, and either would hold
+the whole unit for the full delivery timeout against an unreachable subscriber.
 The store, the delivery log and the clock each keep their own lock; the request
 lock exists only so that id minting and journal ordering are deterministic,
 which is exactly what those two routes do not touch.

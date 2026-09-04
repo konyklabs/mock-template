@@ -134,7 +134,6 @@ from vendorfake.core.kernel.types import (
     AuthResult,
     HandlerArgs,
     Logger,
-    MutableResponse,
     NearMiss,
     ReplyInit,
     RequestRecord,
@@ -161,14 +160,12 @@ __all__ = [
     "DELAY_ASKED_HEADER",
     "REQUEST_ID_HEADER",
     "ControlBinding",
-    "DispatcherFactory",
     "RequestLog",
     "RouteInfo",
     "Unit",
     "make_request",
 ]
 
-DispatcherFactory = Callable[..., WebhookDispatcher]
 """How a caller supplies its own dispatcher, given the constructor's arguments.
 
 The same shape of seam as ``fault_selector`` and for the same reason: the
@@ -488,13 +485,10 @@ class _Trace:
     rule_id: str | None = None
     #: ``store.journal_seq`` immediately before and after the handler ran --
     #: read inside ``_run_pipeline`` step 8, so on a ``serialized`` route
-    #: (every shipped route) both reads happen under the pipeline lock and no
-    #: other request's commit can land between them. Read at the top of
-    #: ``handle`` instead, before the lock, the ASGI threadpool could
-    #: attribute a concurrent request's commit to this one (found by review
-    #: of konyklabs/roadmap#101). A fork's ``serialized=False`` route gets a
-    #: best-effort window instead; a request that never reached the handler
-    #: leaves both at zero, which reads as "committed nothing".
+    #: (every shipped vendor route) both reads happen under the pipeline lock
+    #: and no other request's commit can land between them. A
+    #: ``serialized=False`` route gets a best-effort window; a request that
+    #: never reached the handler leaves both at zero.
     journal_seq_before: int = 0
     journal_seq_after: int = 0
     #: The decision drawn at step 3, whole -- ``fault``/``rule_id`` above are
@@ -612,8 +606,6 @@ class Unit:
         sink: DeliverySink | None = None,
         logger: Logger | None = None,
         control_routes: Callable[[ControlBinding], Sequence[Route]] | None = None,
-        fault_selector: Callable[[ChaosEngine, CapabilityRegistry], FaultSelector] | None = None,
-        dispatcher: DispatcherFactory | None = None,
     ) -> None:
         self._vendor = vendor
         self._config = config
@@ -647,18 +639,7 @@ class Unit:
         # namespace is refused, so every construction path passes that gate.
         self._router = Router(self._routes)
         self._capabilities = CapabilityRegistry(vendor.capabilities, self._routes, config.capabilities, config.profile)
-        # The single arming point, injected rather than constructed inline.
-        # `chaos/selector.py` states that the one-shot leak is *unrepresentable*
-        # there rather than merely tested for -- a claim the conformance suite
-        # has to be able to falsify. This seam is how: the mutant fixtures in
-        # `tests/conformance/mutants/` install a deliberately leaky selector and
-        # assert C12 goes red, without patching a module. Production callers
-        # pass nothing and get the one correct selector.
-        self._selector = (
-            FaultSelector(self._chaos, self._capabilities)
-            if fault_selector is None
-            else fault_selector(self._chaos, self._capabilities)
-        )
+        self._selector = self._make_selector()
 
         self._assert_retry_schedule()
         self._report_dead_chaos_rules()
@@ -667,13 +648,7 @@ class Unit:
         # client is created on first send, so a unit whose vendor has no
         # webhooks opens no connection pool.
         self._sink: DeliverySink = HttpSink() if sink is None else sink
-        # `dispatcher` is the second collaborator seam, alongside
-        # `fault_selector`, and it exists for the same reason: the `webhooks`
-        # capability gate is a line inside `WebhookDispatcher.attach`, and a
-        # contract asserting that the gate is real needs a unit whose gate is
-        # not. Production callers pass nothing.
-        build_dispatcher: DispatcherFactory = WebhookDispatcher if dispatcher is None else dispatcher
-        self._webhooks = build_dispatcher(
+        self._webhooks = self._make_dispatcher(
             store=self._store,
             clock=self._clock,
             # The dispatcher reaches chaos only through the one choke point,
@@ -803,6 +778,15 @@ class Unit:
         return self._requests
 
     # -- lifecycle ----------------------------------------------------------
+
+    # The two collaborators the conformance mutants replace, as overridable
+    # factories: a test subclass installs a defective selector or dispatcher
+    # without a constructor seam production callers could misuse.
+    def _make_selector(self) -> FaultSelector:
+        return FaultSelector(self._chaos, self._capabilities)
+
+    def _make_dispatcher(self, **kwargs: Any) -> WebhookDispatcher:
+        return WebhookDispatcher(**kwargs)
 
     def start(self) -> None:
         """Hydrate the store from the seed document and report what was built."""
@@ -1307,17 +1291,17 @@ class Unit:
         started: float,
         trace: _Trace,
     ) -> UnitResponse:
-        mutable = MutableResponse(status=res.status, headers=dict(res.headers), body=res.body)
-        mutable.headers[REQUEST_ID_HEADER] = req.id
+        headers = dict(res.headers)
+        headers[REQUEST_ID_HEADER] = req.id
         if route is not None and not route.internal:
-            self._vendor.decorate(mutable, self._ctx, req)
+            self._vendor.decorate(headers, self._ctx, req)
         elapsed_ms = (time.monotonic() - started) * 1000
         self._log.debug(
             "request",
             {
                 "method": req.method,
                 "path": req.path,
-                "status": mutable.status,
+                "status": res.status,
                 "route": route.key if route is not None else None,
                 "ms": round(elapsed_ms, 3),
             },
@@ -1357,7 +1341,7 @@ class Unit:
                     path=req.path,
                     route=None if route is None else route.key,
                     operation_id=None if route is None else route.operation_id,
-                    status=mutable.status,
+                    status=res.status,
                     matched=route is not None,
                     fault=trace.fault,
                     rule_id=trace.rule_id,
@@ -1367,18 +1351,10 @@ class Unit:
                     discarded_mutation=committed and deprived,
                 )
             )
-        # ``delay_ms`` and ``transport`` are carried across rather than offered
-        # to ``decorate``. ``MutableResponse`` is the vendor's last chance to
-        # shape what goes on the *wire*; how long a binding holds the answer
-        # back, and what it does to the connection while doing it, are not
-        # vendor opinions, and putting either in reach of one would make the
-        # same fault behave differently per vendor for no stated reason.
+        # ``decorate`` sees only the headers: how long a binding holds the
+        # answer back and what it does to the connection are not vendor opinions.
         return UnitResponse(
-            status=mutable.status,
-            headers=mutable.headers,
-            body=mutable.body,
-            delay_ms=res.delay_ms,
-            transport=res.transport,
+            status=res.status, headers=headers, body=res.body, delay_ms=res.delay_ms, transport=res.transport
         )
 
 

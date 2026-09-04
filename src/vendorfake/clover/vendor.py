@@ -73,7 +73,6 @@ from vendorfake.core.kernel.types import (
     ErrorShaper,
     EventMapper,
     MagicTriggerSpec,
-    MutableResponse,
     Route,
     Signer,
     UnitContext,
@@ -310,10 +309,10 @@ class CloverVendor:
         self._errors = self._build_errors()
         self._ids.reseed(ctx.config.chaos.seed)
 
-    def decorate(self, res: MutableResponse, ctx: UnitContext, req: UnitRequest) -> None:
+    def decorate(self, headers: dict[str, str], ctx: UnitContext, req: UnitRequest) -> None:
         """Stamp only ``x-unit-vendor``: Clover has no version header. See the
         module docstring."""
-        res.headers["x-unit-vendor"] = ctx.vendor.name
+        headers["x-unit-vendor"] = ctx.vendor.name
 
 
 def create_clover_vendor(

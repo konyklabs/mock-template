@@ -39,8 +39,9 @@ from vendorfake.core.config.overlay import apply_seed_overlay, seed_overlay_dige
 from vendorfake.core.config.profile import load_profile
 from vendorfake.core.control.plane import control_plane_routes
 from vendorfake.core.kernel.types import Route, VendorDefinition
-from vendorfake.core.kernel.unit import ControlBinding, DispatcherFactory, Unit
+from vendorfake.core.kernel.unit import ControlBinding, Unit
 from vendorfake.core.transport.inprocess import in_process
+from vendorfake.core.webhooks.dispatcher import WebhookDispatcher
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.square.vendor import create_square_vendor
 
@@ -71,6 +72,37 @@ class Provenance(StrEnum):
     LOSING_ENTRY = "losing-entry"
     #: A plausible defect nobody has shipped here. Invented, and labelled so.
     HYPOTHETICAL = "hypothetical"
+
+
+DispatcherFactory = Callable[..., WebhookDispatcher]
+
+
+class MutantUnit(Unit):
+    """A unit whose fault selector or webhook dispatcher a mutant replaces.
+
+    Overrides the two factories ``Unit`` exposes for exactly this purpose;
+    ``None`` for either keeps the production collaborator.
+    """
+
+    def __init__(
+        self,
+        *,
+        selector: Callable[[ChaosEngine, CapabilityRegistry], FaultSelector] | None,
+        dispatcher: DispatcherFactory | None,
+        **kwargs: Any,
+    ) -> None:
+        self._mutant_selector = selector
+        self._mutant_dispatcher = dispatcher
+        super().__init__(**kwargs)
+
+    def _make_selector(self) -> FaultSelector:
+        if self._mutant_selector is None:
+            return super()._make_selector()
+        return self._mutant_selector(self._chaos, self._capabilities)
+
+    def _make_dispatcher(self, **kwargs: Any) -> WebhookDispatcher:
+        factory = WebhookDispatcher if self._mutant_dispatcher is None else self._mutant_dispatcher
+        return factory(**kwargs)
 
 
 @dataclass(frozen=True)
@@ -121,11 +153,11 @@ class Mutant:
     vendor: Callable[[VendorDefinition], VendorDefinition] | None = None
     #: Rewrites the control-plane route table.
     control: Callable[[Sequence[Route]], Sequence[Route]] | None = None
-    #: Replaces the fault selector, through ``Unit(fault_selector=...)``.
+    #: Replaces the fault selector (see :class:`MutantUnit`).
     selector: Callable[[ChaosEngine, CapabilityRegistry], FaultSelector] | None = None
     #: Wraps the client for one transport, modelling a defective binding.
     client: Callable[[str, ConformanceClient], ConformanceClient] | None = None
-    #: Replaces the webhook dispatcher, through ``Unit(dispatcher=...)``.
+    #: Replaces the webhook dispatcher (see :class:`MutantUnit`).
     dispatcher: DispatcherFactory | None = None
     #: Replaces how a seed OVERLAY is applied to the seed document, standing
     #: in for ``core/config/overlay.py::apply_seed_overlay``. The seam exists
@@ -228,14 +260,14 @@ def build_unit(mutant: Mutant, profile: str, *, seed_overlay: Mapping[str, Any] 
             }
         )
 
-    unit = Unit(
+    unit = MutantUnit(
+        selector=mutant.selector,
+        dispatcher=mutant.dispatcher,
         vendor=definition,
         config=config,
         seed=seed,
         sink=MemorySink(),
         control_routes=control,
-        fault_selector=mutant.selector,
-        dispatcher=mutant.dispatcher,
     )
     unit.start()
     return unit

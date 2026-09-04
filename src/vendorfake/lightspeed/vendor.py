@@ -55,7 +55,6 @@ from vendorfake.core.kernel.types import (
     ErrorShaper,
     EventMapper,
     MagicTriggerSpec,
-    MutableResponse,
     Route,
     Signer,
     UnitContext,
@@ -340,7 +339,7 @@ class LightspeedVendor:
         self._versions.reset()
         self._errors = self._build_errors()
 
-    def decorate(self, res: MutableResponse, ctx: UnitContext, req: UnitRequest) -> None:
+    def decorate(self, headers: dict[str, str], ctx: UnitContext, req: UnitRequest) -> None:
         """Stamp the vendor, the API version, and the two documented rate-limit
         headers.
 
@@ -350,11 +349,11 @@ class LightspeedVendor:
         matched vendor route and on none of the control plane's, which is
         exactly the boundary the documented quota has.
         """
-        res.headers["x-unit-vendor"] = ctx.vendor.name
-        res.headers["x-unit-api-version"] = API_VERSION
+        headers["x-unit-vendor"] = ctx.vendor.name
+        headers["x-unit-api-version"] = API_VERSION
         snapshot = self._limiter.snapshot(ctx)
-        res.headers[RATE_LIMIT_LIMIT_HEADER] = str(snapshot.limit)
-        res.headers[RATE_LIMIT_REMAINING_HEADER] = str(snapshot.remaining)
+        headers[RATE_LIMIT_LIMIT_HEADER] = str(snapshot.limit)
+        headers[RATE_LIMIT_REMAINING_HEADER] = str(snapshot.remaining)
 
 
 def create_lightspeed_vendor(*, vendor_config: dict[str, Any] | None = None, seed: int = 1) -> VendorDefinition:
