@@ -411,14 +411,3 @@ def test_a_chaos_rule_injects_a_deterministic_429_over_http(client: httpx.Client
         assert statuses[1].headers["retry-after"] == "1"
     finally:
         assert client.post("/__unit/chaos/reset", json={}).status_code == 200
-
-
-def test_the_framework_answered_nothing_over_http(client: httpx.Client) -> None:
-    """Read last, after every request this module made.
-
-    The counter lives in the child process, which is why it is on the wire at
-    all. Non-zero would mean Starlette answered a consumer somewhere -- a hole
-    in the catch-all -- and every vendor-shaped-error claim above would be
-    conditional on which path the request happened to take.
-    """
-    assert client.get("/__unit/health").json()["framework_answered"] == 0

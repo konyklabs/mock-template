@@ -1,36 +1,7 @@
 """What every Square surface is handed, and the two readers they share.
 
-FOR: naming the dependency a surface has on its vendor -- the resolved
-configuration and the unit's id stream -- as a protocol, so a surface module
-never imports :mod:`vendorfake.square.vendor` and the vendor is free to import
-the surfaces.
-
-INVARIANT: **a surface reads its configuration through the vendor, live.** Both
-members below are properties on the vendor object, not values copied at route
-construction: a profile's ``vendor`` block resolves in ``hydrate``, which runs
-*after* the routes are built and again on every ``POST /__unit/state/reset``.
-A surface that captured ``config.application_id`` when its routes were made
-would authenticate against the default secret forever, and the symptom would be
-an OAuth flow that fails with credentials the operator can see in the profile.
-
-The same reasoning applies with more force to ``ids``: there is exactly one id
-stream per unit, and it is re-seeded at hydrate. A surface that built its own
-:class:`~vendorfake.square.ids.SquareIds` would draw the same ids as the
-vendor's, so two collections would mint colliding identifiers from step one.
-
-The reference's ``readBody`` is deliberately absent. It moved into the core as
-``HandlerArgs.body()``, which is content-type general, so every vendor inherits
-the guarantee rather than rediscovering it -- and so no transport adapter is
-ever asked to decide what a body is.
-
-:func:`is_expired` is here rather than in either caller because both the auth
-adapter and the OAuth surface answer "has this timestamp passed?", and Square's
-two answers -- an expired access token and an expired authorization code --
-must agree about what the boundary instant means. :func:`instant_ms` is the
-parse underneath it, shared by every surface that compares a stored RFC 3339
-stamp against a bound a caller sent -- an order date filter, a catalog
-``begin_time`` -- so that "malformed bound excludes nothing" is one rule.
-"""
+A surface reads its configuration and id stream through the vendor, live, so
+each is re-resolved after every ``POST /__unit/state/reset``."""
 
 from __future__ import annotations
 
@@ -62,18 +33,8 @@ class SquareDeps(Protocol):
 
 
 def is_expired(at: str, clock: Clock) -> bool:
-    """Whether the RFC 3339 instant ``at`` is at or before the unit clock.
-
-    At **or** before: the reference writes ``Date.parse(expiresAt) <=
-    clock.now()``, so the expiry instant itself is already too late, and a
-    consumer that advances a virtual clock by exactly the TTL must see the
-    token gone rather than land on the one millisecond where it still works.
-
-    An unparseable value reads as not-yet-expired. That is the direction
-    ``Date.parse`` takes too -- ``NaN <= now`` is ``false`` -- and it is the
-    safer of the two: a hand-edited seed with a malformed timestamp produces a
-    token that keeps working, not one that has already expired everywhere.
-    """
+    """True when the RFC 3339 instant ``at`` is at or before the unit clock;
+    an unparseable value reads as not-yet-expired."""
     try:
         parsed = datetime.fromisoformat(at)
     except ValueError:
@@ -84,12 +45,8 @@ def is_expired(at: str, clock: Clock) -> bool:
 
 
 def instant_ms(value: str | None) -> float | None:
-    """An RFC 3339 timestamp as epoch milliseconds, or ``None``.
-
-    ``None`` for anything absent or unparseable, which every caller reads as
-    "no opinion" -- the direction ``Date.parse`` takes, where every comparison
-    against ``NaN`` is false, so a malformed bound never excludes anything.
-    """
+    """An RFC 3339 timestamp as epoch milliseconds, or ``None`` when absent or
+    unparseable, which callers treat as "no opinion"."""
     if not value:
         return None
     try:

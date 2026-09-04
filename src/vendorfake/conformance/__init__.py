@@ -1,38 +1,10 @@
-"""The conformance suite: what "correct" means, independently of language.
+"""The conformance suite: what "correct" means, independent of language.
 
-FOR: making a rebuild verifiable rather than trusted, and giving a second
-vendor a definition of done it can run against itself on the day it is
-written.
+A check reaches a unit only through :class:`~vendorfake.conformance.client.ConformanceClient` -- never a unit object, an import of a vendor, or a path not read from ``/__unit/routes`` -- so the same contract list can run from another language against a running container.
 
-INVARIANT: **a check reaches a unit only through
-:class:`~vendorfake.conformance.client.ConformanceClient`.** No check receives
-a unit object, imports a vendor, or knows a path it did not read from
-``/__unit/routes``. That is what makes these contracts a specification rather
-than a Python artifact: a consumer written in another language can execute the
-same list against a running container, and the transport axis exercises every
-contract rather than only the one about transports.
+This package imports only the core, the standard library and ``httpx``, never a web framework (enforced by ``tools/boundary_check.py``). An HTTP transport is a client against a base URL somebody else is serving, never a server this package starts.
 
-WHAT THIS PACKAGE MAY IMPORT. The core, the standard library, and ``httpx``.
-Never a web framework -- ``tools/boundary_check.py`` asserts it twice, by
-scanning imports and by importing every module here in a subprocess with
-``fastapi``, ``starlette`` and ``uvicorn`` blocked at the meta path. An HTTP
-transport is a client against a base URL that somebody else is serving, never
-a server this package knows how to start.
-
-HOW IT IS RUN. Three entry points over one registry, never three lists.
-``run_conformance(target)`` is the framework-free façade; ``python -m
-vendorfake.conformance`` is that façade with an exit code, and takes either a
-``--target module:attribute`` or a ``--base-url`` pointing at a unit somebody
-else is already running; ``pytest --pyargs vendorfake.conformance -p
-vendorfake.conformance.plugin`` renders the same registry as one test per
-(contract x profile) -- both flags, because ``--pyargs`` only *selects* the
-tests and nothing under this package auto-loads the plugin that registers
-``--conformance-target`` (see ``plugin.py``). The pytest layer states no
-contract the façade does not -- its one session-level rule is the anti-vacuity
-rule :class:`~vendorfake.conformance.report.ConformanceReport` already applies,
-restored in the only place a per-test rendering can assert it. A vendor
-supplies one :class:`~vendorfake.conformance.types.ConformanceTarget` and gets
-every contract.
+Three entry points share one registry: ``run_conformance(target)``; ``python -m vendorfake.conformance``, the same façade with an exit code via ``--target`` or ``--base-url``; and ``pytest --pyargs vendorfake.conformance -p vendorfake.conformance.plugin``, one test per (contract x profile) -- both flags are required since ``--pyargs`` only selects tests (see ``plugin.py``). A vendor supplies one :class:`~vendorfake.conformance.types.ConformanceTarget` and gets every contract.
 """
 
 from __future__ import annotations

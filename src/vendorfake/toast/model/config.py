@@ -2,30 +2,12 @@
 ``entityType``, which fields are money.
 
 DOCUMENTED (toast-config-api.yaml v2.5.0): ``GET /config/v2/<resource>`` and
-``GET /config/v2/<resource>/{guid}`` for every resource named below; every
-entity is a ``ToastReference`` plus ``externalId`` plus its own fields;
-``lastModified`` and ``pageToken`` query parameters; the
-``Toast-Next-Page-Token`` response header, omitted on the last page; at most
-300 items per page. Archived entities are not returned (nothing here archives).
+``.../{guid}`` per resource; paging via ``lastModified``/``pageToken`` and the
+``Toast-Next-Page-Token`` header, capped at 300 items; archived entities are
+never returned. No config resource's MenuItem carries a price.
 
-The shapes, from the same specification: DiningOption ``{name, behavior,
-curbside}``; AlternatePaymentType ``{name}``; TaxRate ``{name, isDefault,
-rate, type, roundingType, taxTable, conditionalTaxRates}``; RevenueCenter
-``{name, description}``; ServiceArea ``{name, revenueCenter}``; Table
-``{name, serviceArea, revenueCenter}``; RestaurantService ``{name}``;
-Discount ``{name, active, type, percentage, amount, selectionType,
-nonExclusive, itemPickingPriority, fixedTotal, promoCodes}``; ServiceCharge
-``{name, amountType, amount, percent, gratuity, taxable,
-serviceChargeCalculation, destination}``; MenuItem ``{name, calories, sku,
-plu, type, optionGroups, inheritOptionGroups, unitOfMeasure,
-inheritUnitOfMeasure}`` -- **no price** on the config MenuItem; MenuGroup
-``{name, menu, items, subgroups, optionGroups}``; Menu ``{name, groups}``;
-VoidReason ``{name}``.
-
-Each resource's documents are stored as the reference pages list them, with
-money in cents and an internal ``modified_ms`` the projection strips: Toast
-documents the ``lastModified`` *query* and not the field it compares against
-(JUDGMENT, and the seed pins the instant).
+JUDGMENT: ``lastModified`` compares against an internal ``modified_ms`` Toast
+does not document; the seed pins that instant.
 """
 
 from __future__ import annotations
@@ -87,11 +69,8 @@ def project_config_entity(resource: ConfigResource, entity: Mapping[str, Any]) -
         if key in _INTERNAL_KEYS or key in ("externalId", "entityType"):
             continue
         if value is None:
-            # JUDGMENT: an optional field the entity has no value for is
-            # omitted, not answered null -- the configuration specification
-            # types these as plain strings, numbers and enums with no
-            # nullable, and marks the few it does mean to be null with
-            # x-nullable. Found by the fidelity validator (roadmap#56).
+            # JUDGMENT: an optional field with no value is omitted, not null
+            # -- the specification marks nullable fields with x-nullable.
             continue
         if key in resource.money_keys and isinstance(value, int) and not isinstance(value, bool):
             out[key] = to_dollars(value)

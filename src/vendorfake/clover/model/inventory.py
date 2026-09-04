@@ -1,32 +1,12 @@
-"""The inventory item wire vocabulary.
+"""The inventory item wire vocabulary: what a Clover inventory item document
+carries, so the surface and its tests share one vocabulary.
 
-FOR: stating once what a Clover inventory item document carries, so the PR-C
-surface and its tests share one vocabulary.
-
-The field set and most defaults are DOCUMENTED by the create-item response
-example on https://docs.clover.com/dev/docs/inventorycreateitem, verbatim:
-
-    {"id": "NEWITEM123ABC", "hidden": false, "available": true,
-     "name": "Craft Beer", "price": 750, "priceType": "FIXED",
-     "defaultTaxRates": true, "isRevenue": true,
-     "modifiedTime": 1755786102000, "isAgeRestricted": true}
-
-Create requires ``name`` and ``price`` (same page); ``price`` is integer cents
-("$20.99 ... 2099"); ``priceType`` is FIXED|VARIABLE|PER_UNIT; ``stockCount``
-is deprecated in favour of ``itemStock`` and neither is modelled here.
-
-Defaults, labelled:
-
-* ``hidden=False``, ``available=True``, ``priceType=FIXED``,
-  ``defaultTaxRates=True`` -- read off the example above, where the create
-  request set none of them. PARTIAL: an example's echo, not a stated rule.
-* ``isRevenue=False`` -- JUDGMENT, and the one default that *disagrees* with
-  the example. The example response shows ``isRevenue: true``, but the page
-  does not show whether the request set it, so it evidences nothing about the
-  default; ``False`` is chosen because "counts as revenue" is a bookkeeping
-  claim this fake should not silently make about an item nobody classified.
-  A consumer must not learn a default for this flag from either the example
-  or this fake.
+The field set and defaults are DOCUMENTED by the create-item response example
+on https://docs.clover.com/dev/docs/inventorycreateitem (PARTIAL: an echo,
+not a stated rule), except ``isRevenue`` -- JUDGMENT False, disagreeing with
+the example's ``true``, since "counts as revenue" should not be silently
+claimed for an unclassified item. Create requires ``name`` and ``price``;
+``stockCount`` (deprecated) is not modelled here.
 """
 
 from __future__ import annotations
@@ -42,24 +22,17 @@ from vendorfake.core.util.json import compact
 __all__ = ["ITEM_EXPANDABLE", "ItemCreateRequest", "ItemPatchRequest", "ItemWire", "PriceType", "project_item"]
 
 _REQUEST = ConfigDict(extra="ignore", frozen=True)
-"""The parse path: item documents arrive decoded, so ``"priceType":
-"VARIABLE"`` must become the enum member and documented-but-unmodelled fields
-(``isAgeRestricted``, ``itemStock``, ...) must be tolerated rather than
-400ing on the shrink. The full rationale is on ``model/order.py``'s
-``_REQUEST``; lax ``int`` still refuses a fractional price."""
+"""Tolerates documented-but-unmodelled fields (``isAgeRestricted``, ...)
+rather than 400ing; see ``model/order.py``'s ``_REQUEST``."""
 
 
 class PriceType(StrEnum):
-    """The three documented ``priceType`` values."""
-
     FIXED = "FIXED"
     VARIABLE = "VARIABLE"
     PER_UNIT = "PER_UNIT"
 
 
 class ItemWire(BaseModel):
-    """One inventory item. ``name`` and ``price`` required, as on create."""
-
     model_config = _REQUEST
 
     id: str
@@ -96,14 +69,13 @@ class ItemWire(BaseModel):
 
 
 class ItemCreateRequest(BaseModel):
-    """``POST .../items``: "name and price are required"
-    (https://docs.clover.com/dev/docs/inventorycreateitem). Everything else
-    takes the defaults labelled on :class:`ItemWire`."""
+    """DOCUMENTED: name and price are required
+    (https://docs.clover.com/dev/docs/inventorycreateitem); rest defaults
+    per :class:`ItemWire`."""
 
     model_config = _REQUEST
 
     name: str = Field(min_length=1)
-    #: Cents, never negative.
     price: int = Field(ge=0)
     hidden: bool | None = None
     available: bool | None = None
@@ -115,9 +87,8 @@ class ItemCreateRequest(BaseModel):
 
 
 class ItemPatchRequest(BaseModel):
-    """``POST .../items/{itemId}`` -- "Updates an existing inventory item"
-    (https://docs.clover.com/dev/reference/inventoryupdateitem). Sparse: only
-    the fields sent change. Flipping ``available`` is the sold-out use case."""
+    """Sparse update: only the fields sent change
+    (https://docs.clover.com/dev/reference/inventoryupdateitem)."""
 
     model_config = _REQUEST
 
@@ -133,9 +104,8 @@ class ItemPatchRequest(BaseModel):
 
 
 ITEM_EXPANDABLE: frozenset[str] = frozenset({"modifierGroups", "taxRates"})
-"""``expand=modifierGroups`` is the documented way to see an item's groups
-(https://docs.clover.com/dev/docs/managing-modifier-groups-modifiers);
-``taxRates`` follows the same mechanism."""
+"""DOCUMENTED expansion names
+(https://docs.clover.com/dev/docs/managing-modifier-groups-modifiers)."""
 
 
 def project_item(
@@ -146,14 +116,9 @@ def project_item(
     tax_rates: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """A stored item as Clover JSON, with the requested expansions.
-
-    ``modifierGroups`` expands to the documented ``{"elements": [{id, name,
-    showByDefault, modifierIds}]}`` shape -- ``modifierIds`` is the
-    comma-joined string the documented example shows, not an array.
-    ``taxRates`` expands to ``{"elements": [{id, name, rate, isDefault}]}``
-    (JUDGMENT on the shape: the expansion is not shown with an example; the
-    ``elements`` wrapper is how every other Clover expansion is documented).
-    """
+    ``modifierGroups`` -> documented ``{"elements": [{..., modifierIds}]}``
+    (comma-joined). ``taxRates`` -> JUDGMENT shape, no example: same
+    ``elements`` wrapper as every other Clover expansion."""
     wanted = frozenset(expand)
     wire = ItemWire.model_validate(entity).wire()
     if "modifierGroups" in wanted:

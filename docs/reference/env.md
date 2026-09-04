@@ -2,28 +2,26 @@
 
 # Environment variables
 
-Every environment variable `load_profile` reads. `Replaces` names the reference TypeScript implementation's variable this one renames; empty marks a control this Python build added that the reference never had.
+Every environment variable `load_profile` reads.
 
-| Variable | Replaces | Applies to | Summary |
-| --- | --- | --- | --- |
-| `VENDORFAKE_PROFILE` | `UNIT_PROFILE` | profile | Profile name or path to load when none is passed. |
-| `VENDORFAKE_CAPABILITIES` | `UNIT_CAPABILITIES` | capabilities | Absolute list, or a +add,-remove delta against the profile's list. |
-| `VENDORFAKE_SEED` | `UNIT_SEED` | seed_path | Seed document path, overriding the profile's. |
-| `VENDORFAKE_SEED_OVERLAY` |  | seed_overlay | Partial seed document merged over the seed: a JSON file path, or the JSON itself inline. |
-| `VENDORFAKE_WEBHOOK_URL` | `UNIT_WEBHOOK_URL` | webhooks.subscribers | Appends one subscriber so a container can push to a caller with no API call. |
-| `VENDORFAKE_WEBHOOK_EVENTS` | `UNIT_WEBHOOK_EVENTS` | webhooks.subscribers | Comma-separated event types for that subscriber. Defaults to '*'. |
-| `VENDORFAKE_WEBHOOK_SIGNATURE_KEY` | `UNIT_WEBHOOK_SIGNATURE_KEY` | webhooks.subscribers | Signing key for that subscriber. |
-| `VENDORFAKE_WEBHOOK_TIME_SCALE` | `UNIT_WEBHOOK_TIME_SCALE` | webhooks.retry.time_scale | Multiplier on every retry delay. |
-| `VENDORFAKE_WEBHOOK_TIMEOUT_MS` | `UNIT_WEBHOOK_TIMEOUT_MS` | webhooks.retry.timeout_ms | Milliseconds before a subscriber is called timed out. |
-| `VENDORFAKE_CHAOS_SEED` | `UNIT_CHAOS_SEED` | chaos.seed | Seed for the fault engine's RNG. |
-| `VENDORFAKE_CLOCK` | `UNIT_CLOCK` | clock.mode | 'real' or 'virtual'. |
-| `VENDORFAKE_CLOCK_START` |  | clock.start | RFC 3339 instant the virtual clock starts at. Requires clock.mode='virtual'. |
-| `VENDORFAKE_ERROR_SIDECAR` |  | errors.sidecar | Where the 'unit_error' sidecar is emitted: 'headers' (default), 'body' or 'both'. |
-| `VENDORFAKE_TRANSPORT` | `UNIT_TRANSPORT` | transport.kind | Which binding the CLI stands up. |
-| `VENDORFAKE_TRANSPORT_DIR` | `UNIT_TRANSPORT_DIR` | transport.dir | Directory the file-drop binding watches. |
-| `VENDORFAKE_PORT` | `UNIT_PORT` | transport.port | Port for the HTTP binding. |
-| `VENDORFAKE_HOST` | `UNIT_HOST` | transport.host | Interface for the HTTP binding. |
-| `VENDORFAKE_LOG_LEVEL` | `UNIT_LOG_LEVEL` | log_level | Minimum level the unit's logger emits. |
-| `VENDORFAKE_VENDOR_<suffix>` | `UNIT_VENDOR_` | vendor_config | Prefix: the remainder becomes a snake_case vendor-config key. The reference camel-cased it. |
-| `VENDORFAKE_REQUEST_LOG_CAPACITY` |  | requests.capacity | How many requests the in-memory request log keeps before evicting the oldest. |
-| `VENDORFAKE_UNMATCHED` |  | unmatched.policy | 'vendor-404' or 'error': what an in-process binding does with a request no route matched. |
+| Variable | Applies to | Summary |
+| --- | --- | --- |
+| `VENDORFAKE_PROFILE` | profile | Profile name or path to load when none is passed. |
+| `VENDORFAKE_CAPABILITIES` | capabilities | Absolute list, or a +add,-remove delta against the profile's list. |
+| `VENDORFAKE_SEED` | seed_path | Seed document path, overriding the profile's. |
+| `VENDORFAKE_SEED_OVERLAY` | seed_overlay | Partial seed document merged over the seed: a JSON file path, or the JSON itself inline. |
+| `VENDORFAKE_WEBHOOK_URL` | webhooks.subscribers | Appends one subscriber so a container can push to a caller with no API call. |
+| `VENDORFAKE_WEBHOOK_EVENTS` | webhooks.subscribers | Comma-separated event types for that subscriber. Defaults to '*'. |
+| `VENDORFAKE_WEBHOOK_SIGNATURE_KEY` | webhooks.subscribers | Signing key for that subscriber. |
+| `VENDORFAKE_WEBHOOK_TIME_SCALE` | webhooks.retry.time_scale | Multiplier on every retry delay. |
+| `VENDORFAKE_WEBHOOK_TIMEOUT_MS` | webhooks.retry.timeout_ms | Milliseconds before a subscriber is called timed out. |
+| `VENDORFAKE_CHAOS_SEED` | chaos.seed | Seed for the fault engine's RNG. |
+| `VENDORFAKE_CLOCK` | clock.mode | 'real' or 'virtual'. |
+| `VENDORFAKE_CLOCK_START` | clock.start | RFC 3339 instant the virtual clock starts at. Requires clock.mode='virtual'. |
+| `VENDORFAKE_ERROR_SIDECAR` | errors.sidecar | Where the 'unit_error' sidecar is emitted: 'headers' (default), 'body' or 'both'. |
+| `VENDORFAKE_PORT` | transport.port | Port for the HTTP binding. |
+| `VENDORFAKE_HOST` | transport.host | Interface for the HTTP binding. |
+| `VENDORFAKE_LOG_LEVEL` | log_level | Minimum level the unit's logger emits. |
+| `VENDORFAKE_VENDOR_<suffix>` | vendor_config | Prefix: the remainder becomes a snake_case vendor-config key. |
+| `VENDORFAKE_REQUEST_LOG_CAPACITY` | requests.capacity | How many requests the in-memory request log keeps before evicting the oldest. |
+| `VENDORFAKE_UNMATCHED` | unmatched.policy | 'vendor-404' or 'error': what an in-process binding does with a request no route matched. |

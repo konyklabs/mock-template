@@ -1,49 +1,9 @@
-"""The Square vendor definition -- everything the core needs to become a Square
-unit, and nothing else.
+"""The Square vendor definition: everything the core needs to become a Square unit, assembled as one
+object satisfying :class:`~vendorfake.core.kernel.types.VendorDefinition`.
 
-FOR: assembling one object that satisfies
-:class:`~vendorfake.core.kernel.types.VendorDefinition`. Compare this file's
-length with the core it plugs into: that ratio is the authoring-economics claim
-this project makes.
-
-INVARIANT: **one vendor instance per unit.** :data:`VENDOR` is minted fresh on
-every attribute access, which is unusual enough to state plainly. A vendor owns
-a *stateful* id stream, and the whole point of that stream is that two runs of
-the same scenario produce the same ids so a transcript can be diffed. A single
-shared instance would have two units in one process -- which is exactly what the
-conformance suite builds, a fresh unit per check -- drawing from one stream and
-interleaving, so neither run would reproduce. The reference has no such problem
-because its ``createSquareVendor`` factory is called per unit; the registry here
-resolves a module *attribute*, so the module makes that attribute a factory.
-
-Configuration resolves in two phases
-------------------------------------
-A profile's ``vendor`` block is part of the *profile*, and the profile is
-loaded after the vendor is resolved -- ``create_unit`` needs the vendor to know
-where the profiles are. So this object starts with defaults and re-resolves in
-:meth:`SquareVendor.hydrate`, which the unit calls at start and again on
-``POST /__unit/state/reset``, from ``ctx.config.vendor_config``. Anything built
-out of the config (the error shaper) is rebuilt there too, and the id stream is
-re-seeded from the unit's seed, which is what makes a re-hydrated unit mint the
-ids it minted the first time.
-
-Routes are built once, bound to this object
--------------------------------------------
-:attr:`SquareVendor.routes` builds its surfaces on first access and caches
-them, and each surface holds *this vendor*, not a copy of its configuration.
-That is what lets the routes exist before ``hydrate`` has resolved the profile:
-a handler reads ``deps.config`` when it runs, so a profile that replaces the
-application secret is in force on the next request rather than on the next
-process.
-
-The webhook seams, and why they are two
---------------------------------------
-``signer`` and ``events`` are separate properties because they answer separate
-questions: what a mutation *means* on the wire, and how a delivery is proven to
-have come from here. The dispatcher requires both before it will deliver
-anything, which is why a vendor that supplied only one would send nothing
-rather than send something unverifiable. ``None`` remains a legitimate answer
-for a vendor with no webhook scheme at all; this one has both.
+INVARIANT -- one instance per unit; configuration resolves in two phases (defaults at construction, then
+a profile re-resolve in :meth:`SquareVendor.hydrate`), and :attr:`SquareVendor.routes` builds its surfaces
+once, each holding this vendor so a later config change is in force on the next request.
 """
 
 from __future__ import annotations
@@ -59,7 +19,6 @@ from vendorfake.core.kernel.types import (
     ErrorShaper,
     EventMapper,
     MagicTriggerSpec,
-    MutableResponse,
     Route,
     Signer,
     UnitContext,
@@ -115,32 +74,18 @@ SQUARE_SCOPES: tuple[str, ...] = (
     "INVENTORY_WRITE",
     WEBHOOK_SUBSCRIPTIONS_SCOPE,
 )
-"""The scopes this unit's routes ask for.
-
-All but the last are a subset of Square's published OAuth permissions
-(https://developer.squareup.com/docs/oauth-api/square-permissions) -- the ones
-the modelled surface actually needs. A route names the scopes it requires and
-the kernel checks them against the token, so this tuple is the vocabulary and
-not the policy.
-
-The last one is not on that page, and is the only entry here that is not:
-Square publishes no webhook permission because the Webhook Subscriptions API is
-application-owned rather than seller-owned. The citations and the JUDGMENT are
-on :data:`~vendorfake.square.config.WEBHOOK_SUBSCRIPTIONS_SCOPE`.
-"""
+"""DOCUMENTED -- all but the last are Square's published OAuth permissions; the last is not, see
+:data:`~vendorfake.square.config.WEBHOOK_SUBSCRIPTIONS_SCOPE`.
+https://developer.squareup.com/docs/oauth-api/square-permissions"""
 
 SQUARE_MAGIC = MagicTriggerSpec(
     prefix="chaos:",
     body_paths=("order.reference_id", "idempotency_key", "subscription.name"),
     query_params=("state",),
 )
-"""In-band fault triggering, in fields a consumer can set through an SDK.
-
-Prior art is Square's own sandbox, which uses magic values in ordinary request
-fields (``cnon:card-nonce-declined``) rather than a control channel, so a
-consumer's real client library can drive a fault.
-https://developer.squareup.com/docs/devtools/sandbox/testing
-"""
+"""In-band fault triggering, in fields a consumer can set through an SDK. DOCUMENTED prior art --
+Square's sandbox uses magic values in ordinary fields the same way.
+https://developer.squareup.com/docs/devtools/sandbox/testing"""
 
 SQUARE_ROLES: Mapping[str, str] = {
     "auth": "oauth",
@@ -148,12 +93,7 @@ SQUARE_ROLES: Mapping[str, str] = {
     "webhooks": "webhooks",
     "chaos": "chaos",
 }
-"""The neutral role vocabulary, mapped to Square's own capability names.
-
-Square spells its order surface ``order-lifecycle`` and its login surface
-``oauth``; the two role names a consumer actually needs to remember
-(``auth``, ``orders``) resolve here rather than by luck of naming matching
-another vendor's. See ``VendorDefinition.roles``."""
+"""The neutral role vocabulary mapped to Square's own capability names. See ``VendorDefinition.roles``."""
 
 _VOLATILE_FIELDS: tuple[str, ...] = (
     "expires_at",
@@ -162,60 +102,24 @@ _VOLATILE_FIELDS: tuple[str, ...] = (
     "used_at",
     "revoked_at",
     "superseded_at",
-    # Stamped from the clock by a mutation: a catalog upsert sets the
-    # millisecond-epoch `catalog_version`, an inventory change `calculated_at`,
-    # a loyalty enrolment `enrolled_at` and `mapping_created_at`.
+    # Stamped from the clock by a mutation.
     "catalog_version",
     "calculated_at",
     "enrolled_at",
     "mapping_created_at",
-    # Fulfillment-details stamps, one level down inside `fulfillments[]`:
-    # `placed_at` on creation and every transition stamp, exactly the set
-    # surface/orders.py can write from the clock. The digest matches names at
-    # any depth, so a name here covers `tenders[].created_at` too without
-    # listing it (the core already covers `created_at`).
+    # Fulfillment-details stamps; the digest matches names at any depth, covering `tenders[].created_at`.
     *sorted(FULFILLMENT_STAMPS),
 )
-"""Entity fields whose values are excluded from the state digest because this
-unit writes them from its clock. Two units seeded identically a second apart,
-and driven with the same traffic, must still agree, and these are the fields
-that would otherwise make them differ.
-
-The rule, stated once: **a stamp the unit set is volatile; a value the caller
-sent is state.** Two properties of the core digest (``Store.entity_digest``)
-carry the first half -- a name matches at any depth, so the stamps inside
-``tenders[]``, ``fulfillments[].pickup_details`` and ``reward_tiers[]`` are
-covered, and a set field still hashes as *set*, so a spent authorization code
-(``used_at``) and a fresh one digest differently although the instant itself
-is ignored. The second half is the vendor's: a fulfillment stamp the *caller*
-supplied under one of these names (``picked_up_at`` beside ``state:
-COMPLETED``, ``expires_at`` on pickup details) is mirrored into the
-fulfillment's ``supplied_stamps`` -- ``[name, value]`` pairs, so no volatile
-name appears as a key -- which the digest hashes and the wire never shows -- so two orders that differ only in a caller-sent
-instant digest differently. ``tests/unit/square/test_digest_determinism.py``
-pins both halves.
-
-Not listed on purpose: ``pickup_at``, ``deliver_at``, ``courier_pickup_at``
-and the other *schedule* instants, which only a caller ever sets. They are
-what the consumer asked for, not what the clock said, and stay in the digest
-under their own names. And name-matching stops inside the free-form subtrees
-:data:`_OPAQUE_FIELDS` declares, where every key is the caller's."""
+"""Entity fields excluded from the state digest because this unit writes them from its clock. INVARIANT
+-- a caller-supplied value under one of these names is mirrored into ``supplied_stamps`` so the digest
+still hashes it as state."""
 
 _OPAQUE_FIELDS: tuple[str, ...] = (
-    # "Application-defined data ... keys ... alphanumeric characters,
-    # underscores (_) and hyphens (-)."
-    # https://developer.squareup.com/docs/build-basics/general-considerations/metadata
-    # So `created_at` inside it is a legal caller key sharing a volatile
-    # name; the digest must take it verbatim. Orders and line items both
-    # carry one, stored exactly as sent.
+    # DOCUMENTED free-form caller data: https://developer.squareup.com/docs/build-basics/general-considerations/metadata
     "metadata",
-    # `pickup_details.curbside_pickup_details`, a documented free-form-ish
-    # blob this unit stores raw and never stamps.
     "curbside_pickup_details",
 )
-"""Caller free-form subtrees the state digest takes verbatim, matched at any
-depth and winning over :data:`_VOLATILE_FIELDS`. This unit writes nothing
-inside them, so nothing there is the clock's."""
+"""Caller free-form subtrees the state digest takes verbatim, winning over :data:`_VOLATILE_FIELDS`."""
 
 
 class SquareVendor:
@@ -240,10 +144,7 @@ class SquareVendor:
         self._ids = SquareIds(seed)
         self._errors = self._build_errors()
         self._auth = SquareAuth(self, SQUARE_SCOPES)
-        # Both hold *this vendor*, not a copy of its configuration, so that a
-        # profile resolved in `hydrate` -- which runs after construction -- is
-        # in force on the next delivery rather than on the next process. That
-        # is the same rule the surfaces follow; see `surface/common.py`.
+        # Both hold *this vendor*, so a profile resolved in `hydrate` is in force on the next delivery.
         self._signer = SquareWebhookSigner(self)
         self._events = SquareEventMapper(self)
         self._routes: tuple[Route, ...] | None = None
@@ -272,9 +173,7 @@ class SquareVendor:
 
     @property
     def config(self) -> SquareConfig:
-        """The resolved configuration. Not part of the protocol; the surfaces
-        read it, and a test asserting that a profile's ``vendor`` block took
-        effect reads it too."""
+        """The resolved configuration. Not part of the protocol; surfaces read it."""
         return self._config
 
     @property
@@ -296,13 +195,8 @@ class SquareVendor:
 
     @property
     def routes(self) -> Sequence[Route]:
-        """The vendor surface, built once and cached.
-
-        Cached because ``Route`` handlers are bound methods of a surface object
-        and rebuilding them on every access would make two reads of this
-        property produce routes that compare unequal -- which the router, the
-        capability index and the OpenAPI document would each see differently.
-        """
+        """Built once and cached: ``Route`` handlers are bound methods, so rebuilding would make two
+        reads compare unequal."""
         if self._routes is None:
             self._routes = (
                 oauth_routes(self)
@@ -326,13 +220,8 @@ class SquareVendor:
 
     @property
     def signer(self) -> Signer | None:
-        """Square's HMAC scheme, and every header a delivery carries.
-
-        One object for both because the signature is a header too: two hooks
-        would be two chances to register only one, and a delivery that is
-        signed but carries no retry counter -- or counted but unsigned -- is
-        silent at the sink.
-        """
+        """Square's HMAC scheme and every header a delivery carries, one object for both, since a
+        delivery signed but missing its retry counter would be silent at the sink."""
         return self._signer
 
     @property
@@ -346,13 +235,7 @@ class SquareVendor:
 
     @property
     def machines(self) -> Mapping[str, MachineDef]:
-        """The order, fulfillment and payment lifecycles, at ``GET /__unit/machines``.
-
-        This is the registration the reference lacks: its ``orderMachine`` is a
-        module-level singleton nothing publishes, so "every declared terminal
-        state really is terminal" could not be asserted from outside the vendor
-        package.
-        """
+        """The order, fulfillment and payment lifecycles, at ``GET /__unit/machines``."""
         return {
             ORDER_MACHINE_NAME: ORDER_MACHINE,
             FULFILLMENT_MACHINE_NAME: FULFILLMENT_MACHINE,
@@ -377,62 +260,32 @@ class SquareVendor:
 
     @property
     def base_dir(self) -> Path:
-        """What a profile's relative ``seed`` path resolves against.
-
-        The package root, one level above the profiles, which is where the
-        reference resolves seeds from.
-        """
+        """What a profile's relative ``seed`` path resolves against."""
         return _PACKAGE_DIR
 
     # -- lifecycle ---------------------------------------------------------
 
     def hydrate(self, ctx: UnitContext, seed: object) -> None:
-        """Phase two of configuration, then load the seed scenario.
-
-        The configuration step happens first and unconditionally, so that a
-        profile's ``vendor`` block is in force even when hydration fails -- and
-        so that the tokens the scenario seeds are stamped with the expiry the
-        *profile's* TTL implies rather than the built-in default's.
-        """
+        """Phase two of configuration, then load the seed: config resolves first so seeded tokens
+        get the profile's TTL, not the default's."""
         self._resolve_config(ctx)
         hydrate_square(ctx, seed, self._config)
 
     def _resolve_config(self, ctx: UnitContext) -> None:
-        """Re-resolve from the profile, then rebuild what depends on it.
-
-        The id stream is re-seeded rather than continued: a unit that
-        re-hydrates must mint the same ids it minted the first time, which is
-        what makes ``POST /__unit/state/reset`` reproduce a scenario instead of
-        merely repeating it.
-        """
+        """Re-resolve from the profile, then rebuild what depends on it. The id stream is re-seeded,
+        not continued, so a reset reproduces a scenario's ids."""
         block = dict(ctx.config.vendor_config)
         self._config = self._base_config if not block else self._base_config.merged_with(block)
         self._errors = self._build_errors()
         self._ids.reseed(ctx.config.chaos.seed)
 
-    def decorate(self, res: MutableResponse, ctx: UnitContext, req: UnitRequest) -> None:
-        """Stamp the API version on every response, success or error.
-
-        "Regardless of whether you explicitly specify a version in the request,
-        the response always returns the Square-Version header so you know which
-        API version is used."
-        https://developer.squareup.com/docs/build-basics/versioning-overview
-
-        JUDGMENT -- **whatever the request sent is echoed, unchanged.** An empty
-        ``square-version``, an unsupported date, ``banana`` -- all come back
-        verbatim. The versioning page documents only that "the response always
-        returns the ``Square-Version`` header"; it says nothing about what a
-        request carrying a version this API does not support gets back, and
-        this unit implements exactly one API version, so it has no supported
-        set to check a value against. **NOT VERIFIED**: a consumer must not
-        read the echo as "this version was accepted". The alternative --
-        substituting the configured version whenever the request's value is
-        unrecognised -- would quietly hide a consumer's typo instead, which is
-        the failure mode a fake exists to surface.
-        """
+    def decorate(self, headers: dict[str, str], ctx: UnitContext, req: UnitRequest) -> None:
+        """Stamp the API version on every response. DOCUMENTED -- always present regardless of the
+        request. JUDGMENT / NOT VERIFIED -- an unsupported requested value is echoed unchanged.
+        https://developer.squareup.com/docs/build-basics/versioning-overview"""
         requested = req.headers.get("square-version")
-        res.headers["square-version"] = self._config.api_version if requested is None else requested
-        res.headers["x-unit-vendor"] = ctx.vendor.name
+        headers["square-version"] = self._config.api_version if requested is None else requested
+        headers["x-unit-vendor"] = ctx.vendor.name
 
 
 def create_square_vendor(
@@ -440,15 +293,6 @@ def create_square_vendor(
     vendor_config: dict[str, Any] | None = None,
     seed: int = 1,
 ) -> VendorDefinition:
-    """Build a Square vendor.
-
-    ``vendor_config`` is the base a profile's ``vendor`` block is merged over,
-    and ``seed`` seeds the id stream until :meth:`SquareVendor.hydrate` re-seeds
-    it from the unit. Both exist for tests and for a caller assembling a unit by
-    hand; ``create_unit(vendor="square")`` needs neither.
-
-    The return annotation is the protocol, so ``mypy --strict`` checks the
-    structural conformance of :class:`SquareVendor` here, at one call site,
-    rather than wherever a unit happens to be built.
-    """
+    """Build a Square vendor. ``vendor_config`` is the base a profile's ``vendor`` block merges over;
+    ``seed`` seeds the id stream until :meth:`SquareVendor.hydrate` re-seeds it."""
     return SquareVendor(config=resolve_square_config(vendor_config), seed=seed)

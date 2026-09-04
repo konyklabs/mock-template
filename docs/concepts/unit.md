@@ -43,9 +43,8 @@ directly; see [Driver](driver.md).
 - `unit.webhooks` — the delivery dispatcher.
 - `unit.context` — vendor, resolved config, clock, logger: everything a
   route handler or the control plane needs to answer one request.
-- `unit.handle(req)` — the one entry point every binding calls: an
-  in-process client, the ASGI adapter, and the file-drop transport all end
-  up here. A route this unit does not serve, an unknown capability, and a
+- `unit.handle(req)` — the one entry point every binding calls: the
+  in-process client and the ASGI adapter both end up here. A route this unit does not serve, an unknown capability, and a
   disabled one are indistinguishable from `handle`'s point of view — the
   difference is in *what* gets raised, not in a second code path.
 

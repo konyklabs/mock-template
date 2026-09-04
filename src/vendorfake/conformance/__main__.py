@@ -1,29 +1,8 @@
-"""``python -m vendorfake.conformance`` -- run the contracts against a unit.
+"""``python -m vendorfake.conformance`` -- run the contracts against a unit, and return an exit code with no test framework in the picture.
 
-FOR: an exit code with no test framework in the picture. An external vendor may
-not use pytest, and a container healthcheck wants a number rather than a
-report. This is the framework-free façade over the same registry the pytest
-layer renders; neither adds an assertion the other does not have.
+The target is always named, never guessed: this package may not import a vendor or the registry that knows vendors exist, so ``--target module:attribute`` (or ``--base-url``) is required, and a missing one is an error rather than a default that quietly tests the wrong thing.
 
-WHY THE TARGET IS NAMED AND NEVER GUESSED. This package may not import a
-vendor, and it may not import the registry that knows vendors exist -- that is
-the layer rule ``tools/boundary_check.py`` enforces, and it is what keeps the
-suite executable by a consumer whose vendor is not in this distribution. So
-the target is a ``module:attribute`` the caller names, and a missing one is an
-error that says so rather than a default that quietly tests the wrong thing.
-
-THE TWO WAYS TO NAME A UNIT.
-
-``--target module:attribute`` is the matrix run: the target builds a fresh
-unit per contract, so the whole profile list can be swept and the aggregate
-rule -- every contract passed somewhere -- is meaningful.
-
-``--base-url http://host:port`` is the container run: the unit is already
-running, somebody else started it, and the suite reaches it over a socket. It
-is single-profile by construction (the container loaded one), so the aggregate
-rule is switched off and the caveat in
-:data:`~vendorfake.conformance.runner.REMOTE_CAVEAT` is printed. This package
-never starts a server; a base URL is the only way it talks to one.
+``--target module:attribute`` is the matrix run: a fresh unit per contract, so the whole profile list can be swept and "every contract passed somewhere" is meaningful. ``--base-url http://host:port`` is the container run: the unit is already running and reached over a socket, single-profile by construction, so the aggregate rule is switched off and :data:`~vendorfake.conformance.runner.REMOTE_CAVEAT` is printed. This package never starts a server itself.
 """
 
 from __future__ import annotations
@@ -81,9 +60,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     cross_profile: bool | None = None
     if args.base_url:
         if args.profiles:
-            # The container knows which profile it loaded. A flag that
-            # disagreed with it would relabel the run rather than change it,
-            # and a mislabelled conformance report is worse than none.
+            # The container knows which profile it loaded; a disagreeing flag would only mislabel the run.
             parser.error("--profile cannot be combined with --base-url: the running unit reports its own profile")
         try:
             target = remote_target(args.base_url)

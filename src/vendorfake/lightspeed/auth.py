@@ -1,35 +1,19 @@
 """Who a presented credential is, and what it may do.
 
-FOR: turning an ``Authorization: Bearer`` header into an
-:class:`~vendorfake.core.kernel.types.AuthResult` the kernel can check required
-scopes against.
+DOCUMENTED (https://x-series-api.lightspeedhq.com/docs/authorization): the
+whole specification uses ONE security scheme, ``bearerAuth``, applied
+globally with no per-operation override; personal tokens are "applied
+identically to OAuth tokens via the Authorization header", so they resolve
+through the same path and differ only in their record's ``kind``. Each
+operation names its required scope in its own ``description``; a missing one
+raises ``forbidden_scope``, mapped to 403 (JUDGMENT -- see ``errors.py``).
+Revocation ("using a refresh token will revoke the access token that was
+returned with it") is refused distinctly from expiry, so a consumer's
+refresh handling can tell the two apart via the ``Vendorfake-Error-Kind``
+sidecar header even though both answer the same documented 401.
 
-DOCUMENTED: the whole specification uses ONE security scheme --
-``{"bearerAuth": {"scheme": "bearer", "type": "http"}}`` in
-``components.securitySchemes``, applied globally at the document root as
-``"security": [{"bearerAuth": []}]``, with no per-operation override anywhere
-in the 201 operations. There is no second mode. Personal tokens are "applied
-identically to OAuth tokens via the Authorization header"
-(https://x-series-api.lightspeedhq.com/docs/authorization), so they resolve
-through the same path and differ only in their record's ``kind``.
-
-DOCUMENTED: scopes. Each operation names the scope it needs in its own
-``description``, in the pattern ``🔒 Requires: `scope:name` scope``. The kernel
-checks ``Route.scopes`` against the resolved result and raises
-``forbidden_scope``, which the error table maps to 403 (JUDGMENT on the
-status -- see ``errors.py``), so this adapter only reports scopes.
-
-DOCUMENTED: revocation. "Using a refresh token will revoke the access token
-that was returned with it." A revoked token is refused here, distinctly from
-an expired one, so a consumer's refresh handling can tell the two apart
-through the ``Vendorfake-Error-Kind`` sidecar header even though both answer
-the same documented 401.
-
-**THE RATE LIMITER RUNS HERE**, before the token is even looked at. The
-documented quota counts *requests* per retailer per application, not successful
-ones, and every authenticated route in this surface passes through this method.
-The two unauthenticated routes count in their own handlers; the control plane
-does not count at all. See ``ratelimit.py``.
+The rate limiter runs here, before the token is even looked at, since the
+documented quota counts requests rather than successes; see ``ratelimit.py``.
 """
 
 from __future__ import annotations
@@ -53,9 +37,7 @@ __all__ = ["KIND_OAUTH", "KIND_PERSONAL", "LightspeedAuth", "find_token"]
 
 KIND_OAUTH = "oauth"
 KIND_PERSONAL = "personal"
-"""The two kinds of bearer the vendor documents. Both authenticate identically;
-the kind is recorded so a scenario can tell them apart and so
-``/__unit/auth`` can say which is which."""
+"""The two kinds of bearer the vendor documents; both authenticate identically."""
 
 
 def _split_scheme(header: str) -> tuple[str, str]:
@@ -64,13 +46,8 @@ def _split_scheme(header: str) -> tuple[str, str]:
 
 
 def find_token(ctx: UnitContext, access_token: str) -> TokenEntity | None:
-    """The stored token for an opaque bearer string, or ``None``.
-
-    One collection holds every kind: an OAuth token from the exchange or a
-    refresh, and a seeded personal token. Lightspeed applies both "identically
-    via the Authorization header", so a second lookup keyed on kind would be a
-    second place for the two to drift apart.
-    """
+    """The stored token for an opaque bearer string, or ``None``. One
+    collection holds every kind, since both authenticate identically."""
     found = ctx.store.collection(COL.tokens).find(lambda entity: entity.get("access_token") == access_token)
     return None if found is None else TokenEntity.from_entity(found)
 
@@ -99,9 +76,7 @@ class LightspeedAuth:
         }
 
     def credentials(self, ctx: UnitContext) -> Sequence[AuthCredential]:
-        """Every live token, read from the store -- so a token an exchange just
-        minted is offered and one the clock has ended, or a refresh has
-        revoked, is not."""
+        """Every live token from the store; one expired or revoked is excluded."""
         offered: list[AuthCredential] = []
         for entity in ctx.store.collection(COL.tokens).all():
             token = TokenEntity.from_entity(entity)
@@ -121,9 +96,7 @@ class LightspeedAuth:
         return tuple(offered)
 
     def resolve(self, args: HandlerArgs, mode: AuthMode) -> AuthResult:
-        # Counted before the credential is examined: the documented limiter
-        # counts requests, and a caller hammering with a bad token is still
-        # spending the retailer's quota.
+        # Counted before the credential is examined; the limiter counts requests.
         self._deps.limiter.consume(args.ctx)
         header = args.header("authorization")
         if not header:

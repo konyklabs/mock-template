@@ -21,16 +21,6 @@ so nothing runs the whole matrix over it, and the one contract whose claim is
 about separate runs opens it deliberately. Conflating the two is what let a
 determinism contract compare two units that shared a pid and report
 determinism.
-
-THE TRIPWIRE IS WIRED HERE OR NOWHERE
--------------------------------------
-``framework_answered`` needs the same :class:`FrameworkTripwire` handed to
-``create_unit`` and to ``create_app``. This harness did neither, so the number
-the unit reported was the literal 0 and the two contracts asserting on it could
-not fail -- a verb dropped from ``HTTP_METHODS`` made Starlette answer a
-request, the tripwire counted it, and the report printed "framework_answered
-still 0". ``tests/conformance/test_harness_wiring.py`` drives that hole and
-watches the number move.
 """
 
 from __future__ import annotations
@@ -49,7 +39,7 @@ from typing import Any
 
 import uvicorn
 
-from vendorfake.asgi import FrameworkTripwire, bind, bound_port, create_app
+from vendorfake.asgi import bind, bound_port, create_app
 from vendorfake.clover.seed.constants import SEED_MERCHANT_ID as CLOVER_SEED_MERCHANT_ID
 from vendorfake.conformance import ConformanceClient, ConformanceTarget, HttpConformanceClient
 from vendorfake.conformance.client import InProcessConformanceClient
@@ -105,7 +95,6 @@ CHILD_STARTUP_TIMEOUT_S = 60.0
 def build_unit(
     profile: str,
     *,
-    tripwire: FrameworkTripwire | None = None,
     vendor: str = VENDOR,
     env: Mapping[str, str] | None = None,
 ) -> Unit:
@@ -120,21 +109,12 @@ def build_unit(
     The sink is the in-memory one because the suite builds two units to assert
     determinism, and a delivery sink that opened real connections to ``*.test``
     hostnames would make the webhook contracts a test of DNS.
-
-    ``tripwire`` is threaded through to the control plane so that
-    ``GET /__unit/health`` reports the *real* count of requests the web
-    framework answered by itself. Passing ``None`` reports 0, and 0 is then the
-    literal constant rather than a measurement -- which is precisely the state
-    this harness was in: ``framework_answered`` was wired at neither end, so
-    both contracts that assert on it asserted on a hardcoded zero and a real
-    hole in the catch-all went unnoticed while the suite stayed green.
     """
     return create_unit(
         vendor=vendor,
         profile=profile,
         sink=MemorySink(),
         logger=JsonLogger("warn"),
-        framework_answered=None if tripwire is None else tripwire.get,
         # Empty for every ordinary check -- the registry's own default -- and
         # named only by `open_with_seed_overlay` below, which is the one caller
         # that has to reach a `VENDORFAKE_*` layer to build the unit it needs.
@@ -147,7 +127,7 @@ def _unit(profile: str, vendor: str = VENDOR) -> Unit:
 
 
 @contextmanager
-def serving(unit: Unit, *, tripwire: FrameworkTripwire | None = None) -> Iterator[str]:
+def serving(unit: Unit) -> Iterator[str]:
     """*This* unit on a real socket, yielding its base URL.
 
     Split out from :func:`serve` because ``--base-url`` needs the address and
@@ -155,7 +135,7 @@ def serving(unit: Unit, *, tripwire: FrameworkTripwire | None = None) -> Iterato
     that entry point works means somebody else must start one and hand over a
     URL. That somebody is here.
     """
-    app = create_app(unit, tripwire=tripwire)
+    app = create_app(unit)
     sock: socket.socket = bind("127.0.0.1", 0)
     port = bound_port(sock)
     server = uvicorn.Server(uvicorn.Config(app, log_level="error", access_log=False))
@@ -195,18 +175,10 @@ def serve(unit: Unit) -> Iterator[ConformanceClient]:
 
 @contextmanager
 def _served(profile: str, vendor: str = VENDOR) -> Iterator[ConformanceClient]:
-    """The HTTP binding, with the tripwire wired at both ends.
-
-    The unit is built with ``framework_answered=tripwire.get`` and the
-    application is handed *the same object*. That is the whole wiring, and
-    without it the number the unit reports is a constant: a verb missing from
-    ``HTTP_METHODS`` made Starlette answer a request, the tripwire counted it,
-    and the contract printed "framework_answered still 0" and passed.
-    """
-    tripwire = FrameworkTripwire()
-    unit = build_unit(profile, tripwire=tripwire, vendor=vendor)
+    """The HTTP binding."""
+    unit = build_unit(profile, vendor=vendor)
     try:
-        with serving(unit, tripwire=tripwire) as base_url:
+        with serving(unit) as base_url:
             client = HttpConformanceClient(base_url)
             try:
                 yield client

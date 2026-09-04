@@ -1,8 +1,4 @@
-"""Square's fidelity declaration -- data only.
-
-``declaration.json`` names the upstream document and the routes the spec does
-not describe; ``extract.json`` and ``pin.json`` are cut from that document by
-``vendorfake-fidelity pin`` and never edited by hand; ``corpus/`` holds the
-documented-behaviour cases. Nothing in this package is code. See
-``vendorfake.fidelity`` and D-006.
-"""
+"""Square's fidelity declaration -- data only: ``declaration.json`` names the
+upstream document and undescribed routes; ``extract.json``/``pin.json`` are cut
+from it by ``vendorfake-fidelity pin``; ``corpus/`` holds documented cases.
+See ``vendorfake.fidelity`` and D-006."""

@@ -1,29 +1,15 @@
-"""The loyalty wire vocabulary: program, account and event projections, and
-the three request shapes.
+"""The loyalty wire vocabulary: program, account and event projections, and the three request shapes.
 
-Shapes from
-https://developer.squareup.com/reference/square/objects/LoyaltyProgram,
-https://developer.squareup.com/reference/square/objects/LoyaltyProgramAccrualRule,
-https://developer.squareup.com/reference/square/objects/LoyaltyAccount,
+INVARIANT: an absent optional emits no key, via ``compact()``. Phone numbers are validated as E.164
+(leading ``+``, non-zero first digit, <=15 digits total); anything else is refused naming the field.
+
+SHRINK: expiration policies, non-SPEND accrual types, rewards and promotions are not modelled -- only
+what a single-SPEND-rule program carries.
+
+DOCUMENTED: shapes from https://developer.squareup.com/reference/square/objects/LoyaltyProgram,
+https://developer.squareup.com/reference/square/objects/LoyaltyProgramAccrualRule, https://developer.squareup.com/reference/square/objects/LoyaltyAccount,
 https://developer.squareup.com/reference/square/objects/LoyaltyAccountMapping and
 https://developer.squareup.com/reference/square/objects/LoyaltyEvent.
-
-INVARIANT: **an absent optional emits no key**, through ``compact()``. An
-account never accrued against has no ``expiring_point_deadlines``; an event
-that was not for an order has no ``order_id`` inside ``accumulate_points``.
-
-Phone numbers are E.164
------------------------
-"phone_number: The phone number of the buyer, in E.164 format. For example,
-``+14155551111``." E.164 is a leading ``+``, a non-zero first digit and at
-most fifteen digits in all; :data:`E164` is that rule and nothing narrower. A
-number with spaces, dashes or a national prefix is refused naming the field,
-because a fake that normalised it would teach a consumer that Square does.
-
-SHRINK (prototype): ``expiration_policy``, ``expiring_point_deadlines``, the
-``VISIT`` / ``ITEM_VARIATION`` / ``CATEGORY`` accrual types, rewards and
-promotions are not modelled; the projection emits what a single-SPEND-rule
-program carries and no more.
 """
 
 from __future__ import annotations
@@ -70,8 +56,7 @@ E164 = re.compile(r"^\+[1-9]\d{1,14}$")
 
 SEARCH_DEFAULT_LIMIT = 30
 SEARCH_MAX_LIMIT = 200
-"""SearchLoyaltyAccounts ``limit``: "The maximum number of results to include
-in the response. The default value is 30." and "Min 1, Max 200".
+"""SearchLoyaltyAccounts ``limit``: default 30, min 1, max 200.
 https://developer.squareup.com/reference/square/loyalty-api/search-loyalty-accounts
 """
 
@@ -175,8 +160,7 @@ class LoyaltyAccountMappingRequest(BaseModel):
 
 
 class LoyaltyAccountSpecRequest(BaseModel):
-    """``loyalty_account`` on CreateLoyaltyAccount: "program_id: The Square-
-    assigned ID of the loyalty program" and the mapping to enrol under.
+    """``loyalty_account`` on CreateLoyaltyAccount: the program to enroll under and its mapping.
     https://developer.squareup.com/reference/square/loyalty-api/create-loyalty-account
     """
 
@@ -198,9 +182,7 @@ class CreateLoyaltyAccountRequest(BaseModel):
 
 
 class LoyaltyAccountsSearchQueryRequest(BaseModel):
-    """``query``: "mappings: The set of mappings to use in the loyalty account
-    search. This cannot be combined with `customer_ids`." and the mirror
-    sentence on ``customer_ids``. Both "Max: 30".
+    """``query``: ``mappings`` and ``customer_ids`` are mutually exclusive, each capped at 30.
     https://developer.squareup.com/reference/square/objects/SearchLoyaltyAccountsRequestLoyaltyAccountQuery
     """
 
@@ -223,10 +205,7 @@ class SearchLoyaltyAccountsRequest(BaseModel):
 
 
 class AccumulatePointsRequest(BaseModel):
-    """``accumulate_points``: "order_id: The ID of the order for which to
-    accumulate the points ... points: The number of points to add to the
-    account. Specify this field only when the points are not calculated by
-    Square from an order." Exactly one of the two.
+    """``accumulate_points``: exactly one of ``order_id`` (Square-calculated) or ``points`` (manual).
     https://developer.squareup.com/reference/square/objects/LoyaltyEventAccumulatePoints
     """
 
@@ -237,9 +216,7 @@ class AccumulatePointsRequest(BaseModel):
 
 
 class AccumulateLoyaltyPointsRequest(BaseModel):
-    """``POST /v2/loyalty/accounts/{account_id}/accumulate``. Both
-    ``idempotency_key`` ("Min Length 1, Max Length 128") and ``location_id``
-    are required.
+    """``POST /v2/loyalty/accounts/{account_id}/accumulate``; ``idempotency_key`` and ``location_id`` are both required.
     https://developer.squareup.com/reference/square/loyalty-api/accumulate-loyalty-points
     """
 

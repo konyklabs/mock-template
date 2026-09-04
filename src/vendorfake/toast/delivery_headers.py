@@ -1,30 +1,13 @@
 """The non-signature headers on a Toast delivery.
 
-DOCUMENTED (https://doc.toasttab.com/doc/devguide/apiHttpHeaders.html), and
-emitted here in the documented casing:
+DOCUMENTED (https://doc.toasttab.com/doc/devguide/apiHttpHeaders.html):
+``Toast-Attempt-Number``, ``Toast-Event-Type``, ``Toast-Event-Category``,
+``Toast-Restaurant-External-ID`` (omitted if not restaurant-scoped) and
+``Content-Type``, all read from the delivered body so headers and body never
+disagree.
 
-* ``Toast-Attempt-Number`` -- starts at 1, on every attempt;
-* ``Toast-Event-Type`` -- e.g. ``order_updated``, ``in_stock``;
-* ``Toast-Event-Category`` -- e.g. ``stock``;
-* ``Toast-Restaurant-External-ID`` -- "omitted if not restaurant-scoped";
-* ``Content-Type: application/json``.
-
-The page also lists ``Content-Length``, ``Accept-Encoding``, ``Connection``
-and ``User-Agent``: transport headers the delivery sink owns, not this unit.
-
-The three Toast-* values are read from the delivered body -- the envelope's
-``eventType``, ``eventCategory`` and ``details.restaurantGuid`` -- so the
-headers and the body can never disagree. A body that is not a Toast envelope
-(the control plane's emitter accepts any document) gets the core event type in
-both ``Toast-Event-*`` headers and no restaurant header.
-
-JUDGMENT -- **one header is this fake's.** ``x-vendorfake-retry-reason``
-appears on a retry only, carrying the core's neutral outcome name: Toast
-documents no retry-only header, and the conformance suite's C16 asks that a
-retry be distinguishable from a first send by a header the vendor names.
-``Toast-Attempt-Number`` changes value on a retry but is present on the first
-send too, so it cannot be that header. The product's own prefix is the one a
-consumer cannot mistake for Toast's; a handler must not depend on it.
+JUDGMENT: ``x-vendorfake-retry-reason`` is this fake's own retry-only header,
+undocumented by Toast, needed by conformance check C16.
 """
 
 from __future__ import annotations

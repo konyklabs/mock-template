@@ -39,11 +39,11 @@ vendorfake serve --vendor square         # http://127.0.0.1:8080
 
 ```sh
 curl -s http://127.0.0.1:8080/__unit/health
-# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"framework_answered":0}
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221}
 ```
 
-The full walkthrough, including the container and the pytest/Vitest
-fixtures, is under [Start here](start/install.md).
+The full walkthrough, including the container and the pytest fixtures, is
+under [Start here](start/install.md).
 
 ## Where to go next
 
@@ -51,7 +51,7 @@ fixtures, is under [Start here](start/install.md).
   and pick the binding (in-process sync, in-process async, served, or
   container) that fits your test suite.
 - **[Recipes](pytest-plugin.md)** — runnable patterns for pytest (sync and
-  async), Vitest, Playwright, docker compose, and CI.
+  async), docker compose, and CI.
 - **[Concepts](concepts/unit.md)** — the vocabulary: unit, profile,
   capability and roles, seed, driver, journal and request log, clock, chaos
   rules and faults, provenance labels.
@@ -63,7 +63,7 @@ fixtures, is under [Start here](start/install.md).
   inconsistencies it reproduces, and every judgment call with the page that is
   silent about it. Lightspeed Retail X-Series has the first.
 - **[For agents](for-agents.md)** — the agent-facing surface: `vendorfake
-  agent-setup`, `vendorfake explain`, `AGENTS.md`, `llms.txt`.
+  explain`, `AGENTS.md`, `llms.txt`.
 - **[Contract](api-contract.md)** — what is public, what is internal, and
   the deprecation policy.
 - **[Changelog](changelog.md)**.

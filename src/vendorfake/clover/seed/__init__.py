@@ -1,11 +1,8 @@
-"""The seed scenario: what a clover unit's world looks like at start.
-
-One merchant ("Harvest & Rye"), two tax rates, three items (the documented
-"Craft Beer" at 750 among them), a modifier group, two employees, two tenders,
-two order types, the default service charge, a customer, one open order with
-a client-set total, and two pre-minted bearers -- full-permission and
-read-only -- and one pre-verified webhook subscriber. :mod:`.constants`
-names every id; :mod:`.document` is the schema; :mod:`.hydrate` loads it.
+"""The seed scenario: what a clover unit's world looks like at start -- one
+merchant, tax rates, items, a modifier group, employees, tenders, order
+types, a service charge, a customer, an open order, two pre-minted bearers
+and a pre-verified webhook subscriber. :mod:`.constants` names every id;
+:mod:`.document` is the schema; :mod:`.hydrate` loads it.
 """
 
 from __future__ import annotations

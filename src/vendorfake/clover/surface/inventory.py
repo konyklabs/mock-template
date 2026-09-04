@@ -1,35 +1,24 @@
-"""The inventory surface: items, their expansions, and modifiers.
+"""The inventory surface: items, their expansions, and modifiers -- the
+reference data a line item points at.
 
-FOR: the reference data a line item points at -- items by id, with the tax
-rates and modifier groups a consumer needs to price and customise them.
+CreateItem/GetItems/GetItem/UpdateItem ``/v3/merchants/{mId}/items[/{itemId}]``
+(https://docs.clover.com/dev/reference/inventorycreateitem,
+https://docs.clover.com/dev/reference/inventorygetitems,
+https://docs.clover.com/dev/reference/inventoryupdateitem); GetModifiers/
+GetModifier ``/v3/merchants/{mId}/modifier_groups/{modGroupId}/modifiers[/{modId}]``
+(https://docs.clover.com/dev/reference/modifiergetmodifiersbygroup,
+https://docs.clover.com/dev/docs/manage-item-modifiers-availability).
 
-=================  ==============================================================
-CreateItem         ``POST /v3/merchants/{mId}/items``
-                   https://docs.clover.com/dev/reference/inventorycreateitem
-GetItems           ``GET  /v3/merchants/{mId}/items``
-                   https://docs.clover.com/dev/reference/inventorygetitems
-GetItem            ``GET  /v3/merchants/{mId}/items/{itemId}``
-UpdateItem         ``POST /v3/merchants/{mId}/items/{itemId}``
-                   https://docs.clover.com/dev/reference/inventoryupdateitem
-GetModifiers       ``GET  /v3/merchants/{mId}/modifier_groups/{modGroupId}/modifiers``
-                   https://docs.clover.com/dev/reference/modifiergetmodifiersbygroup
-GetModifier        ``GET  /v3/merchants/{mId}/modifier_groups/{modGroupId}/modifiers/{modId}``
-                   https://docs.clover.com/dev/docs/manage-item-modifiers-availability
-=================  ==============================================================
+DOCUMENTED: create requires ``name`` and ``price``; update is ``POST`` and
+sparse; the list is the ``{"elements": [...]}`` envelope with ``limit``
+(default 100, max 1000) and ``offset``; ``expand=modifierGroups`` shows an
+item's groups as ``modifierGroups.elements[]``; a modifier carries
+``available`` ("True (default) -- the modifier stock is available") and
+``price`` in cents.
 
-Documented behaviour reproduced here: create requires ``name`` and ``price``
-(a missing one is a 400 naming the field); the response carries the fields of
-the verbatim create example with the defaults labelled on
-``model/inventory.py``; update is ``POST`` and sparse; the list is the
-``{"elements": [...]}`` envelope with ``limit`` (default 100, max 1000) and
-``offset``; ``expand=modifierGroups`` shows an item's groups as
-``modifierGroups.elements[]`` -- the exact call a menu-sync consumer makes;
-a modifier carries ``available`` ("True (default) -- the modifier stock is
-available") and ``price`` in cents.
-
-JUDGMENT, labelled at its site: the 404 bodies are this package's envelope
-(Clover documents none); modifier groups and modifiers are read-only seed
-data here (``CLOVER_NOT_MODELED``).
+JUDGMENT, labelled at its site: the 404 bodies are this package's envelope;
+modifier groups and modifiers are read-only seed data here
+(``CLOVER_NOT_MODELED``).
 """
 
 from __future__ import annotations
@@ -192,9 +181,8 @@ class CloverInventorySurface:
         current = _require_item(args)
         for name in request.model_fields_set:
             if getattr(request, name) is None and name in _CANNOT_BE_CLEARED:
-                # A required field with no default: clearing it would store a
-                # document the wire cannot project, which is a 500 on every
-                # later read of this item AND of the whole list.
+                # Required, no default: clearing it would store an item the
+                # wire cannot project.
                 raise UnitError(
                     UnitErrorKind.INVALID_VALUE,
                     detail=f"{name} cannot be cleared; name and price are required on an item.",
@@ -251,9 +239,8 @@ class CloverInventorySurface:
     # -- shared --------------------------------------------------------------
 
     def _project(self, ctx: UnitContext, entity: Mapping[str, Any], expand: frozenset[str]) -> dict[str, Any]:
-        # Round-tripped through the tolerant entity reader before projection,
-        # so a stored document can never 500 a list: the wire model is strict
-        # about required fields and the reader supplies every default.
+        # Round-tripped through the tolerant entity reader so a stored
+        # document can never 500 a list.
         item = ItemEntity.from_entity(entity)
         entity = item.to_entity()
         groups: list[Mapping[str, Any]] = []

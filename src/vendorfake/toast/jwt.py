@@ -1,24 +1,12 @@
 """A JWT-shaped access token, minted and checked with HS256.
 
-FOR: producing the three-segment ``accessToken`` a Toast login answers with.
-DOCUMENTED (https://doc.toasttab.com/doc/devguide/authentication.html): the
-token is a JWT; https://doc.toasttab.com/doc/devguide/apiClientAccounts.html:
-it "carries partner_guid or management_set_guid".
+DOCUMENTED: the token is a JWT carrying ``partner_guid``
+(https://doc.toasttab.com/doc/devguide/authentication.html,
+https://doc.toasttab.com/doc/devguide/apiClientAccounts.html).
 
-JUDGMENT -- everything else about it. The header is the conventional
-``{"alg": "HS256", "typ": "JWT"}``; the payload carries ``partner_guid``
-(documented), ``jti`` (the token record's id, so a token maps to one stored
-record), ``iat`` and ``exp`` (Unix seconds, so a JWT-aware client sees the
-same lifetime ``expiresIn`` states), and ``scope`` (the space-joined scope set,
-for a consumer decoding it in a debugger). The signing secret is this unit's
-(``ToastConfig.jwt_signing_secret``); Toast's real key is not something a
-consumer ever holds, and a consumer must never verify a Toast token locally.
-
-The auth adapter does NOT verify the signature to authenticate: it looks the
-presented string up in the token store, exactly as an opaque token would be
-looked up, so a token minted by another unit -- or with the signing secret --
-is refused as unknown. :func:`verify_jwt` exists for tests and for a consumer
-who wants to see that the segments are what they claim.
+JUDGMENT: everything else is this project's shape; a consumer must never
+verify a Toast token locally. The auth adapter authenticates by token-store
+lookup, not signature verification; :func:`verify_jwt` is for tests only.
 """
 
 from __future__ import annotations

@@ -1,22 +1,16 @@
-"""The configuration API surface: thirteen resources, list and by guid.
+"""The configuration API surface: thirteen resources, list and by guid --
+reference data an ordering integration reads once to build its pickers
+(``model/config.py`` lists the resources and shapes).
 
-FOR: the reference data an ordering integration reads once to build its
-pickers -- dining options, the alternate payment types an OTHER payment names,
-tax rates, revenue centres, service areas, tables, restaurant services,
-discounts, service charges, the config-flavoured menu entities, void reasons.
+DOCUMENTED (toast-config-api.yaml v2.5.0): ``GET /config/v2/<resource>`` and
+``.../{guid}``; ``lastModified`` returns entities modified at or after that
+instant (JUDGMENT on inclusivity, since the page gives the parameter and not
+the comparison); ``pageToken`` continues a list via the
+``Toast-Next-Page-Token`` header, capped at 300 items per page.
 
-DOCUMENTED (toast-config-api.yaml v2.5.0; ``model/config.py`` lists the
-shapes): ``GET /config/v2/<resource>`` and ``GET /config/v2/<resource>/{guid}``;
-``lastModified`` (e.g. ``2024-06-20T00:00:00.000+0000``) returns entities
-modified at or after that instant (JUDGMENT on inclusivity -- the page gives
-the parameter and not the comparison); ``pageToken`` continues a list and the
-``Toast-Next-Page-Token`` response header carries the next one, omitted on
-the last page; at most 300 items per page. No ``page``/``pageSize``.
-
-JUDGMENT: the page token is the core's opaque cursor -- fingerprinted to the
+JUDGMENT: the page token is the core's opaque cursor, fingerprinted to the
 resource and the ``lastModified`` it was issued for, so a token replayed
-against another list is a 400 rather than the wrong page -- because Toast
-documents the header and not the token's format. Every route in this module
+against another list is a 400 rather than the wrong page. Every route
 requires ``Toast-Restaurant-External-ID``; the lists are the restaurant's.
 """
 

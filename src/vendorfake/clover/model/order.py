@@ -1,70 +1,28 @@
-"""The order wire vocabulary: Clover's ``Order`` and ``LineItem``, as models,
-plus the request shapes the orders surface parses and the two arithmetic
-helpers -- projection with expansions, and the atomic-order total.
+"""The order wire vocabulary: Clover's ``Order`` and ``LineItem`` models, the request shapes
+the orders surface parses, and two arithmetic helpers -- projection with expansions, and the
+atomic-order total.
 
-FOR: stating once what a Clover order document carries -- field names, units,
-enums, defaults -- so the surfaces parse and project through one vocabulary
-and tests can pin it without a unit.
+INVARIANT: an absent optional emits no key -- every projection goes through the core's
+``compact()``, so a sparse document matches the real API's.
 
-INVARIANT: **an absent optional emits no key.** Every projection is assembled
-through the core's ``compact()``, so an order with no ``note`` carries no
-``"note": null`` -- a consumer writing ``if "note" in order`` must take the
-same branch it would against the real API's sparse documents.
+Units: money is integer cents, DOCUMENTED ("$20.99 is represented as an amount value of 2099",
+https://docs.clover.com/dev/docs/creating-custom-orders); ``currency`` is ISO-4217. Entity
+timestamps are Unix milliseconds; OAuth expirations are Unix seconds (``model/oauth.py``).
+``unitQty`` is fixed-point x1000, DOCUMENTED ("unit quantity multiplied by 1000",
+https://docs.clover.com/dev/docs/ordercreatelineitem) -- absent means one unit.
+``percentageDecimal`` is percent x 10000 on a service charge, DOCUMENTED
+(https://docs.clover.com/dev/docs/ordercreateatomicorder).
 
-Units, both documented and easy to confuse:
+``total`` is client-owned on plain orders, DOCUMENTED ("If your app modifies an order, it must
+update the total as well", creating-custom-orders); only :func:`atomic_total` ever computes one.
 
-* **Money is integer cents.** "$20.99 is represented as an amount value of
-  2099" (https://docs.clover.com/dev/docs/creating-custom-orders); ``currency``
-  is ISO-4217.
-* **Entity timestamps are Unix milliseconds** -- ``createdTime``,
-  ``modifiedTime``, ``clientCreatedTime``, ``deletedTime`` (the inventory
-  create example shows ``modifiedTime: 1755786102000``). OAuth expirations are
-  Unix *seconds*; see ``model/oauth.py``.
-* **``unitQty`` is fixed-point x1000** -- "unit quantity multiplied by 1000"
-  (https://docs.clover.com/dev/docs/ordercreatelineitem), so 1.5 units is
-  ``1500`` and an absent ``unitQty`` means one unit.
-* **``percentageDecimal`` is percent x 10000** on a service charge
-  (https://docs.clover.com/dev/docs/ordercreateatomicorder), so 18% is
-  ``180000``. A discount carries either a negative ``amount`` in cents (the
-  tutorial's ``-200``) or a whole-number ``percentage``.
+``state`` is kept a plain ``str`` since Clover's own pages mix case (``machine.py`` owns the
+canonical values). Boolean flags with no documented default stay optional-and-omitted, except
+line items' ``exchanged``/``refunded`` (JUDGMENT default False).
 
-``total`` is client-owned on plain orders -- DOCUMENTED, and the fidelity
-point the surface must not soften: "Order totals are calculated dynamically
-and updated by the app the merchant uses... If your app modifies an order, it
-must update the total as well" (creating-custom-orders). The model treats
-``total`` as an ordinary stored integer; only :func:`atomic_total`, used by the
-two ``/atomic_order/*`` endpoints that Clover documents as calculating totals,
-ever computes one.
-
-Enums and defaults:
-
-* ``state`` is ``open``, ``locked`` or absent/null ("null is the default for
-  hidden orders") -- kept a plain ``str`` here because Clover's own pages mix
-  ``Open``/``open`` and storage is verbatim; the machine in ``machine.py``
-  owns the canonical values.
-* ``paymentState`` values are documented:
-  OPEN|PAID|REFUNDED|CREDITED|PARTIALLY_PAID|PARTIALLY_REFUNDED. JUDGMENT --
-  the ``OPEN`` *default* is this project's reading (an order nobody has paid
-  is open for payment); Clover documents the values, not an initial one.
-* ``payType`` values are documented: SPLIT_GUEST|SPLIT_ITEM|SPLIT_CUSTOM|FULL.
-* The boolean flags (``taxRemoved``, ``testMode``, ``manualTransaction``,
-  ``groupLineItems``, ``printed``) are documented fields with no documented
-  defaults, so they are optional-and-omitted rather than carrying invented
-  values -- except line items' ``exchanged`` and ``refunded`` (default False:
-  a freshly created line has been neither, a JUDGMENT about initial state,
-  not a claimed Clover default).
-
-Expansions -- ``expand=lineItems,discounts,orderType,serviceCharge`` and the
-dotted ``lineItems.discounts``, "maximum of three fields per API call"
-(https://docs.clover.com/dev/docs/expanding-fields). JUDGMENT on what an
-*unexpanded* order shows: the nested collections ``lineItems``,
-``discounts`` and ``serviceCharge`` are omitted unless asked for, which is
-what "expand" has to mean for a field to be expandable at all; ``orderType``
-is a reference and shows its ``{"id"}`` either way, because this unit stores
-nothing more about an order type. Expanded ``lineItems`` are capped at 100:
-"Offsets and limits cannot be used to paginate results in nested fields"
-(https://docs.clover.com/dev/docs/paginating-elements), and 100 is the
-documented nested cap.
+Expansions max three fields per call, DOCUMENTED (https://docs.clover.com/dev/docs/expanding-fields).
+Unexpanded, nested collections are omitted (JUDGMENT); expanded ``lineItems`` cap at 100, the
+documented nested-pagination limit (https://docs.clover.com/dev/docs/paginating-elements).
 """
 
 from __future__ import annotations
@@ -114,21 +72,8 @@ __all__ = [
 ]
 
 _REQUEST = ConfigDict(extra="ignore", frozen=True)
-"""The parse-path configuration, and both halves are deliberate.
-
-``extra="ignore"`` because a documented Clover order carries far more than
-this build models -- ``isVat``, ``unpaidBalance``, ``employee``,
-``customers`` and more are all real fields on the order reference -- and
-refusing a body because it mentioned one of them would fail on the shrink
-rather than on the thing under test.
-
-Not strict, because these models validate *decoded* documents (python mode):
-under strict validation ``"paymentState": "PAID"`` would refuse to become the
-enum member and a JSON array would refuse to become the ``lineItems`` tuple,
-so every documented body in Clover's own examples would 400. The money
-guarantee survives without strictness: lax ``int`` still refuses a fractional
-``20.99``, which is the coercion that would actually corrupt an amount.
-"""
+"""``extra="ignore"``: a real order carries more fields than this build
+models. Not strict: validates decoded documents into enum members."""
 
 EXPANDABLE: frozenset[str] = frozenset(
     {
@@ -143,28 +88,17 @@ EXPANDABLE: frozenset[str] = frozenset(
         "lineItems.modifications",
     }
 )
-"""The expansions this unit accepts; see the module docstring. ``orderType``
-and ``employee`` are references and show their ``{"id"}`` either way;
-``customers``, ``payments``, ``lineItems``, ``discounts``, ``serviceCharge``
-and the two dotted line-item collections appear only when expanded."""
+"""The expansions this unit accepts; ``orderType``/``employee`` show their ``{"id"}`` either way."""
 
 TAX_RATE_SCALE = 100000
-"""JUDGMENT -- the scale of a tax rate's ``rate`` integer: percent x 100000,
-so 7.25% is ``725000``. Clover's reference types ``rate`` as an integer "for
-percentage based discounts like sales tax" and ``taxSummaries[].rate`` as
-"Rate in percentage for this order tax rate"
-(https://docs.clover.com/dev/reference/taxrategettaxrates,
-https://docs.clover.com/dev/reference/ordercheckoutatomicorder) and states
-NO scale on either page. The one documented fixed-point percentage on the
-platform is ``percentageDecimal`` = percent x 10000 (merchantgetdefaultservicecharge);
-a rate one order finer is this project's reading, held in one constant so a
-consumer who learns the real scale changes one line. **NOT VERIFIED.**"""
+"""JUDGMENT, NOT VERIFIED -- percent x 100000 (7.25% is ``725000``). Clover
+types ``rate`` as an integer with no stated scale (https://docs.clover.com/dev/reference/taxrategettaxrates)."""
 
 MAX_EXPANSIONS = 3
-""""maximum of three fields per API call" (expanding-fields)."""
+"""DOCUMENTED: "maximum of three fields per API call" (expanding-fields, cited in the module docstring)."""
 
 NESTED_CAP = 100
-"""Nested arrays are not pageable and stop at 100 (paginating-elements)."""
+"""DOCUMENTED: nested arrays are not pageable and stop at 100 (paginating-elements)."""
 
 
 class PaymentState(StrEnum):
@@ -193,11 +127,7 @@ class PayType(StrEnum):
 
 
 class ItemRefWire(BaseModel):
-    """A reference to an inventory item, as a line item carries it.
-
-    "either a ``price`` or an ``item`` object with an inventory item ``id``"
-    (https://docs.clover.com/dev/docs/ordercreatelineitem).
-    """
+    """DOCUMENTED: a reference to an inventory item (https://docs.clover.com/dev/docs/ordercreatelineitem)."""
 
     model_config = _REQUEST
 
@@ -208,9 +138,7 @@ class ItemRefWire(BaseModel):
 
 
 class OrderTypeRefWire(BaseModel):
-    """A reference to an order type, as the documented create example carries
-    it: ``{"orderType": {"id": "KFRPRVCZ73JHM"}, ...}``
-    (https://docs.clover.com/dev/docs/creating-custom-orders)."""
+    """DOCUMENTED: a reference to an order type (https://docs.clover.com/dev/docs/creating-custom-orders)."""
 
     model_config = _REQUEST
 
@@ -221,9 +149,7 @@ class OrderTypeRefWire(BaseModel):
 
 
 class DiscountWire(BaseModel):
-    """A discount: a negative ``amount`` in cents, or a ``percentage``
-    (https://docs.clover.com/dev/docs/create-an-atomic-order, whose tutorial
-    sends ``"amount": -200``)."""
+    """DOCUMENTED: a negative ``amount`` in cents, or a ``percentage`` (https://docs.clover.com/dev/docs/create-an-atomic-order)."""
 
     model_config = _REQUEST
 
@@ -269,8 +195,7 @@ class RefWire(BaseModel):
 
 
 class ModifierRefWire(BaseModel):
-    """The modifier a modification points at, as the atomic tutorial shows it:
-    ``{"id", "name", "available"}`` (https://docs.clover.com/dev/docs/create-an-atomic-order)."""
+    """DOCUMENTED: the modifier a modification points at (https://docs.clover.com/dev/docs/create-an-atomic-order)."""
 
     model_config = _REQUEST
 
@@ -283,9 +208,8 @@ class ModifierRefWire(BaseModel):
 
 
 class ModificationWire(BaseModel):
-    """One line-item modification: ``{"modifier": {...}, "amount": 25}`` per
-    the atomic tutorial. ``amount`` in cents, per unit (JUDGMENT: it scales
-    with ``unitQty`` like the price does; Clover documents no rule)."""
+    """One line-item modification: ``{"modifier": {...}, "amount": 25}``.
+    ``amount`` in cents, per unit (JUDGMENT: scales with ``unitQty``)."""
 
     model_config = _REQUEST
 
@@ -315,8 +239,7 @@ class LineItemWire(BaseModel):
     name: str | None = None
     note: str | None = None
     unitQty: int | None = None
-    #: Documented field, undocumented default: optional-and-omitted, like the
-    #: order's own flag fields (module docstring).
+    #: Undocumented default; optional-and-omitted (module docstring).
     printed: bool | None = None
     exchanged: bool = False
     refunded: bool = False
@@ -349,17 +272,14 @@ class LineItemWire(BaseModel):
 
 
 class OrderWire(BaseModel):
-    """A whole order, ready to serialise. Field set from the order reference
-    pages; see the module docstring for units, enums and defaults."""
+    """A whole order, ready to serialise -- see the module docstring for
+    units, enums and defaults."""
 
     model_config = _REQUEST
 
     id: str
     currency: str
-    #: Client-owned on plain orders; never recomputed. Integer cents, and
-    #: never negative: the requests refuse one and the atomic calculators
-    #: floor at zero, so a negative stored total is a bug this projection
-    #: refuses to serialise rather than emit.
+    #: Client-owned; never recomputed.
     total: int = Field(ge=0)
     #: ``open``/``locked`` verbatim as stored, or None for a hidden order.
     state: str | None = None
@@ -385,9 +305,8 @@ class OrderWire(BaseModel):
     payments: tuple[RefWire, ...] = ()
 
     def wire(self, *, expand: Iterable[str] = ()) -> dict[str, Any]:
-        """The order as JSON, absent optionals omitted, nested collections
-        present only when expanded (module docstring). An empty expanded
-        array is omitted rather than sent as ``[]``, per the package rule."""
+        """The order as JSON; nested collections appear only when expanded
+        (module docstring). An empty expanded array is omitted, not ``[]``."""
         wanted = frozenset(expand)
         lines = self.lineItems[:NESTED_CAP] if "lineItems" in wanted else ()
         line_discounts = "lineItems.discounts" in wanted
@@ -442,11 +361,7 @@ class OrderWire(BaseModel):
 
 def project_order(entity: Mapping[str, Any], expand: Iterable[str] = ()) -> dict[str, Any]:
     """A stored order as Clover JSON, with the requested expansions.
-
-    The stored document uses the wire's own field names, so the entity
-    validates straight into :class:`OrderWire` (``extra="ignore"`` drops the
-    unit's internal ``merchant_id``/``version``/``created_at`` keys).
-    """
+    ``extra="ignore"`` drops the unit's internal storage keys."""
     return OrderWire.model_validate(entity).wire(expand=expand)
 
 
@@ -456,24 +371,13 @@ def project_order(entity: Mapping[str, Any], expand: Iterable[str] = ()) -> dict
 
 
 def supplied(model: BaseModel, field: str) -> bool:
-    """Whether ``field`` was present in the request document at all -- the one
-    legitimate reading of "did the caller mention this?" for a sparse update.
-    ``model.field is None`` cannot answer it: an absent ``note`` and
-    ``"note": null`` both validate to ``None``."""
+    """Whether ``field`` was present in the request at all: ``.field is None`` can't
+    tell, since an absent ``note`` and ``"note": null`` both validate to ``None``."""
     return field in model.model_fields_set
 
 
 class DiscountRequest(BaseModel):
-    """A discount as a caller sends it; ``amount`` (negative cents) or
-    ``percentage``. Both absent is refused by the surface.
-
-    JUDGMENT on signs and bounds -- Clover's tutorial shows ``"amount": -200``
-    and states no rule: ``amount`` is accepted as a signed integer and added
-    as sent (a positive one is a surcharge the caller asked for, not an error
-    this fake can see); ``percentage`` must be 0-100, because a negative or
-    >100 percentage has no documented meaning and would only produce a
-    negative total. The order total is floored at zero by the calculator.
-    """
+    """A discount as sent: ``amount`` (negative cents) or ``percentage``; both absent is refused by the surface."""
 
     model_config = _REQUEST
 
@@ -483,8 +387,7 @@ class DiscountRequest(BaseModel):
 
 
 class ServiceChargeRequest(BaseModel):
-    """``percentageDecimal`` = percent x 10000. An ``id`` alone references the
-    merchant's default service charge, which the surface resolves."""
+    """``percentageDecimal`` = percent x 10000. An ``id`` alone means the merchant's default charge."""
 
     model_config = _REQUEST
 
@@ -503,48 +406,37 @@ class RefRequest(BaseModel):
 
 
 class ModificationRequest(BaseModel):
-    """``{"modifier": {"id"}, "amount"?}``; a missing ``amount`` is the
-    modifier's price (resolved by the surface)."""
+    """``{"modifier": {"id"}, "amount"?}``; a missing ``amount`` is the modifier's own price."""
 
     model_config = _REQUEST
 
     modifier: RefRequest
-    #: Cents, never negative: a reduction is a discount, not a modification.
+    #: A reduction is a discount, not a modification.
     amount: int | None = Field(default=None, ge=0)
     name: str | None = None
 
 
 class LineItemRequest(BaseModel):
-    """One line item on create, bulk create, or inside an ``orderCart``.
-
-    "either a ``price`` or an ``item`` object with an inventory item ``id``"
-    -- both optional *here* because the rule is a disjunction the surface
-    enforces, with its documented message.
-    """
+    """One line item on create/bulk-create/``orderCart``: ``price``/``item`` are both optional
+    here; the surface enforces the disjunction."""
 
     model_config = _REQUEST
 
-    #: Cents, never negative (money is refused below zero everywhere).
     price: int | None = Field(default=None, ge=0)
     item: ItemRefWire | None = None
     name: str | None = None
     note: str | None = None
-    #: Fixed-point x1000, never negative (JUDGMENT: a negative quantity has
-    #: no documented meaning; a return is not a line item).
+    #: JUDGMENT: negative has no documented meaning; a return isn't a line item.
     unitQty: int | None = Field(default=None, ge=0)
     printed: bool | None = None
     discounts: list[DiscountRequest] | None = None
     modifications: list[ModificationRequest] | None = None
-    #: Explicit tax rates for a bare-price line; an item-backed line takes
-    #: the item's.
+    #: For a bare-price line; an item-backed line takes the item's rates.
     taxRates: list[RefRequest] | None = None
 
 
 class BulkLineItemsRequest(BaseModel):
-    """``POST .../bulk_line_items``: ``{"items": [...]}``, "max 100", "Each
-    item must include a price" (https://docs.clover.com/dev/docs/orderbulkcreatelineitems).
-    JUDGMENT on the wrapper key: the reference page's body is an ``items``
-    array; the response echoes the same key."""
+    """DOCUMENTED: ``POST .../bulk_line_items`` body (https://docs.clover.com/dev/docs/orderbulkcreatelineitems)."""
 
     model_config = _REQUEST
 
@@ -552,19 +444,14 @@ class BulkLineItemsRequest(BaseModel):
 
 
 class OrderCreateRequest(BaseModel):
-    """``POST .../orders`` -- the documented create example is
-    ``{"orderType":{"id":...},"currency":"USD","total":1500,"state":"Open"}``
-    and every field is optional on the wire; a missing ``currency`` and a
-    missing ``total`` are defaulted by the surface (labelled there)."""
+    """``POST .../orders``: every field is optional; a missing ``currency``/``total`` is surface-defaulted."""
 
     model_config = _REQUEST
 
     currency: str | None = None
-    #: Client-owned, and never negative.
     total: int | None = Field(default=None, ge=0)
     state: str | None = None
-    #: Accepted on the wire, refused by the surface unless OPEN: paymentState
-    #: is moved by payments (JUDGMENT, ``surface/orders.py``).
+    #: Refused by the surface unless OPEN: payments move it (JUDGMENT).
     paymentState: PaymentState | None = None
     payType: PayType | None = None
     clientCreatedTime: int | None = None
@@ -581,13 +468,11 @@ class OrderCreateRequest(BaseModel):
 
 
 class OrderPatchRequest(OrderCreateRequest):
-    """``POST .../orders/{orderId}`` -- the same fields, applied sparsely:
-    only what the caller mentioned changes (see :func:`supplied`)."""
+    """``POST .../orders/{orderId}``: the same fields, applied sparsely (see :func:`supplied`)."""
 
 
 class OrderCartRequest(BaseModel):
-    """The ``orderCart`` an atomic endpoint takes
-    (https://docs.clover.com/dev/docs/ordercreateatomicorder)."""
+    """The ``orderCart`` an atomic endpoint takes (https://docs.clover.com/dev/docs/ordercreateatomicorder)."""
 
     model_config = _REQUEST
 
@@ -604,8 +489,7 @@ class OrderCartRequest(BaseModel):
 
 
 class AtomicOrderRequest(BaseModel):
-    """``POST .../atomic_order/orders`` and ``.../checkouts``: an
-    ``orderCart`` wrapper."""
+    """``POST .../atomic_order/orders`` and ``.../checkouts``: an ``orderCart`` wrapper."""
 
     model_config = _REQUEST
 
@@ -618,9 +502,8 @@ class AtomicOrderRequest(BaseModel):
 
 
 def _discount_total(discounts: Sequence[Mapping[str, Any]], base: int) -> int:
-    """Discounts applied to ``base`` cents: each is its (negative) ``amount``
-    or ``-percentage%`` of ``base``. Percentages are of the undiscounted
-    base, not compounded (JUDGMENT; Clover documents no compounding rule)."""
+    """Each discount is its (negative) ``amount`` or ``-percentage%`` of ``base``. JUDGMENT: percentages
+    are of the undiscounted base, not compounded."""
     total = 0
     for discount in discounts:
         amount = discount.get("amount")
@@ -633,19 +516,8 @@ def _discount_total(discounts: Sequence[Mapping[str, Any]], base: int) -> int:
 
 
 def line_total(line: Mapping[str, Any]) -> int:
-    """``price x unitQty / 1000``, plus the line's own discounts, in cents.
-
-    ``unitQty`` absent means one unit (1000). JUDGMENT on rounding: half-up
-    on cents through :func:`~vendorfake.core.util.numbers.js_round`, since
-    Clover documents the units and not the rounding of a fractional cent.
-
-    JUDGMENT: floored at zero. A line's own discounts cannot make the line
-    worth less than nothing -- ``DiscountRequest.amount`` is an unbounded
-    signed integer, and without the floor a ``-1000`` discount on a 450 line
-    yielded a negative subtotal, negative tax on it, and a negative persisted
-    total that any positive payment marked PAID. Clover documents no rule;
-    the floor is the same one :func:`atomic_total` applies to the order.
-    """
+    """``price x unitQty / 1000`` plus the line's own discounts, in cents; ``unitQty`` absent means
+    one unit. JUDGMENT: half-up rounding, floored at zero."""
     price = line.get("price")
     base_price = price if isinstance(price, int) and not isinstance(price, bool) else 0
     qty = line.get("unitQty")
@@ -665,17 +537,10 @@ def atomic_total(
     discounts: Sequence[Mapping[str, Any]] = (),
     service_charge: Mapping[str, Any] | None = None,
 ) -> int:
-    """The pre-tax total an ``/atomic_order/*`` endpoint computes, in cents.
-
-    ``sum(line totals) + order discounts + service charge``, where the service
-    charge is ``percentageDecimal / 10000`` percent of the discounted subtotal
-    (JUDGMENT on the base: Clover documents the unit of ``percentageDecimal``
-    and not what it applies to; a charge on the discounted amount is what a
-    receipt shows). Tax is added by :func:`atomic_totals`.
-    """
+    """The pre-tax total an ``/atomic_order/*`` endpoint computes: ``sum(line totals) + order
+    discounts + service charge`` (JUDGMENT). Tax is added by :func:`atomic_totals`."""
     subtotal = sum(line_total(line) for line in lines)
-    # JUDGMENT: floored at zero. A discount larger than the subtotal leaves
-    # nothing owed rather than a negative order; Clover documents no rule.
+    # JUDGMENT: floored at zero rather than a negative order.
     discounted = max(0, subtotal + _discount_total(discounts, subtotal))
     return discounted + _service_charge_amount(discounted, service_charge)
 
@@ -691,9 +556,7 @@ def _service_charge_amount(base: int, service_charge: Mapping[str, Any] | None) 
 
 @dataclass(frozen=True, slots=True)
 class AtomicTotals:
-    """What the documented checkout response carries at the top level:
-    ``total``, ``subtotal``, ``totalTaxAmount`` and ``taxSummaries``
-    (https://docs.clover.com/dev/reference/ordercheckoutatomicorder)."""
+    """The documented checkout response's top level (https://docs.clover.com/dev/reference/ordercheckoutatomicorder)."""
 
     subtotal: int
     total: int
@@ -701,8 +564,7 @@ class AtomicTotals:
     taxSummaries: tuple[dict[str, Any], ...]
 
     def __post_init__(self) -> None:
-        # The floors in line_total and atomic_total make every figure here
-        # non-negative; a negative one is a calculator bug, never a response.
+        # A negative figure here is a calculator bug, never a real response.
         for name in ("subtotal", "total", "totalTaxAmount"):
             if getattr(self, name) < 0:
                 raise ValueError(f"atomic {name} is negative: {getattr(self, name)}")
@@ -722,17 +584,8 @@ def atomic_totals(
     discounts: Sequence[Mapping[str, Any]] = (),
     service_charge: Mapping[str, Any] | None = None,
 ) -> AtomicTotals:
-    """The whole documented totals block for a cart.
-
-    ``line_rates[i]`` is the tax rates (``{id, name, rate}``) that apply to
-    ``lines[i]``. JUDGMENT, all labelled: tax is computed per line on the
-    line's own discounted total (before order-level discounts and the service
-    charge -- Clover documents the fields and not the base), each rate is
-    ``rate / TAX_RATE_SCALE`` percent rounded half-up per line, ``subtotal``
-    is the sum of line totals, and ``total`` is the discounted subtotal plus
-    the service charge plus ``totalTaxAmount`` -- a receipt total. The
-    reference describes ``total`` only as "Total price of the order in cents".
-    """
+    """The whole totals block for a cart; ``line_rates[i]`` are the tax rates for ``lines[i]``.
+    JUDGMENT: tax is computed per line on its own discounted total."""
     subtotal = sum(line_total(line) for line in lines)
     pre_tax = atomic_total(lines, discounts, service_charge)
     summaries: dict[str, dict[str, Any]] = {}

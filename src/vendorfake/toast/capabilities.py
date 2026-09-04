@@ -1,24 +1,21 @@
 """What this vendor can be asked to do, and what it deliberately does not model.
 
-FOR: declaring the capability set once, so that the route table, the control
-plane's capability index and the core's own gating all read the same list --
-and recording, with reasons, every documented Toast behaviour this fake
-chooses not to implement.
+Declares the capability set once so the route table, the control plane's
+capability index and the core's gating all read the same list, and records,
+with reasons, every documented Toast behaviour this fake omits.
 
-INVARIANT: **every capability the core gates on is accounted for.** The core
-fails at construction when one of its gated capabilities (``chaos``,
-``webhooks``, ``webhooks.chaos``) is neither declared here nor excused in
+INVARIANT: every capability the core gates on is accounted for -- the core
+fails at construction when a gated capability (``chaos``, ``webhooks``,
+``webhooks.chaos``) is neither declared here nor excused in
 ``VendorDefinition.not_supported`` with a reason.
 
-``webhooks`` and ``webhooks.chaos`` are declared together with the signer,
-the event mapper and the subscription stand-in, which is the order the
-declaration system demands: a capability declared while the dispatcher would
-silently no-op on a missing seam is the enabled-but-dead state it exists to
-prevent, and the earlier steps of this build excused both for that reason.
+``webhooks``/``webhooks.chaos`` are declared together with the signer, event
+mapper and subscription stand-in, so a capability is never declared while
+the dispatcher would silently no-op on a missing seam.
 
 ``not_supported`` may not name anything the core does not gate on, so the
-documented Toast features this fake omits live in :data:`TOAST_NOT_MODELED`, an
-informational map the surfaces cite in refusals.
+documented Toast features this fake omits live in :data:`TOAST_NOT_MODELED`,
+which the surfaces cite in refusals.
 """
 
 from __future__ import annotations

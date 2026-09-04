@@ -204,32 +204,13 @@ def test_every_control_route_carries_a_summary_and_an_operation_id() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_health_names_the_vendor_the_profile_and_the_framework_counter() -> None:
+def test_health_names_the_vendor_the_profile_and_the_uptime() -> None:
     api, _ = _api()
     body = api.get("/__unit/health").json()
     assert body["status"] == "ok"
     assert body["vendor"] == "acme"
     assert body["profile"] == "test"
     assert isinstance(body["uptime_ms"], int)
-    # Zero over the in-process binding is the true answer, not a stub: there is
-    # no framework present that could have answered anything.
-    assert body["framework_answered"] == 0
-
-
-def test_health_reports_the_transport_adapters_counter_when_one_is_supplied() -> None:
-    """The counter is surfaced rather than kept in the serving process,
-    because a list inside a uvicorn child is unreadable from the parent of an
-    out-of-process test -- which is the only place the number matters."""
-    hits = [3]
-    unit = make_unit(
-        [],
-        vendor=_vendor(),
-        control_routes=lambda binding: control_plane_routes(binding, framework_answered=lambda: hits[0]),
-        sink=MemorySink(),
-        capabilities=("orders", "chaos", "webhooks", "webhooks.chaos"),
-        schedule_ms=(5,),
-    )
-    assert in_process(unit).get("/__unit/health").json()["framework_answered"] == 3
 
 
 def test_info_carries_all_eight_keys_the_conformance_suite_asserts_by_name() -> None:
@@ -784,14 +765,11 @@ def test_programming_a_sink_that_is_not_the_memory_sink_is_a_conflict() -> None:
     """`conflict`, not the brief's `invalid_state`: the twenty kinds are fixed
     by a conformance check asserting the literal count, and "the unit is not in
     a state where this is possible" is what `conflict` already means."""
-    import tempfile
+    from vendorfake.core.webhooks.sink import HttpSink
 
-    from vendorfake.core.webhooks.sink import FileSink
-
-    with tempfile.TemporaryDirectory() as tmp:
-        api, _ = _api(sink=FileSink(tmp))
-        res = api.post("/__unit/webhooks/sink", {"statuses": [500]})
-        assert (res.status, res.header("x-unit-error")) == (409, "conflict")
+    api, _ = _api(sink=HttpSink())
+    res = api.post("/__unit/webhooks/sink", {"statuses": [500]})
+    assert (res.status, res.header("x-unit-error")) == (409, "conflict")
 
 
 # ---------------------------------------------------------------------------

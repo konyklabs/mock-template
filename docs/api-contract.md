@@ -65,12 +65,10 @@ same name, `clock_start=` layers beneath it exactly as in `unit()`, and the
 parent-resolved `.seed` reads the same `VENDORFAKE_VENDOR_*` layer. Additive:
 a call without it behaves as before. Entries for what `served()` passes as a
 flag (`VENDORFAKE_PROFILE`, `VENDORFAKE_HOST`, `VENDORFAKE_PORT`,
-`VENDORFAKE_LOG_LEVEL`), for `VENDORFAKE_TRANSPORT` and
-`VENDORFAKE_TRANSPORT_DIR`, for `VENDORFAKE_SEED` and for
+`VENDORFAKE_LOG_LEVEL`), for `VENDORFAKE_SEED` and for
 `VENDORFAKE_SEED_OVERLAY` are refused with
 `ValueError` before the child is spawned — the first four because the flag
-would beat them (the message names the parameter to use), the transport pair
-because `serve` only ever binds HTTP and there is no parameter to use, the
+would beat them (the message names the parameter to use), the
 seed because `.seed` could not describe it, and the overlay because
 `seed_overlay=` is the parameter for it and only the parameter's path checks
 the document in the calling process. There is still no `capabilities=`.
@@ -238,11 +236,10 @@ upgrade may move them under you.
   `.config`, `.errors`, `.seed`, `.model`, and the names their `__init__`
   re-exports. What a vendor surface *does* is pinned by the conformance suite;
   where it lives is not.
-- **`vendorfake.agent`** — the machinery behind `vendorfake agent-setup` and
-  `vendorfake explain`: the rules-file template, the `.mcp.json` merge, and
-  the lookups `explain` renders. `vendorfake.agent.__init__` declares
-  `__all__ = []` and is reached only from `vendorfake.cli`'s two subcommand
-  bodies. The command line those two subcommands are part of is pinned — see
+- **`vendorfake.agent`** — the lookups behind `vendorfake explain`.
+  `vendorfake.agent.__init__` declares
+  `__all__ = []` and is reached only from `vendorfake.cli`'s subcommand
+  bodies. The command line that subcommand is part of is pinned — see
   *The command line*, above — this package's internal shape is not; a test
   or an agent reaches this surface through the `vendorfake` command, never by
   importing `vendorfake.agent` directly.

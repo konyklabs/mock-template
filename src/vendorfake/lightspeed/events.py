@@ -1,73 +1,17 @@
-"""Committed state mutation -> Lightspeed webhook event.
+"""Committed state mutation -> Lightspeed webhook event, keyed by the store's
+journal so a delivery and the matching REST response can't drift.
 
-FOR: deriving every webhook this unit sends from the journal, so an event
-exists exactly when a mutation committed. **No handler emits**; the store's
-journal decides, and this mapper keys on the journal's collection.
+DOCUMENTED (https://x-series-api.lightspeedhq.com/docs/webhooks): the seven
+event types are the specification's ``WebhookType`` enum
+(:data:`LIGHTSPEED_EVENT_TYPES`); ``register_closure.create`` is synthesised
+(no REST resource for a closure exists); ``product.update``/``customer.update``
+also fire on a soft delete; ``inventory.update`` fires per row, not per request.
 
-THE SEVEN EVENT TYPES are the specification's ``WebhookType`` enum, verified
-identical to the list on https://x-series-api.lightspeedhq.com/docs/webhooks:
-``sale.update``, ``product.update``, ``customer.update``, ``inventory.update``,
-``register_closure.create``, ``consignment.send``, ``consignment.receive``.
-:data:`LIGHTSPEED_EVENT_TYPES` is that enum in that order, and a subscription
-may name any of them.
-
-**Two of the seven are never fired.** Consignments are outside issue #94's
-scoped surface, so nothing in this unit ever mutates a consignment and an
-event with no mutation behind it would be a fake event with a real signature.
-``capabilities.py`` records the omission under ``consignment-events``.
-
-WHAT FIRES WHAT
----------------
-============================  ==============================================
-``register_closures`` insert  ``register_closure.create`` -- "fires every
-                              register close". There is no REST resource for
-                              a closure anywhere in the 135 documented paths,
-                              so the payload is synthesised by the close
-                              action itself (``surface/registers.py``).
-``sales`` write               ``sale.update`` ("may fire multiple times for
-                              layby/account sales")
-``products`` write            ``product.update`` ("fires on product edits")
-``customers`` write           ``customer.update`` ("create/delete/modify,
-                              including balance changes")
-``inventory`` write           ``inventory.update`` ("requires inventory
-                              tracking enabled")
-============================  ==============================================
-
-``products``, ``customers``, ``inventory`` and ``sales`` each carry their own
-model's wire shape, so the entity a webhook delivers and the entity the REST
-route answers are ONE function and cannot drift.
-
-A ``sale.update`` payload carries no payment-type NAME
-(``PaymentTypeDetails.name``): the mapper projects from the journal entry and
-has no reason to reach into the payment types collection for a label the
-request itself did not carry. The payment's ``config_id`` is there, which is
-the id a consumer resolves against ``GET /payment_types``.
-
-A ``product.update`` and a ``customer.update`` fire on a DELETE as well as a
-create or an edit, because both deletes here are soft: the row keeps its id,
-gains a ``deleted_at``, and is still there for the payload to carry. The
-webhooks page documents ``customer.update`` as covering
-"create/delete/modify".
-
-``inventory.update`` fires per inventory ROW, not per request: a stock
-adjustment batch that moves three rows delivers three, and a product created
-with opening stock at two outlets delivers two plus its ``product.update``.
-
-THE PAYLOAD SHAPE is the 2026-07 entity as this unit stores it. DOCUMENTED
-DEVIATION, and UNVERIFIED: the webhooks page says "The payload objects you'll
-find in webhook requests are the same as those you'll receive from API 1.0" --
-the OLDER response shapes, not the 2026-07 ones this specification documents.
-This unit does not model API 1.0 at all, so it sends what it has. How large a
-drift that implies is unknown and is recorded in ``capabilities.py`` under
-``payload-shape-is-2026-07`` rather than guessed at.
-
-THE DELIVERY FIELDS. ``PreparedEvent.body`` here is the *form fields* of the
-delivery, not a JSON envelope: ``payload`` (the entity, which the signer
-JSON-encodes), plus ``domain_prefix`` and ``environment``. The docs call the
-latter two optional -- "may be present but are not guaranteed to be" -- and
-this unit sends both, because a consumer whose code reads them should be
-exercised against a delivery that has them. The form encoding itself is
-``signer.encode_body``; see ``signer.py``.
+JUDGMENT / NOT VERIFIED: the two consignment types are never fired (out of
+scope, see ``capabilities.py``'s ``consignment-events``); payloads use this
+unit's 2026-07 shape rather than the API 1.0 shape the page describes (see
+``capabilities.py``'s ``payload-shape-is-2026-07``); the optional
+``domain_prefix``/``environment`` delivery fields are always sent.
 """
 
 from __future__ import annotations
@@ -100,8 +44,8 @@ LIGHTSPEED_EVENT_TYPES: tuple[str, ...] = (
     "consignment.send",
     "consignment.receive",
 )
-"""The specification's ``WebhookType`` enum, in its own order. All seven are
-subscribable; the two consignment values are never fired here."""
+"""The specification's ``WebhookType`` enum, in its own order; the two
+consignment values are never fired here."""
 
 EVENT_FOR_COLLECTION: Mapping[str, str] = {
     COL.register_closures: "register_closure.create",
@@ -110,24 +54,16 @@ EVENT_FOR_COLLECTION: Mapping[str, str] = {
     COL.customers: "customer.update",
     COL.inventory: "inventory.update",
 }
-"""Which committed collection produces which event. Read by the mapper and by
-this package's tests, so the table is one thing rather than a chain of ``if``s
-plus an assertion about it."""
+"""Which committed collection produces which event."""
 
-#: Store bookkeeping the wire never carries. ``object_version`` is renamed
-#: rather than dropped: it IS the Lightspeed ``version``.
+#: Store bookkeeping the wire never carries (``object_version`` renames to Lightspeed's ``version``).
 _INTERNAL_KEYS = frozenset({"id", "version", "created_at", "updated_at", OBJECT_VERSION})
 
 
 def _generic(entity: Mapping[str, Any]) -> dict[str, Any]:
-    """A stored entity as the wire carries it: ``id`` first, the store's own
-    bookkeeping dropped, and Lightspeed's ``version`` restored from
-    :data:`~vendorfake.lightspeed.entities.OBJECT_VERSION`.
-
-    No collection this unit writes falls back here any more -- every one of
-    the five in :data:`_PROJECTIONS` names its own surface's model projection.
-    It stays as the table's default, so a collection added by a later slice
-    delivers its stored shape rather than raising at delivery time.
+    """A stored entity as the wire carries it: ``id`` first, store bookkeeping
+    dropped, ``version`` restored from :data:`OBJECT_VERSION`. Fallback for a
+    collection absent from :data:`_PROJECTIONS`.
     """
     out: dict[str, Any] = {"id": entity["id"]}
     for key, value in entity.items():
@@ -144,9 +80,8 @@ _PROJECTIONS: Mapping[str, Any] = {
     COL.inventory: project_inventory,
     COL.sales: project_sale,
 }
-"""Which committed collection is carried by which wire projection. A
-collection absent from this table falls back to :func:`_generic`; today no
-collection this unit writes is."""
+"""Which committed collection is carried by which wire projection; falls back
+to :func:`_generic`."""
 
 
 class LightspeedEventMapper:
@@ -164,10 +99,7 @@ class LightspeedEventMapper:
             return ()
         stored = ctx.store.collection(entry.collection).get(entry.id)
         if stored is None:
-            # A delete: the entity is gone, so there is nothing to carry. The
-            # only collection here that is ever deleted from is `customers`,
-            # whose event is documented to fire on delete -- a later slice
-            # that models the deletion carries the tombstone it needs.
+            # A hard delete: nothing to carry (deletes modelled here are soft).
             return ()
         project = _PROJECTIONS.get(entry.collection, _generic)
         payload = project(stored)

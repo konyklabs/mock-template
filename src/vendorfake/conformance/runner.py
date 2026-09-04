@@ -1,32 +1,10 @@
 """Running the registry: one check, or all of them, over profiles and transports.
 
-FOR: being the framework-free façade. No pytest, no web framework, no vendor.
-A container's healthcheck and an external vendor without a test runner both get
-an exit code from here; the pytest layer is a second rendering over the same
-registry, and the only rule it states that this module does not state inline is
-the one this module states in the report -- every contract passed on at least
-one profile.
+The framework-free façade -- no pytest, no web framework, no vendor. A container's healthcheck and an external vendor without a test runner both get an exit code from here; the pytest layer states no rule this module does not state inline.
 
-INVARIANT: **each check gets its own freshly built unit.** The reference shares
-one unit across all ten of its checks and mutates it -- capabilities toggled in
-one, chaos rules installed in another -- which makes check order load-bearing
-and lets a failure part-way through one contract poison every contract after
-it. In-process construction costs milliseconds. Isolation removes the whole
-class of flake, and it makes "two fresh units agree" the ordinary case rather
-than a special one.
+Each check gets its own freshly built unit, never one shared and mutated across checks, so check order is never load-bearing and one contract's failure cannot poison the ones after it.
 
-SECOND INVARIANT: **an unexpected exception is red, never a skip.** A suite
-that turned a crash into a skip would report the emptiest possible run as its
-cleanest. But red comes in two kinds and they are reported as two: an
-exception raised *inside* a check body is a FAILURE of that contract, while an
-exception raised while the unit is being CONSTRUCTED or reached is an ERROR --
-the contract was never asked, so nothing at all was learned about it.
-
-That split was bought with a measurement. Deleting one core-gated capability
-declaration from a vendor makes ``Unit`` refuse to start, which used to print
-``[FAIL] C11`` -- indistinguishable from C11 having been asked and having
-found the declaration missing, and identical to what every other contract
-printed at the same moment. One line of the report now says which happened.
+An unexpected exception is red, never a skip -- but red comes in two kinds: an exception raised inside a check body is a FAILURE of that contract, while one raised while the unit is being constructed or reached is an ERROR, because the contract was never asked and nothing was learned about it.
 """
 
 from __future__ import annotations
@@ -66,11 +44,7 @@ __all__ = [
 ]
 
 TARGET_ENV_VAR = "VENDORFAKE_CONFORMANCE_TARGET"
-"""Where both renderings look for a target when no flag names one.
-
-One spelling, read by the CLI and by the pytest plugin, so that a vendor
-wiring the suite into CI sets it once and both entry points obey it.
-"""
+"""Where both renderings look for a target when no flag names one -- one spelling, read by the CLI and the pytest plugin."""
 
 REMOTE_TRANSPORT = "http"
 """The only transport a unit somebody else is running can be reached over."""
@@ -87,17 +61,7 @@ REMOTE_CAVEAT = (
 
 
 def resolve_target(spec: str) -> ConformanceTarget:
-    """``my_package.testing:target`` -> the target itself.
-
-    Lives here rather than in either entry point because the CLI and the pytest
-    plugin must resolve a target the same way; two spellings of "find the
-    vendor" is two places for them to disagree about what was tested.
-
-    A zero-argument callable is called, so a vendor may publish either a
-    module-level target or a factory; anything else raises :class:`LookupError`
-    naming what was found, because "your target is a string" is a better
-    failure than an attribute error thrown from inside the runner.
-    """
+    """``my_package.testing:target`` -> the target itself. Shared by the CLI and the pytest plugin so both resolve a target the same way. A zero-argument callable is called, so a vendor may publish either a module-level target or a factory; anything else raises :class:`LookupError` naming what was found."""
     module_name, _, attribute = spec.partition(":")
     found = getattr(import_module(module_name), attribute or "target")
     if isinstance(found, ConformanceTarget):
@@ -113,35 +77,18 @@ def resolve_target(spec: str) -> ConformanceTarget:
 
 
 def remote_target(base_url: str) -> ConformanceTarget:
-    """A target for a unit somebody else is already running.
+    """A target for a unit somebody else is already running. The suite never starts a server itself, so the address is passed in and this builds a client against it.
 
-    FOR: pointing the contracts at a container. The suite never starts a
-    server -- that would mean importing the framework the core exists to stay
-    clear of -- so the address is passed in and this builds a client against
-    it.
+    The profile and vendor name are discovered from the control plane rather than passed as flags, since the running unit already knows which profile it loaded. The run is therefore single-profile: the caller passes ``cross_profile=False`` to :func:`run_conformance`, because "every contract passed on some profile" is a statement about a matrix and one container is not one.
 
-    The profile and the vendor's name are DISCOVERED from the control plane
-    rather than passed as flags: the running unit already knows which profile
-    it loaded, and a flag would only introduce a second answer that could be
-    wrong. The run is therefore single-profile, which is why the caller passes
-    ``cross_profile=False`` to :func:`run_conformance`: "every contract passed
-    on some profile" is a statement about a matrix, and one container is not
-    one.
-
-    WHAT IS RESTORED BETWEEN CHECKS, and what cannot be. Capabilities are put
-    back to the set the unit started with and the seed scenario is re-applied,
-    so a contract that toggles a capability or writes an entity does not
-    change what the next one sees. A freshly *constructed* unit is out of
-    reach by definition -- see :data:`REMOTE_CAVEAT`, which every such run
-    prints.
+    Between checks, capabilities are put back to the set the unit started with and the seed scenario is re-applied. A freshly constructed unit is out of reach by definition -- see :data:`REMOTE_CAVEAT`, which every such run prints.
     """
     probe = HttpConformanceClient(base_url)
     try:
         try:
             answered = probe.call("GET", f"{CONTROL_PREFIX}info")
         except httpx.HTTPError as exc:
-            # A refused connection is a usage error, not a crash: the caller
-            # typed an address, and the message has to be the address.
+            # A refused connection is a usage error, not a crash.
             raise LookupError(f"cannot reach a unit at {base_url}: {type(exc).__name__}: {exc}") from exc
         if answered.status != 200:
             raise LookupError(
@@ -176,13 +123,7 @@ def remote_target(base_url: str) -> ConformanceTarget:
 
 
 def _restore(client: ConformanceClient, capabilities: Sequence[str]) -> None:
-    """Put a shared unit back to the shape the run found it in.
-
-    A restore that quietly failed would be worse than no restore at all: every
-    later contract would be reading a unit an earlier one had changed, and the
-    report would call it conformance. So a non-2xx answer raises, and
-    :func:`run_check` turns that into a FAIL naming the route.
-    """
+    """Put a shared unit back to the shape the run found it in. A non-2xx answer raises, rather than let a later contract silently read a unit an earlier one changed."""
     for method, path, body in (
         ("POST", f"{CONTROL_PREFIX}capabilities", {"set": list(capabilities)}),
         ("POST", f"{CONTROL_PREFIX}state/reset", {}),
@@ -206,14 +147,7 @@ def select_checks(ids: Sequence[str] | None) -> tuple[CheckSpec, ...]:
 
 @contextmanager
 def _reached(target: ConformanceTarget, profile: str, transport: str) -> Iterator[Any]:
-    """``check_env``, with a construction crash relabelled as an ERROR.
-
-    The whole of the distinction lives here, in the narrowest place it can:
-    only what ``target.open_client`` does on the way *in* is reclassified.
-    Once a client exists the context is a plain pass-through, so an exception
-    a check body raises is still that check body's failure and cannot be
-    laundered into "the harness is broken".
-    """
+    """``check_env``, with a construction crash relabelled as an ERROR. Only what ``target.open_client`` does on the way in is reclassified; once a client exists this is a plain pass-through."""
     try:
         manager = check_env(target, profile, transport)
         env = manager.__enter__()
@@ -284,17 +218,7 @@ def run_conformance(
     strict: bool = False,
     cross_profile: bool | None = None,
 ) -> ConformanceReport:
-    """Ask every selected contract of every selected (profile, transport).
-
-    ``cross_profile`` overrides the derivation for the one case the derivation
-    cannot see: a run against a unit somebody else is running. Such a target
-    honestly declares the single profile it loaded, so "this run covered every
-    profile the target declares" is true and the anti-vacuity rule would fire
-    on every contract the container's profile cannot meet. Passing ``False``
-    says "this was never a matrix"; nothing else may pass it, and the report
-    prints the resulting never-ran list as informational rather than dropping
-    it.
-    """
+    """Ask every selected contract of every selected (profile, transport). ``cross_profile`` overrides the derivation for the one case it cannot see: a run against a unit somebody else is running, which honestly declares only the one profile it loaded. Passing ``False`` says "this was never a matrix"; the report then prints the never-ran list as informational rather than failing on it."""
     specs = select_checks(check_ids)
     chosen_profiles = tuple(profiles) if profiles else tuple(target.profiles)
     chosen_transports = tuple(transports) if transports else tuple(target.transports)
@@ -316,19 +240,7 @@ def run_conformance(
 
 
 def unobserved_contracts(specs: Sequence[CheckSpec], results: Sequence[CheckResult]) -> dict[str, str]:
-    """Contracts whose precondition is about the RUN, not the vendor, and that
-    no (profile, transport) in the run could meet.
-
-    Only the virtual clock today. Every other precondition describes the
-    vendor or the profile -- no signer, no seed, a capability off -- and a
-    profile that lacks the capability skips the contract forever, which is
-    what the expected-skip matrix records. The clock is different: it is a
-    property of how the unit was STARTED, any profile can run on either, and
-    a container is checked on exactly one. A run in which no profile offered
-    one has not skipped the retry-schedule contract for a reason about the
-    vendor; it has simply not looked, and under ``--strict`` that is a
-    failure naming what to start differently rather than a declared skip.
-    """
+    """Contracts whose precondition is about the RUN, not the vendor, and that no (profile, transport) in the run could meet. Only the virtual clock today: unlike a missing capability, it is a property of how the unit was started, so a run that never offered one has not skipped for a reason about the vendor -- it has simply not looked, and under ``--strict`` that is a failure rather than a declared skip."""
     out: dict[str, str] = {}
     for spec in specs:
         if not spec.requires.virtual_clock:
@@ -345,17 +257,12 @@ def unobserved_contracts(specs: Sequence[CheckSpec], results: Sequence[CheckResu
 
 
 def declared_skips(target: ConformanceTarget) -> dict[str, frozenset[str]]:
-    """The skip matrix a target answers to: its own when it names one, the
-    manifest's otherwise. One resolution for the report, the pytest plugin
-    and any test that renders a skip -- they must never disagree about
-    which skips a vendor declared."""
+    """The skip matrix a target answers to: its own when it names one, the manifest's otherwise -- one resolution shared by the report, the pytest plugin and any test that renders a skip."""
     if target.expected_skips is None:
         return expected_skips()
     return {check_id: frozenset(profiles) for check_id, profiles in target.expected_skips.items()}
 
 
 def skip_is_declared(target: ConformanceTarget, check_id: str, profile: str) -> bool:
-    """Whether a skip of ``check_id`` on ``profile`` is one the target
-    declared: in its skip matrix, or as a contract its vendor can never be
-    asked (``inapplicable``)."""
+    """Whether a skip of ``check_id`` on ``profile`` is one the target declared: in its skip matrix, or as a contract its vendor can never be asked (``inapplicable``)."""
     return check_id in target.inapplicable or profile in declared_skips(target).get(check_id, frozenset())

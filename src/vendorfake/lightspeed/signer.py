@@ -1,48 +1,15 @@
 """Lightspeed's webhook signature: HMAC-SHA256 over the raw form body, hex.
 
-FOR: producing the ``X-Signature`` header a consumer's verification code
-checks, so that a handler that verifies correctly against this unit verifies
-correctly against Lightspeed -- and one that does not fails here first.
+DOCUMENTED (https://x-series-api.lightspeedhq.com/docs/webhooks): header format is
+``X-Signature: signature=<hex>,algorithm=HMAC-SHA256``; recipe is "hash the webhook
+request body and compare it to the signature in the header".
 
-WHAT LIGHTSPEED DOCUMENTS (https://x-series-api.lightspeedhq.com/docs/webhooks):
-the header's exact format, quoted::
+JUDGMENT: "the webhook request body" reads as the raw form bytes here, not the decoded
+``payload`` field's JSON; the hex encoding is also JUDGMENT -- see
+:meth:`LightspeedWebhookSigner.describe` for both readings and why.
 
-    X-Signature: signature=897hRT893qkA783M093ha903f,algorithm=HMAC-SHA256
-
-Comma-separated ``key=value`` pairs in one header value. The algorithm is
-named. The recipe is one sentence: "generate a signature by hashing the
-webhook request body and compare it to the signature in the header for an
-exact match".
-
-JUDGMENT, and the loudest one in this package: **what "the webhook request
-body" means.** The delivery is ``application/x-www-form-urlencoded`` with the
-entity JSON inside a ``payload`` field, so the phrase has two readings -- the
-raw form-encoded bytes as sent, or the ``payload`` field's JSON string after
-decoding. The docs do not say, and a second, more targeted fetch confirmed the
-ambiguity rather than resolving it. This unit signs the **raw form-encoded
-body bytes**, which is the literal reading of "the request body", and
-:meth:`LightspeedWebhookSigner.describe` says so at ``/__unit/info``. A
-consumer verifying against the real API and finding the header disagrees
-should try the ``payload``-only reading second;
-:func:`lightspeed_signature_over_payload` is shipped so that reading is one
-call away rather than a re-implementation.
-
-The encoding is **hex**, also JUDGMENT: the page's own sample value
-(``897hRT893qkA783M093ha903f``) is not hex and not valid base64 either -- it is
-an illustration, not a spec -- so hex is chosen as the encoding a reader of
-"hashing the body" reaches for first, and it is stated rather than assumed.
-
-THE PROPERTIES FOLLOW: bound to the body and the secret, not to the URL and
-not to the attempt. A retry re-sends the same bytes and the same header, which
-is what lets a consumer deduplicating on the payload's own id verify a
-redelivery.
-
-THE SECRET. Lightspeed's own signature is computed with the application's
-``client_secret``: there is no per-subscription secret in ``WebhookRequest``,
-which carries only ``active``, ``type`` and ``url``. The core hands the signer
-whatever the subscription's ``signature_key`` holds, so the seed and the
-``POST /webhooks`` handler both set that key to the configured client secret --
-see ``surface/webhooks.py``.
+Bound to the body and the secret, not the URL; signs with the application's
+``client_secret`` since ``WebhookRequest`` carries none of its own.
 """
 
 from __future__ import annotations
@@ -96,13 +63,7 @@ def lightspeed_signature(secret: str, raw_body: bytes | str) -> str:
 
 
 def lightspeed_signature_over_payload(secret: str, raw_body: bytes | str) -> str:
-    """The OTHER reading: the HMAC over the ``payload`` field's JSON string only.
-
-    Shipped so a consumer chasing the ambiguity in the docs can try the second
-    reading without writing their own form parser. Nothing in this unit sends
-    it. A body with no ``payload`` field signs as the empty string, which is
-    what the reading degenerates to.
-    """
+    """The other reading: HMAC over just the ``payload`` field's JSON string; nothing in this unit sends it."""
     text = raw_body.decode("utf-8") if isinstance(raw_body, bytes) else raw_body
     fields = dict(parse_qsl(text, keep_blank_values=True))
     return _hmac_hex(secret, fields.get(_PAYLOAD_FIELD, "").encode("utf-8"))
@@ -114,12 +75,8 @@ def signature_header_value(signature: str) -> str:
 
 
 def verify_lightspeed_signature(secret: str, raw_body: bytes | str, header_value: str) -> bool:
-    """Whether ``header_value`` is what this scheme produces for ``raw_body``.
-
-    Shipped for consumers to copy. It parses the comma-separated members the
-    way the header is documented, checks the algorithm, and compares with
-    :func:`hmac.compare_digest`, never ``==``.
-    """
+    """Whether ``header_value`` is what this scheme produces for ``raw_body``; compares
+    with :func:`hmac.compare_digest`, never ``==``."""
     members: dict[str, str] = {}
     for part in header_value.split(","):
         key, separator, value = part.strip().partition("=")
@@ -145,18 +102,9 @@ class LightspeedWebhookSigner:
     def encode_body(self, event: PreparedEvent) -> bytes:
         """The delivery body: ``application/x-www-form-urlencoded``.
 
-        Satisfies the core's :class:`~vendorfake.core.webhooks.models.BodyEncodingSigner`,
-        which is the hook that lets a vendor whose delivery is not JSON send
-        what it documents rather than a body its own content-type header
-        contradicts. ``event.body`` is the *fields* mapping the event mapper
-        built; each value already a string is sent as it is, and every other
-        value is JSON-encoded -- which is what makes ``payload`` "a
-        JSON-encoded object with entity details" without the mapper having to
-        serialise it itself.
-
-        A body that is not a mapping -- the control plane's
-        ``POST /__unit/webhooks/emit`` accepts any document -- becomes the
-        whole ``payload``, which is the field the docs make required.
+        Satisfies :class:`~vendorfake.core.webhooks.models.BodyEncodingSigner`. String
+        values pass through as-is; everything else is JSON-encoded. A non-mapping body
+        (e.g. from ``POST /__unit/webhooks/emit``) becomes the whole ``payload`` field.
         """
         body = event.body
         fields = dict(body) if isinstance(body, Mapping) else {_PAYLOAD_FIELD: body}

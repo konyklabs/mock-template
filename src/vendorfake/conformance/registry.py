@@ -1,23 +1,6 @@
-"""Check registration, and the committed record of what is registered.
+"""Check registration and the committed record of what is registered -- one list, one id space, shared by the standalone runner, the pytest plugin and the report.
 
-FOR: making the set of contracts one list, in one place, with one id space --
-so that the standalone runner, the pytest plugin and the report are three
-renderings of the same registry rather than three lists kept in step by hand.
-
-INVARIANT: **removing a contract is a reviewable diff.** ``manifest.json``
-holds the id-to-name map and the expected-skip matrix as committed data, and a
-test asserts the live registry equals it. A check deleted, renamed or quietly
-gated out of every profile therefore shows up in a pull request as a changed
-file, which is the one property the template-checksum idea from the reference
-was reaching for and the only part of it that survives a single-repo topology.
-
-WHAT A CHECK MAY KNOW. Nothing about any vendor. A check declares what it
-needs through :class:`~vendorfake.conformance.types.Requires` and DISCOVERS it
-at runtime from ``/__unit/routes``, ``/__unit/capabilities`` and
-``/__unit/info``. There is no hardcoded path, no hardcoded capability name and
-no vendor slug anywhere in this package -- ``tools/boundary_check.py`` fails
-the build if one appears, with the vendor list derived from the source tree
-rather than hand-written.
+Removing a contract is a reviewable diff: ``manifest.json`` holds the id-to-name map and expected-skip matrix as committed data, checked against the live registry by a test. A check knows nothing about any vendor -- it declares what it needs via :class:`~vendorfake.conformance.types.Requires` and discovers routes and capabilities at runtime; no hardcoded path, capability name or vendor slug may appear in this package, enforced by ``tools/boundary_check.py``.
 """
 
 from __future__ import annotations
@@ -38,9 +21,7 @@ __all__ = [
 ]
 
 CHECKS: list[CheckSpec] = []
-"""Every registered contract, in registration order -- which is id order,
-because the check modules are imported in id order by
-:mod:`vendorfake.conformance.checks`."""
+"""Every registered contract, in registration order -- id order, since the check modules import in id order via :mod:`vendorfake.conformance.checks`."""
 
 NO_PRECONDITION = Requires()
 """The default gate: a contract every unit must answer, on every profile."""
@@ -49,13 +30,7 @@ _MANIFEST_FILE = "manifest.json"
 
 
 def check(*, id: str, name: str, asserts: str, requires: Requires = NO_PRECONDITION) -> Callable[[CheckFn], CheckFn]:
-    """Register one contract.
-
-    ``id`` shadows the builtin deliberately: it is the wire name of the thing,
-    it appears in reports, test ids and the manifest, and calling the parameter
-    anything else here would make every call site read differently from every
-    place the value is seen.
-    """
+    """Register one contract. ``id`` shadows the builtin deliberately -- it is the wire name of the thing, appearing in reports, test ids and the manifest."""
 
     def decorate(fn: CheckFn) -> CheckFn:
         for existing in CHECKS:
@@ -93,14 +68,7 @@ def load_manifest() -> dict[str, str]:
 
 
 def expected_skips() -> dict[str, frozenset[str]]:
-    """Skips that are expected and permanent, as committed data.
-
-    A profile that genuinely lacks the capability a contract needs will skip it
-    forever, and treating that as a strict-mode failure would make ``--strict``
-    unusable. Recording the pairs here instead means two things fail loudly: an
-    *undeclared* skip, and an expected skip that stops happening -- which means
-    a profile changed and nobody said so.
-    """
+    """Skips that are expected and permanent, as committed data. An undeclared skip and an expected skip that stops happening both fail loudly under ``--strict``."""
     matrix = _manifest_document()["expected_skips"]
     if not isinstance(matrix, dict):
         raise RuntimeError(f"{_MANIFEST_FILE}: 'expected_skips' must be an object mapping check id to profile names")

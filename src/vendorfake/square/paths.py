@@ -1,22 +1,6 @@
-"""Hand-written path constants for Square, one per route with an operation_id.
-
-FOR: a consumer who wants ``paths.OBTAIN_TOKEN`` instead of a route path typed
-into every test -- and a route path that CANNOT drift from what the router
-actually serves, because ``tests/unit/test_paths_drift.py`` builds a real
-Square vendor, reads its route table and asserts these constants against it:
-one constant per non-internal route carrying an ``operation_id``, values
-equal, and no constant naming a route that does not exist.
-
-Constants are ``UPPER_SNAKE`` of the route's ``operation_id`` -- the same
-identifier :func:`vendorfake.registry.routes` and ``GET /__unit/routes``
-publish, so a name here is always the name a consumer already has from
-discovering the surface at runtime. Path templates keep the brace form
-(``{order_id}``), matching every other place a template is written in this
-project.
-
-Do not hand-edit a value without also fixing the route it names, or the drift
-test fails naming exactly which constant disagrees with the router -- that is
-the point of the test existing at all.
+"""Hand-written path constants for Square, one per route with an operation_id. Names are ``UPPER_SNAKE`` of the
+route's ``operation_id``, matching what :func:`vendorfake.registry.routes` publishes. ``tests/unit/test_paths_drift.py``
+asserts every constant against the live route table, so a stale value fails that test rather than drifting silently.
 """
 
 from __future__ import annotations

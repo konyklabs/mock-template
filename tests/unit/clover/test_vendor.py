@@ -11,7 +11,6 @@ from vendorfake.clover.machine import ORDER_MACHINE
 from vendorfake.clover.retry import CLOVER_RETRY_SCHEDULE_MS
 from vendorfake.clover.vendor import CloverVendor, create_clover_vendor
 from vendorfake.core.kernel.types import (
-    MutableResponse,
     UnitError,
     UnitErrorKind,
     UnitRequest,
@@ -159,9 +158,9 @@ def test_volatile_fields_are_clovers_wall_clock_names() -> None:
 
 def test_decorate_stamps_only_the_unit_vendor_header() -> None:
     vendor = create_clover_vendor()
-    res = MutableResponse(status=200, headers={}, body=b"{}")
-    vendor.decorate(res, fake_ctx(), request())
-    assert res.headers == {"x-unit-vendor": "clover"}
+    headers: dict[str, str] = {}
+    vendor.decorate(headers, fake_ctx(), request())
+    assert headers == {"x-unit-vendor": "clover"}
 
 
 def test_opaque_fields_are_deliberately_empty() -> None:

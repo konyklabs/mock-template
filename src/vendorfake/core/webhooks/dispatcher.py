@@ -1,55 +1,11 @@
-"""Webhook delivery, derived from the journal and owned by nobody else.
-
-FOR: turning committed state mutations into signed outbound events, delivering
-them at least once, and recording every attempt in a log a consumer can read
-back. Events are derived from the state journal, **not** fired by hand from
-route handlers, so an event can only exist if the mutation behind it committed.
-Delivery is at-least-once: an attempt is retried until a success status or
-schedule exhaustion, and a delivery whose acknowledgement is lost is retried and
-therefore duplicated. Every attempt carries the same ``event_id``, which is the
-consumer's dedup handle.
-
-INVARIANT: **the core sends no delivery headers of its own.** Every header goes
-through the vendor: ``signer.sign(...)`` for the signature and
-``signer.headers(meta)`` for everything else, over the neutral
-:class:`DeliveryMetadata`. See ``webhooks/models.py`` for why that is one hook
-and not two, and for the retry-reason vocabulary that moved with it.
-
-SECOND INVARIANT: **the delivery log has exactly one writer.** Every record --
-including the two chaos outcomes that never touch the sink, ``skipped`` and
-``dropped`` -- is written on the delivery worker's thread, because the log is
-numbered ``dlv_00001`` in write order and ``deliveries()`` is published in that
-order. The reference writes ``skipped`` and ``dropped`` from the request thread
-and gets away with it only because Node has one thread; two writers here would
-renumber the ids and reorder the log, and the ported chaos tests assert both.
-
-THE SYNCHRONOUS PROLOGUE, and exactly what it does and does not promise.
-The reference leans on a JavaScript rule Python does not have: an ``async``
-function body runs synchronously up to its first ``await``, so ``attempt()``
-does the mapping, the id minting, the body build, the signing and the call into
-``sink.send`` before ``handle()`` can return. Python has no equivalent, so the
-prologue is explicit: :meth:`enqueue` runs on the request thread and completes
-the *whole* preparation of the first attempt -- event id, body bytes, signature,
-headers, work item on the queue -- before it returns. What it does **not** do is
-send. So the two assertions this design supports are:
-
-(a) after ``handle()`` returns, :meth:`prepared` shows the event, with its id
-    minted and its first attempt fully built and queued; and
-(b) :meth:`drain` is the only thing that makes :class:`DeliveryRecord`\\ s and
-    the sink's own record of receipt reliably observable.
-
-The stronger claim -- that a delivery record exists before ``handle()``
-returns -- is *not* made, and asserting it would be asserting a race: under one
-worker thread the record may or may not have been written by then. The
-reference does not give that guarantee either; its record is written after its
-first ``await``. Every reference test already drains first, so nothing is lost.
-
-RETRIES ARE PREPARED ON THE WORKER, first attempts on the request thread. The
-signature covers the attempt number for any vendor that declares
-``attempt_bound``, so a retry must be re-signed rather than re-sent, and the
-place to do that is the job that decided to retry. That also keeps the timer
-callback trivial -- it submits an already-built work item -- which matters
-because the timer callback runs on ``Clock.advance``'s caller.
+"""Webhook delivery, derived from the journal, so an event exists only if the mutation
+behind it committed. Delivery is at-least-once and every attempt carries the same
+``event_id``, the consumer's dedup handle. **The core sends no delivery headers of its
+own**: ``signer.sign(...)`` for the signature, ``signer.headers(meta)`` for the rest.
+**The delivery log has exactly one writer**, the worker thread, ids being ``dlv_00001``
+in write order. :meth:`enqueue` runs on the request thread and completes each first
+attempt's preparation but does not send, so :meth:`prepared` is populated once the
+request returns while a record is only observable after :meth:`drain`.
 """
 
 from __future__ import annotations
@@ -89,58 +45,38 @@ if TYPE_CHECKING:
 __all__ = ["WebhookDispatcher"]
 
 _TIMER_PREFIX = "webhook"
-"""Every timer this module schedules carries a label starting with this.
-
-Load-bearing, not decoration: :meth:`WebhookDispatcher.drain` decides whether
-the unit has settled by asking the clock which timers are pending and filtering
-on this prefix. A timer scheduled here under some other label would make
-``drain()`` return with a retry still on the clock.
-"""
+"""Every timer this module schedules is labelled with this prefix, which is how
+:meth:`WebhookDispatcher.drain` decides the unit has settled."""
 
 _DRAIN_PASSES = 500
-"""Upper bound on :meth:`WebhookDispatcher.drain`'s loop, ported from
-``dispatcher.ts:122``. It exists so a subscriber that fails forever cannot turn
-a drain into a hang; twelve attempts need twelve passes, so hitting five hundred
-means something is wrong rather than slow."""
+"""Bound on :meth:`WebhookDispatcher.drain`'s loop, so a drain cannot become a hang."""
 
 _REAL_MODE_POLL_MS = 250.0
-"""How long :meth:`WebhookDispatcher.drain` sleeps at most between passes on a
-real clock. The reference's ``Math.min(next + 1, 250)``: long enough not to
-spin, short enough that a ten-millisecond retry is not waited out for a
-quarter of a second."""
+"""How long :meth:`WebhookDispatcher.drain` sleeps at most between passes, real clock."""
+
+_FIRST_ATTEMPT_POLL_S = 0.005
+"""How often :meth:`WebhookDispatcher.await_first_attempt` re-reads the delivery log."""
 
 _BODY_PREVIEW_LIMIT = 400
-"""Characters of the delivered payload kept on each record."""
 
-#: Reference defaults for the two delivery faults that take a parameter:
-#: ``Number(decision.params.copies ?? 1)`` and
-#: ``Number(decision.params.delayMs ?? 50)``. One extra copy and fifty
-#: milliseconds respectively.
 DEFAULT_DUPLICATE_COPIES = 1
 DEFAULT_WEBHOOK_DELAY_MS = 50.0
 
 
 @dataclass(frozen=True, slots=True)
 class _Queued:
-    """One delivery of one event to one subscriber, before it is built."""
-
     event: PreparedEvent
     subscription: Subscription
-    #: 0 for the first send. ``attempt`` is this plus one.
     retry_number: int
     initial_delivery_at: str
     #: Set by ``webhook.drop_ack``: send for real, then discard the answer.
     drop_ack: bool
-    #: Why the previous attempt failed. ``None`` on the first send.
     retry_reason: DeliveryOutcome | None
-    #: Chaos labels recorded against this attempt, e.g. ``["dup:webhook.duplicate"]``.
     chaos_applied: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class _Attempt:
-    """A fully built work item: nothing left to decide but whether it worked."""
-
     queued: _Queued
     body: bytes
     body_text: str
@@ -148,8 +84,6 @@ class _Attempt:
 
 
 class WebhookDispatcher:
-    """The journal listener, the fan-out, the retry loop and the delivery log."""
-
     __slots__ = (
         "_clock",
         "_delivery_seq",
@@ -192,30 +126,23 @@ class WebhookDispatcher:
         self._on_log = on_log
 
         self._worker = DeliveryWorker()
-        #: Written only on the worker thread; read under `_log_lock` so a
-        #: control-plane read never sees a half-appended record.
+        #: Written only on the worker thread; read under `_log_lock`.
         self._log: list[DeliveryRecord] = []
         self._log_lock = threading.Lock()
         self._delivery_seq = 0
-        #: Request-side state: the event counter and the one reorder slot.
-        #: Re-entrant because `enqueue` runs inside a journal listener, which
-        #: already holds the store's lock, and may itself read the store.
+        #: Re-entrant: `enqueue` runs inside a journal listener and may read the store.
         self._request_lock = threading.RLock()
         self._event_seq = 0
         self._held_for_reorder: _Queued | None = None
         self._prepared: list[PreparedEvent] = []
         self._enabled_flag = True
 
-    # -- switches and reporting ---------------------------------------------
-
     @property
     def enabled(self) -> bool:
-        """Both switches must be on. ``disabled`` comes from the profile and
-        cannot be turned back on at runtime; ``set_enabled`` is the runtime one."""
+        """Both switches must be on; profile ``disabled`` cannot be undone at runtime."""
         return self._enabled_flag and not self._disabled
 
     def set_enabled(self, on: bool) -> None:
-        """Silence or resume delivery without touching the capability."""
         self._enabled_flag = on
 
     @property
@@ -224,17 +151,7 @@ class WebhookDispatcher:
 
     @property
     def sink(self) -> DeliverySink:
-        """The sink itself, for the one control route that programs it.
-
-        Published rather than private because ``POST /__unit/webhooks/sink``
-        has to reach a :class:`~vendorfake.core.webhooks.sink.MemorySink` to
-        program its next answers, and a forced retry driven from *outside* the
-        process is the only way a language-independent conformance check can
-        observe the retry schedule at all. The dispatcher does not care what it
-        hands back: it narrows nothing and promises nothing beyond the
-        :class:`~vendorfake.core.webhooks.sink.DeliverySink` protocol, so a
-        caller wanting more must check for it.
-        """
+        """The sink itself, so ``POST /__unit/webhooks/sink`` can program a ``MemorySink``."""
         return self._sink
 
     @property
@@ -242,50 +159,28 @@ class WebhookDispatcher:
         return self._retry
 
     def set_retry_policy(self, patch: Mapping[str, Any]) -> MutableRetryPolicy:
-        """Patch the live policy and return it, so a caller can report the result."""
         return self._retry.apply(patch)
 
     def deliveries(self) -> tuple[DeliveryRecord, ...]:
-        """Every attempt, oldest first, each a private copy.
-
-        Copies because the reference copies (``dispatcher.ts:109``) and for the
-        same reason: a caller that mutated a record's ``headers`` would rewrite
-        the evidence a later assertion reads.
-        """
+        """Every attempt, oldest first, each a private copy of the evidence."""
         with self._log_lock:
             return tuple(record.copy() for record in self._log)
 
     def clear_log(self) -> None:
-        """Forget every delivery. Called on hydrate, so a re-seeded unit starts
-        with a clean transcript rather than one that spans two scenarios."""
         with self._log_lock:
             self._log.clear()
 
     def prepared(self) -> tuple[PreparedEvent, ...]:
-        """Every event prepared for delivery, in preparation order.
-
-        The observable half of the synchronous prologue: this is populated
-        before ``handle()`` returns, while a :class:`DeliveryRecord` is not.
-        See the module docstring for why the weaker claim is the true one.
-        """
+        """Every event prepared for delivery, in order, populated before the request returns."""
         with self._request_lock:
             return tuple(self._prepared)
 
     def subscriptions(self) -> tuple[Subscription, ...]:
-        """Every registered subscriber, in insertion order."""
         return tuple(Subscription.from_entity(e) for e in self._store.collection(SUBSCRIPTION_COLLECTION).all())
 
-    # -- wiring --------------------------------------------------------------
-
     def load_config_subscribers(self, subscribers: Sequence[SubscriberConfig]) -> None:
-        """Seed profile-declared subscribers into the store.
-
-        Inserted rather than held aside, so that a config subscriber and one
-        created through a vendor's own API are the same kind of thing to
-        everything downstream. An id that already exists is skipped rather than
-        overwritten: hydrate runs on every reset, and overwriting would discard
-        a runtime change on the first ``POST /__unit/state/reset``.
-        """
+        """Seed profile subscribers as ordinary entities; an existing id is skipped, hydrate
+        running on every reset."""
         collection = self._store.collection(SUBSCRIPTION_COLLECTION)
         for index, sub in enumerate(subscribers):
             subscriber_id = sub.id if sub.id is not None else f"wbhk_cfg_{index + 1:02d}"
@@ -302,31 +197,12 @@ class WebhookDispatcher:
             collection.insert(entity, {"source": "config"})
 
     def attach(self) -> None:
-        """Wire the dispatcher to the store journal. Called once, by the kernel.
-
-        THE ``webhooks`` CAPABILITY GATE IS HERE, inside the listener rather
-        than around the registration. The registry is mutable at runtime --
-        ``POST /__unit/capabilities`` can switch ``webhooks`` off and on again
-        -- so a gate evaluated once at construction would answer a question
-        about the profile rather than about the unit's current state, and a
-        capability turned off after start-up would go on delivering.
-
-        Four other reasons a journal entry produces nothing, in the order the
-        reference checks them and for reasons that are not interchangeable:
-
-        * the vendor has no event mapper or no signer, so there is nothing to
-          build or nothing to sign it with;
-        * the entry mutates the subscription collection, so registering a
-          subscriber does not notify every subscriber that a subscriber was
-          registered;
-        * the entry is marked ``seed``, because **loading a scenario that
-          contains an open order must not push an ``order.created`` to every
-          subscriber**. Compared with ``is True`` and not for truthiness: a
-          vendor writing ``{"seed": "default.seed.json"}`` into its hydrate
-          metadata is naming a file, not asserting a flag;
-        * mapping raised, which is logged against the entry's ``seq`` and
-          swallowed, because one unmappable mutation must not stop the journal.
-        """
+        """Wire the dispatcher to the store journal; called once, by the kernel. The
+        ``webhooks`` capability is gated inside the listener, the registry being mutable at
+        runtime. Four other reasons an entry produces nothing: no mapper or no signer; it
+        mutates the subscription collection, so registering a subscriber notifies nobody;
+        it is marked ``seed``, compared with ``is True`` since ``{"seed": "x.json"}`` names
+        a file; or mapping raised, logged and swallowed so the journal cannot stop."""
 
         def listener(entry: JournalEntry) -> None:
             if not self.enabled:
@@ -350,16 +226,9 @@ class WebhookDispatcher:
 
         self._store.on_journal(listener)
 
-    # -- preparation ---------------------------------------------------------
-
     def _prepare(self, entry: JournalEntry, ctx: UnitContext) -> tuple[PreparedEvent, ...]:
-        """Ask the vendor what this mutation means, then assign ids and stamps.
-
-        Two phases, and the split is the vendor contract: the id belongs to the
-        dispatcher, because it must be stable across retries for a consumer to
-        deduplicate on, while its position inside the envelope belongs to the
-        vendor.
-        """
+        """Ask the vendor what this mutation means, then assign ids and stamps: the id is
+        the dispatcher's, being stable across retries, its envelope place the vendor's."""
         mapper = ctx.vendor.events
         if mapper is None:  # pragma: no cover - the listener checked first
             return ()
@@ -379,52 +248,23 @@ class WebhookDispatcher:
         return tuple(out)
 
     def _mint_event_id(self, entry: JournalEntry, event_type: str) -> str:
-        """Deterministic event ids, ported from ``dispatcher.ts:197``.
-
-        Two runs of the same scenario produce the same ids, which makes a
-        webhook transcript diffable evidence rather than noise. The digest
-        covers the type, the collection, the entity id, the journal sequence
-        and a dispatcher-local counter; the counter is what separates two
-        events derived from the *same* journal entry, which a vendor mapping one
-        mutation onto two event types produces.
-
-        Formatted into the five UUID groups rather than left as a hex string
-        because consumers of the reference vendor's webhooks expect a
-        UUID-shaped ``event_id``, and the shape is the only part of that
-        expectation the core can honour without knowing the vendor. It is
-        deliberately *not* a real UUID: nothing here claims a version or a
-        variant nibble, and a consumer that parses it as a v4 will find it is
-        not one.
-        """
+        """Deterministic event ids, so two runs of one scenario produce a diffable
+        transcript. The digest covers type, collection, entity id, journal sequence and a
+        local counter separating two events mapped from one entry. UUID-shaped, not a UUID."""
         with self._request_lock:
             self._event_seq += 1
             seq = self._event_seq
         digest = sha256_hex(f"{event_type}|{entry.collection}|{entry.id}|{entry.seq}|{seq}")
         return "-".join((digest[0:8], digest[8:12], digest[12:16], digest[16:20], digest[20:32]))
 
-    # -- the synchronous prologue -------------------------------------------
-
     def enqueue(self, event: PreparedEvent) -> None:
-        """Fan one event out to every subscriber that asked for its type.
-
-        Runs on the request thread and completes the whole preparation of each
-        first attempt before returning; see the module docstring. A subscriber
-        whose ``enabled`` is false is skipped here rather than at send time, so
-        a disabled subscriber produces no delivery record at all rather than a
-        record explaining that it was disabled.
-        """
+        """Fan one event out to every subscriber that asked for its type, completing each
+        first attempt's preparation first. A disabled subscriber records nothing at all."""
         if not self.enabled:
             return
 
-        # Resolved before ``_request_lock``, for the reason set out on
-        # :meth:`enqueue_to`. The journal listener reaches here already holding
-        # ``Store.lock``, so this path was store->request only by accident of
-        # who called it; the control plane's ``POST /__unit/webhooks/emit``
-        # calls this method holding neither lock and would have established
-        # request->store. Nothing today runs those two concurrently, because
-        # every route that reaches either is ``serialized=True`` -- a property
-        # no test asserts and that the next ``serialized=False`` route would
-        # remove without anyone noticing.
+        # Resolved before ``_request_lock`` is taken, for the lock order set out on
+        # :meth:`enqueue_to`.
         matching = [s for s in self.subscriptions() if s.enabled and matches_event_type(s.event_types, event.type)]
 
         with self._request_lock:
@@ -432,75 +272,28 @@ class WebhookDispatcher:
             for subscription in matching:
                 self._queue(event, subscription)
 
-    def enqueue_to(self, event: PreparedEvent, subscription_id: str) -> None:
-        """Deliver one event to exactly one subscriber, with no fan-out.
-
-        For the routes that name their recipient rather than describing it --
-        a test-delivery route, a callback-verification handshake -- where a
-        broadcast would send a subscriber an event nobody asked it for, signed
-        with its own key so it looks genuine, and would leave the caller
-        reading somebody else's status code back.
-
-        The event type is *not* matched against ``event_types``: the caller
-        named this subscription explicitly, and filtering a targeted send would
-        report the subscriber as silent when it was simply never asked. A
-        disabled subscriber is still skipped, so it records no delivery at all
-        -- the same rule :meth:`enqueue` applies.
-
-        ``self.enabled`` is checked here AND in :meth:`enqueue`. An earlier
-        version of this docstring claimed only this method needed it, because
-        "every other path to the sink arrives through the journal listener".
-        That was false: ``POST /__unit/webhooks/emit`` calls :meth:`enqueue`
-        straight from a route handler and never sees the listener's guard, so
-        ``webhooks.disable_delivery`` -- a property of the deployment that
-        :meth:`set_enabled` deliberately cannot undo -- was still bypassable
-        through the control plane. Guarding one door while recording that only
-        one existed is worse than guarding neither, because the note is what
-        the next reader trusts.
-        """
+    def enqueue_to(self, event: PreparedEvent, subscription_id: str) -> bool:
+        """Deliver one event to exactly one subscriber, for the routes that name their
+        recipient. The event type is *not* matched against ``event_types``, the caller
+        having named this subscription. Returns False, queueing nothing, when delivery
+        is disabled or the subscriber is unknown or disabled, so a caller knows there
+        is no attempt to wait for."""
         if not self.enabled:
-            return
+            return False
 
-        # LOCK ORDER. The store lock is taken and RELEASED before
-        # ``_request_lock``, and the two are never held together in that
-        # direction, because the journal path holds them the other way round:
-        # ``Store.append_journal`` dispatches its listeners while still holding
-        # ``Store.lock``, and that listener calls :meth:`enqueue`, which takes
-        # ``_request_lock``. An earlier version of this comment said every
-        # pre-existing caller therefore arrived store->request; that was wrong.
-        # :meth:`enqueue` took ``_request_lock`` and then read the store, so it
-        # was request->store too, and safe only because every route reaching it
-        # is ``serialized=True``. Both now resolve the store before the lock.
-        #
-        # This method is a delivery entry point called straight from a route
-        # handler. Its callers are vendor routes that name their recipient --
-        # a test-delivery route, a callback-verification stand-in -- and each
-        # arrives holding neither lock. Resolving the subscription inside
-        # ``_request_lock`` would establish request->store and close the cycle
-        # -- and it is reachable whenever any such route runs concurrently
-        # with a journal-driven send, which a ``serialized=False`` caller does
-        # by design on the ASGI threadpool. Neither acquire has a timeout, so
-        # the deadlock would be permanent and would take the whole unit down
-        # with it: the request holding the pipeline lock is the one that
-        # hangs.
-        #
-        # Reading the subscription first is safe. ``subscriptions()`` returns
-        # copies, so the value cannot be mutated underneath the send, and a
-        # subscription deleted between the read and the queue produces a
-        # delivery to a snapshot -- which is what a test delivery is anyway.
+        # LOCK ORDER: the store lock is taken and released BEFORE ``_request_lock``, because
+        # the journal path holds them the other way round -- ``Store.append_journal``
+        # dispatches listeners under ``Store.lock``, whose listener takes ``_request_lock``.
         target = next((s for s in self.subscriptions() if s.id == subscription_id), None)
         if target is None or not target.enabled:
-            return
+            return False
 
         with self._request_lock:
             self._prepared.append(event)
             self._queue(event, target)
+        return True
 
     def _queue(self, event: PreparedEvent, subscription: Subscription) -> None:
-        """Prepare and schedule one subscriber's first attempt.
-
-        The caller holds ``_request_lock``.
-        """
         self._apply_chaos_and_schedule(
             _Queued(
                 event=event,
@@ -514,22 +307,11 @@ class WebhookDispatcher:
         )
 
     def _apply_chaos_and_schedule(self, queued: _Queued) -> None:
-        """Ported from ``dispatcher.ts:218``, with two threading changes.
-
-        The chaos gate is ``webhooks.chaos`` and it is applied by the single
-        fault-selection choke point, which is why this method calls
-        ``selector.select_webhook`` rather than the engine.
-
-        ``held_for_reorder`` is ONE slot, released on the *next* enqueue
-        regardless of event type, and the release is scheduled **after** the
-        duplicate copies. That order is what produces the delivered-version
-        sequence the reference's reordering test asserts, and it is ported
-        literally rather than tidied.
-
-        The two outcomes that never touch the sink -- ``skipped`` and
-        ``dropped`` -- are submitted to the delivery worker as terminal jobs
-        instead of being recorded here, so that the log keeps one writer.
-        """
+        """Apply the delivery faults, then queue or schedule the attempt. Selection goes
+        through ``selector.select_webhook``, which applies the ``webhooks.chaos`` gate.
+        ``held_for_reorder`` is ONE slot, released on the next enqueue whatever its type and
+        after the duplicate copies. Outcomes that never touch the sink go to the worker as
+        terminal jobs, so the log keeps one writer."""
         chaos_applied: list[str] = []
         delay_ms = 0.0
         copies = 1
@@ -551,15 +333,12 @@ class WebhookDispatcher:
             elif decision.fault == "webhook.drop_ack":
                 queued = replace(queued, drop_ack=True)
             elif decision.fault == "webhook.out_of_order":
-                # Hold this event back until the next one has gone out.
                 held = replace(queued, chaos_applied=tuple(chaos_applied))
                 self._held_for_reorder = held
                 self._submit_terminal(held, "skipped", "held for out-of-order delivery")
                 return
             elif decision.fault == "webhook.drop":
-                # Never touches the sink: recorded so a test can see it
-                # happened, but the subscriber gets nothing and no retry is
-                # scheduled.
+                # Never touches the sink: recorded, but nothing is sent or retried.
                 dropped = replace(queued, chaos_applied=tuple(chaos_applied))
                 self._submit_terminal(dropped, "dropped", "dropped by chaos rule (webhook.drop)")
                 return
@@ -585,25 +364,13 @@ class WebhookDispatcher:
                 self._worker.submit(partial(self._run_attempt, attempt))
 
     def _build_attempt(self, queued: _Queued) -> _Attempt | None:
-        """Serialise, sign, and collect headers. The whole vendor surface, here.
-
-        Returns ``None`` when the vendor has no signer, matching the
-        reference's ``if (!signer) return``: a vendor with no signing scheme
-        has no way to produce a delivery a consumer could verify, and sending
-        an unsigned one would be worse than sending none.
-
-        Header order is provider first, signature second, so that a provider
-        which accidentally names a signature header cannot overwrite the
-        signature. The core contributes nothing to the mapping.
-        """
+        """Serialise, sign and collect headers -- the whole vendor surface. ``None`` when the
+        vendor has no signer. Provider headers first, signature second."""
         ctx = self._get_context()
         signer = ctx.vendor.signer
         if signer is None:
             return None
-        # The vendor's own encoding when it declares one, JSON otherwise. These
-        # are the exact bytes signed below and sent by the sink, so a vendor
-        # whose content type is not application/json cannot end up with a
-        # header that contradicts its body. See `BodyEncodingSigner`.
+        # The vendor's encoding when it declares one. These exact bytes are signed and sent.
         body = (
             signer.encode_body(queued.event) if isinstance(signer, BodyEncodingSigner) else dump_json(queued.event.body)
         )
@@ -631,41 +398,19 @@ class WebhookDispatcher:
         return _Attempt(queued=queued, body=body, body_text=body.decode("utf-8"), headers=headers)
 
     def _schedule(self, attempt: _Attempt, delay_ms: float, label: str) -> None:
-        """Put a built attempt on the clock. The callback only submits.
-
-        Trivial on purpose: the callback runs on whichever thread fires the
-        timer, which for a virtual clock is ``Clock.advance``'s caller, and
-        anything slower than an enqueue there would stretch a re-scan loop.
-        """
+        """Put a built attempt on the clock. The callback only submits, running on whichever
+        thread fires the timer."""
         self._clock.after(delay_ms, label, partial(self._worker.submit, partial(self._run_attempt, attempt)))
 
     def _submit_terminal(self, queued: _Queued, status: str, error: str) -> None:
-        """Record an outcome that never reaches the sink, on the worker.
-
-        Through the queue rather than directly so that the delivery log's ids
-        and order stay a function of the scenario rather than of thread
-        scheduling: a ``dropped`` recorded from the request thread would take a
-        ``dlv_`` number out from under an attempt already in flight.
-        """
+        """Record an outcome that never reaches the sink, on the worker, so the ids stay ordered."""
         self._worker.submit(partial(self._record, queued, status, 0, error=error))
 
-    # -- the worker's half ---------------------------------------------------
-
     def _run_attempt(self, attempt: _Attempt) -> None:
-        """Send once, record the outcome, and schedule the retry if there is one.
-
-        Runs on the delivery worker. Everything it does happens before the
-        worker clears its busy flag, so a ``quiesce()`` that returns has
-        observed both the record and the next retry's timer -- which is the
-        property ``Clock.advance(settle=...)`` relies on to collapse a retry
-        cascade into one call.
-
-        ``drop_ack`` is applied *after* the send, not instead of it: the
-        subscriber really answered, and the point of the fault is that the
-        acknowledgement was lost in transit rather than never sent. Its
-        ``response_status`` on the record is therefore the real 200, which is
-        what makes the fault distinguishable from an outage.
-        """
+        """Send once, record the outcome, schedule the retry if there is one. Runs entirely
+        before the worker's busy flag clears, so a returning ``quiesce()`` has seen both the
+        record and the next retry's timer. ``drop_ack`` is applied *after* the send, the
+        record keeping the real status that distinguishes it from an outage."""
         queued = attempt.queued
         result = self._sink.send(
             SinkRequest(
@@ -725,13 +470,8 @@ class WebhookDispatcher:
         body_text: str = "",
         next_attempt_in_ms: int | None = None,
     ) -> None:
-        """Append one record. The only writer, and only from the worker thread.
-
-        ``body_hash`` is the hash of the delivered *text* and is empty when
-        there was no delivery -- a ``skipped`` record has nothing to hash, and
-        hashing the empty string would give every one of them the same
-        plausible-looking digest.
-        """
+        """Append one record, from the worker thread only. ``body_hash`` is empty, not the
+        hash of the empty string, when there was no delivery."""
         with self._log_lock:
             self._delivery_seq += 1
             delivery_id = f"dlv_{self._delivery_seq:05d}"
@@ -762,42 +502,15 @@ class WebhookDispatcher:
         if self._on_log is not None:
             self._on_log(record.copy())
 
-    # -- settling ------------------------------------------------------------
-
     def quiesce(self, timeout: float | None = None) -> bool:
-        """The worker's handshake, re-exported so ``Clock.advance`` can take it.
-
-        Passed as ``settle=`` and therefore called with the clock's lock
-        released; see ``webhooks/worker.py`` for the full lock-order argument.
-        """
         return self._worker.quiesce(timeout)
 
     def drain(self, *, timeout_ms: float | None = None) -> None:
-        """Settle everything: in-flight attempts AND retries still on the clock.
-
-        Both halves, because without the second a test asserting on the retry
-        schedule would have to sleep for a guessed duration and hope. The loop
-        is the reference's (``dispatcher.ts:121``) with the worker handshake
-        substituted for its ``await Promise.all(inFlight)``:
-
-        1. wait for the worker -- queue empty and no job running;
-        2. ask the clock for pending timers whose label is ours;
-        3. if there are none, everything has settled and we are done;
-        4. otherwise move to the earliest one -- by advancing the virtual clock
-           (passing :meth:`quiesce` so the re-scan sees the retry the worker
-           registers) or by sleeping on a real one -- and go round again.
-
-        The bound is passes and not wall time by default, matching the
-        reference; ``timeout_ms`` adds a wall-clock ceiling for a caller that
-        would rather return with work outstanding than wait, which is what a
-        vendor's "send a test event and tell me what happened" route wants.
-
-        This blocks on machinery another request must feed, so every route that
-        calls it must declare ``serialized=False``. That is not a style rule:
-        under the pipeline's request lock, a drain against an unreachable
-        subscriber would hold the whole unit for ``timeout_ms`` times the retry
-        schedule.
-        """
+        """Settle everything: in-flight attempts AND retries still on the clock. Each pass
+        waits for the worker, then moves to the earliest pending timer of ours, advancing a
+        virtual clock with :meth:`settle` or sleeping on a real one. The bound is passes,
+        not wall time; ``timeout_ms`` adds a ceiling. Every route calling this must declare
+        ``serialized=False``, or a drain on an unreachable subscriber holds the unit."""
         deadline = None if timeout_ms is None else time.monotonic() + timeout_ms / 1000.0
         for _ in range(_DRAIN_PASSES):
             remaining = None if deadline is None else deadline - time.monotonic()
@@ -814,48 +527,41 @@ class WebhookDispatcher:
             else:
                 time.sleep(min(max(next_due + 1.0, 1.0), _REAL_MODE_POLL_MS) / 1000.0)
 
-    def settle(self) -> None:
-        """The callable to hand to ``Clock.advance(ms, settle=...)``.
+    def await_first_attempt(self, event_id: str, subscription_id: str, *, timeout_ms: float) -> DeliveryRecord | None:
+        """The first delivery record for ``event_id`` to ``subscription_id``, or ``None``.
 
-        Public and named, because the control plane's
-        ``POST /__unit/clock/advance`` must pass it: that route advances the
-        clock *without* a preceding drain, and without this hook the re-scan
-        would run before the worker had registered the retry it is about to
-        schedule -- so a twelve-attempt cascade would report three and the
-        route would answer as though the subscriber had stopped failing.
-
-        A separate method from :meth:`quiesce` because ``advance`` takes
-        ``Callable[[], None]`` and ``quiesce`` returns a bool. The verdict is
-        discarded deliberately: with no timeout there is nothing to report, and
-        swallowing a bool here is clearer than a lambda that pretends there
-        never was one.
+        Never moves the clock, so a caller waits for one attempt at most: ``None`` comes
+        back after ``timeout_ms`` of wall-clock time, or at once on a virtual clock when
+        the worker is idle, because the attempt is then pending on a timer only
+        ``Clock.advance`` can fire.
         """
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        while True:
+            idle = self._worker.quiesce(0.0)
+            for record in self.deliveries():
+                if record.event_id == event_id and record.subscription_id == subscription_id:
+                    return record
+            if time.monotonic() >= deadline or (idle and self._clock.mode == "virtual"):
+                return None
+            time.sleep(_FIRST_ATTEMPT_POLL_S)
+
+    def settle(self) -> None:
+        """The callable to hand to ``Clock.advance(ms, settle=...)``, which
+        ``POST /__unit/clock/advance`` must pass: it advances without a preceding drain, so
+        without this a twelve-attempt cascade reports three."""
         self._worker.quiesce()
 
     def stop(self) -> None:
-        """Stop accepting new deliveries and let the worker thread finish.
-
-        Called from ``Unit.stop`` after its drain. Idempotent, and it does not
-        drain: a caller that wants everything delivered calls :meth:`drain`
-        first, and one that is shutting down after a failure should not be made
-        to wait for a subscriber that is the reason it is shutting down.
-        """
+        """Stop accepting new deliveries and let the worker finish; idempotent, and it does
+        not drain."""
         self._worker.stop()
 
     def worker_failures(self) -> tuple[str, ...]:
-        """Delivery jobs that raised. Empty is the only acceptable value, and a
-        test asserts it -- a swallowed exception on the worker would otherwise
-        present as a missing delivery record."""
         return self._worker.failures()
 
 
 def _parse_body(body_text: str) -> tuple[Any, bool]:
-    """Parse the delivered payload back, reporting whether it was JSON.
-
-    A vendor whose payload is not JSON keeps ``body_preview`` only, which is
-    the reference's behaviour; the second element is what lets the record say
-    "not JSON" rather than "the JSON document ``null``".
-    """
+    """Parse the payload back; the flag separates "not JSON" from "the JSON document null"."""
     if not body_text:
         return None, False
     try:

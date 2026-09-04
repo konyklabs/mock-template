@@ -1,36 +1,14 @@
 """Linear segment routing over ``{name}`` path templates.
 
-FOR: turning a method and a path into the one :class:`Route` that answers it,
-plus the parameters that path carried -- and, when nothing answers, into the
-distinction between "no such path" and "that path, wrong verb", which are two
-different errors to a consumer.
+Turns a method and a path into the one :class:`Route` that answers it plus the parameters that path carried, and
+otherwise distinguishes "no such path" from "that path, wrong verb".
 
-INVARIANT: **the control-plane namespace belongs to the core.** ``/__unit/`` is
-where a unit exposes itself -- capabilities, chaos, the journal, the clock -- so
-a vendor route beginning with it would shadow or be shadowed by machinery every
-consumer relies on, depending only on which was registered first. The reference
-has no such check; :meth:`Router.add` raises at construction here, which turns
-a subtle routing collision into a unit that refuses to start and says which
-route did it.
+INVARIANT: **the control-plane namespace belongs to the core.** ``/__unit/`` is where a unit exposes itself, so a
+vendor route beginning with it would shadow or be shadowed by machinery every consumer relies on, depending only on
+registration order. :meth:`Router.add` raises at construction and names the offending route.
 
-Deliberately tiny, and ported almost line for line from
-``packages/core/src/kernel/router.ts``. A vendor surface is a fixed,
-hand-written list of paths; every dependency added here is one every fork
-inherits forever. Two Node-isms did not survive:
-
-``decodeURIComponent`` raises; ``urllib.parse.unquote`` does not
-    ``decodeURIComponent('%zz')`` throws ``URIError``, which the reference's
-    ``handle()`` catches as an unhandled error and answers ``internal``/500.
-    ``unquote('%zz')`` returns the string ``'%zz'`` unchanged, so the same
-    request would reach a handler with a garbage path parameter and answer
-    200. Neither is right: a malformed escape is a bad request. This port
-    validates the escape itself and raises ``invalid_value`` on ``path``, which
-    the vendor's shaper turns into a 400. Recorded as ``provenance: judgment``
-    and pinned by a router test in both directions.
-
-``!`` non-null assertions
-    Segment lists are indexed under a length equality the loop has already
-    established, so there is nothing to assert.
+A malformed percent-escape is a bad request: :func:`percent_decode` raises ``invalid_value`` on ``path``, which the
+vendor's shaper turns into a 400. ``provenance: judgment``.
 """
 
 from __future__ import annotations
@@ -56,11 +34,7 @@ __all__ = [
 ]
 
 INTERNAL_PATH_PREFIX: Final = "/__unit/"
-"""Reserved for the unit's own control plane.
-
-A double-underscore path segment is collision-proof against any real vendor
-surface, and the prefix names the concept rather than a product, so a fork does
-not inherit a name it has to explain."""
+"""Reserved for the unit's own control plane."""
 
 #: A percent escape is exactly ``%`` followed by two hex digits. Anything else
 #: -- ``%zz``, a trailing ``%``, ``%4`` -- is malformed.
@@ -68,24 +42,14 @@ _ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
 def split_path(path: str) -> list[str]:
-    """``/v2/orders/x`` -> ``['v2', 'orders', 'x']``; empty segments dropped.
-
-    Dropping empties is what makes ``/v2//orders`` and ``/v2/orders/`` match the
-    same route as ``/v2/orders``. Ported verbatim; a stricter reading would
-    reject trailing slashes that every HTTP client in the world sends.
-    """
+    """``/v2/orders/x`` -> ``['v2', 'orders', 'x']``; empty segments dropped,
+    so ``/v2//orders`` and ``/v2/orders/`` match the same route."""
     return [segment for segment in path.split("/") if segment]
 
 
 def percent_decode(segment: str, *, path: str) -> str:
-    """Decode one path segment, raising ``invalid_value`` on anything malformed.
-
-    Two failure modes, one answer. A syntactically bad escape (``%zz``) is
-    caught by the regex; an escape sequence that decodes to invalid UTF-8
-    (``%C3%28``) is caught by ``errors="strict"``. ``decodeURIComponent``
-    rejects both, so this is fidelity to the reference's *decision* rather than
-    to its failure mode.
-    """
+    """Decode one path segment, raising ``invalid_value`` on anything malformed: a bad escape (``%zz``) caught by the
+    regex, and an escape decoding to invalid UTF-8 (``%C3%28``) caught by ``errors="strict"``."""
     if _ESCAPE.search(segment):
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,
@@ -125,9 +89,7 @@ class NoRoute:
 
 
 MatchOutcome = Match | MethodNotAllowed | NoRoute
-"""Three outcomes, not two, because ``405`` and ``404`` are different answers
-and a router that returned ``None`` for both would push the distinction into
-every caller."""
+"""Three outcomes, not two: ``405`` and ``404`` are different answers."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,11 +115,7 @@ class Router:
 
     def add(self, route: Route) -> None:
         """Compile and append one route, refusing a reserved vendor path.
-
-        The reservation is checked here rather than at unit construction so
-        that every path into the table -- a vendor's list, a control plane, a
-        test building a router by hand -- passes the same gate.
-        """
+        Checked here so every path into the table passes the same gate."""
         if not route.internal and is_control_path(route.path):
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
@@ -189,14 +147,9 @@ class Router:
         return ()
 
     def match(self, method: str, path: str) -> MatchOutcome:
-        """Find the route for ``method`` and ``path``.
-
-        Ported literally, including the two properties that are easy to lose:
-        the scan collects *every* path-shaped candidate before giving up, so
-        the 405's ``allowed`` list is complete rather than "the first one we
-        saw"; and it returns on the first candidate whose method matches, so
-        registration order decides between two routes with the same shape.
-        """
+        """Find the route for ``method`` and ``path``. The scan collects every path-shaped candidate before giving up,
+        so a 405's ``allowed`` list is complete, and returns on the first method match, so registration order
+        decides between two routes of the same shape."""
         wanted = split_path(path)
         path_matches: list[_Compiled] = []
         for compiled in self._compiled:
@@ -221,28 +174,14 @@ class Router:
 
 
 def is_control_path(path: str) -> bool:
-    """True for the control-plane namespace: exactly the bare prefix, or anything under it.
-
-    The one definition of "this path belongs to the observer, not the vendor"
-    -- used both to keep a vendor route from claiming the namespace
-    (:meth:`Router.add`, :func:`assert_no_reserved_paths`) and to keep
-    control-plane traffic out of the request log
-    (:mod:`vendorfake.core.kernel.unit`). ``startswith(INTERNAL_PATH_PREFIX)``
-    alone would miss the bare path with no trailing slash -- ``/__unit`` --
-    which matches no registered route (every control route lives at
-    ``/__unit/<segment>``) but is still the observer's own traffic, not a
-    vendor 404.
-    """
+    """True for the control-plane namespace: the bare prefix or anything under it. Bare ``/__unit`` counts -- it
+    matches no registered route but is still the observer's own traffic rather than a vendor 404."""
     return path == INTERNAL_PATH_PREFIX.rstrip("/") or path.startswith(INTERNAL_PATH_PREFIX)
 
 
 def assert_no_reserved_paths(routes: Sequence[Route]) -> None:
-    """Raise if any non-internal route claims the control-plane namespace.
-
-    The same rule :meth:`Router.add` enforces, exposed separately so a caller
-    holding a route list can check it before building anything -- a vendor
-    self-test, for instance, which has no reason to construct a router.
-    """
+    """Raise if any non-internal route claims the control-plane namespace: the rule :meth:`Router.add` enforces, for a
+    caller holding a list, not a router."""
     offenders = [route.key for route in routes if not route.internal and is_control_path(route.path)]
     if not offenders:
         return

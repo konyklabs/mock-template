@@ -142,7 +142,6 @@ def test_every_declared_subcommand_has_a_dispatch_arm() -> None:
         "profiles",
         "routes",
         "faults",
-        "agent-setup",
         "explain",
         "conformance",
     }
@@ -471,7 +470,6 @@ def test_serve_applies_flag_then_environment_then_profile_then_default(monkeypat
     that out would make the test slower, racier and no more conclusive. The
     socket itself is proved out of process, in ``tests/integration``.
     """
-    import functools
 
     import vendorfake.asgi as asgi_module
     import vendorfake.cli as cli_module
@@ -483,13 +481,7 @@ def test_serve_applies_flag_then_environment_then_profile_then_default(monkeypat
     units: list[object] = []
 
     def fake_create_unit(**kwargs: object) -> object:
-        built = make_unit(
-            control_routes=functools.partial(
-                control_plane_routes,
-                framework_answered=kwargs["framework_answered"],  # type: ignore[arg-type]
-            ),
-            log_level="warn",
-        )
+        built = make_unit(control_routes=control_plane_routes, log_level="warn")
         units.append(built)
         return built
 
@@ -523,42 +515,6 @@ def test_serve_applies_flag_then_environment_then_profile_then_default(monkeypat
             {"VENDORFAKE_HOST": "0.0.0.0", "VENDORFAKE_PORT": "9001", "VENDORFAKE_LOG_LEVEL": "debug"},
         )
         assert (chosen["host"], chosen["port"], chosen["log_level"]) == ("10.0.0.5", 0, "error")
-    finally:
-        for built in units:
-            built.stop()  # type: ignore[attr-defined]
-
-
-def test_serve_wires_the_tripwire_into_the_unit_before_building_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``framework_answered`` reaches ``create_unit``, not just ``create_app``.
-
-    The control plane closes over the callable at construction, so a tripwire
-    handed only to the application would leave ``GET /__unit/health`` reporting
-    a permanent 0 -- a tripwire that can never fire and would look like a pass
-    forever.
-    """
-    import vendorfake.asgi as asgi_module
-    import vendorfake.cli as cli_module
-    import vendorfake.registry as registry_module
-    from tests.fakes import make_unit
-
-    seen: dict[str, object] = {}
-    units: list[object] = []
-
-    def fake_create_unit(**kwargs: object) -> object:
-        seen.update(kwargs)
-        built = make_unit(log_level="error")
-        units.append(built)
-        return built
-
-    monkeypatch.setattr(registry_module, "create_unit", fake_create_unit)
-    monkeypatch.setattr(asgi_module, "run_server", lambda app, **kwargs: None)
-
-    parser = cli_module._build_parser()
-    try:
-        assert cli_module._serve(parser.parse_args(["serve"]), {}, sys.stdout) == 0
-        answered = seen["framework_answered"]
-        assert callable(answered)
-        assert answered() == 0
     finally:
         for built in units:
             built.stop()  # type: ignore[attr-defined]

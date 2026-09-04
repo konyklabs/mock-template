@@ -1,157 +1,21 @@
-"""The Orders surface: the stateful heart of this vendor.
+"""The Orders surface: CreateOrder, RetrieveOrder, UpdateOrder, SearchOrders, BatchRetrieveOrders, PayOrder, and
+the legacy ``POST /v2/locations/{location_id}/orders`` path.
+https://developer.squareup.com/reference/square/orders-api/create-order https://developer.squareup.com/reference/square/orders-api/retrieve-order
+https://developer.squareup.com/reference/square/orders-api/update-order https://developer.squareup.com/reference/square/orders-api/search-orders
 
-FOR: reproducing the six Orders operations a point-of-sale integration actually
-drives, with the behaviours Square documents and consumers get wrong -- the
-version field and optimistic concurrency, sparse updates, the four-state
-lifecycle with two terminal states, and cursor pagination with a lifetime and a
-query fingerprint.
-
-=====================  =========================================================
-CreateOrder            ``POST /v2/orders``
-                       https://developer.squareup.com/reference/square/orders-api/create-order
-CreateOrder (legacy)   ``POST /v2/locations/{location_id}/orders``
-                       the path CreateOrder had before ``location_id`` moved
-                       into the body; see :meth:`OrdersSurface.create_order_at_location`
-RetrieveOrder          ``GET  /v2/orders/{order_id}``
-                       https://developer.squareup.com/reference/square/orders-api/retrieve-order
-UpdateOrder            ``PUT  /v2/orders/{order_id}``
-                       https://developer.squareup.com/reference/square/orders-api/update-order
-SearchOrders           ``POST /v2/orders/search``
-                       https://developer.squareup.com/reference/square/orders-api/search-orders
-BatchRetrieveOrders    ``POST /v2/orders/batch-retrieve``
-                       https://developer.squareup.com/reference/square/orders-api/batch-retrieve-orders
-PayOrder               ``POST /v2/orders/{order_id}/pay``
-                       https://developer.squareup.com/reference/square/orders-api/pay-order
-=====================  =========================================================
-
-INVARIANT: **a rejected request changes nothing.** Every mutation goes through
-``Collection.update``, which checks ``expect_version`` before it runs the
-mutator and copies before it commits, so a version conflict, an illegal
-transition or a bad line item leaves no entity change, no version bump and --
-because the journal is the event source -- no webhook. Nothing here writes to
-the store outside that call.
-
-Absent, null and cleared
-------------------------
-UpdateOrder is sparse: "your request should only include the properties that
-you want to add, update, or clear"
-(https://developer.squareup.com/docs/orders-api/manage-orders/update-orders).
-So a field the caller did not mention must survive untouched, and the only way
-to know which those are is
-:func:`~vendorfake.square.model.order.supplied`, i.e. Pydantic's
-``model_fields_set``. Testing the parsed value against ``None`` collapses "not
-mentioned" into "clear it", which silently wipes every optional on a
-read-modify-write round trip -- the most common way an integration uses this
-endpoint.
-
-JUDGMENT -- **null clears an optional field.** Square documents exactly one way
-to clear: name the field in ``fields_to_clear``. It says nothing about sending
-``null``. This unit accepts both, which is what the reference does by accident
-(its ``optionalString`` maps ``null`` to ``undefined``, and the spread that
-merges a line-item patch then deletes the key). Making it a rule rather than an
-accident lets it be stated: on the sparse ``order`` object and on a line-item
-patch, a field that is present and null -- or an empty string -- is cleared,
-exactly as if it had been named in ``fields_to_clear``. What cannot be cleared
-is what an order cannot be without: ``state``, ``version``, and a line item's
-``quantity`` and ``base_price_money``. Null on one of those is ``invalid_value``
-naming the field, not a silent no-op.
-
-The reference is narrower in two places and this file is deliberately wider,
-because Square's notation is general and the reference's restriction was not:
-``fields_to_clear`` accepts ``line_items[uid].name``,
-``line_items[uid].catalog_object_id`` and ``line_items[uid].variation_name``
-alongside the reference's single ``line_items[uid].note``; and
-``"line_items": null`` empties the list where the reference raised
-``invalid_value``. Everything else about ``fields_to_clear`` is Square's:
-"line_items[coffee_uid].applied_discounts[discount_uid]" style paths, and a
-clear that cannot be applied is **silently ignored while the version still
-increments** -- "On a 200 response, Square has incremented the order version,
-even if all requested property changes are ignored and no changes are actually
-made." One consequence of this unit's determinism is folded into that rule: a
-clear naming the uid a new *unnamed* line in the same request is about to be
-minted under is ignored too, because the tendered-floor probe below cannot
-see that uid and the commit must not disagree with the probe.
-
-Stamps and the digest
----------------------
-The details stamps are set from the unit's clock, so they are volatile to
-the state digest (``_VOLATILE_FIELDS`` in ``vendor.py`` names exactly
-:data:`FULFILLMENT_STAMPS`): two units driven alike on different clocks must
-digest alike, and the digest's presence marker still catches a stamp that
-stopped being set. A caller may send the same stamps -- ``picked_up_at``
-beside ``state: COMPLETED`` -- and a value the caller sent is state, not
-clock. The rule is therefore: **a stamp the unit set is volatile; a value the
-caller supplied is digested**, and it is kept by mirroring every supplied
-value for a volatile name into the fulfillment's ``supplied_stamps`` -- a
-list of ``[name, value]`` pairs the wire projection never emits, and pairs
-rather than a mapping because a mirror *keyed* by the stamp's name would be
-scrubbed at any depth exactly like the stamp. Clearing the stamp with a null
-clears the mirror too.
-
-The tendered floor
-------------------
-An OPEN order that has been partly tendered cannot be shrunk below what its
-tenders have applied: an update whose merged line items would total less
-than that -- ``fields_to_clear: ["line_items"]`` after a 200-cent tender on a
-500-cent order, a quantity cut, a price cut -- is refused with
-``invalid_value`` on ``order.line_items``, and nothing is written. JUDGMENT:
-Square publishes no error for it, and without the rule ``net_amount_due_money``
-would clamp to zero on an order that had been tendered past its new total and
-the next PayOrder would complete it with tenders exceeding the total. The
-check runs on a dry merge before any uid is minted, so it costs a refused
-request nothing from the id stream.
-
-The double-pay fix
-------------------
-The reference's ``assertTransition`` returns early when ``from === to``, so
-PayOrder on an order that was already COMPLETED returned 200, replaced the
-tenders and bumped the version -- a second payment against a closed order. The
-core's state machine forbids a self-transition unless the state declares
-``allow_self``, and neither terminal state can, so the same call is now
-``invalid_transition``. See :mod:`vendorfake.square.machine` and
-:mod:`vendorfake.core.state.machine`.
-
-Zero-quantity lines
--------------------
-"Line items with a quantity of `0` are automatically removed when paying for or
-otherwise completing the order."
+INVARIANT: a rejected request changes nothing -- ``Collection.update`` checks ``expect_version`` before
+committing. UpdateOrder is sparse (:func:`~vendorfake.square.model.order.supplied`); JUDGMENT: a present
+``null`` is an explicit clear except on ``state``, ``version``, and a line item's
+``quantity``/``base_price_money``, which refuse it as ``invalid_value``. INVARIANT: fulfillment stamps this
+unit sets from its clock are volatile to the state digest (:data:`FULFILLMENT_STAMPS`), mirrored into
+``supplied_stamps`` when caller-supplied.
+JUDGMENT: a partly tendered OPEN order cannot shrink below what its tenders applied (``invalid_value``).
+INVARIANT: PayOrder on an already-COMPLETED order is ``invalid_transition``; no terminal state allows a
+self-transition. DOCUMENTED: a completing order's zero-quantity line items are dropped.
 https://developer.squareup.com/reference/square/objects/OrderLineItem
-
-Documented, and neither the reference nor the first cut of this file did it: a
-line with ``"quantity": "0"`` survived PayOrder, so a consumer who sends one --
-which is exactly what a cart UI does when a customer zeroes an item -- reads
-back an order Square would not have returned. Both completion paths now drop
-them; see :func:`_drop_zero_quantity_lines`.
-
-Fulfillments
-------------
-An order carries ``fulfillments`` -- how the buyer receives it -- each with a
-``type`` and a ``state`` that moves through the fulfillment machine in
-:mod:`vendorfake.square.machine`. UpdateOrder merges them sparsely by ``uid``
-exactly as it merges line items: a known uid updates in place, an unknown one
-appends and must name a ``type``, a details field that is present and null is
-cleared. A state change is asserted against the machine before anything is
-written, so an illegal move is a 400 with no version bump.
-
-JUDGMENT -- **a transition stamps the timestamp Square would stamp**, when the
-caller did not supply it: ``placed_at`` on creation, ``accepted_at`` on
-RESERVED, ``ready_at`` / ``packaged_at`` on PREPARED, ``picked_up_at`` /
-``delivered_at`` / ``shipped_at`` on COMPLETED, ``canceled_at`` on CANCELED,
-``failed_at`` on FAILED -- each in the details object named for the type. The
-field descriptions on the three details pages say what each stamp records
-("The timestamp indicating when the fulfillment was picked up by the
-recipient"); that Square sets them itself on the corresponding move is the
-reading, and it is NOT VERIFIED which of them Square would also accept from a
-caller. See :func:`_stamp_transition`.
-
-SHRINK (prototype): CalculateOrder and CloneOrder are not implemented -- they
-add no state behaviour over the routes above. Taxes, discounts, service
-charges, returns and refunds are not modelled, and a fulfillment's
-``entries`` (``line_item_application: ENTRY_LIST``) is not; see
-:mod:`vendorfake.square.model.order`. PayOrder's ``payment_ids`` resolve
-against the Payments surface when they name stored payments and are otherwise
-opaque references whose tender total is taken from the order; see
-:meth:`OrdersSurface.pay_order`.
+JUDGMENT: an unsupplied fulfillment transition stamps the timestamp Square would stamp; NOT VERIFIED which of
+them Square also accepts from a caller. SHRINK: CalculateOrder and CloneOrder are not implemented; taxes,
+discounts, service charges, returns/refunds and a fulfillment's ``entries`` are not modelled.
 """
 
 from __future__ import annotations
@@ -246,8 +110,7 @@ MAX_BATCH_ORDER_IDS = 100
 """BatchRetrieveOrders: "A maximum of 100 orders can be retrieved per request."."""
 
 _MACHINE = StateMachine(ORDER_MACHINE)
-"""One instance, at module level, because a :class:`StateMachine` holds no
-entity and no store -- it is the definition plus the two assertions over it."""
+"""One instance at module level; a :class:`StateMachine` holds no entity or store."""
 
 _FULFILLMENT_MACHINE = StateMachine(FULFILLMENT_MACHINE)
 _PAYMENT_MACHINE = StateMachine(PAYMENT_MACHINE)
@@ -272,33 +135,24 @@ _TRANSITION_STAMPS: Mapping[tuple[str, str], str] = {
     ("SHIPMENT", FulfillmentState.CANCELED.value): "canceled_at",
     ("SHIPMENT", FulfillmentState.FAILED.value): "failed_at",
 }
-"""Which details stamp a transition sets when the caller did not. JUDGMENT;
-see the module docstring."""
+"""Which details stamp a transition sets when the caller did not. JUDGMENT."""
 
 FULFILLMENT_STAMPS: frozenset[str] = frozenset({"placed_at", *_TRANSITION_STAMPS.values()})
-"""Every details stamp this unit can set from its clock: ``placed_at`` on
-creation and each transition stamp above. The vendor declares exactly these
-volatile to the state digest -- see "Stamps and the digest"."""
+"""Every details stamp this unit can set from its clock; declared volatile to the state digest."""
 
 _SHADOWED_STAMPS: frozenset[str] = FULFILLMENT_STAMPS | {"expires_at"}
-"""Details fields whose *name* the digest treats as volatile: the unit-set
-stamps, plus ``expires_at``, which is volatile at the top level for OAuth
-tokens and is matched at any depth. A caller-supplied value under any of
-these names is mirrored into ``Fulfillment.supplied_stamps`` so the digest
-still sees it."""
+"""Field names the digest treats as volatile at any depth. A caller-supplied value under one of
+these names is mirrored into ``Fulfillment.supplied_stamps`` so the digest still sees it."""
 
 _CREATABLE_STATES: tuple[str, ...] = (OrderState.OPEN.value, OrderState.DRAFT.value)
-"""CreateOrder accepts these two. The terminal pair cannot be a starting state:
-"Completed orders are fully paid" and "Canceled orders are not paid" both
-describe an order that has already been somewhere."""
+"""CreateOrder accepts these two; the terminal pair cannot be a starting state."""
 
 _SORT_FIELDS: Mapping[str, str] = {
     "CREATED_AT": "created_at",
     "UPDATED_AT": "updated_at",
     "CLOSED_AT": "closed_at",
 }
-"""``sort_field`` to the entity field it orders by, and to the
-``date_time_filter`` key that must accompany it."""
+"""``sort_field`` to the entity field it orders by and the ``date_time_filter`` key it requires."""
 
 _SORT_ORDERS: tuple[str, ...] = ("ASC", "DESC")
 
@@ -309,18 +163,13 @@ _CLEARABLE_LINE_FIELDS: tuple[str, ...] = ("name", "note", "catalog_object_id", 
 """Line-item fields a null clears -- everything a line can be without."""
 
 _LINE_ITEM_PATH = re.compile(r"^line_items\[([^\]]+)\](?:\.(.+))?$")
-"""Square's bracket notation for a line item inside ``fields_to_clear``, e.g.
-``line_items[coffee_uid]`` or ``line_items[coffee_uid].note``."""
+"""Square's bracket notation for a line item inside ``fields_to_clear``, e.g. ``line_items[uid].note``."""
 
 
 @dataclass(frozen=True, slots=True)
 class _LinePatch:
-    """One sparse line-item change, split into what it sets and what it removes.
-
-    Two mappings rather than one dict with a sentinel, because the merge has to
-    ``pop`` a cleared key and never write ``None`` into it -- see the "absence
-    is absence" invariant in :mod:`vendorfake.square.entities`.
-    """
+    """One sparse line-item change: what it sets and what it removes, as two mappings rather than
+    one dict with a sentinel, since the merge must ``pop`` a cleared key and never write ``None``."""
 
     uid: str
     assign: dict[str, Any] = dataclass_field(default_factory=dict)
@@ -347,13 +196,8 @@ class OrdersSurface:
         self._deps = deps
 
     def routes(self) -> tuple[Route, ...]:
-        """The literal paths come first.
-
-        The router returns the first candidate whose method matches, so the two
-        collection-level POSTs would work in any order -- but reading
-        ``/v2/orders/search`` after ``/v2/orders/{order_id}`` invites the next
-        person to add ``POST /v2/orders/{order_id}`` above them and shadow both.
-        """
+        """The literal paths come first: the router returns the first candidate whose method matches, so
+        ``/v2/orders/search`` must not sit after ``/v2/orders/{order_id}`` and risk being shadowed."""
         return (
             Route(
                 method="POST",
@@ -365,18 +209,7 @@ class OrdersSurface:
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="orders.create"),
                 operation_id="CreateOrder",
                 summary="Create an order. Idempotent on idempotency_key.",
-                # The minimum body CreateOrder accepts, published so that a
-                # language-independent check can cause a committed mutation
-                # rather than only observing seed inserts. "The order object
-                # must include a location_id"
-                # (https://developer.squareup.com/reference/square/orders-api/create-order),
-                # and the id has to be one the scenario actually holds -- an
-                # example naming an invented location would be an example the
-                # route refuses, which is worse than publishing none.
-                #
-                # `idempotency_key` is deliberately absent: whoever sends this
-                # body supplies their own, and a shipped constant would make
-                # every caller of the example collide with every other.
+                # Minimal accepted body; `idempotency_key` omitted so callers of the example don't collide.
                 example_body={"order": {"location_id": SEED_LOCATION_ID}},
             ),
             Route(
@@ -386,13 +219,10 @@ class OrdersSurface:
                 handler=self.create_order_at_location,
                 auth="bearer",
                 scopes=("ORDERS_WRITE",),
-                # The same scope as CreateOrder: one key, one order, whichever
-                # path a client used to send it.
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="orders.create"),
                 operation_id="CreateOrderAtLocation",
                 summary="CreateOrder on its pre-2019 path; the location comes from the URL.",
-                # An empty order: the location is authoritative from the URL,
-                # which is the whole point of this path.
+                # Empty order: the location is authoritative from the URL.
                 example_body={"order": {}},
                 example_params={"location_id": SEED_LOCATION_ID},
             ),
@@ -405,12 +235,7 @@ class OrdersSurface:
                 scopes=("ORDERS_READ",),
                 operation_id="SearchOrders",
                 summary="Filtered, sorted, cursor-paginated order search.",
-                # The page parameters travel in the body, so the walk that
-                # proves pages never overlap needs a body that works: "Your
-                # request must include one or more location_ids", and BOTH
-                # seeded locations are named because the scenario splits its
-                # orders across the two -- an example reaching one location
-                # would publish a one-row listing no page walk can cross.
+                # Both seeded locations are named so the page-walk example isn't a one-row listing.
                 example_body={"location_ids": [SEED_LOCATION_ID, SEED_KIOSK_LOCATION_ID]},
                 pagination=PaginationSpec(style="cursor", where="body", items_path="orders"),
             ),
@@ -441,20 +266,12 @@ class OrdersSurface:
                 handler=self.update_order,
                 auth="bearer",
                 scopes=("ORDERS_WRITE",),
-                # "If you don't provide a new idempotency_key with each update
-                # request, you get a 200 response but the returned order doesn't
-                # reflect any of your updates." That is `replay`, not `conflict`.
+                # DOCUMENTED: a repeated idempotency_key replays the prior response rather than conflicting.
                 # https://developer.squareup.com/docs/orders-api/manage-orders/update-orders
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="orders.update", on_mismatch="replay"),
                 operation_id="UpdateOrder",
                 summary="Sparse update under optimistic concurrency.",
-                # The smallest update the route accepts: the version alone --
-                # "Your request must include the order.version property" --
-                # against the seeded open order, which hydrate leaves at
-                # version 1. Without an example this is the ONLY route
-                # declaring on_mismatch="replay", so the replay half of the
-                # idempotency contract was asserted by nothing (review of
-                # konyklabs/roadmap#15, item 6).
+                # Smallest accepted update: version alone, against the seeded open order at version 1.
                 example_body={"order": {"version": 1}},
                 example_params={"order_id": SEED_OPEN_ORDER_ID},
             ),
@@ -466,10 +283,7 @@ class OrdersSurface:
                 auth="bearer",
                 scopes=("ORDERS_WRITE", "PAYMENTS_WRITE"),
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="orders.pay", required=True),
-                # No example_body: a working PayOrder is pinned to the order's
-                # current version and total, which other checks move. The
-                # params still name the seeded order so a scope probe reaches
-                # the handler instead of a 404.
+                # No example_body: a working PayOrder is pinned to a version/total other checks move.
                 example_params={"order_id": SEED_OPEN_ORDER_ID},
                 operation_id="PayOrder",
                 summary="Pay an open order and move it to COMPLETED.",
@@ -484,23 +298,13 @@ class OrdersSurface:
     # -- POST /v2/locations/{location_id}/orders ----------------------------
 
     def create_order_at_location(self, args: HandlerArgs) -> ReplyInit:
-        """CreateOrder, on the path it had before the location moved into the body.
+        """CreateOrder on the pre-2019 path where the location lived in the URL. NOT VERIFIED which
+        ``Square-Version`` moved it -- the move is recorded in Square's changelog
+        (https://developer.squareup.com/docs/changelog/connect).
+        https://developer.squareup.com/reference/square/orders-api/create-order
 
-        Raw clients built against an older ``Square-Version`` still send
-        ``POST /v2/locations/{location_id}/orders`` with the same body, and the
-        current reference documents only the new path
-        (https://developer.squareup.com/reference/square/orders-api/create-order).
-        The move is recorded in Square's changelog
-        (https://developer.squareup.com/docs/changelog/connect); the exact
-        version that made it is NOT VERIFIED here.
-
-        JUDGMENT -- the URL's location is authoritative. A body that omits
-        ``order.location_id`` takes it from the path; a body that states a
-        *different* one is refused with ``invalid_value`` rather than silently
-        overridden either way, because an order created at a location the
-        caller did not name in one of the two places is the bug this route
-        would otherwise hide. Everything else -- validation, pricing, the
-        idempotency scope -- is CreateOrder's, by delegation.
+        JUDGMENT: the URL's location is authoritative; a body naming a different one is refused as
+        ``invalid_value`` rather than silently overridden. Everything else delegates to CreateOrder.
         """
         raw = args.body()
         order = raw.get("order")
@@ -531,10 +335,7 @@ class OrdersSurface:
                 info={"allowed": list(_CREATABLE_STATES)},
             )
 
-        # Validate every line and every fulfillment before minting anything,
-        # then mint in one place, in order -- line uids, fulfillment uids, the
-        # order id -- so a refused create draws nothing from the id stream and
-        # the next accepted one mints exactly what it would have minted anyway.
+        # Validate everything before minting anything, so a refused create draws nothing from the id stream.
         checked_lines = self._new_line_items(args.ctx, spec.line_items or [], location.currency)
         checked_fulfillments = self._new_fulfillments(spec.fulfillments or [], args.ctx.clock.iso_ms())
         line_items = tuple(
@@ -547,8 +348,7 @@ class OrdersSurface:
             id=self._deps.ids.order(),
             location_id=location.id,
             merchant_id=location.merchant_id,
-            # The currency is the location's, never the request's: an order
-            # cannot be denominated in something the seller does not take.
+            # Currency is the location's, never the request's: a seller can't be paid in what it doesn't take.
             currency=location.currency,
             state=state,
             line_items=line_items,
@@ -586,11 +386,7 @@ class OrdersSurface:
                 field="order.version",
             )
 
-        # The version, before anything that mints: the store would refuse the
-        # write at `expect_version` anyway, but by then `_line_patches` and
-        # `_fulfillment_patches` have drawn uids for new entries, and a stale
-        # write that shifts every later id is the drift PayOrder avoids by
-        # minting inside its mutator. Same kind and wording as the store's.
+        # Checked before anything mints, since a stale write would shift the ids drawn for new entries.
         if patch.version != current.version:
             raise UnitError(
                 UnitErrorKind.VERSION_CONFLICT,
@@ -601,9 +397,7 @@ class OrdersSurface:
                 info={"collection": COL.orders, "id": order_id, "supplied": patch.version, "current": current.version},
             )
 
-        # Terminality first, then the move: "this order is finished" explains
-        # "that move is not allowed", and reporting them the other way round
-        # tells a consumer to consult a lifecycle diagram they cannot use.
+        # Terminality checked first: "this order is finished" explains "that move is not allowed", not vice versa.
         _MACHINE.assert_mutable(current.state, subject)
         next_state = patch.state
         if supplied(patch, "state"):
@@ -625,10 +419,7 @@ class OrdersSurface:
             fulfillment_patches = self._fulfillment_patches(current, patch.fulfillments)
         now = args.ctx.clock.iso_ms()
 
-        # Dry-run the line changes on a copy -- new lines under placeholder
-        # uids, which change no total -- so the tendered floor is checked and
-        # a new line missing its quantity or price is refused before any uid
-        # is minted. Then mint, in order: line uids, fulfillment uids.
+        # Dry-run the line changes on a copy first, so the tendered floor is checked before any uid is minted.
         probe = orders.require(order_id)
         taken = {str(line.get("uid", "")) for line in _lines_of(probe)}
         probed = _placeholders(patches, taken)
@@ -675,22 +466,10 @@ class OrdersSurface:
     # -- POST /v2/orders/search --------------------------------------------
 
     def search_orders(self, args: HandlerArgs) -> ReplyInit:
-        """Search the merchant's orders, one location set at a time.
-
-        ``location_ids`` is required: "Your request must include one or more
-        `location_ids`. `SearchOrders` only returns the orders for those
-        locations."
+        """Search the merchant's orders, one location set at a time. ``location_ids`` is required.
         https://developer.squareup.com/docs/orders-api/manage-orders/search-orders
-
-        The reference typed it optional and answered 200 with every location's
-        orders when it was omitted, which is the one shape Square will not
-        answer -- so a consumer whose query is missing the field builds a page
-        of results here and gets an error in production.
-
-        JUDGMENT -- the status. Square publishes no error code for the omission;
-        this unit answers its standard 400 ``MISSING_FIELD`` naming
-        ``location_ids``, which is what every other absent required field on
-        this surface answers.
+        JUDGMENT: Square publishes no error code for the omission; this unit answers its standard 400
+        ``MISSING_FIELD`` naming ``location_ids``.
         """
         body = args.body()
         request = validate_body(SearchOrdersRequest, body)
@@ -730,9 +509,7 @@ class OrdersSurface:
         date_filter = None if filters is None else filters.date_time_filter
         if date_filter is not None:
             for wire_name, expected in _SORT_FIELDS.items():
-                # "If you use the DateTimeFilter in a SearchOrders query, you
-                # must set the sort_field in OrdersSort to the same field you
-                # filter for."
+                # DOCUMENTED: a date_time_filter requires sort_field set to the same field.
                 # https://developer.squareup.com/reference/square/objects/SearchOrdersDateTimeFilter
                 if supplied(date_filter, expected) and wire_name != sort_field:
                     raise UnitError(
@@ -754,17 +531,11 @@ class OrdersSurface:
             if bounds is not None:
                 orders = [order for order in orders if _within(getattr(order, key), bounds.start_at, bounds.end_at)]
 
-        # Code point, never locale collation: `localeCompare` puts "a" before
-        # "B" and Python's `sorted` does not, Square order ids are mixed case,
-        # and the page order is on the wire. `reverse=` inverts the tie-break
-        # too, which is what negating the whole comparison does in the
-        # reference.
+        # Code point order, not locale collation: order ids are mixed case and the page order is on the wire.
         sort_key = _SORT_FIELDS[sort_field]
         orders.sort(key=lambda order: (getattr(order, sort_key) or "", order.id), reverse=sort_order == "DESC")
 
-        # The fingerprint is the whole request except paging, which is how the
-        # cursor enforces "you must use the original query" while still letting
-        # a caller change the page size.
+        # The fingerprint is the whole request except paging, so a cursor stays valid across page-size changes.
         fingerprint = {name: value for name, value in body.items() if name not in ("cursor", "limit")}
         page = collection.paginate(
             orders,
@@ -774,10 +545,7 @@ class OrdersSurface:
             default_limit=SEARCH_DEFAULT_LIMIT,
             max_limit=SEARCH_MAX_LIMIT,
         )
-        # `orders` and `order_entries` are the answer to the request rather
-        # than properties of an object, so the one that was asked for is
-        # present even when it is empty; see "Empty arrays, in one rule" in
-        # :mod:`vendorfake.square.model.order`.
+        # `orders`/`order_entries`: whichever was asked for is present even when empty.
         return json_(
             compact(
                 {
@@ -792,21 +560,10 @@ class OrdersSurface:
     # -- POST /v2/orders/batch-retrieve ------------------------------------
 
     def batch_retrieve_orders(self, args: HandlerArgs) -> ReplyInit:
-        """Retrieve many orders by id.
-
-        "If a given order ID does not exist, the ID is ignored instead of
-        generating an error", and the response's ``orders`` array holds "the
-        requested orders, omitting any that don't exist"
-        (https://developer.squareup.com/reference/square/orders-api/batch-retrieve-orders).
-        That is a map-and-filter over the ids as sent, so a repeated id yields
-        the order twice; Square documents nothing either way, and the literal
-        reading is the one that needs no extra rule.
-
-        JUDGMENT -- ``location_id`` is deprecated on Square's own request object
-        and documented only as "omit it to retrieve orders within the scope of
-        the current authorization's merchant ID". Supplying it here scopes the
-        result to that location, which is what the name says; Square publishes
-        no behaviour to defer to.
+        """Retrieve many orders by id. DOCUMENTED: a missing id is ignored rather than erroring; a repeated id
+        yields the order twice. https://developer.squareup.com/reference/square/orders-api/batch-retrieve-orders
+        JUDGMENT: ``location_id`` (deprecated on Square's request object) scopes the result to that location
+        when supplied.
         """
         request = validate_body(BatchRetrieveOrdersRequest, args.body())
         if len(request.order_ids) > MAX_BATCH_ORDER_IDS:
@@ -831,39 +588,16 @@ class OrdersSurface:
     # -- POST /v2/orders/{order_id}/pay ------------------------------------
 
     def pay_order(self, args: HandlerArgs) -> ReplyInit:
-        """Pay an OPEN order with the payments named, and complete it.
-
-        "The total of the `payment_ids` listed in the request must be equal to
-        the order total. Orders with a total amount of `0` can be marked as
-        paid by specifying an empty array of `payment_ids` in the request."
+        """Pay an OPEN order with the payments named, and complete it. DOCUMENTED: the ``payment_ids`` total must
+        equal the order total; an order totaling 0 can be paid with an empty array.
         https://developer.squareup.com/reference/square/orders-api/pay-order
 
-        Two readings of ``payment_ids``, and the request decides which:
-
-        * every id names a payment this unit holds -- the documented flow, a
-          CreatePayment with ``autocomplete: false`` followed by PayOrder. Each
-          must be APPROVED, at the order's location, and belong to this order
-          or to none; their ``amount_money`` (tips aside) must sum to what is
-          still due; and each is moved to COMPLETED through the payment
-          machine after the order commits, which journals a ``payment.updated``
-          apiece. An id listed twice is refused naming ``payment_ids`` -- a
-          payment tenders once;
-        * none does -- the opaque form this unit accepted before it had a
-          Payments surface, kept so a scenario that never creates payments
-          still completes orders. The first id's tender carries exactly what
-          is still due and the rest zero, because there is nothing else to
-          divide; an order with nothing due refuses the ids with 400
-          (JUDGMENT: Square documents only the zero-total case, below).
-
-        "Orders with a total amount of `0` can be marked as paid by specifying
-        an empty array of `payment_ids`": an empty list on an order with
-        nothing due completes it with no tender. Either way the order
-        completes because the due reaches zero -- :func:`apply_tenders` is
-        the one place that decides -- never by fiat of this route.
-
-        A mix is refused naming the id that does not resolve: a caller who
-        creates payments here and then names one that does not exist has made
-        a mistake this unit must not paper over with a zero tender.
+        Two readings of ``payment_ids``: each may name a payment this unit holds (APPROVED, at the order's
+        location, unowned or owned by this order, summing to what is due -- moved to COMPLETED and journalled;
+        a repeated id is refused), or none may resolve (the opaque form: the first id's tender carries what is
+        due, the rest zero). JUDGMENT: nothing-due refuses opaque ids with 400; a mix of resolving and
+        unresolving ids is refused naming the bad one. Completion is always :func:`apply_tenders`' decision,
+        never this route's fiat.
         """
         request = validate_body(PayOrderRequest, args.body())
         order_id = args.params["order_id"]
@@ -872,19 +606,15 @@ class OrdersSurface:
         subject = f"Order {order_id}"
 
         if current.state == OrderState.DRAFT:
-            # Its own error rather than the machine's, because Square publishes
-            # the reason: "Draft orders can be updated, but cannot be paid or
-            # fulfilled." https://developer.squareup.com/reference/square/enums/OrderState
+            # DOCUMENTED: "Draft orders can be updated, but cannot be paid or fulfilled."
+            # https://developer.squareup.com/reference/square/enums/OrderState
             raise UnitError(
                 UnitErrorKind.INVALID_TRANSITION,
                 detail=(f"{subject} is in state DRAFT and cannot be paid. A DRAFT order cannot be paid or fulfilled."),
                 field="state",
                 info={"from": OrderState.DRAFT.value, "to": OrderState.COMPLETED.value},
             )
-        # COMPLETED -> COMPLETED lands here and is refused, because the core's
-        # machine does not allow a self-transition unless the state declares it
-        # and a terminal state cannot. That is the double-payment the reference
-        # answered with 200.
+        # COMPLETED -> COMPLETED is refused here; no terminal state allows a self-transition.
         _MACHINE.assert_transition(current.state, OrderState.COMPLETED.value, subject)
 
         total = order_total(current)
@@ -908,16 +638,12 @@ class OrdersSurface:
                 field="payment_ids",
                 info={"order_total": total, "due": due},
             )
-        # No ids and something due: the placeholder this unit has always
-        # tendered under, kept for scenarios that never create payments. No
-        # ids and nothing due is the documented zero-total case: no tender.
+        # No ids + something due: the placeholder tender kept for scenarios with no Payments surface use.
+        # No ids + nothing due is the documented zero-total case: no tender.
         opaque_ids = payment_ids or (["unit-payment"] if due > 0 else [])
 
         def mutate(draft: Entity) -> None:
-            # Minted inside the mutator, so a version conflict -- which
-            # `Collection.update` raises before calling this -- does not draw
-            # from the id stream and leave two runs of one scenario numbering
-            # their tenders differently.
+            # Minted inside the mutator so a version conflict (raised before this runs) draws nothing.
             now = args.ctx.clock.iso_ms()
             if stored is not None:
                 tenders = [tender_for_payment(self._deps.ids, current, payment, now) for payment in stored]
@@ -928,17 +654,13 @@ class OrdersSurface:
                         location_id=current.location_id,
                         transaction_id=current.id,
                         created_at=now,
-                        # The first tender carries exactly what is due and the
-                        # rest zero: with opaque ids the due is all there is
-                        # to divide, and nothing may be tendered past it.
+                        # First tender carries exactly what's due, rest zero.
                         amount_money=Money(amount=due if index == 0 else 0, currency=current.currency),
                         payment_id=payment_id,
                     )
                     for index, payment_id in enumerate(opaque_ids)
                 ]
-            # Completion is `apply_tenders`' decision -- the due reaches zero
-            # -- which both branches guarantee: the stored payments sum to it,
-            # and the opaque tender is it.
+            # Completion is `apply_tenders`' decision (due reaches zero); both branches guarantee that.
             apply_tenders(draft, tenders, now)
 
         updated = orders.update(
@@ -956,15 +678,9 @@ class OrdersSurface:
     def _new_line_items(
         self, ctx: UnitContext, items: Sequence[LineItemRequest], currency: str
     ) -> tuple[OrderLineItem, ...]:
-        """Line items for CreateOrder: complete, or a 400 naming the index.
-
-        Nothing is synthesised. A line with no quantity and a line with no
-        price are both refused rather than defaulted, because the alternative
-        is an order that is quietly worth nothing.
-
-        A line the caller did not name comes back with an **empty** uid; the
-        caller mints once every line and every fulfillment of the request has
-        passed, so a refusal further on draws nothing from the id stream.
+        """Line items for CreateOrder: complete, or a 400 naming the index; nothing is synthesised (no quantity
+        or price is refused rather than defaulted). Uids are minted only after the whole request passes, so a
+        refusal draws nothing from the id stream.
         """
         built: list[OrderLineItem] = []
         for index, item in enumerate(items):
@@ -982,9 +698,7 @@ class OrdersSurface:
             variation_name = item.variation_name
             if item.catalog_object_id:
                 variation = _require_variation(ctx, item.catalog_object_id, f"{path}.catalog_object_id")
-                # Pricing resolves from the catalog when the caller does not
-                # override it -- the behaviour that makes seeded catalog data
-                # worth having.
+                # Pricing resolves from the catalog when the caller does not override it.
                 price = price or variation.price_money
                 variation_name = variation_name or variation.variation_name
                 name = name or _catalog_item_name(ctx, variation)
@@ -1010,15 +724,9 @@ class OrdersSurface:
     def _line_patches(
         self, ctx: UnitContext, items: Sequence[LineItemRequest], currency: str
     ) -> tuple[_LinePatch, ...]:
-        """Line items for UpdateOrder: only what the caller mentioned.
-
-        An absent field stays absent so the merge preserves what is stored --
-        synthesising a default here would silently zero a price the caller
-        never named. A present-but-null optional is a *clear*, which is why the
-        patch carries two collections rather than one dict.
-
-        A new line the caller did not name comes back with an empty uid, for
-        the caller to mint after the dry run; see :meth:`update_order`.
+        """Line items for UpdateOrder: only what the caller mentioned; an absent field stays absent, a
+        present-but-null optional is a clear (hence two collections, not one dict with a sentinel). A new line
+        comes back with an empty uid, minted after the dry run; see :meth:`update_order`.
         """
         patches: list[_LinePatch] = []
         for index, item in enumerate(items):
@@ -1066,15 +774,9 @@ class OrdersSurface:
     # -- fulfillments -------------------------------------------------------
 
     def _new_fulfillments(self, items: Sequence[FulfillmentRequest], now: str) -> tuple[Fulfillment, ...]:
-        """Fulfillments for CreateOrder: a type each, PROPOSED unless stated.
-
-        A state other than PROPOSED on creation is accepted when the machine
-        allows the move from PROPOSED -- a seller's own app can create an order
-        that is already RESERVED -- and stamped as such a move would be.
-
-        A fulfillment the caller did not name comes back with an empty uid;
-        the caller mints after everything in the request has passed -- the
-        discipline PayOrder keeps for tender ids.
+        """Fulfillments for CreateOrder: a type each, PROPOSED unless stated (a seller's own app may create an
+        order already RESERVED, stamped as that move would be). An unnamed uid is minted only after the whole
+        request passes.
         """
         checked: list[tuple[str | None, str, str, dict[str, Any], tuple[tuple[str, Any], ...] | None]] = []
         seen: set[str] = set()
@@ -1106,25 +808,10 @@ class OrdersSurface:
     def _fulfillment_patches(
         self, current: OrderEntity, items: Sequence[FulfillmentRequest]
     ) -> tuple[_FulfillmentPatch, ...]:
-        """Fulfillments for UpdateOrder: only what the caller mentioned.
-
-        Transitions are asserted *here*, against the stored state, before
-        ``Collection.update`` runs -- so an illegal move is refused with no
-        version bump, the same guarantee a bad line item has.
-
-        A ``uid`` names an existing fulfillment, and one that names none is
-        refused -- ``invalid_value`` on ``order.fulfillments[i].uid`` -- while
-        an entry with **no** uid is a new fulfillment and is minted one.
-        JUDGMENT, and deliberately unlike line items, where an unknown uid
-        appends: a fulfillment is a thing in flight through a state machine,
-        and a retry carrying a stale or mistyped uid that silently created a
-        second PROPOSED fulfillment beside the one it meant to advance is the
-        duplicate no kitchen can tell from a real second order. A line item
-        under a caller-chosen uid is idempotent data with no such consequence.
-        Square publishes no sentence for either case.
-
-        A new entry comes back with an empty uid; :meth:`update_order` mints
-        after the whole request has passed, as on create.
+        """Fulfillments for UpdateOrder: only what the caller mentioned; transitions are asserted here, against
+        stored state, so an illegal move is refused with no version bump. JUDGMENT: an unknown ``uid`` is
+        refused rather than appended (unlike a line item) so a stale retry can't silently create a duplicate
+        PROPOSED fulfillment. A new entry's uid is minted after the whole request passes, as on create.
         """
         by_uid = {f.uid: f for f in current.fulfillments}
         checked: list[tuple[str | None, dict[str, Any], dict[str, Any], tuple[str, ...]]] = []
@@ -1184,10 +871,8 @@ def order_routes(deps: SquareDeps) -> tuple[Route, ...]:
 
 
 def _cannot_be_cleared(field: str) -> UnitError:
-    """A null on a field an order cannot be without.
-
-    Refused rather than ignored: silently dropping it would leave a caller who
-    meant to clear something believing they had.
+    """A null on a field an order cannot be without; refused rather than silently ignored so a caller who
+    meant to clear something doesn't believe they had.
     """
     return UnitError(
         UnitErrorKind.INVALID_VALUE,
@@ -1209,12 +894,8 @@ def require_order(orders: Collection, order_id: str) -> OrderEntity:
 
 
 def _require_location(ctx: UnitContext, location_id: str) -> LocationEntity:
-    """The location, or a 400 that lists the ones this unit has.
-
-    ``invalid_value`` and not ``not_found``: the order does not exist yet, so
-    what is wrong is the value the caller sent. The ``known`` list is what makes
-    the fake usable without reading the seed document.
-    """
+    """The location, or a 400 that lists the ones this unit has. ``invalid_value`` and not ``not_found``: the
+    order doesn't exist yet, so what's wrong is the value the caller sent."""
     locations = ctx.store.collection(COL.locations)
     stored = locations.get(location_id)
     if stored is None:
@@ -1257,12 +938,8 @@ def _lines_of(draft: Entity) -> list[dict[str, Any]]:
 
 
 def _merge_line_items(existing: Sequence[dict[str, Any]], patches: Sequence[_LinePatch]) -> list[dict[str, Any]]:
-    """Sparse merge by uid: a known uid updates in place, an unknown one appends.
-
-    In place means *position* as well as identity -- a patch that renames a line
-    must not move it to the end of the order, because the line order is on the
-    wire and a receipt reads top to bottom.
-    """
+    """Sparse merge by uid: a known uid updates in place, an unknown one appends. "In place" means position too --
+    a renamed line must not move to the end, since line order is on the wire and a receipt reads top to bottom."""
     by_uid: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for line in existing:
@@ -1289,13 +966,8 @@ def _merge_line_items(existing: Sequence[dict[str, Any]], patches: Sequence[_Lin
 
 
 def _assign_or_clear(draft: Entity, patch: Any, name: str) -> None:
-    """Apply one sparse order-level field.
-
-    Absent: nothing happens. Present and truthy: assigned. Present and null or
-    empty: **popped**, never set to ``None`` -- see the "absence is absence"
-    invariant in :mod:`vendorfake.square.entities`, which the entity digest,
-    the journal's ``changed`` list and the wire projection all depend on.
-    """
+    """Apply one sparse order-level field: absent does nothing, truthy assigns, null/empty pops (never sets
+    ``None``) -- the "absence is absence" invariant in :mod:`vendorfake.square.entities`."""
     if not supplied(patch, name):
         return
     value = getattr(patch, name)
@@ -1306,15 +978,8 @@ def _assign_or_clear(draft: Entity, patch: Any, name: str) -> None:
 
 
 RESERVED_UID_PREFIX = "#"
-"""A caller-supplied line or fulfillment uid may not start with this.
-
-JUDGMENT. Square reserves the ``#`` prefix for client-chosen temporary ids in
-catalog upserts ("use a temporary ID prefixed with `#`"), and a line or
-fulfillment uid is otherwise Square's to mint; a caller-chosen ``#...`` uid
-is never a legitimate request, and refusing it keeps the vocabulary in one
-place. The dry merge's placeholders do not rely on this -- see
-:func:`_placeholders` -- so the invariant survives even if the rule were
-loosened."""
+"""A caller-supplied line or fulfillment uid may not start with this. JUDGMENT: Square reserves ``#`` for
+client-chosen temporary catalog-upsert ids, so a caller-chosen ``#...`` uid here is never legitimate."""
 
 
 def _require_uid_unreserved(uid: str, field: str) -> None:
@@ -1328,14 +993,8 @@ def _require_uid_unreserved(uid: str, field: str) -> None:
 
 
 def _placeholders(patches: tuple[_LinePatch, ...] | None, taken: set[str]) -> tuple[_LinePatch, ...] | None:
-    """The patches with a distinct placeholder uid on each new line, for the
-    dry merge. No total depends on a uid, so any string will do as long as it
-    collides with nothing: each placeholder carries a NUL byte, which no
-    request uid is refused for and no real uid has ever carried, and is then
-    lengthened until it is in neither ``taken`` -- the stored uids and the
-    named patches -- nor the placeholders already handed out. The dry merge
-    therefore sees exactly the lines the commit will, whatever the caller
-    named."""
+    """The patches with a distinct placeholder uid on each new line, for the dry merge. Each placeholder carries
+    a NUL byte (no request uid can) lengthened until unused, so it never collides."""
     if patches is None:
         return None
     used = set(taken) | {p.uid for p in patches if p.uid}
@@ -1353,9 +1012,8 @@ def _placeholders(patches: tuple[_LinePatch, ...] | None, taken: set[str]) -> tu
 
 
 def _fresh(named: tuple[_LinePatch, ...] | None, assigned: tuple[_LinePatch, ...] | None) -> frozenset[str]:
-    """The uids this request assigned to lines the caller left unnamed --
-    placeholders on the dry run, minted uids on the commit. ``named`` and
-    ``assigned`` are the same patches before and after assignment."""
+    """The uids this request assigned to lines the caller left unnamed -- placeholders on the dry run, minted
+    uids on the commit. ``named``/``assigned`` are the same patches before/after assignment."""
     if named is None or assigned is None:
         return frozenset()
     return frozenset(after.uid for before, after in zip(named, assigned, strict=True) if not before.uid)
@@ -1369,18 +1027,9 @@ def _apply_line_changes(
     *,
     fresh: frozenset[str],
 ) -> None:
-    """Every change an update makes to ``line_items``, in one place, so the
-    dry run and the real mutator cannot disagree about the result.
-
-    ``fresh`` is the set of uids this request itself assigned to unnamed new
-    lines, and a clear naming one of them is ignored. On the dry run those
-    are placeholders no caller can name; on the commit they are minted from
-    a deterministic stream, so a caller *can* name the uid the commit is
-    about to draw -- and the probe, which could not see it, would have passed
-    a floor the commit then broke. Ignoring the clear in both keeps the two
-    agreeing, and is the same "a clear that cannot be applied is silently
-    ignored" rule Square documents: from the caller's side the uid did not
-    exist when the request was written.
+    """Every change an update makes to ``line_items``, in one place, so the dry run and the real mutator cannot
+    disagree. ``fresh`` holds uids this request itself assigned to unnamed new lines; a clear naming one is
+    ignored, matching Square's "an inapplicable clear is silently ignored."
     """
     if clears_line_items:
         draft["line_items"] = []
@@ -1390,8 +1039,7 @@ def _apply_line_changes(
 
 
 def _assert_tendered_floor(order: OrderEntity, subject: str) -> None:
-    """Refuse a merged order whose lines total less than its tenders applied.
-    See "The tendered floor" in the module docstring."""
+    """Refuse a merged order whose lines total less than its tenders already applied."""
     applied = sum(tender.applied for tender in order.tenders)
     total = order_total(order)
     if total < applied:
@@ -1435,19 +1083,9 @@ def _apply_order_fields_to_clear(draft: Entity, paths: Sequence[str]) -> None:
 
 
 def _apply_fields_to_clear(draft: Entity, paths: Sequence[str]) -> None:
-    """Square's dot/bracket clear notation.
-
-    ``reference_id``, ``line_items``, ``line_items[uid]``,
-    ``line_items[uid].note``. Anything else -- a read-only property, a field
-    this unit does not model, a typo -- is **silently ignored and the version
-    still increments**, which is Square's documented behaviour and not an
-    oversight: "On a 200 response, Square has incremented the order version,
-    even if all requested property changes are ignored and no changes are
-    actually made."
-    https://developer.squareup.com/docs/orders-api/manage-orders/update-orders
-
-    Split in two so the update's dry run can apply the line-item half alone;
-    this whole is what the pair does together.
+    """Square's dot/bracket clear notation (``reference_id``, ``line_items``, ``line_items[uid]``,
+    ``line_items[uid].note``). DOCUMENTED: anything else is silently ignored while the version still
+    increments. https://developer.squareup.com/docs/orders-api/manage-orders/update-orders
     """
     _apply_line_fields_to_clear(draft, paths)
     _apply_order_fields_to_clear(draft, paths)
@@ -1468,13 +1106,8 @@ def _require_fulfillment_type(raw: str | None, field: str) -> str:
 
 
 def _details_assignments(item: FulfillmentRequest, kind: str, path: str) -> tuple[dict[str, Any], list[str]]:
-    """The details fields a request sets and the ones it clears, for the
-    details object the fulfillment's type carries.
-
-    A details object for a *different* type is refused: a PICKUP fulfillment
-    with ``delivery_details`` is a request Square's object cannot represent,
-    and storing it would echo a shape no consumer could act on.
-    """
+    """The details fields a request sets and the ones it clears, for the details object the fulfillment's type
+    carries. A details object for a different type is refused, since Square's object cannot represent it."""
     wanted = _DETAILS_KEY[kind]
     for other in _DETAILS_KEY.values():
         if other != wanted and supplied(item, other) and getattr(item, other) is not None:
@@ -1515,11 +1148,8 @@ def _fulfillment(
 
 
 def _supplied_stamps(prior: Any, assign: Mapping[str, Any], clear: Sequence[str]) -> tuple[tuple[str, Any], ...] | None:
-    """The caller-supplied values for volatile stamp names, after this
-    request: the prior mirror (as stored, ``[[name, value], ...]``), plus what
-    the request set, minus what it cleared -- as pairs sorted by name, or
-    ``None`` when nothing is left. Pairs and not a mapping because the digest
-    scrubs a volatile name at any depth; see "Stamps and the digest"."""
+    """The caller-supplied values for volatile stamp names after this request, as pairs sorted by name (or
+    ``None`` if empty) -- pairs, not a mapping, since the digest scrubs a volatile name at any depth."""
     mirror: dict[str, Any] = {}
     if isinstance(prior, list | tuple):
         mirror.update({str(pair[0]): pair[1] for pair in prior if isinstance(pair, list | tuple) and len(pair) == 2})
@@ -1547,12 +1177,8 @@ def _fulfillments_of(draft: Entity) -> list[dict[str, Any]]:
 def _merge_fulfillments(
     existing: Sequence[dict[str, Any]], patches: Sequence[_FulfillmentPatch], now: str
 ) -> list[dict[str, Any]]:
-    """Sparse merge by uid, in place, with the details merged one level down.
-
-    Position is preserved as it is for line items. A transition stamps its
-    details field when the patch did not set it, and ``placed_at`` is stamped
-    on a fulfillment that is new.
-    """
+    """Sparse merge by uid, in place, with the details merged one level down (position preserved, as for line
+    items); a transition stamps its details field when the patch didn't set it."""
     by_uid: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for f in existing:
@@ -1599,11 +1225,8 @@ def _merge_fulfillments(
 def _resolve_payments(
     payments: Collection, payment_ids: Sequence[str], order: OrderEntity
 ) -> list[PaymentEntity] | None:
-    """The stored payments ``payment_ids`` name, or ``None`` when none is stored.
-
-    See :meth:`OrdersSurface.pay_order` for the two readings and why a mix is
-    refused.
-    """
+    """The stored payments ``payment_ids`` name, or ``None`` when none is stored. See
+    :meth:`OrdersSurface.pay_order` for the two readings and why a mix is refused."""
     found: list[PaymentEntity | None] = [
         None if (raw := payments.get(pid)) is None else PaymentEntity.from_entity(raw) for pid in payment_ids
     ]
@@ -1657,14 +1280,8 @@ def _resolve_payments(
 
 
 def capture_payment(payments: Collection, payment: PaymentEntity, order_id: str | None, operation_id: str) -> Entity:
-    """Move a payment to COMPLETED through the payment machine, journalled.
-
-    The one place a payment's ``status`` is written to COMPLETED, for PayOrder
-    and for the Payments surface alike, so that the machine's rule -- no
-    edge out of a terminal state, no self-transition -- is asserted on every
-    capture and a payment cannot be captured twice. ``order_id`` is bound
-    when the capture attaches a previously unattached payment to an order.
-    """
+    """Move a payment to COMPLETED through the payment machine, journalled; the one place ``status`` is written
+    to COMPLETED, so the terminal/self-transition rule is asserted on every capture."""
     _PAYMENT_MACHINE.assert_transition(payment.status, PaymentState.COMPLETED.value, f"Payment {payment.id}")
 
     def mutate(draft: Entity) -> None:
@@ -1676,13 +1293,9 @@ def capture_payment(payments: Collection, payment: PaymentEntity, order_id: str 
 
 
 def tender_for_payment(ids: SquareIds, order: OrderEntity, payment: PaymentEntity, now: str) -> Tender:
-    """The tender a completed payment adds to its order.
-
-    JUDGMENT -- ``type`` is ``OTHER`` for an external payment. Square's
-    ``TenderType`` (https://developer.squareup.com/reference/square/enums/TenderType)
-    has no ``EXTERNAL`` member and documents no mapping from a payment's
-    ``source_type``; ``OTHER`` is the member that claims nothing false.
-    """
+    """The tender a completed payment adds to its order. JUDGMENT: ``type`` is ``OTHER`` for an external payment,
+    since Square's ``TenderType`` (https://developer.squareup.com/reference/square/enums/TenderType) has no
+    ``EXTERNAL`` member or mapping from ``source_type``."""
     return Tender(
         id=ids.tender(),
         location_id=order.location_id,
@@ -1699,17 +1312,10 @@ def tender_for_payment(ids: SquareIds, order: OrderEntity, payment: PaymentEntit
 
 
 def apply_tenders(draft: Entity, tenders: Sequence[Tender], now: str) -> None:
-    """Append ``tenders`` to an order draft and complete it if it is now paid.
-
-    Shared by PayOrder and by the Payments surface, so "an order is COMPLETED
-    when the tenders cover its total" is one rule -- and "cover" is
-    :func:`~vendorfake.square.model.order.amount_due` reaching zero, which
-    counts what a tender applies to the order and not its tip. The guide's
-    flow -- "Square marks the order as COMPLETED" once payments covering the
-    total are completed -- is the reading followed
-    (https://developer.squareup.com/docs/orders-api/pay-for-orders); the
-    exact wording is NOT VERIFIED and a partial payment leaves the order OPEN
-    with the remainder in ``net_amount_due_money``.
+    """Append ``tenders`` to an order draft and complete it once paid -- shared by PayOrder and the Payments
+    surface, via :func:`~vendorfake.square.model.order.amount_due` reaching zero (counting what a tender
+    applies, not its tip). NOT VERIFIED: a partial payment leaves the order OPEN with the remainder in
+    ``net_amount_due_money``. https://developer.squareup.com/docs/orders-api/pay-for-orders
     """
     existing = draft.get("tenders")
     stored = [dict(t) for t in existing if isinstance(t, dict)] if isinstance(existing, list) else []
@@ -1729,23 +1335,11 @@ def _complete_order(draft: Entity, now: str) -> None:
 
 
 def _drop_zero_quantity_lines(draft: Entity) -> None:
-    """Completing an order removes the lines whose quantity is zero.
-
-    "Line items with a quantity of `0` are automatically removed when paying
-    for or otherwise completing the order."
+    """Completing an order removes lines whose quantity is zero. DOCUMENTED: "removed when paying for or
+    otherwise completing the order"; a CANCELED transition does not, since the sentence says completing.
     https://developer.squareup.com/reference/square/objects/OrderLineItem
-
-    Called from PayOrder and from the UpdateOrder transition into COMPLETED --
-    "otherwise completing" is what that second call site is. A transition into
-    CANCELED does not remove anything: the sentence says *completing*, and a
-    canceled order's lines are the record of what was not sold.
-
-    Removing them changes no total, because a line whose quantity is zero
-    already contributes ``round(base * 0) = 0``; what changes is the array a
-    consumer reads back, which is the thing the sentence is about. The quantity
-    is parsed with the same ``parseFloat`` port the money projection uses, so
-    ``"0"``, ``"0.0"`` and ``"0.00"`` are all the documented zero, and junk --
-    which yields no number at all -- is left alone rather than swept up.
+    Quantity is parsed like the money projection's numbers, so ``"0"``/``"0.0"``/``"0.00"`` all count and
+    junk is left alone.
     """
     lines = _lines_of(draft)
     kept = [line for line in lines if not _is_zero_quantity(line)]
@@ -1763,12 +1357,8 @@ def _is_zero_quantity(line: Mapping[str, Any]) -> bool:
 
 
 def _within(value: str | None, start_at: str | None, end_at: str | None) -> bool:
-    """Square's range semantics: start inclusive, end exclusive.
-
-    An order with no value for the field being filtered is **excluded** -- an
-    open order has no ``closed_at``, and "closed between Monday and Tuesday"
-    must not match it.
-    """
+    """Square's range semantics: start inclusive, end exclusive. A value-less order is excluded -- an open order
+    has no ``closed_at``, and "closed between Monday and Tuesday" must not match it."""
     if not value:
         return False
     at = instant_ms(value)

@@ -1,26 +1,17 @@
-"""Instants on Toast's two wires, and the business date.
-
-FOR: the conversions between what the store holds -- epoch milliseconds, the
-core clock's unit -- and the three spellings Toast documents.
+"""Instants on Toast's two wires, and the business date. Converts between
+epoch milliseconds, the core clock's unit, and the spellings below.
 
 DOCUMENTED (https://doc.toasttab.com/doc/devguide/apiUnderstandingGuidsEntityIdentifiersAndMultilocationIds_V2.html):
-REST dates are ``2025-01-15T14:30:00.000+0000`` and webhook timestamps are
-``2024-03-28T15:11:01.050Z`` -- both UTC to the millisecond, one with a
-four-digit numeric offset and one with ``Z``. ``businessDate`` is an integer
-``yyyyMMdd``.
+REST dates are ``2025-01-15T14:30:00.000+0000``, webhook timestamps are
+``2024-03-28T15:11:01.050Z``, both UTC to the millisecond, and
+``businessDate`` is an integer ``yyyyMMdd``. Query dates (``GET
+/ordersBulk``, toast-orders-api.yaml) are ISO-8601 with an offset;
+:func:`parse_rest_date` also accepts the colon-separated form and ``Z``.
 
-DOCUMENTED (``GET /ordersBulk``, toast-orders-api.yaml): query dates arrive as
-ISO-8601 with milliseconds and an offset, e.g. ``2016-01-01T14:13:12.000+0400``.
-:func:`parse_rest_date` accepts that, the colon-separated offset form, and
-``Z``; anything else is a 400 naming the field.
-
-JUDGMENT -- the business date. Toast documents ``closeoutHour`` (0-12) on the
-restaurant and ``businessDate`` on orders, and nothing about how one derives
-from the other. This project's reading: an instant belongs to the local
-calendar day it falls on in the restaurant's ``timeZone`` *after* subtracting
-``closeoutHour`` hours -- so with closeout at 4, an order at 02:00 local on the
-16th has business date 20250115. Held in one function so a consumer who learns
-the real rule changes one line.
+JUDGMENT: Toast documents ``closeoutHour`` and ``businessDate`` but not how
+one derives from the other; this project's reading is that an instant
+belongs to the local calendar day it falls on after subtracting
+``closeoutHour`` hours in the restaurant's ``timeZone``.
 """
 
 from __future__ import annotations
@@ -70,9 +61,7 @@ def parse_rest_date(text: str, *, field: str) -> int:
     try:
         moment = datetime.fromisoformat(f"{matched.group('date')}T{matched.group('time')}.{millis}000{zone}")
     except ValueError:
-        # The regex checks the SHAPE only; February 30th, month 13, 25:99:99
-        # and a +99:99 offset all pass it and fail here. The promise is the
-        # same 400 naming the field, never a 500 with a Python message.
+        # The regex checks shape only; an out-of-range date/time/offset lands here.
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,
             detail=f"{field} is not a real instant: the date, time or offset is out of range.",
@@ -87,7 +76,7 @@ def parse_business_date(text: str, *, field: str) -> int:
     stripped = text.strip()
     if _BUSINESS_DATE.match(stripped):
         try:
-            datetime.strptime(stripped, "%Y%m%d")  # a calendar date, not an instant
+            datetime.strptime(stripped, "%Y%m%d")
             return int(stripped)
         except ValueError:
             pass
@@ -100,18 +89,10 @@ def parse_business_date(text: str, *, field: str) -> int:
 
 
 def business_date(epoch_ms: float, *, time_zone: str, closeout_hour: int, field: str | None = None) -> int:
-    """The restaurant's business date for an instant. JUDGMENT; module docstring.
-
-    An unknown zone falls back to UTC rather than raising: a scenario author
-    who misspelt a zone gets a business date off by hours, which a test sees,
-    where a 500 on every order create would hide the order.
-
-    The zone shift and the closeout subtraction can each leave the calendar --
-    the date regex admits year 0001, and an instant within ``closeout_hour``
-    plus the zone offset of ``datetime.min`` underflows. When the instant was
-    caller input the caller names ``field`` and gets the documented 400; a
-    clock- or seed-driven instant leaves ``field`` unset, because there the
-    crash is a unit bug and hiding it would help nobody
+    """The restaurant's business date for an instant (JUDGMENT; see module
+    docstring). An unknown zone falls back to UTC rather than raising. A
+    calendar underflow raises the documented 400 naming ``field`` when the
+    instant was caller input, or propagates when it was not
     (konyklabs/roadmap#41).
     """
     try:

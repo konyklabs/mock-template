@@ -4,16 +4,11 @@ The consumer-side version: writing or fixing tests against an *installed*
 vendorfake, in a repository that is not this one. If you are working inside
 the vendorfake repository itself, read its `AGENTS.md` instead.
 
-Two shortcuts before the detail below:
-
-- `vendorfake agent-setup` writes a compact version of this file into
-  `.claude/rules/vendorfake.md`, scoped by `paths:` frontmatter to your test
-  glob (default `tests/**`), so a session editing application code never
-  loads it.
-- `vendorfake explain <route|fault|profile|error|header> <name>` answers "what
-  is this" from the command line, without opening this document or the
-  source: `vendorfake explain fault timeout`, `vendorfake explain route
-  CreateOrder --vendor square`.
+One shortcut before the detail below: `vendorfake explain
+<route|fault|profile|error|header> <name>` answers "what is this" from the
+command line, without opening this document or the source: `vendorfake
+explain fault timeout`, `vendorfake explain route CreateOrder --vendor
+square`.
 
 ## Starting a unit
 

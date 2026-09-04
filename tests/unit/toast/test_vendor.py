@@ -7,7 +7,7 @@ import pytest
 import vendorfake.toast as toast
 from tests.unit.toast.conftest import fake_ctx
 from tests.unit.toast.harness import LEDGER, SURFACE
-from vendorfake.core.kernel.types import MutableResponse, UnitError, UnitErrorKind, UnitRequest, VendorDefinition
+from vendorfake.core.kernel.types import UnitError, UnitErrorKind, UnitRequest, VendorDefinition
 from vendorfake.fidelity.validate import ValidatingClient
 from vendorfake.registry import available_vendors, create_unit, resolve_vendor
 from vendorfake.toast.auth import ToastAuth
@@ -102,9 +102,9 @@ def test_volatile_fields_are_toasts_wall_clock_names() -> None:
 
 
 def test_decorate_stamps_only_the_unit_vendor_header() -> None:
-    res = MutableResponse(status=200, headers={}, body=b"{}")
-    create_toast_vendor().decorate(res, fake_ctx(), request())
-    assert res.headers == {"x-unit-vendor": "toast"}
+    headers: dict[str, str] = {}
+    create_toast_vendor().decorate(headers, fake_ctx(), request())
+    assert headers == {"x-unit-vendor": "toast"}
 
 
 def test_hydrate_resolves_the_profiles_vendor_block_and_reseeds_both_streams() -> None:

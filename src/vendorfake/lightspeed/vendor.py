@@ -1,45 +1,16 @@
-"""The Lightspeed vendor definition -- everything the core needs to become a
-Lightspeed X-Series unit, and nothing else.
+"""The Lightspeed vendor definition: assembles the object satisfying
+:class:`~vendorfake.core.kernel.types.VendorDefinition` for a Lightspeed X-Series unit.
 
-FOR: assembling one object that satisfies
-:class:`~vendorfake.core.kernel.types.VendorDefinition`. This is the fourth
-vendor in the distribution and plugs into the same core the Square, Clover and
-Toast vendors do.
-
-INVARIANT: **one vendor instance per unit.** :data:`VENDOR` (in
-``__init__.py``) is minted fresh on every attribute access, because a vendor
-owns four pieces of mutable state -- two id streams, the retailer's version
-counter and the rate limiter's window -- and two units sharing any of them
-would interleave.
+INVARIANT: one vendor instance per unit -- :data:`VENDOR` (``__init__.py``) is minted fresh
+per attribute access, since a vendor owns mutable state (id streams, version counter, rate
+limiter window) that two units must not share.
 
 Configuration resolves in two phases: defaults at construction, then
-:meth:`LightspeedVendor.hydrate` re-resolves from ``ctx.config.vendor_config``
--- at start and again on ``POST /__unit/state/reset`` -- rebuilds the error
-shaper, reseeds both id streams, restarts the version counter and recomputes
-the rate limiter's quota from the number of registers the scenario just
-loaded.
+:meth:`LightspeedVendor.hydrate` re-resolves config, rebuilds the error shaper, reseeds ids,
+and recomputes the rate limiter's quota (``300 x registers + 50``) from the loaded scenario.
 
-``api_version`` is ``"2026-07"``: unlike Toast's, this vendor's version is a
-real, named thing -- the document's ``info.version``, and the path segment
-every resource route sits under.
-
-WHY THE RATE LIMITER'S QUOTA IS COMPUTED IN ``hydrate`` AND NOWHERE ELSE. The
-documented formula is ``300 x <number of registers> + 50``, so the quota is a
-function of the scenario -- which does not exist when the vendor is
-constructed. Recomputing it per request would be a store scan on the hot path
-for a number that only a re-seed can change.
-
-THE ROLE MAPPING. ``VendorDefinition.roles`` must map all four neutral roles to
-capabilities this vendor declares. ``auth``, ``webhooks`` and ``chaos`` map to
-themselves, and ``orders`` maps to ``sales``: a Lightspeed *sale* is this
-vendor's order-equivalent resource, so a consumer asking a unit for its orders
-role gets the surface that creates, reads, updates and returns one.
-
-It pointed at ``registers`` in the chassis slice of konyklabs/roadmap#94, when
-the Sales tag did not exist here yet and the till lifecycle was the only
-transactional surface the unit served. That was recorded as a JUDGMENT to
-revisit, pinned by a test whose name said so; slice L2b revisits it, and this
-line and the ``orders-only`` profile's capability list move together.
+JUDGMENT: ``roles`` maps ``orders`` to ``sales`` -- a Lightspeed *sale* is this vendor's
+order-equivalent resource.
 """
 
 from __future__ import annotations
@@ -55,7 +26,6 @@ from vendorfake.core.kernel.types import (
     ErrorShaper,
     EventMapper,
     MagicTriggerSpec,
-    MutableResponse,
     Route,
     Signer,
     UnitContext,
@@ -104,13 +74,9 @@ LIGHTSPEED_MAGIC = MagicTriggerSpec(
     body_paths=("url",),
     query_params=("state",),
 )
-"""In-band fault triggering, in fields a consumer can set through a real
-Lightspeed client: a webhook's ``url`` is an ordinary writable string
-(``WebhookRequest``) and ``state`` is the documented opaque round-trip
-parameter on the authorize URL, which is exactly the kind of field a caller
-controls end to end. Prior art is Square's sandbox magic values; Lightspeed
-publishes no equivalent, so the mechanism is this project's, flagged by the
-``chaos:`` prefix no real value would carry."""
+"""In-band fault triggering via fields a real client can set: a webhook's ``url`` and the
+authorize URL's documented opaque ``state`` param. JUDGMENT: Lightspeed has no such
+mechanism, so ``chaos:`` is this project's prefix, chosen so no real value would carry it."""
 
 LIGHTSPEED_ROLES: Mapping[str, str] = {
     "auth": "auth",
@@ -118,9 +84,8 @@ LIGHTSPEED_ROLES: Mapping[str, str] = {
     "webhooks": "webhooks",
     "chaos": "chaos",
 }
-"""The neutral role vocabulary, mapped to this vendor's own capability names.
-See the module docstring for why ``orders`` points at ``sales``, and what it
-pointed at before."""
+"""Neutral role vocabulary mapped to this vendor's capability names; see the module
+docstring for why ``orders`` maps to ``sales``."""
 
 _VOLATILE_FIELDS: tuple[str, ...] = (
     "expires_at_ms",
@@ -131,25 +96,17 @@ _VOLATILE_FIELDS: tuple[str, ...] = (
     "register_close_time",
     "activated_at",
 )
-"""Entity fields excluded from the state digest because this unit writes them
-from its clock. The core matches these names at any depth. ``register_open_time``
-is deliberately ABSENT: the seed states it, so it is scenario data rather than a
-stamp, and a digest that ignored it could not tell a register the scenario
-opened last Tuesday from one it opened this morning. ``register_close_time`` IS
-here, because only a close action ever writes it. The digest keeps each
-scrubbed field's *presence*, so closing a register still moves it."""
+"""Fields excluded from the state digest because this unit writes them from its clock,
+matched at any depth. ``register_open_time`` is deliberately ABSENT (scenario data, not a
+stamp); ``register_close_time`` IS here, since only a close action writes it."""
 
 _OPAQUE_FIELDS: tuple[str, ...] = (
     "document",
     "config",
     "attributes",
 )
-"""Caller (or seed) free-form subtrees the digest takes verbatim: the retailer's
-uncomputed blocks, a payment type's ``config`` ("Shape varies by payment type",
-``additionalProperties: true``) and an outlet's ``attributes`` list. The
-volatile scrub must not descend into any of them -- a retailer's
-``document.activated_at`` is state the seed states, not a stamp this unit
-wrote."""
+"""Caller/seed free-form subtrees the digest takes verbatim; the volatile scrub must not
+descend into them."""
 
 
 class LightspeedVendor:
@@ -243,9 +200,8 @@ class LightspeedVendor:
 
     @property
     def routes(self) -> Sequence[Route]:
-        """The vendor surface, built once and cached: auth first, so the
-        credential-issuing routes are what a reader meets at the top of
-        ``GET /__unit/routes``."""
+        """The vendor surface, built once and cached; auth first, so credential-issuing
+        routes lead ``GET /__unit/routes``."""
         if self._routes is None:
             self._routes = (
                 auth_routes(self)
@@ -253,12 +209,7 @@ class LightspeedVendor:
                 + outlet_routes(self)
                 + register_routes(self)
                 + payment_type_routes(self)
-                # konyklabs/roadmap#94: the catalogue, then its stock, then
-                # the customer a sale is attached to, then the sale itself --
-                # the order a reader of `GET /__unit/routes` needs them in.
-                # `POST /sales` is the one route publishing an `example_body`,
-                # so nothing here depends on which comes first; see
-                # surface/sales.py.
+                # Catalogue, then stock, then customers, then sales; see surface/sales.py.
                 + product_routes(self)
                 + inventory_routes(self)
                 + customer_routes(self)
@@ -277,14 +228,12 @@ class LightspeedVendor:
 
     @property
     def signer(self) -> Signer | None:
-        """``X-Signature``, the delivery headers, and the form encoding of the
-        body itself. See :mod:`.signer`."""
+        """``X-Signature``, delivery headers, and body form-encoding; see :mod:`.signer`."""
         return self._signer
 
     @property
     def events(self) -> EventMapper | None:
-        """Journal entry to one of the seven documented event types. See
-        :mod:`.events`."""
+        """Journal entry to one of the seven documented event types; see :mod:`.events`."""
         return self._events
 
     @property
@@ -293,14 +242,8 @@ class LightspeedVendor:
 
     @property
     def machines(self) -> Mapping[str, MachineDef]:
-        """One: the sale lifecycle.
-
-        A REGISTER IS DELIBERATELY NOT A MACHINE. It is open or closed and the
-        two actions are the only transitions; that is a boolean rather than a
-        lifecycle, and declaring a two-state machine for it would publish a
-        vocabulary no route uses. A sale's ``state`` is a real enum on a real
-        schema, with edges worth publishing -- see ``machine.py``.
-        """
+        """One: the sale lifecycle. A register is deliberately not a machine --
+        open/closed is a boolean, not a lifecycle worth its own vocabulary."""
         return {SALE_MACHINE_NAME: SALE_MACHINE}
 
     @property
@@ -340,21 +283,14 @@ class LightspeedVendor:
         self._versions.reset()
         self._errors = self._build_errors()
 
-    def decorate(self, res: MutableResponse, ctx: UnitContext, req: UnitRequest) -> None:
-        """Stamp the vendor, the API version, and the two documented rate-limit
-        headers.
-
-        The rate-limit pair is here rather than in the handlers because the
-        page says they are on EVERY response -- the success, the shaped
-        refusal, and the 429 itself. ``decorate`` runs on all three for a
-        matched vendor route and on none of the control plane's, which is
-        exactly the boundary the documented quota has.
-        """
-        res.headers["x-unit-vendor"] = ctx.vendor.name
-        res.headers["x-unit-api-version"] = API_VERSION
+    def decorate(self, headers: dict[str, str], ctx: UnitContext, req: UnitRequest) -> None:
+        """Stamp the vendor, the API version, and the two documented rate-limit headers --
+        here, not in the handlers, since the page says they're on EVERY response."""
+        headers["x-unit-vendor"] = ctx.vendor.name
+        headers["x-unit-api-version"] = API_VERSION
         snapshot = self._limiter.snapshot(ctx)
-        res.headers[RATE_LIMIT_LIMIT_HEADER] = str(snapshot.limit)
-        res.headers[RATE_LIMIT_REMAINING_HEADER] = str(snapshot.remaining)
+        headers[RATE_LIMIT_LIMIT_HEADER] = str(snapshot.limit)
+        headers[RATE_LIMIT_REMAINING_HEADER] = str(snapshot.remaining)
 
 
 def create_lightspeed_vendor(*, vendor_config: dict[str, Any] | None = None, seed: int = 1) -> VendorDefinition:

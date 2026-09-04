@@ -1,73 +1,19 @@
 """The OAuth v2 surface: authorize, token exchange, refresh.
 
-FOR: reproducing the three endpoints a Clover OAuth consumer drives, with the
-documented redirect parameters, the documented four-field token response and
-the documented single-use refresh rotation -- so that an integration which
-handles rotation correctly against this unit handles it correctly against
-Clover, and one which does not fails here first.
+DOCUMENTED: authorize redirects with ``merchant_id``, ``client_id``,
+``code``; token exchange answers the four-field
+``{access_token, access_token_expiration, refresh_token,
+refresh_token_expiration}``; refresh is ``{client_id, refresh_token}``,
+single-use, no secret
+(https://docs.clover.com/dev/docs/high-trust-app-auth-flow,
+https://docs.clover.com/dev/docs/generate-oauth-expiring-access-and-refresh-token,
+https://docs.clover.com/dev/docs/refresh-access-tokens,
+https://docs.clover.com/dev/docs/oauth-and-tokens-faqs). Everything else
+(error bodies/status, PKCE via RFC 7636, code TTL) is JUDGMENT, labelled at
+each site.
 
-=========  =================================================================
-Authorize  ``GET  /oauth/v2/authorize``
-           https://docs.clover.com/dev/docs/high-trust-app-auth-flow
-Token      ``POST /oauth/v2/token``
-           https://docs.clover.com/dev/docs/generate-oauth-expiring-access-and-refresh-token
-Refresh    ``POST /oauth/v2/refresh``
-           https://docs.clover.com/dev/docs/refresh-access-tokens
-=========  =================================================================
-
-Documented behaviour reproduced here
-------------------------------------
-* the authorize redirect carries ``merchant_id``, ``client_id`` and ``code``
-  -- Clover, unlike Square, identifies the merchant and echoes the app in the
-  callback (high-trust-app-auth-flow, verbatim shape);
-* token exchange accepts ``{client_id, client_secret, code}`` (high-trust) or
-  ``{client_id, code, code_verifier}`` (PKCE) and answers exactly
-  ``{access_token, access_token_expiration, refresh_token,
-  refresh_token_expiration}``, expirations in Unix **seconds**;
-* refresh takes ``{client_id, refresh_token}`` with **no client_secret**, and
-  "Refresh token is for single use and becomes invalid immediately after a
-  new access_token and refresh_token pair is generated" -- reusing a rotated
-  refresh token is refused;
-* access tokens live 30 minutes ("OAuth access_tokens expire in 30 minutes",
-  oauth-and-tokens-faqs).
-
-JUDGMENT, each labelled at its site
------------------------------------
-* **Error bodies.** Clover documents no OAuth error body, status or code
-  anywhere (audit gap 2). Failures answer the package envelope
-  (``{"message": ...}``) with 401 for credential failures and 400 for
-  malformed requests; the bad-code message is the one phrase Clover's own FAQ
-  uses, "Failed to validate authentication code"
-  (https://docs.clover.com/dev/docs/oauth-and-tokens-faqs), answered
-  identically for an unknown, spent or expired code -- a real authorization
-  server does not say which, and the ``unit_error`` sidecar carries the
-  distinction for whoever is debugging.
-* **Code TTL and single use** -- documented nowhere; ten minutes and
-  single-use per RFC 6749 convention, from ``CloverConfig``.
-* **``state``** -- Clover's v2 authorize example shows no ``state`` parameter.
-  It is passed through to the redirect when the consumer sends one, because
-  every standard OAuth client library sends and verifies it and a fake that
-  dropped it would break CSRF checks the consumer is right to run. A consumer
-  must not conclude from this unit that Clover itself echoes it.
-* **PKCE at authorize** -- the *token* side of PKCE is documented
-  (``code_verifier`` in the exchange body); the authorize-side
-  ``code_challenge`` parameter is not shown on the v2 pages, so accepting it
-  here follows RFC 7636, S256 only -- and an omitted ``code_challenge_method``
-  is refused rather than defaulted, because the RFC's default is ``plain``.
-  A code issued with a challenge demands the verifier at exchange; one issued
-  without demands the secret.
-* **Prior access tokens survive a refresh.** Clover's docs invalidate only
-  the *refresh* token on rotation and say nothing about access tokens minted
-  earlier, so this unit keeps them valid to their own expiry. Inventing
-  revocation would teach consumers an invalidation rule Clover does not
-  publish, and they would discover its absence in production.
-
-THE ORDERING INVARIANT (the N-1 class from the Square build): **no 4xx leaves
-a journal entry.** Every refusal on the exchange path -- unknown client, bad
-code, expired code, secret, verifier -- is computed before the code's
-mark-used write, and every refusal on the refresh path before the rotation
-write. A refused request must leave the world exactly as it found it, so the
-consumer's corrected retry with the same code or refresh token succeeds.
+Invariant: no 4xx leaves a journal entry -- every refusal is checked before
+its write.
 """
 
 from __future__ import annotations
@@ -99,9 +45,8 @@ CAPABILITY = "oauth"
 """The capability every route below belongs to."""
 
 FAILED_CODE_MESSAGE = "Failed to validate authentication code"
-"""Clover's own phrase for a code it will not accept, from the OAuth FAQ
-(https://docs.clover.com/dev/docs/oauth-and-tokens-faqs). Used verbatim for an
-unknown, spent and expired code alike; see the module docstring."""
+"""DOCUMENTED: Clover's OAuth FAQ phrase, used for any bad code
+(https://docs.clover.com/dev/docs/oauth-and-tokens-faqs)."""
 
 
 class CloverOAuthSurface:
@@ -143,19 +88,12 @@ class CloverOAuthSurface:
     # -- GET /oauth/v2/authorize -------------------------------------------
 
     def authorize(self, args: HandlerArgs) -> ReplyInit:
-        """The consent redirect, approval automatic (a mock has nobody to click).
-
-        The redirect query is the documented shape:
-        ``?merchant_id=...&client_id=...&code=...``
-        (https://docs.clover.com/dev/docs/high-trust-app-auth-flow).
+        """DOCUMENTED: redirects with ``?merchant_id=...&client_id=...&code=...``
+        (https://docs.clover.com/dev/docs/high-trust-app-auth-flow); approval
+        is automatic since a mock has nobody to click.
         """
         config = self._deps.config
-        # A query key that is present but empty (`?code_challenge=`) is
-        # neither absent nor a value: every optional below is read through
-        # `_query`, which refuses the empty spelling by name, so an empty
-        # challenge cannot be stored as "" and route the exchange down a PKCE
-        # branch no verifier could ever satisfy. Same rule as the request
-        # models' absent-vs-empty invariant (model/common.py).
+        # `_query` refuses an empty value by name (model/common.py).
         client_id = _query(args, "client_id")
         if client_id is None:
             raise UnitError(UnitErrorKind.MISSING_FIELD, detail="client_id is required.", field="client_id")
@@ -168,9 +106,7 @@ class CloverOAuthSurface:
 
         supplied_redirect = _query(args, "redirect_uri")
         if supplied_redirect is not None and supplied_redirect != config.redirect_uri:
-            # The mismatch this parameter exists to catch. JUDGMENT on the
-            # status -- Clover documents no error for it -- but not on the
-            # refusal: redirecting a code to an unregistered URI is the attack.
+            # JUDGMENT: blocks redirecting a code to an unregistered URI.
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail="redirect_uri does not match the redirect URI registered for this app.",
@@ -181,11 +117,8 @@ class CloverOAuthSurface:
         challenge = _query(args, "code_challenge")
         method = _query(args, "code_challenge_method")
         if challenge is not None and method != "S256":
-            # JUDGMENT: an omitted method is refused, not defaulted to S256.
-            # RFC 7636 s4.3 makes `plain` the default when the method is
-            # absent, and this unit refuses `plain`; silently upgrading an
-            # absent method to S256 would accept a request the RFC reads as
-            # the one method we reject. Clover documents nothing either way.
+            # JUDGMENT: an omitted method defaults to `plain` (RFC 7636 s4.3),
+            # which is rejected rather than accepted.
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail=(
@@ -210,8 +143,6 @@ class CloverOAuthSurface:
         params = {"merchant_id": merchant.id, "client_id": client_id, "code": code}
         state = args.query("state")
         if state is not None:
-            # JUDGMENT: not in Clover's documented redirect; see the module
-            # docstring for why it is echoed anyway.
             params["state"] = state
         return redirect(_with_query(redirect_uri, params))
 
@@ -228,19 +159,14 @@ class CloverOAuthSurface:
             raise _failed_code("unknown")
         record = AuthorizationCodeEntity.from_entity(stored)
         if record.client_id != request.client_id:
-            # The code was issued to another app. Unreachable while one app is
-            # configured (`_check_client` matched the request to it), but a
-            # second seeded app must not redeem the first app's code. Same
-            # 401 as any other code failure, above every write.
+            # A second seeded app must not redeem the first app's code.
             raise _failed_code("other_client")
         if record.used_at_ms is not None:
             raise _failed_code("already_used")
         if is_past_ms(record.expires_at_ms, ctx.clock):
             raise _failed_code("expired")
 
-        # Every refusal above and below this comment happens BEFORE the
-        # mark-used write: a refused exchange must not burn the code (the
-        # module docstring's ordering invariant).
+        # All refusals precede the mark-used write (ordering invariant).
         if record.code_challenge is not None:
             self._check_verifier(request.code_verifier, record.code_challenge)
         else:
@@ -279,19 +205,14 @@ class CloverOAuthSurface:
             )
         existing = TokenEntity.from_entity(found)
         if existing.client_id != request.client_id:
-            # Unreachable while one app is configured (`_check_client` already
-            # matched the request to it), but a second seeded app must not be
-            # able to rotate the first app's grant. Same 401 as any other
-            # credential failure, and above every write.
+            # A second seeded app must not rotate the first app's grant.
             raise UnitError(
                 UnitErrorKind.UNAUTHORIZED,
                 detail="The refresh token was not issued to this client_id.",
                 field="refresh_token",
             )
         if existing.refresh_used_at_ms is not None:
-            # "Refresh token is for single use and becomes invalid immediately
-            # after a new access_token and refresh_token pair is generated."
-            # https://docs.clover.com/dev/docs/refresh-access-tokens
+            # DOCUMENTED single-use: https://docs.clover.com/dev/docs/refresh-access-tokens
             raise UnitError(
                 UnitErrorKind.UNAUTHORIZED,
                 detail="The refresh token was already used. Refresh tokens are single use.",
@@ -304,18 +225,12 @@ class CloverOAuthSurface:
                 field="refresh_token",
             )
 
-        # All refusals are above; the rotation write is below. A refused
-        # refresh must not retire the token -- with single-use rotation that
-        # would lock the consumer out of the grant permanently, answered by a
-        # 4xx claiming nothing happened.
+        # All refusals are above the rotation write (ordering invariant).
         now_ms = int(ctx.clock.now())
 
         def rotate(draft: Entity) -> None:
             draft["refresh_used_at_ms"] = now_ms
 
-        # Journalled: rotation is a real, documented state change a consumer
-        # can observe (the old refresh token stops working). The old ACCESS
-        # token is deliberately untouched; see the module docstring.
         tokens.update(existing.id, rotate, meta={"operation_id": "RefreshToken"})
         return json_(
             self._mint(
@@ -330,8 +245,7 @@ class CloverOAuthSurface:
     # -- shared ------------------------------------------------------------
 
     def _check_client(self, client_id: str) -> None:
-        """JUDGMENT on the status: no OAuth error is documented, and 401 is
-        the package convention for a credential failure."""
+        """JUDGMENT: 401 is the package convention for a credential failure."""
         if client_id != self._deps.config.client_id:
             raise UnitError(
                 UnitErrorKind.UNAUTHORIZED,
@@ -355,8 +269,7 @@ class CloverOAuthSurface:
             )
 
     def _check_verifier(self, verifier: str | None, challenge: str) -> None:
-        """PKCE proves knowledge of the verifier: S256 only,
-        ``BASE64URL(SHA256(ASCII(code_verifier)))`` unpadded (RFC 7636)."""
+        """S256 only: ``BASE64URL(SHA256(ASCII(code_verifier)))`` unpadded (RFC 7636)."""
         if not verifier:
             raise UnitError(
                 UnitErrorKind.MISSING_FIELD,
@@ -380,13 +293,8 @@ class CloverOAuthSurface:
         now_ms: int,
         operation_id: str,
     ) -> dict[str, Any]:
-        """Issue one access/refresh pair, record it, and answer the documented
-        four fields. Stored instants are ms; the wire gets Unix seconds
-        through :func:`~vendorfake.clover.surface.common.wire_seconds`.
-
-        ``operation_id`` is the caller's, so a refresh journals the token it
-        minted as a refresh: one request, one operation, however many writes.
-        """
+        """Issue and record one access/refresh pair, keyed to the caller's
+        ``operation_id`` so a refresh journals as a refresh."""
         config = self._deps.config
         access_expires_ms = now_ms + config.access_token_ttl_ms
         refresh_expires_ms = now_ms + config.refresh_token_ttl_ms
@@ -398,8 +306,7 @@ class CloverOAuthSurface:
             merchant_id=merchant_id,
             access_token_expiration_ms=access_expires_ms,
             refresh_token_expiration_ms=refresh_expires_ms,
-            # Every token inherits the app's fixed permission set; Clover has
-            # no per-token scope request. See config.py.
+            # Every token inherits the app's fixed permission set (no per-token scope request).
             permissions=config.permissions,
             createdTime=now_ms,
         )
@@ -423,13 +330,8 @@ def oauth_routes(deps: CloverDeps) -> tuple[Route, ...]:
 
 
 def _query(args: HandlerArgs, name: str) -> str | None:
-    """A query parameter, with an explicitly empty value refused by name.
-
-    ``None`` when the key is absent; the value when it is non-empty; a 400
-    when it is present and empty (``?code_challenge=``). Query strings have
-    no request model to carry the absent-vs-empty invariant, so it is
-    written out here once.
-    """
+    """A query parameter: ``None`` if absent, the value if non-empty, a 400
+    if present and empty (``?code_challenge=``)."""
     raw = args.query(name)
     if raw is None:
         return None
@@ -439,8 +341,7 @@ def _query(args: HandlerArgs, name: str) -> str | None:
 
 
 def _failed_code(reason: str) -> UnitError:
-    """The one documented phrase for every kind of bad code; the sidecar says
-    which kind, for whoever is debugging. See the module docstring."""
+    """The one documented phrase for every kind of bad code; the sidecar carries ``reason``."""
     return UnitError(
         UnitErrorKind.UNAUTHORIZED,
         detail=FAILED_CODE_MESSAGE,
@@ -450,12 +351,8 @@ def _failed_code(reason: str) -> UnitError:
 
 
 def _the_merchant(ctx: UnitContext) -> MerchantEntity:
-    """The merchant this unit represents.
-
-    One per unit; the first insertion-ordered record is the answer. Until the
-    PR-E seed ships one, a unit doing OAuth needs a merchant inserted by its
-    driver, and the error says so.
-    """
+    """The merchant this unit represents: one per unit, the first
+    insertion-ordered record."""
     merchants = ctx.store.collection(COL.merchants).all()
     if not merchants:
         raise UnitError(
@@ -466,13 +363,8 @@ def _the_merchant(ctx: UnitContext) -> MerchantEntity:
 
 
 def _with_query(url: str, params: Mapping[str, str]) -> str:
-    """``url`` with ``params`` set on its query string.
-
-    Built with :func:`urllib.parse.urlencode` rather than by concatenation, so
-    a redirect URI that already carries a query keeps it and a ``state`` value
-    containing ``&`` survives the round trip. Existing occurrences of a key
-    are replaced rather than appended.
-    """
+    """``url`` with ``params`` set on its query string, replacing any existing
+    occurrence of each key and preserving the rest."""
     parts = urlsplit(url)
     kept = [(name, value) for name, value in parse_qsl(parts.query, keep_blank_values=True) if name not in params]
     query = urlencode([*kept, *params.items()])

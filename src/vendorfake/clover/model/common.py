@@ -1,19 +1,10 @@
 """Turning a Pydantic validation failure into the error this vendor publishes.
 
-FOR: letting a surface state its request shape as a model and still answer
-with the vendor's own error vocabulary, so that "client_id is required" is a
-``missing_field`` naming ``client_id`` -- carried in the ``message`` and the
-``unit_error.field`` sidecar -- rather than a Pydantic report a consumer has
-never seen.
-
-INVARIANT: **an absent field and an empty field are the same failure.** A
-form-encoded body parses ``client_id=`` to the empty string rather than to a
-missing key, so every required string in a request model is spelled
-``min_length=1`` and this module maps Pydantic's ``missing`` and
-``string_too_short`` onto the one ``missing_field`` kind. Everything else is
-``invalid_value``. Same rule, same reasoning, as the Square package's
-``model/common.py`` -- the cross-vendor dedup of this module is filed
-separately.
+INVARIANT: an absent field and an empty field are the same failure -- a
+form-encoded body parses ``client_id=`` to the empty string, so every
+required string is ``min_length=1`` and this module maps Pydantic's
+``missing``/``string_too_short`` onto ``missing_field``; everything else is
+``invalid_value``. Same rule as the Square package's ``model/common.py``.
 """
 
 from __future__ import annotations
@@ -33,13 +24,9 @@ MISSING_ERROR_TYPES = frozenset({"missing", "string_too_short"})
 
 
 def _field_path(loc: tuple[int | str, ...]) -> str | None:
-    """Pydantic's location tuple as the path this vendor puts in ``field``.
-
-    Indexes in brackets (``lineItems[0].price``), dots between names --
-    matching the paths the surfaces build by hand, so one logical field never
-    has two spellings. Clover documents no field-path notation at all, so the
-    convention is this project's, shared with the Square package.
-    """
+    """Pydantic's location tuple as the ``field`` path: indexes in brackets
+    (``lineItems[0].price``), dots between names -- Clover documents no
+    field-path notation; this convention is shared with the Square package."""
     if not loc:
         return None
     rendered = ""
@@ -54,12 +41,9 @@ def _field_path(loc: tuple[int | str, ...]) -> str | None:
 
 
 def unit_error_from_validation(exc: ValidationError) -> UnitError:
-    """The first validation failure, as this vendor's error.
-
-    The first only: a consumer fixing one field at a time sees the same
-    sequence either way, and the body stays identical whichever content type
-    carried the request.
-    """
+    """The first validation failure, as this vendor's error -- a consumer
+    fixing one field at a time sees the same sequence regardless of content
+    type."""
     first = exc.errors()[0]
     field = _field_path(tuple(first.get("loc", ())))
     if first.get("type") in MISSING_ERROR_TYPES:
@@ -76,11 +60,8 @@ def unit_error_from_validation(exc: ValidationError) -> UnitError:
 
 
 def validate_body(model: type[_M], body: Any) -> _M:
-    """Validate ``body`` against ``model``, raising the vendor's error instead.
-
-    The one call-site pattern for every request model in this package, so that
-    no surface has to remember to catch :class:`ValidationError`.
-    """
+    """Validate ``body`` against ``model``, raising the vendor's error instead
+    of :class:`ValidationError`."""
     try:
         return model.model_validate(body)
     except ValidationError as exc:

@@ -1,32 +1,25 @@
 """The Toast vendor definition -- everything the core needs to become a Toast
 unit, and nothing else.
 
-FOR: assembling one object that satisfies
-:class:`~vendorfake.core.kernel.types.VendorDefinition`. This is the third
-vendor in the distribution and plugs into the same core the Square and Clover
-vendors do, with zero core changes.
+Assembles one object satisfying
+:class:`~vendorfake.core.kernel.types.VendorDefinition`, plugging into the
+same core the Square and Clover vendors do.
 
-INVARIANT: **one vendor instance per unit.** :data:`VENDOR` (in
-``__init__.py``) is minted fresh on every attribute access, because a vendor
-owns two stateful id streams (entity guids and error ``requestId``s) and two
-units sharing either would interleave their draws.
+INVARIANT: one vendor instance per unit -- :data:`VENDOR` is minted fresh on
+every attribute access, since a vendor owns two stateful id streams (entity
+guids and error ``requestId``s) that two units must not interleave.
 
 Configuration resolves in two phases: defaults at construction, then
-:meth:`ToastVendor.hydrate` re-resolves from ``ctx.config.vendor_config`` -- at
-start and again on ``POST /__unit/state/reset`` -- rebuilds the error shaper,
-and reseeds both id streams from the unit's seed.
+:meth:`ToastVendor.hydrate` re-resolves at start and on every
+``POST /__unit/state/reset``, rebuilding the error shaper and reseeding both
+id streams. ``api_version`` is ``None``: Toast's version lives in the path
+(``/orders/v2``), not a header.
 
-``api_version`` is ``None``: Toast documents no version request or response
-header -- the version lives in the path (``/orders/v2``, ``/menus/v3``).
-
-The webhook seams, and why they are two
---------------------------------------
-``signer`` and ``events`` are separate properties because they answer separate
-questions: what a mutation *means* on the wire, and how a delivery is proven to
-have come from here. The dispatcher requires both before it will deliver
-anything. The subscription stand-in is last in the route table so every real
-Toast path matches first and the conformance suite's "first mutating route"
-is a real endpoint.
+``signer`` and ``events`` are separate properties, since they answer separate
+questions -- what a mutation means on the wire, and how a delivery is proven
+to have come from here -- both required before the dispatcher will deliver.
+The subscription stand-in is last in the route table so every real Toast
+path matches first.
 """
 
 from __future__ import annotations
@@ -42,7 +35,6 @@ from vendorfake.core.kernel.types import (
     ErrorShaper,
     EventMapper,
     MagicTriggerSpec,
-    MutableResponse,
     Route,
     Signer,
     UnitContext,
@@ -84,12 +76,10 @@ TOAST_MAGIC = MagicTriggerSpec(
     body_paths=("externalId", "deliveryInfo.notes"),
     query_params=("pageToken",),
 )
-"""In-band fault triggering, in fields a consumer can set through a real Toast
-client: an order's ``externalId`` and ``deliveryInfo.notes`` are ordinary
-writable fields (toast-orders-api.yaml), and ``pageToken`` is the config API's
-documented paging parameter. Prior art is Square's sandbox magic values; Toast
-publishes no equivalent, so the mechanism is this project's, flagged by the
-``chaos:`` prefix no real value would carry."""
+"""In-band fault triggering, in fields a real Toast client can write: an
+order's ``externalId`` and ``deliveryInfo.notes`` (toast-orders-api.yaml),
+and the config API's ``pageToken``. JUDGMENT: Toast publishes no equivalent
+mechanism; the ``chaos:`` prefix flags a value no real client would send."""
 
 TOAST_ROLES: Mapping[str, str] = {
     "auth": "auth",
@@ -97,12 +87,9 @@ TOAST_ROLES: Mapping[str, str] = {
     "webhooks": "webhooks",
     "chaos": "chaos",
 }
-"""The neutral role vocabulary, mapped to Toast's own capability names.
-Toast already spells its login and order surfaces ``auth`` and ``orders``, so
-every role here is the identity map -- stated explicitly rather than left
-implicit, because the mapping is part of the contract every vendor answers
-the same way, not an accident of this vendor's naming. See
-``VendorDefinition.roles``."""
+"""The neutral role vocabulary, mapped to Toast's own capability names --
+the identity map here, stated explicitly since the mapping is part of every
+vendor's contract, not an accident of naming. See ``VendorDefinition.roles``."""
 
 _VOLATILE_FIELDS: tuple[str, ...] = (
     "expires_at_ms",
@@ -123,15 +110,11 @@ _VOLATILE_FIELDS: tuple[str, ...] = (
     "lastUpdated",
     "publishedDate",
 )
-"""Entity fields excluded from the state digest because they carry wall-clock
-time. The core matches these names at ANY depth (konyklabs/roadmap#35), which
-Toast leans on harder than the other vendors: an order nests its checks and
-selections, so ``checks[].createdDate`` and ``selections[].modifiedDate`` are
-scrubbed by the same names as the top-level order stamps. ``access_token`` is
-here because a minted JWT carries ``iat``/``exp`` claims and therefore differs
-per run on a real clock; the seeded tokens are constants regardless. The
-digest keeps each scrubbed field's *presence*, so a void that only stamps
-``voidDate`` still moves it."""
+"""Entity fields excluded from the state digest for carrying wall-clock time,
+matched at ANY depth (konyklabs/roadmap#35) so nested checks/selections are
+scrubbed too. ``access_token`` is here because a minted JWT's ``iat``/``exp``
+differ per run; each field's *presence* is kept, so a void that only stamps
+``voidDate`` still moves the digest."""
 
 _OPAQUE_FIELDS: tuple[str, ...] = (
     "curbsidePickupInfo",
@@ -148,10 +131,9 @@ _OPAQUE_FIELDS: tuple[str, ...] = (
     "availability",
     "contentAdvisories",
 )
-"""Caller (or seed) free-form subtrees the digest takes verbatim: the wire
-stores them as sent (``TOAST_NOT_MODELED``), so a caller's own ``modifiedDate``
-inside ``appliedServiceCharges`` is state, not a stamp, and the volatile scrub
-must not descend into it."""
+"""Caller/seed free-form subtrees the digest takes verbatim
+(``TOAST_NOT_MODELED``), so a caller's ``modifiedDate`` inside one of these
+is state, not a stamp."""
 
 
 class ToastVendor:
@@ -307,9 +289,9 @@ class ToastVendor:
         self._request_ids.reseed(ctx.config.chaos.seed)
         self._errors = self._build_errors()
 
-    def decorate(self, res: MutableResponse, ctx: UnitContext, req: UnitRequest) -> None:
+    def decorate(self, headers: dict[str, str], ctx: UnitContext, req: UnitRequest) -> None:
         """Stamp only ``x-unit-vendor``: Toast has no version header."""
-        res.headers["x-unit-vendor"] = ctx.vendor.name
+        headers["x-unit-vendor"] = ctx.vendor.name
 
 
 def create_toast_vendor(*, vendor_config: dict[str, Any] | None = None, seed: int = 1) -> VendorDefinition:

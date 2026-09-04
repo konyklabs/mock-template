@@ -1,51 +1,23 @@
-"""Outbound transport for one delivery attempt.
+"""Outbound transport for one delivery attempt: the dispatcher decides what to send and
+when to retry, this decides how the bytes leave.
 
-FOR: keeping "how a delivery leaves the process" out of the dispatcher. The
-dispatcher decides *what* to send, to whom, when to retry and what to record;
-:class:`DeliverySink` decides how the bytes leave. Real vendors push over HTTP,
-some drop a file on a share, and a test wants neither.
-
-INVARIANT: **the sink is the only place in the core that may reach the network,
-and it is the only place ``httpx`` may be imported.** ``tools/boundary.toml``
-records that permission. The invariant it protects is the one D-001 exists for:
-the core does not assume HTTP. A dispatcher that called ``httpx`` itself would
-make that claim untestable, because there would be no seam at which to prove
-it; with the seam, :class:`FileSink` *is* the proof -- it is a delivery path
-with no socket in it, exercised by the same dispatcher and the same tests.
-
-WHY ``SinkResult.status == 0`` IS A CONTRACT AND NOT AN ACCIDENT. There is no
-status when the transport failed before a response existed, and the reference
-uses ``0`` for that (``sink.ts:45``, ``status: 0``), which
-``dispatcher.ts:310`` then reads back to classify the failure. Ported
-literally, including ``MemorySink``'s callable form returning ``0`` -- "index 0
-returns 0, i.e. the subscriber timed out" is how the timeout test is written at
-all, and a sink that raised instead would have no way to say it.
-
-WHY ``MemorySink.respond_with`` KEEPS ITS CALLABLE FORM. ``(req, call_index) ->
-int`` is what makes "fail the first two attempts, then accept" a one-line test
-setup. Replacing it with a list of statuses would be tidier and would silently
-change what happens when the dispatcher makes more attempts than the list has
-entries, which is exactly the case the retry-exhaustion test is about.
-
-THE SEND IS SYNCHRONOUS, like everything else in the core. It runs on the
-delivery worker's thread, never on a request thread, so a subscriber that takes
-the full ``timeout_ms`` to answer costs one background thread and no request.
+**The sink is the only place in the core that may reach the network, and the only place
+``httpx`` may be imported** (``tools/boundary.toml`` records the permission), because per
+D-001 the core does not assume HTTP. ``SinkResult.status == 0`` is a contract: there is
+no status when the transport failed before a response existed.
 """
 
 from __future__ import annotations
 
-import json
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
 
 __all__ = [
     "DeliverySink",
-    "FileSink",
     "HttpSink",
     "MemorySink",
     "SinkRequest",
@@ -53,19 +25,12 @@ __all__ = [
 ]
 
 _SNIPPET_LIMIT = 200
-"""How much of a subscriber's response body is kept. The reference's
-``text.slice(0, 200)``; enough to recognise an error page, short enough that a
-misbehaving subscriber cannot fill the delivery log with its own HTML."""
+"""How much of a subscriber's response body is kept, so it cannot fill the log."""
 
 
 @dataclass(frozen=True, slots=True)
 class SinkRequest:
-    """One outbound delivery, fully formed.
-
-    ``body`` is bytes and not an object: the signature was computed over these
-    exact bytes before this request existed, and a sink that re-serialised
-    would invalidate it while every assertion still passed.
-    """
+    """One outbound delivery. ``body`` is bytes: the signature covers these exact bytes."""
 
     url: str
     headers: Mapping[str, str]
@@ -75,49 +40,28 @@ class SinkRequest:
 
 @dataclass(frozen=True, slots=True)
 class SinkResult:
-    """What came back. ``status`` is ``0`` when nothing did."""
-
     status: int
     body_snippet: str | None = None
     error: str | None = None
-    #: True when nothing came back in time. Distinct from ``status == 0``,
-    #: which also covers a connection that was refused outright.
+    #: True when nothing came back in time; ``status == 0`` also covers a refusal.
     timed_out: bool = False
 
 
 class DeliverySink(Protocol):
-    """Where a delivery goes. Two members, and neither of them mentions HTTP."""
-
     @property
-    def kind(self) -> str:
-        """Short name reported at ``/__unit/info``: ``http``, ``memory``, ``file``."""
-        ...
+    def kind(self) -> str: ...
 
     def send(self, req: SinkRequest) -> SinkResult:
-        """Deliver once. Never raises: a failure is a :class:`SinkResult`.
-
-        The dispatcher's retry decision is driven entirely by the returned
-        value, so a sink that raised would turn a retryable failure into an
-        unhandled exception on the delivery worker.
-        """
+        """Deliver once. Never raises: the retry decision is driven by the returned value."""
         ...
 
 
 class MemorySink:
-    """Captures deliveries in memory. The conformance suite's sink, and tests'.
-
-    ``received`` holds a copy of every request in the order the dispatcher made
-    it, which is the observation most delivery tests are actually about: with
-    one delivery worker that order is determined rather than merely likely.
-    """
-
     kind = "memory"
 
     def __init__(self, respond_with: int | Callable[[SinkRequest, int], int] = 200) -> None:
         self.received: list[SinkRequest] = []
-        #: A status, or a function of ``(request, call_index)`` returning one.
-        #: ``call_index`` is 0-based and counts calls to *this* sink, not
-        #: attempts for one event.
+        #: A status, or a function of ``(request, 0-based call index on this sink)``.
         self.respond_with: int | Callable[[SinkRequest, int], int] = respond_with
         self._lock = threading.Lock()
 
@@ -132,20 +76,12 @@ class MemorySink:
         return SinkResult(status=status)
 
     def clear(self) -> None:
-        """Forget every delivery. Useful between phases of one long test."""
         with self._lock:
             self.received.clear()
 
 
 class HttpSink:
-    """Posts each delivery over HTTP. The default sink for a running unit.
-
-    The client is built on first use rather than at construction, so a unit
-    whose vendor has no webhooks -- or a test that never delivers -- opens no
-    connection pool and leaks no file descriptor. Requests are made from one
-    delivery worker thread, and ``httpx.Client`` is documented thread-safe, so
-    one client is shared rather than one per attempt.
-    """
+    """Posts each delivery over HTTP. One thread-safe client, built on first use."""
 
     kind = "http"
 
@@ -161,15 +97,8 @@ class HttpSink:
             return self._client
 
     def send(self, req: SinkRequest) -> SinkResult:
-        """Post once. Every failure mode becomes a :class:`SinkResult`.
-
-        Three outcomes, matching the three :class:`DeliveryOutcome` members the
-        dispatcher classifies into: a status came back, nothing came back in
-        time, or the transport failed. ``follow_redirects`` is off because a
-        subscriber that answers ``302`` has not accepted the delivery, and
-        following the redirect would report the redirect target's status as if
-        it were the subscriber's.
-        """
+        """Post once; every failure mode becomes a :class:`SinkResult`. ``follow_redirects``
+        is off because a subscriber answering ``302`` has not accepted the delivery."""
         client = self._ensure_client()
         try:
             res = client.post(
@@ -185,7 +114,6 @@ class HttpSink:
         return SinkResult(status=res.status_code, body_snippet=res.text[:_SNIPPET_LIMIT])
 
     def close(self) -> None:
-        """Release the connection pool. Called from ``Unit.stop``."""
         with self._lock:
             client = self._client
             self._client = None
@@ -193,51 +121,7 @@ class HttpSink:
             client.close()
 
 
-@dataclass
-class FileSink:
-    """Writes each delivery as a JSON document. The proof the sink is not HTTP.
-
-    One file per attempt, numbered in delivery order, so a consumer with no
-    HTTP server can still observe the full transcript -- headers and signature
-    included -- by reading a directory. The body is written as text when it
-    decodes as UTF-8 and as a hex string when it does not, because a vendor
-    whose payload is binary must still produce a readable transcript rather
-    than a file that cannot be written at all.
-    """
-
-    dir: Path
-    kind: str = "file"
-    _seq: int = field(default=0, init=False, repr=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
-
-    def send(self, req: SinkRequest) -> SinkResult:
-        with self._lock:
-            self._seq += 1
-            seq = self._seq
-        self.dir.mkdir(parents=True, exist_ok=True)
-        try:
-            body_text: str | None = req.body.decode("utf-8")
-            body_hex: str | None = None
-        except UnicodeDecodeError:
-            body_text = None
-            body_hex = req.body.hex()
-        document: dict[str, object] = {"url": req.url, "headers": dict(req.headers)}
-        if body_text is not None:
-            document["body"] = body_text
-        else:
-            document["body_hex"] = body_hex
-        path = self.dir / f"delivery-{seq:05d}.json"
-        path.write_text(json.dumps(document, indent=2, ensure_ascii=False), encoding="utf-8")
-        return SinkResult(status=200)
-
-
 def _describe(exc: BaseException) -> str:
-    """A one-line description that never collapses to the empty string.
-
-    ``str(httpx.ConnectError())`` is often ``''``, and an empty ``error`` on a
-    delivery record is indistinguishable from no error at all -- which is the
-    difference between "the subscriber refused the connection" and "the
-    subscriber accepted it".
-    """
+    """A description that never collapses to the empty string, which would read as no error."""
     text = str(exc).strip()
     return f"{type(exc).__name__}: {text}" if text else type(exc).__name__

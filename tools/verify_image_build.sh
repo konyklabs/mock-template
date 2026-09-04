@@ -129,10 +129,12 @@ for vendor in "${vendors[@]}"; do
     fail "healthcheck command exited non-zero"
   fi
 
-  if [ "$(curl -sf "http://127.0.0.1:$port/__unit/health" | grep -o '"framework_answered":[0-9]*')" = '"framework_answered":0' ]; then
-    ok "framework_answered is 0"
-  else
+  # The ASGI adapter logs this line when the framework answered a request
+  # instead of the unit; after the traffic above it must not have.
+  if docker logs "$name" 2>&1 | grep -q "the web framework answered a request instead of the unit"; then
     fail "the web framework answered a request inside the container"
+  else
+    ok "every request was answered by the unit"
   fi
 done
 

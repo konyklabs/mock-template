@@ -1,24 +1,21 @@
 """Building priced checks and selections from requests -- shared by
 ``/prices``, ``POST /orders``, the selection append, the discount routes and
-the seed, so there is exactly one place an amount is computed.
+the seed, so there is exactly one place an amount is computed. This is what
+makes the documented rule "retrieve the check prices from /prices before you
+POST the order" true here.
 
-FOR: the documented rule "Before you POST the order, you must retrieve the
-check prices from the /prices endpoint" only means something if ``/prices``
-and ``/orders`` compute identically. They call the same functions here.
+INVARIANT: no id is drawn before every refusal has had its chance -- a
+builder calls its ``mint`` callable only after a selection resolves;
+``/prices`` passes ``None`` and gets ``"guid": null`` everywhere (documented
+for the order and check; JUDGMENT that selections and modifiers read the
+same way).
 
-INVARIANT: **no id is drawn before every refusal has had its chance.** A
-builder takes a ``mint`` callable and calls it only after a selection has
-resolved; ``/prices`` passes ``None`` and gets ``"guid": null`` everywhere
-(documented for the order and check; JUDGMENT that selections and modifiers
-read the same way).
-
-Refusals follow the documented ``POST /orders`` codes: **404** for a
-referenced entity that is missing -- a menu item, a modifier option, a
-pre-modifier, a dining option, a table, a revenue centre, an alternate payment
-type -- and **400** for unsupported data: a missing price, a negatively priced
-item, a modifier whose option the item's groups do not offer (JUDGMENT: the
-V3 document says which options an item offers, and accepting any option on any
-item would price a document Toast would refuse).
+DOCUMENTED (``POST /orders``): 404 for a missing referenced entity (menu
+item, modifier option, pre-modifier, dining option, table, revenue centre,
+alternate payment type); 400 for unsupported data (missing price, negative
+price). JUDGMENT: 400 also for a modifier whose option the item's groups do
+not offer, since accepting any option on any item would price a document
+Toast would refuse.
 """
 
 from __future__ import annotations
@@ -283,9 +280,8 @@ def build_check(
 
 def _applied_service_charge(index: MenuIndex, request: Any, field: str) -> dict[str, Any]:
     """One stored applied service charge: the reference resolved like every
-    other, the caller's amount in cents, the config record's own vocabulary
-    filling what the caller left out. Never computed (``TOAST_NOT_MODELED``);
-    never echoed verbatim (finding 7)."""
+    other, the caller's amount, the config record filling what is left out.
+    Never computed (``TOAST_NOT_MODELED``)."""
     source = index.service_charges.get(request.serviceCharge.guid)
     if source is None:
         raise _not_found("Service charge", request.serviceCharge.guid, f"{field}serviceCharge.guid")
@@ -328,10 +324,7 @@ def retotal_check(check: dict[str, Any], index: MenuIndex) -> None:
         selections_total += price
         taxes += tax
     if check.get("taxExempt"):
-        # JUDGMENT: a tax-exempt check levies nothing -- the specification
-        # documents the flag alone -- and the exemption is written all the way
-        # down, so a selection never contradicts its check by carrying a
-        # ``tax`` the check does not levy.
+        # JUDGMENT: exemption is written down to every selection, so none contradicts its check.
         _exempt_selections(check.get("selections", []))
         taxes = 0
     discounted = 0

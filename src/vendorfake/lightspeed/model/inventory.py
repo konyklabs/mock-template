@@ -1,43 +1,17 @@
 """Inventory on the wire: the record, the level, and the adjustment log.
 
-THE INVENTORY TAG HAS TWO READ MODELS, and a consumer who does not notice will
-write the wrong client. Both are documented, both are in this slice:
+DOCUMENTED (``api-2026-07``): two read models cover the same rows.
+``Inventory`` is the stored record, one per product per outlet;
+``InventoryLevel`` is a denormalised report with ``location_id`` in place of
+``id``/``outlet_id`` and ``reorder_threshold`` for ``Inventory``'s
+``reorder_point``. JUDGMENT: those two names are the same number, and
+``total_cost`` is ``average_cost x current_inventory_level``, since the spec
+never states either. All four reads answer a bare JSON array, not the
+envelope the stock-adjustment list uses.
 
-``Inventory`` (``POST /inventory``, ``GET /inventory/{product_id}``)
-    The stored record -- ``id``, ``product_id``, ``outlet_id``,
-    ``current_inventory_level`` and the four reorder members. One row per
-    product per outlet. This is the thing a stock adjustment moves.
-
-``InventoryLevel`` (``POST /inventory_levels``, ``GET /inventory_levels/{id}``)
-    A denormalised REPORT over the same rows: no ``id`` and no ``outlet_id``,
-    but a ``location_id``, the product's ``name``, ``brand_id``,
-    ``product_type_id`` and ``supplier_id``, a ``root_product_id``, a
-    ``total_cost``, and ``reorder_threshold`` where ``Inventory`` says
-    ``reorder_point``. JUDGMENT, stated because the specification never
-    connects the two: ``reorder_threshold`` and ``reorder_point`` are the same
-    number under two names, and ``total_cost`` is
-    ``average_cost x current_inventory_level``, which is the only reading that
-    makes the example's ``average_cost: 10, current_inventory_level: 4,
-    total_cost: 40`` consistent.
-
-**Neither read answers the ``{"data": ..., "version": ...}`` envelope.** All
-four declare a bare JSON ARRAY as their 200 body
-(``{"items": {"$ref": ".../Inventory"}, "type": "array"}``), and their examples
-print one. The stock-adjustment list is the other way round -- it declares
-``StockAdjustmentCollection``, which IS the envelope. Both are reproduced as
-declared; the envelope is not applied uniformly just because most of this API
-uses it.
-
-**Two of the four reads are POSTs.** ``ListInventoryRecords`` and
-``ListInventoryLevels`` are ``POST`` operations whose query travels in the
-request body. They mutate nothing, so they fire no event.
-
-THE ADJUSTMENT'S SIGN RULES ARE DOCUMENTED, verbatim on
-``StockAdjustmentReason``: "Negative reasons (require ``quantity`` < 0):
-``DAMAGE``, ``EXPIRY``, ``INTERNAL_USE``, ``THEFT``, ``DONATION``. Positive
-reasons (require ``quantity`` > 0): ``STOCK_FOUND``, ``SAMPLE_FOR_SALE``. For
-``CUSTOM``, the sign must match the referenced custom reason's ``type``."
-:func:`check_reason_sign` is that paragraph as code.
+The adjustment's documented sign rule (negative reasons need ``quantity`` <
+0, positive need > 0, ``CUSTOM`` matches its reason's ``type``) is
+:func:`check_reason_sign` as code.
 """
 
 from __future__ import annotations
@@ -84,25 +58,14 @@ REORDER_METHODS: tuple[str, ...] = ("FIXED", "MIN_MAX")
 """``Inventory.reorder_method``'s two non-null values."""
 
 MAX_ADJUSTMENTS_PER_BATCH = 1000
-"""DOCUMENTED: "A batch of 1-1000 stock adjustments to create"
-(``CreateStockAdjustmentsRequest.description``), and ``maxItems: 1000`` /
-``minItems: 1`` on the array."""
+"""DOCUMENTED: ``CreateStockAdjustmentsRequest``'s ``maxItems``/``minItems``."""
 
 _REQUEST = ConfigDict(extra="ignore", frozen=True)
 
 
 class InventoryRequest(BaseModel):
     """``POST /inventory``'s body. Every member is optional; an empty body
-    lists every inventory record the retailer has.
-
-    ``size`` is this operation's page size -- it is NOT called ``page_size``
-    here, and it is in the body rather than the query. ``sort_direction`` is
-    ``asc``/``desc`` over the version, which is the only order the rows have;
-    the schema declares the enum and no default, so anything that is not
-    ``desc`` sorts ascending here rather than being refused (JUDGMENT: this is
-    an ordering preference, not a field a caller can get wrong in a way that
-    changes which rows come back).
-    """
+    lists every record. ``size`` (not ``page_size``) is in the body."""
 
     model_config = _REQUEST
 
@@ -116,15 +79,8 @@ class InventoryRequest(BaseModel):
 
 
 class InventoryLevelsRequest(BaseModel):
-    """``POST /inventory_levels``'s body.
-
-    ``location_ids``, ``product_ids`` and ``root_product_ids`` filter;
-    ``offset``/``size`` page. The remaining members
-    (``group_variants``, ``include_composites``, ``supplier_ids``,
-    ``sort_type``, ``to_be_procured_only``) are accepted and recorded as not
-    modelled in ``capabilities.py`` -- this unit has no composites, no supplier
-    entity and no per-column sort to apply them to.
-    """
+    """``POST /inventory_levels``'s body. The remaining members are accepted
+    but not modelled, per ``capabilities.py``."""
 
     model_config = _REQUEST
 
@@ -143,8 +99,7 @@ class InventoryLevelsRequest(BaseModel):
 
 
 class CreateStockAdjustmentItem(BaseModel):
-    """One element of ``POST /stock_adjustments``. Four required members, and
-    ``quantity`` is a **string** on this schema."""
+    """One element of ``POST /stock_adjustments``; ``quantity`` is a string here."""
 
     model_config = _REQUEST
 
@@ -193,14 +148,9 @@ def _wrong_sign(field: str, reason: str, wanted: str) -> UnitError:
 
 
 def project_inventory(entity: Mapping[str, Any]) -> dict[str, Any]:
-    """The documented ``Inventory`` record, members in alphabetical order.
-
-    ``average_cost``, ``reorder_amount``, ``reorder_method``, ``reorder_point``
-    and ``reorder_target`` are all ``nullable`` on the schema and the vendor's
-    own example prints ``"reorder_amount": null`` -- so an unset one is an
-    explicit null, not an absent key. ``deleted_at`` is the exception: the
-    example omits it entirely for a live row.
-    """
+    """The documented ``Inventory`` record, alphabetical order. Nullable
+    reorder members emit ``null`` when unset; ``deleted_at`` is omitted for a
+    live row."""
     record = InventoryEntity.from_entity(entity)
     projected: dict[str, Any] = {
         "average_cost": wire_number(record.average_cost),
@@ -222,18 +172,9 @@ def project_inventory(entity: Mapping[str, Any]) -> dict[str, Any]:
 
 def project_inventory_level(entity: Mapping[str, Any], product: Mapping[str, Any]) -> dict[str, Any]:
     """The documented ``InventoryLevel`` report row for one stored record.
-
-    Every member the schema declares is emitted; the ones this unit cannot
-    resolve (``brand_id``, ``product_type_id``, ``supplier_id`` -- the Brands,
-    Product Types and Suppliers tags are deferred) are omitted rather than
-    guessed at, because absence is absence.
-
-    ``reorder_amount``, ``reorder_target`` and ``reorder_threshold`` are typed
-    ``number`` here and NOT nullable, where their ``Inventory`` counterparts
-    are -- so a record with no reorder rule reports them as ``0`` on this
-    report and as ``null`` on the record. That is the vendor's own pair of
-    schemas, not a choice made here; ``reorder_method`` is nullable on both and
-    stays null.
+    ``brand_id``/``product_type_id``/``supplier_id`` are omitted when
+    unresolvable. Unlike ``Inventory``, the reorder-amount members are NOT
+    nullable, so a record with no reorder rule reports ``0``.
     """
     record = InventoryEntity.from_entity(entity)
     typed = ProductEntity.from_entity(product)
@@ -250,19 +191,11 @@ def project_inventory_level(entity: Mapping[str, Any], product: Mapping[str, Any
         "reorder_amount": wire_number(record.reorder_amount or "0"),
         "reorder_method": record.reorder_method,
         "reorder_target": wire_number(record.reorder_target or "0"),
-        # The same number `Inventory` calls `reorder_point`. See the module
-        # docstring.
+        # `Inventory`'s `reorder_point`, renamed.
         "reorder_threshold": wire_number(record.reorder_point or "0"),
-        # A variant reports its parent as the root; a product with no parent is
-        # its own root.
+        # A variant's root is its parent; else itself.
         "root_product_id": typed.variant_parent_id or typed.id,
-        # `allow_negative=True`, matching the two writers -- `surface/sales.py`
-        # closing an oversold sale and `surface/inventory.py` applying a
-        # shrinkage adjustment both write `current_inventory_level` with it.
-        # A negative level is a state this unit deliberately permits, so the
-        # READ has to be able to report it: refusing here would make one
-        # negative row take down `GET /inventory_levels/{product_id}` and the
-        # whole retailer's `POST /inventory_levels` report.
+        # allow_negative: an oversold sale or shrinkage adjustment can leave this negative.
         "total_cost": wire_number(decimal_text(average * level, field="total_cost", allow_negative=True)),
     }
     for key in ("brand_id", "product_type_id", "supplier_id"):

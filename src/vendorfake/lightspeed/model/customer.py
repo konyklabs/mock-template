@@ -1,40 +1,19 @@
 """The customer wire shape, and the one body that creates and updates it.
 
-DOCUMENTED SCHEMAS: ``Customer`` (47 members), ``CustomerCollection``
-(``data`` + ``version``), ``CustomerResponse`` (``data``), ``CustomerBase``
-(the create AND update body -- ``POST /customers`` and
-``PUT /customers/{customer_id}`` declare the same one), and ``CustomerGroup``.
+DOCUMENTED: ``CustomerBase`` is the single create/update body shared by
+``POST /customers`` and ``PUT /customers/{customer_id}``. ``name`` is derived
+and not settable; ``customer_code`` is generated when omitted, via
+:func:`generate_customer_code`; ``balance``, ``loyalty_balance`` and
+``year_to_date`` are read-only.
 
-``first_name`` and ``last_name`` are the only required members, on both
-schemas -- and both are also ``nullable``. This package reads that pair as
-"the key must be present; the value may be null", so a body that omits either
-is a 422 naming it and a body that sends ``null`` is accepted. That reading is
-JUDGMENT and is stated here because the two annotations genuinely conflict.
+JUDGMENT: ``first_name``/``last_name`` are the only required members and both
+nullable -- read as "key required, value may be null" -- so an omitted key is
+a 422 but an explicit ``null`` is accepted. Customer groups are read-only in
+this slice (Customer Groups tag deferred, ``capabilities.py``:
+``customer-groups``); the scenario seeds one default group every customer
+belongs to unless a body names another that exists.
 
-``name`` IS DERIVED AND NOT SETTABLE. ``CustomerBase`` has no ``name`` member
-at all, and the response examples print ``"first_name": "Anthony",
-"last_name": "Stark", "name": "Anthony Stark"``. So the surface computes it and
-a caller cannot send one.
-
-``customer_code`` IS GENERATED when the caller does not supply one. The
-documented examples are ``Tony-N4ZJ`` and ``Tony-AB2W`` -- a first-name
-fragment, a hyphen, four upper-case alphanumerics -- and ``CustomerBase``
-carries the member, so a caller may set it. The generated form is
-:func:`generate_customer_code` and its alphabet is ``ids.CODE_ALPHABET``.
-
-THE THREE MONEY MEMBERS are read-only here. ``balance``, ``loyalty_balance``
-and ``year_to_date`` are ``format: double`` on ``Customer`` and absent from
-``CustomerBase``, so nothing a consumer can send moves one, and no operation in
-issue #94's scoped surface does either. They stay where the scenario put them.
-
-CUSTOMER GROUPS ARE READ-ONLY. The Customer Groups tag's seven operations are
-deferred, so the scenario seeds the retailer's one default group, every
-customer belongs to it unless a body names another, and a body naming a group
-that does not exist is a 422. Recorded in ``capabilities.py`` under
-``customer-groups``.
-
-KEY ORDER is alphabetical, as every response example in the specification
-prints it.
+Key order is alphabetical, matching every documented response example.
 """
 
 from __future__ import annotations
@@ -91,10 +70,9 @@ CUSTOMER_DOCUMENT_FIELDS: tuple[str, ...] = (
     "twitter",
     "website",
 )
-"""The members ``CustomerBase`` declares that this package stores verbatim --
-addresses, contact details, the four custom fields and the three flags. Named
-once here so the create path, the update path and the seed loader cannot
-disagree about the list. ``CustomerEntity`` types the rest."""
+"""The members ``CustomerBase`` stores verbatim -- addresses, contact details,
+custom fields and flags -- named once so create, update and seed cannot
+disagree. ``CustomerEntity`` types the rest."""
 
 _BOOLEAN_DOCUMENT_FIELDS = frozenset({"do_not_email", "enable_loyalty", "enable_promotional_sms"})
 _NUMERIC_DOCUMENT_FIELDS = frozenset({"on_account_limit"})
@@ -103,12 +81,8 @@ _REQUEST = ConfigDict(extra="ignore", frozen=True)
 
 
 class CustomerBody(BaseModel):
-    """``CustomerBase``: the body of both ``POST`` and ``PUT``.
-
-    ``first_name`` and ``last_name`` are declared with ``None`` as an allowed
-    VALUE and no default, so Pydantic requires the key and accepts the null --
-    which is the reading the module docstring records.
-    """
+    """``CustomerBase``: the body of both ``POST`` and ``PUT``; see the module
+    docstring for the nullable-vs-required reading of ``first_name``/``last_name``."""
 
     model_config = _REQUEST
 
@@ -163,22 +137,16 @@ def customer_document(values: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def generate_customer_code(first_name: str | None, suffix: str) -> str:
-    """``("Tony", "N4ZJ")`` -> ``"Tony-N4ZJ"``.
-
-    A customer with no first name gets the suffix alone rather than a leading
-    hyphen: ``first_name`` is nullable, and ``-N4ZJ`` would read as a typo.
-    """
+    """``("Tony", "N4ZJ")`` -> ``"Tony-N4ZJ"``; no first name gets the suffix
+    alone, not a leading hyphen."""
     prefix = (first_name or "").strip()
     return f"{prefix}-{suffix}" if prefix else suffix
 
 
 def project_customer(entity: Mapping[str, Any]) -> dict[str, Any]:
-    """The documented ``Customer`` document, members in alphabetical order.
-
-    ``first_name``, ``last_name`` and ``name`` are emitted even when null,
-    because all three are nullable members every example prints; every other
-    optional member is absent when unset.
-    """
+    """The documented ``Customer`` document, alphabetical order.
+    ``first_name``/``last_name``/``name`` are emitted even when null; every
+    other optional member is absent when unset."""
     customer = CustomerEntity.from_entity(entity)
     document = dict(customer.document)
     projected: dict[str, Any] = {
@@ -213,9 +181,8 @@ def project_customer(entity: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def project_customer_group(entity: Mapping[str, Any]) -> dict[str, Any]:
-    """The documented ``CustomerGroup``. Read by nothing on the wire in this
-    slice -- there are no group routes -- and by the customer surface, which
-    checks that a body's ``customer_group_id`` names one."""
+    """The documented ``CustomerGroup``. No group routes in this slice; read
+    only by the customer surface, to check a body's ``customer_group_id``."""
     group = CustomerGroupEntity.from_entity(entity)
     return dict(
         sorted(

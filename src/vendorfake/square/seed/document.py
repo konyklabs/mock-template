@@ -1,26 +1,13 @@
 """The seed document's schema, as a model rather than as a cast.
 
-FOR: stating what a scenario file may contain, so that a typo in one is a
-startup failure naming the field instead of a unit that starts with an empty
-catalog and answers 404 to every read as though the scenario were simply small.
+INVARIANT: a scenario is validated before a single entity is inserted. Every model here sets
+``extra="forbid"``, and hydration parses the whole document first, so a typo like ``locatoins`` is a
+startup failure naming the field, not a unit that silently starts with an empty catalog.
 
-INVARIANT: **a scenario is validated before a single entity is inserted.** The
-reference casts the parsed JSON straight to its ``SeedDocument`` interface --
-``seed as SeedDocument`` -- so a misspelled ``locatoins`` produces a unit with
-no locations and the first symptom is an order that cannot be created. Every
-model here sets ``extra="forbid"``, and hydration parses the whole document
-first, so nothing is written until everything is known to be readable.
+Optional-with-a-default fields are defaulted here rather than at the insertion site, so every default
+(``US``, ``America/Los_Angeles``, ...) has one place to find it.
 
-The optional-with-a-default fields are defaulted here rather than at the
-insertion site, which is the second thing this file buys: the reference spreads
-``?? 'US'`` and ``?? 'America/Los_Angeles'`` through its loader, and a reader
-asking "what does a location default to" has to find every one of them.
-
-Keys are snake_case. The reference's copy of this document is camelCase because
-its whole entity model is; this build snake_cases every JSON it publishes or
-accepts -- profiles, control-plane documents, wire projections -- so a camelCase
-scenario would be the only exception. The values, ids and timestamps are
-unchanged, so the two documents remain comparable line for line.
+Keys are snake_case, matching every other JSON this build publishes or accepts.
 """
 
 from __future__ import annotations
@@ -134,11 +121,8 @@ class SeedCatalog(BaseModel):
 
 
 class SeedLineItem(BaseModel):
-    """One line of a seeded order.
-
-    ``base_price_money``, ``name`` and ``variation_name`` are all optional
-    because a line naming a ``catalog_object_id`` inherits them from the
-    variation, which is what a real CreateOrder does too.
+    """One line of a seeded order. ``base_price_money``, ``name`` and ``variation_name`` are all
+    optional because a line naming a ``catalog_object_id`` inherits them from the variation.
     """
 
     model_config = _SEED
@@ -153,19 +137,14 @@ class SeedLineItem(BaseModel):
 
 
 class SeedTender(BaseModel):
-    """One payment already recorded against a seeded order.
-
-    A scenario that ships a COMPLETED order has to be able to say how it was
-    paid, because Square cannot produce a completed order that was not:
-    "Completed orders are fully paid. This is a terminal state."
+    """One payment already recorded against a seeded order -- a COMPLETED order must show how it
+    was paid, since Square treats it as terminal and fully paid.
     https://developer.squareup.com/reference/square/enums/OrderState
 
-    Field names and the ``CARD`` default are Square's ``Tender``
-    (https://developer.squareup.com/reference/square/objects/Tender); the
-    PayOrder example response shows the shape this mirrors
+    Field names and the ``CARD`` default follow Square's ``Tender``
+    (https://developer.squareup.com/reference/square/objects/Tender); ``location_id``/``transaction_id``
+    default to the order's own values during hydration, as PayOrder writes them
     (https://developer.squareup.com/reference/square/orders-api/pay-order).
-    ``location_id`` and ``transaction_id`` default to the order's own values
-    during hydration, which is what PayOrder writes here.
     """
 
     model_config = _SEED
@@ -180,14 +159,10 @@ class SeedTender(BaseModel):
 
 
 class SeedOrder(BaseModel):
-    """An order that already exists when the unit starts.
-
-    ``closed_at`` and ``tenders`` exist so that a terminal order in a scenario
-    can be one Square could actually have produced. ``closed_at`` is "The
-    timestamp for when the order reached a terminal state, in RFC 3339 format"
-    (https://developer.squareup.com/reference/square/objects/Order); without
-    them a shipped COMPLETED order is fully payable, has nothing due against
-    it and matches no ``closed_at`` filter.
+    """An order that already exists when the unit starts. ``closed_at`` and ``tenders`` let a
+    terminal order in a scenario be one Square could actually have produced -- without them a
+    shipped COMPLETED order is still fully payable and matches no ``closed_at`` filter.
+    https://developer.squareup.com/reference/square/objects/Order
     """
 
     model_config = _SEED
@@ -219,17 +194,13 @@ class SeedCatalogObjectReference(BaseModel):
 
 
 class SeedRewardTier(BaseModel):
-    """One ``LoyaltyProgramRewardTier``: ``points`` to earn it, a ``name``, and
-    the ``pricing_rule_reference`` the published schema REQUIRES.
+    """One ``LoyaltyProgramRewardTier``: ``points`` to earn it, a ``name``, and the
+    ``pricing_rule_reference`` the published schema REQUIRES.
     https://developer.squareup.com/reference/square/objects/LoyaltyProgramRewardTier
 
-    JUDGMENT -- the reference names a PRICING_RULE catalog object this unit
-    does not model (SHRINK). The published schema requires the reference and
-    lets it be empty (``object_id`` is nullable, nothing is required inside
-    it), so the seed carries it EMPTY rather than inventing an id a consumer
-    would follow into a 404. Modelling pricing rules is the change that fills
-    it. The fidelity validator (D-006) is what found a tier without the
-    reference fails ``required``.
+    JUDGMENT: this unit does not model pricing rules (SHRINK), so ``pricing_rule_reference`` is
+    carried EMPTY rather than inventing an id that would 404 -- the published schema allows a
+    nullable, empty reference (D-006).
     """
 
     model_config = _SEED
@@ -242,12 +213,10 @@ class SeedRewardTier(BaseModel):
 
 
 class SeedLoyaltyProgram(BaseModel):
-    """The seller's one loyalty program, with a single SPEND accrual rule.
-
-    https://developer.squareup.com/reference/square/objects/LoyaltyProgram and
-    https://developer.squareup.com/reference/square/objects/LoyaltyProgramAccrualRule:
-    buyers earn ``accrual_points`` for every ``spend_amount`` of an order.
+    """The seller's one loyalty program (https://developer.squareup.com/reference/square/objects/LoyaltyProgram),
+    with a single SPEND accrual rule: buyers earn ``accrual_points`` for every ``spend_amount`` of an order.
     ``location_ids`` defaults to every seeded location.
+    https://developer.squareup.com/reference/square/objects/LoyaltyProgramAccrualRule
     """
 
     model_config = _SEED
@@ -292,11 +261,8 @@ class SeedInventoryCount(BaseModel):
 
 
 class SeedToken(BaseModel):
-    """A token already issued to the application.
-
-    A scenario with tokens is what lets a consumer who does not care about the
-    OAuth dance authenticate immediately -- and why token validity is not gated
-    by the ``oauth`` capability.
+    """A token already issued to the application, letting a consumer skip the
+    OAuth dance -- so token validity is not gated by the ``oauth`` capability.
     """
 
     model_config = _SEED
@@ -330,9 +296,8 @@ class SeedDocument(BaseModel):
 
     model_config = _SEED
 
-    #: Provenance, carried in the document so the file explains itself to
-    #: whoever opens it. Aliased because Pydantic treats a leading underscore
-    #: as a private attribute, and the key in the file is ``_comment``.
+    #: Provenance notes; aliased because Pydantic treats a leading underscore
+    #: as private, and the key in the file is ``_comment``.
     comment: tuple[str, ...] = Field(default=(), alias="_comment")
     merchant: SeedMerchant
     locations: tuple[SeedLocation, ...] = ()
@@ -346,12 +311,9 @@ class SeedDocument(BaseModel):
 
 
 def parse_seed_document(raw: object) -> SeedDocument:
-    """Validate a decoded scenario, or raise this vendor's ``internal`` error.
-
-    ``internal`` rather than ``invalid_value``: a malformed seed is a
-    misconfiguration of the *unit*, discovered at start, and there is no
-    consumer request to blame it on. The field path is carried in ``detail`` so
-    the operator can see which key is wrong.
+    """Validate a decoded scenario, or raise this vendor's ``internal`` error
+    -- a malformed seed misconfigures the *unit* at start, not a consumer
+    request. The field path is carried in ``detail``.
     """
     if raw is None:
         raise UnitError(

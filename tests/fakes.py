@@ -21,7 +21,6 @@ from vendorfake.core.kernel.types import (
     JournalEntry,
     MagicTriggerSpec,
     MappedEvent,
-    MutableResponse,
     Route,
     ShapedError,
     SignerProperties,
@@ -172,9 +171,9 @@ class FakeVendor:
     def hydrate(self, ctx: UnitContext, seed: object) -> None:
         self.hydrated += 1
 
-    def decorate(self, res: MutableResponse, ctx: UnitContext, req: UnitRequest) -> None:
+    def decorate(self, headers: dict[str, str], ctx: UnitContext, req: UnitRequest) -> None:
         self.decorated.append(f"{req.method} {req.path}")
-        res.headers["acme-version"] = self.api_version or ""
+        headers["acme-version"] = self.api_version or ""
 
 
 class VendorWithoutRoles:

@@ -1,30 +1,11 @@
 """What every Lightspeed surface is handed, and the helpers they share.
-
-FOR: naming the dependency a surface has on its vendor -- the resolved
-configuration, the two id streams, the version counter and the rate limiter --
-as a protocol, so a surface module never imports
-:mod:`vendorfake.lightspeed.vendor` and the vendor is free to import the
-surfaces.
-
-INVARIANT: **a surface reads its configuration through the vendor, live.**
-Every member of :class:`LightspeedDeps` is a property on the vendor object, not
-a value copied at route construction: a profile's ``vendor`` block resolves in
-``hydrate``, which runs after the routes are built and again on every
-``POST /__unit/state/reset``.
-
-THE ONE AUTH MODE. The whole specification uses a single flat ``bearerAuth``
-HTTP-bearer scheme, applied globally at the document root -- there is no second
-scheme and no per-operation override anywhere in the 201 operations. So there
-is one :data:`BEARER_AUTH` mode, and tenancy is the unit's (one retailer, its
-``domain_prefix``) rather than a header or a path segment the way Toast's and
-Clover's are.
-
-TIME ON THIS VENDOR'S WIRE is RFC 3339 with a ``Z``: the specification's own
-examples are ``"2017-05-05T05:58:53+00:00"`` for a register open time and
-``'2019-08-15T23:05:28Z'`` for a retailer's ``created_at`` -- the same instant
-in two spellings, in one document. :func:`wire_time` picks the ``Z`` form, so
-this package spells it one way; the choice is JUDGMENT and is recorded once
-here rather than at each call site.
+:class:`LightspeedDeps` is a protocol (config, id streams, version counter, rate limiter)
+so a surface never imports :mod:`vendorfake.lightspeed.vendor`; every member reads live
+off the vendor object, since ``hydrate`` re-resolves it on every ``POST /__unit/state/reset``.
+DOCUMENTED: one flat ``bearerAuth`` scheme for the whole specification, hence one
+:data:`BEARER_AUTH` mode; tenancy is the unit's single retailer, not a header or path
+segment. JUDGMENT: the spec spells an instant both with an offset and with ``Z``;
+:func:`wire_time` always picks ``Z``.
 """
 
 from __future__ import annotations
@@ -56,8 +37,7 @@ BEARER_AUTH = "bearer"
 
 API_PREFIX = _API_PREFIX
 TOKEN_PREFIX = _TOKEN_PREFIX
-"""Re-exported from ``paths.py``, which keeps them private so the drift test's
-scan of that module's ``UPPER_SNAKE`` constants sees only route paths."""
+"""Re-exported from ``paths.py`` (kept private there so the drift test's scan sees only route paths)."""
 
 
 @runtime_checkable
@@ -81,13 +61,7 @@ class LightspeedDeps(Protocol):
 
 
 def is_past_ms(instant_ms: int | None, clock: Clock) -> bool:
-    """Whether the epoch-ms ``instant_ms`` is at or before the unit clock.
-
-    ``None`` is "never expires", which is what a personal token is and what a
-    refresh token is here: the authorization page states no lifetime for
-    either, and inventing one would teach a consumer a rule the vendor has not
-    published.
-    """
+    """Whether epoch-ms ``instant_ms`` is at or before the unit clock; ``None`` means "never expires"."""
     return instant_ms is not None and instant_ms <= clock.now()
 
 
@@ -97,22 +71,12 @@ def wire_time(clock: Clock, offset_ms: float = 0.0) -> str:
 
 
 def stamp_version(entity: dict[str, object], deps: LightspeedDeps) -> None:
-    """Draw the next retailer-global version and stamp it on ``entity``.
-
-    Every mutation of any resource draws one -- that is the documented meaning
-    of the counter -- so this is called from inside the store mutator, where a
-    write that is about to be refused has not reached it yet.
-    """
+    """Draw the next retailer-global version and stamp it on ``entity``; call from inside the store mutator."""
     entity[OBJECT_VERSION] = deps.versions.bump()
 
 
 def require_retailer(ctx: UnitContext) -> dict[str, object]:
-    """The one retailer this unit serves.
-
-    A unit with no retailer in its store cannot answer anything: every route in
-    this surface is scoped to one. That is a scenario defect rather than a bad
-    request, so it is the vendor's 500 and not a plausible 4xx.
-    """
+    """The one retailer this unit serves; a missing retailer is a scenario defect (500), not a 4xx."""
     rows = ctx.store.collection(COL.retailer).all()
     if not rows:
         raise UnitError(

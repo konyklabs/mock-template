@@ -2,21 +2,13 @@
 
 DOCUMENTED (toast-partners-api.yaml v1.0.2,
 https://doc.toasttab.com/doc/devguide/apiPartnersGettingAccessibleRestaurants.html):
+the connected-restaurants page
+envelope, with ``pageSize`` default 100 and maximum 200; a row's field names,
+including the ``iso*`` date pair.
 
-* ``GET /partners/v1/connectedRestaurants?lastModified&pageSize&pageToken``
-  answers ``{currentPageNum, results[], totalResultCount, pageSize,
-  currentPageToken, nextPageToken (only when a next page exists), totalCount,
-  nextPageNum, lastPageNum,
-  previousPageNum}``; ``pageSize`` default 100, maximum 200;
-* ``GET /partners/v1/restaurants?lastModified`` answers the bare array;
-* a row is ``{restaurantGuid, managementGroupGuid (null if none),
-  restaurantName, locationName, createdByEmailAddress, externalGroupRef,
-  externalRestaurantRef, modifiedDate (epoch ms), createdDate,
-  isoModifiedDate, isoCreatedDate, deleted, scopes}``.
-
-JUDGMENT: the ``iso*`` spellings use the REST date format; the page shows the
-field names and no values. Page numbers count from 1 and the tokens are the
-core's opaque cursors (a real token's format is undocumented).
+JUDGMENT: the ``iso*`` spellings use the REST date format, since the page
+shows field names and no values. Page numbers count from 1 and the tokens
+are the core's opaque cursors (a real token's format is undocumented).
 """
 
 from __future__ import annotations
@@ -55,9 +47,8 @@ def project_connected_restaurant(entity: Mapping[str, Any], scopes: Sequence[str
 
 
 def page_token(page_number: int, page_size: int) -> str:
-    """The guide's token: base64 of ``p=<page>,s:<size>`` (``cD0xLHM6MTAw`` is
-    its documented first page at size 100). JUDGMENT that this is the format
-    rather than an example of one; it is the only shape the guide shows."""
+    """JUDGMENT: base64 of ``p=<page>,s:<size>`` -- the guide's only example
+    (``cD0xLHM6MTAw``, first page at size 100) is treated as the format."""
     return base64.b64encode(f"p={page_number},s:{page_size}".encode()).decode()
 
 

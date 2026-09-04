@@ -1,19 +1,8 @@
-"""Conformance targets for the vendors shipped in this distribution.
-
-FOR: a consumer who installed the wheel and wants to run the contracts::
-
-    pytest --pyargs vendorfake.conformance -p vendorfake.conformance.plugin --conformance-target vendorfake.testing.conformance:square_target
-    python -m vendorfake.conformance --target vendorfake.testing.conformance:clover_target
-
-The suite itself never starts a server -- ``vendorfake.conformance`` may not
-import a web framework -- so the targets live here, one layer out, where the
-``http`` transport can be a real uvicorn on a background thread and the
-out-of-process one the shipped ``vendorfake serve`` command in a child.
-
-The repository's own harness (``tests/conformance/harness.py``) reads the
-vendors' skip matrices from this module rather than keeping copies: a matrix
-that lived in two places would let the wheel's target and CI's disagree about
-what a skip means.
+"""Conformance targets for the vendors shipped in this distribution, usable from
+an installed wheel. ``vendorfake.conformance`` may not import a web framework, so
+the targets live here, where the ``http`` transport can be a real uvicorn on a
+background thread. ``tests/conformance/harness.py`` reads the skip matrices from
+this module rather than keeping copies.
 """
 
 from __future__ import annotations
@@ -49,17 +38,14 @@ __all__ = [
 ]
 
 PROFILES: tuple[str, ...] = ("full", "no-chaos", "no-faults", "orders-only", "oauth-only", "chaos-demo")
-"""The six profiles every built-in vendor ships, so one matrix shape covers
-all of them."""
+"""The six profiles every built-in vendor ships, so one matrix shape fits all."""
 
 OUT_OF_PROCESS_TRANSPORT = "subprocess"
-"""A unit served by ``vendorfake serve`` in a child process. Declared in
-``out_of_process`` and never in ``transports``: the matrix does not run it,
-the one contract whose claim is about separate runs opens it deliberately."""
+"""A unit served by ``vendorfake serve`` in a child process; declared in
+``out_of_process`` and never in ``transports``, so the matrix does not run it."""
 
 CLOVER_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
-    # A profile that lacks the capability a contract needs, the same shape as
-    # conformance/manifest.json describes for the first vendor.
+    # A profile that lacks the capability a contract needs.
     "C07": ("oauth-only",),
     "C08": ("no-faults",),
     "C09": ("oauth-only", "orders-only"),
@@ -137,17 +123,10 @@ LIGHTSPEED_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
     "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
 }
-"""Which contract skips on which Lightspeed profile, and why each one does:
-
-* ``oauth-only`` enables the token endpoint and nothing else, so it has no
-  paginating route (C26), no example mutation (C07), no webhook surface (C09,
-  C16, C18) and no credential a check can obtain without driving the whole
-  OAuth flow (C17);
-* ``orders-only`` has no webhooks capability (C09, C16, C18);
-* ``no-faults`` has no chaos capability at all (C08, C12, C27);
-* the delivery-scope contracts (C29) need ``webhooks.chaos``, which only
-  ``full`` and ``chaos-demo`` enable, and the retry-cascade (C21) and
-  clock-independence (C32) contracts run only on the virtual-clock profile."""
+"""Which contract skips on which Lightspeed profile: ``oauth-only`` enables only
+the token endpoint, ``orders-only`` has no webhooks, ``no-faults`` no chaos, the
+delivery-scope contracts need ``webhooks.chaos``, and the retry-cascade and
+clock-independence contracts run only on the virtual-clock profile."""
 
 _LIGHTSPEED_NO_IDEMPOTENCY_KEY = (
     "Lightspeed's API documents no idempotency key on any endpoint -- there is no Idempotency-Key header and "
@@ -156,14 +135,6 @@ _LIGHTSPEED_NO_IDEMPOTENCY_KEY = (
 )
 
 LIGHTSPEED_INAPPLICABLE: Mapping[str, str] = {
-    # C13 WAS DECLARED HERE and is not any more. The chassis slice of
-    # konyklabs/roadmap#94 declared this vendor to have no state machines --
-    # true then, and its own wording named what would end it: "the sale
-    # lifecycle ... is a real machine and arrives with the Sales surface; the
-    # inapplicable guard fails the day a machine appears." Slice L2b added it,
-    # the guard duly failed the run ("DECLARED INAPPLICABLE BUT RAN C13"), and
-    # the declaration is deleted rather than reworded. C13 now runs and passes
-    # on every profile that enables `sales`.
     "C19": _LIGHTSPEED_NO_IDEMPOTENCY_KEY.format(contract="replay"),
     "C24": _LIGHTSPEED_NO_IDEMPOTENCY_KEY.format(contract="key-scope"),
     "C25": _LIGHTSPEED_NO_IDEMPOTENCY_KEY.format(contract="mismatch"),
@@ -181,37 +152,22 @@ def _in_process(vendor: str, profile: str, env: Mapping[str, str] | None = None)
 
 @contextmanager
 def open_with_seed_overlay(vendor: str, profile: str, overlay: Mapping[str, Any]) -> Iterator[ConformanceClient]:
-    """A unit with ``overlay`` laid over the profile's seed, in process.
-
-    In process whatever the matrix row's transport is, because the overlay is
-    applied while the *unit* is built and a binding is only ever put in front
-    of one afterwards -- see ``ConformanceTarget.open_with_seed_overlay``.
-    Standing a second uvicorn up to ask a question about construction would
-    cost a thread and a socket to measure the same thing.
-
-    Nothing is caught: an overlay the unit refuses raises out of the ``with``,
-    which is the half of the contract the clause is about.
-    """
+    """A unit with ``overlay`` laid over the profile's seed, in process whatever
+    the matrix row's transport is, the overlay being applied while the unit is
+    built. Nothing is caught: an overlay the unit refuses raises out of the
+    ``with``, which is the half of the contract the clause is about."""
     with _in_process(vendor, profile, {"VENDORFAKE_SEED_OVERLAY": canonical_json(dict(overlay))}) as client:
         yield client
 
 
 @contextmanager
 def _http(vendor: str, profile: str) -> Iterator[ConformanceClient]:
-    # Local import: the target must be resolvable -- and `inprocess` runnable --
-    # without the web framework ever loading.
-    from vendorfake.asgi import FrameworkTripwire, create_app, serve_in_thread
+    # Local import: the target must resolve without the web framework loading.
+    from vendorfake.asgi import create_app, serve_in_thread
 
-    tripwire = FrameworkTripwire()
-    built = create_unit(
-        vendor=vendor,
-        profile=profile,
-        sink=MemorySink(),
-        logger=JsonLogger("warn"),
-        framework_answered=tripwire.get,
-    )
+    built = create_unit(vendor=vendor, profile=profile, sink=MemorySink(), logger=JsonLogger("warn"))
     try:
-        with serve_in_thread(create_app(built, tripwire=tripwire)) as base_url:
+        with serve_in_thread(create_app(built)) as base_url:
             client = HttpConformanceClient(base_url)
             try:
                 yield client
@@ -258,8 +214,7 @@ def target(
     expected_skips: Mapping[str, Sequence[str]] | None = None,
     inapplicable: Mapping[str, str] | None = None,
 ) -> ConformanceTarget:
-    """A target for any installed vendor. Each shipped one is wrapped below
-    with the tenant parameter and skip matrix it needs."""
+    """A target for any installed vendor; each shipped one is wrapped below."""
 
     def opener(profile: str, transport: str) -> AbstractContextManager[ConformanceClient]:
         return open_client(vendor, profile, transport)
@@ -285,8 +240,7 @@ def square_target() -> ConformanceTarget:
 
 
 def clover_target() -> ConformanceTarget:
-    """Every Clover route is scoped to ``{mId}``, so it is filled with the
-    seeded merchant; the skip matrix is Clover's own."""
+    """Every Clover route is scoped to ``{mId}``, filled with the seeded merchant."""
     from vendorfake.clover.seed.constants import SEED_MERCHANT_ID
 
     return target(
@@ -298,9 +252,7 @@ def clover_target() -> ConformanceTarget:
 
 
 def lightspeed_target() -> ConformanceTarget:
-    """The fourth vendor. No ``path_params``: a Lightspeed unit serves exactly
-    one retailer -- tenancy is the per-retailer subdomain, not a path segment --
-    so every probe path stays the probe."""
+    """No ``path_params``: tenancy is the per-retailer subdomain, not a path."""
     return target(
         "lightspeed",
         expected_skips=LIGHTSPEED_EXPECTED_SKIPS,
@@ -309,10 +261,7 @@ def lightspeed_target() -> ConformanceTarget:
 
 
 def toast_target() -> ConformanceTarget:
-    """The third vendor. No ``path_params``: Toast scopes a request to its
-    restaurant with the ``Toast-Restaurant-External-ID`` header, which the
-    vendor's credentials publish together with the bearer, so every probe
-    path stays the probe."""
+    """No ``path_params``: Toast scopes with a header the credentials publish."""
     return target(
         "toast",
         expected_skips=TOAST_EXPECTED_SKIPS,

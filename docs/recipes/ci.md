@@ -1,7 +1,7 @@
 # CI
 
 Most consumer suites need nothing beyond installing vendorfake and running
-pytest (or Vitest) — [in-process bindings](../start/bindings.md) need no
+pytest — [in-process bindings](../start/bindings.md) need no
 extra CI service, no port, no container. Reach for the patterns below only
 when a suite specifically needs a real URL or a non-Python consumer.
 
@@ -47,17 +47,17 @@ jobs:
           repository: konyklabs/vendorfake
           path: vendorfake
       - run: docker build -t vendorfake ./vendorfake
+      - run: docker run -d --rm -p 127.0.0.1:8080:8080 -e VENDORFAKE_VENDOR=square vendorfake
+      - run: for i in $(seq 1 30); do curl -sf http://127.0.0.1:8080/__unit/health && break; sleep 1; done
       - name: Test
         env:
-          VENDORFAKE_IMAGE: vendorfake
-        run: npm test   # picks up VENDORFAKE_IMAGE the way examples/vitest-consumer's globalSetup does
+          SQUARE_BASE_URL: http://127.0.0.1:8080
+        run: <your suite's command>
 ```
 
-This is the same `VENDORFAKE_IMAGE` switch
-[the Vitest recipe](vitest.md) describes: CI builds the image once and sets
-the variable so `globalSetup` uses Testcontainers instead of spawning
-`vendorfake serve` as a child process, which is what a runner without a
-project-local Python (a pure Node.js job, for instance) needs anyway.
+The suite under test needs nothing from vendorfake but a base URL; the
+control plane (`/__unit/*`) is plain HTTP for the setup and teardown a test
+needs.
 
 ## Caching
 

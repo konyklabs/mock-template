@@ -1,51 +1,11 @@
-"""Committed state mutation -> Clover webhook payload.
+"""Committed state mutation -> Clover webhook payload; every webhook is
+derived from the journal, no handler emits.
 
-FOR: deriving every webhook this unit sends from the journal, so that an event
-exists exactly when a mutation committed -- the same structural claim the
-Square package makes, restated here because it is the one a rebuild dissolves
-first: **no handler emits.** The orders, inventory, customers and payments
-surfaces contain no ``emit`` call; the store's journal decides.
-
-THE DOCUMENTED PAYLOAD, verbatim from https://docs.clover.com/dev/docs/webhooks
-(fetched 2026-08-29)::
-
-    {"appId":"DRKVJT2ZRRRSC",
-     "merchants":{"XYZVJT2ZRRRSC":[{"objectId":"O:GHIVJT2ABCRSC","type":"CREATE","ts":1537970958000}]}}
-
-* ``appId`` -- the app the subscription belongs to; this unit's ``client_id``.
-* ``merchants`` -- keyed by merchant id, each a list of events.
-* ``objectId`` -- ``<key>:<entity id>``. The documented keys are ``O`` orders,
-  ``I`` inventory, ``C`` customers, ``P`` payments (``E`` employees and ``M``
-  merchants exist and are not modelled: nothing here mutates either).
-* ``type`` -- ``CREATE``, ``UPDATE`` or ``DELETE``.
-* ``ts`` -- Unix **milliseconds**, like every Clover entity timestamp.
-
-JUDGMENT -- **one event per delivery.** The documented shape is an aggregate
-(a list per merchant), but Clover publishes nothing about when or whether it
-batches, and a fake that invented a batching window would teach consumers a
-coalescing rule that may not exist. Every delivery therefore carries exactly
-one event in a one-element list; a consumer written against the documented
-shape iterates and is correct either way.
-
-JUDGMENT -- **what a soft delete looks like.** Clover's ``DELETE /orders/{id}``
-is documented and the audit found no statement of whether the order is gone
-or marked ``deletedTime``; the orders surface (PR C) records it as an
-``update`` that sets ``deletedTime``, under the operation id ``DeleteOrder``.
-Either signal maps to ``DELETE`` here, as does a hard ``delete`` journal op,
-so the payload says ``DELETE`` however the surface chose to store it.
-
-THE CONTRACT WITH THE SURFACES: this mapper keys on the journal's
-``collection`` and ``op`` and on one ``operation_id``. The collections are
-``entities.COL``'s ``orders``, ``items``, ``customers`` and ``payments``, read
-from ``COL`` so the name is spelled once; the surfaces never call this module
-and this module never calls a surface -- the store's journal is the whole
-interface, which ``tests/unit/clover/test_events.py`` drives both through the
-real routes and through raw store writes.
-
-Event types on the core's side are ``<key>:<type>`` -- ``O:CREATE``,
-``I:UPDATE`` -- so that a subscriber's per-key filter (Clover's dashboard lets
-an app subscribe per key) is the core's own ``O:*`` glob and a chaos rule can
-still name one exact event. See :data:`CLOVER_EVENT_TYPES`.
+DOCUMENTED: payload shape ``{"appId": ..., "merchants": {"<merchant id>":
+[{"objectId": "<key>:<entity id>", "type": "CREATE"|"UPDATE"|"DELETE", "ts":
+<unix ms>}]}}`` (https://docs.clover.com/dev/docs/webhooks). JUDGMENT: one
+event per delivery; a soft delete (``deletedTime`` set) and a hard delete
+both map to ``DELETE``.
 """
 
 from __future__ import annotations
@@ -84,43 +44,28 @@ EVENT_KEYS: Mapping[str, str] = {
     COL.customers: KEY_CUSTOMERS,
     COL.payments: KEY_PAYMENTS,
 }
-"""Store collection -> documented ``objectId`` prefix, keyed by the names
-``entities.COL`` spells so a rename there is a rename here."""
+"""Store collection -> documented ``objectId`` prefix."""
 
 CHANGE_TYPES: tuple[str, ...] = ("CREATE", "UPDATE", "DELETE")
 """The documented ``type`` vocabulary, in the order the page lists it."""
 
 DELETE_OPERATION_IDS: frozenset[str] = frozenset({"DeleteOrder"})
-"""Operation ids whose journal ``update`` is a soft delete. JUDGMENT -- see the
-module docstring."""
+"""Operation ids whose journal ``update`` is a soft delete. JUDGMENT."""
 
 SOFT_DELETE_FIELD = "deletedTime"
-"""The field a soft-deleting write sets. Documented on the order object
-(https://docs.clover.com/dev/docs/creating-custom-orders lists ``deletedTime``
-beside ``createdTime`` and ``modifiedTime``)."""
+"""The field a soft-deleting write sets (documented on the order object,
+https://docs.clover.com/dev/docs/creating-custom-orders)."""
 
 VERIFICATION_EVENT_TYPE = "verification"
-"""The event type of the one delivery that is not a state change: the
-``{"verificationCode": ...}`` POST the webhook surface sends to a callback
-being registered. Named here because the signer must recognise it -- the
-``X-Clover-Auth`` header is documented as sent only *after* the callback is
-validated, so this is the one delivery that must not carry it."""
+"""The one delivery that is not a state change: a callback's verification POST."""
 
 
 def event_type(key: str, change: str) -> str:
-    """``O`` + ``CREATE`` -> ``O:CREATE``. Spelled once."""
     return f"{key}:{change}"
 
 
 def verification_event_id(subscription_id: str) -> str:
-    """The event id of a subscription's verification POST.
-
-    Load-bearing, not decoration: the signer recognises the unit's own
-    verification delivery by this id *and* the type, because the type alone is
-    forgeable -- ``POST /__unit/webhooks/emit`` accepts any type string -- and
-    the id is not: the emitter derives its ids from a digest and nothing else
-    in the process builds a :class:`PreparedEvent` with this shape.
-    """
+    """The signer keys on id+type together; the type alone is forgeable."""
     return f"{VERIFICATION_EVENT_TYPE}:{subscription_id}"
 
 
@@ -133,12 +78,7 @@ CLOVER_EVENT_TYPES: tuple[str, ...] = tuple(
 
 
 class CloverEventMapper:
-    """Satisfies ``EventMapper``. Holds the vendor for ``appId``.
-
-    ``appId`` is the resolved ``client_id``, read live through the vendor for
-    the same reason every surface reads its config live: the profile's
-    ``vendor`` block resolves in ``hydrate``, after this object is built.
-    """
+    """Satisfies ``EventMapper``. Reads ``client_id`` live through the vendor."""
 
     __slots__ = ("_deps",)
 
@@ -151,9 +91,7 @@ class CloverEventMapper:
             return ()
         merchant_id = _merchant_id(entry, ctx)
         if merchant_id is None:
-            # Not silently: a mutation nobody can be told about is a scenario
-            # defect (a unit with no merchant), and the delivery log would
-            # otherwise just be empty.
+            # Not silently: a unit with no merchant is a scenario defect.
             ctx.log.warn(
                 "webhook not mapped: no merchant to attribute the mutation to",
                 {"collection": entry.collection, "id": entry.id, "seq": entry.seq},
@@ -164,20 +102,15 @@ class CloverEventMapper:
         app_id = self._deps.config.client_id
 
         def build(meta: EventMeta) -> object:
-            # `meta` carries the dispatcher's event id, which Clover's payload
-            # has no field for; a consumer deduplicates on objectId + ts, and
-            # the id stays on the delivery record for the fake's own log.
+            # `meta`'s event id has no field in Clover's payload; dedup on objectId + ts.
             return PayloadWire(appId=app_id, merchants={merchant_id: [wire]}).wire()
 
         return (MappedEvent(type=event_type(key, change), entity_id=entry.id, build=build),)
 
 
 def _change_type(entry: JournalEntry, ctx: UnitContext) -> str:
-    """``insert`` -> CREATE, ``delete`` -> DELETE, ``update`` -> UPDATE unless
-    the write was a soft delete: a ``DeleteOrder`` operation, or a write that
-    set ``deletedTime`` and left it set (an ``update`` that *cleared* it is not
-    a delete, which is why the stored entity is consulted and not only the
-    ``changed`` list)."""
+    """``update`` is DELETE only for a ``DeleteOrder`` op or a write leaving
+    ``deletedTime`` set (checked against the stored entity, not ``changed``)."""
     if entry.op == "insert":
         return "CREATE"
     if entry.op == "delete":
@@ -193,13 +126,8 @@ def _change_type(entry: JournalEntry, ctx: UnitContext) -> str:
 
 
 def _merchant_id(entry: JournalEntry, ctx: UnitContext) -> str | None:
-    """The merchant the payload is keyed by.
-
-    The entity's own ``merchant_id`` when it carries one (the package convention
-    for the owning merchant, as on tokens and codes); otherwise the unit's
-    merchant, of which there is one. On a hard delete the entity is gone and
-    only the second source remains.
-    """
+    """The entity's own ``merchant_id``, else the unit's one merchant (the
+    only source left once a hard delete removes the entity)."""
     stored: Mapping[str, Any] | None = ctx.store.collection(entry.collection).get(entry.id)
     if stored is not None:
         owner = stored.get("merchant_id")

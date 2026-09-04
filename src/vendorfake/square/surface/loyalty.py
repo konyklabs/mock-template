@@ -1,54 +1,23 @@
-"""The Loyalty surface: find or enrol a buyer by phone, and give them points
-for an order.
+"""The Loyalty surface: find or enrol a buyer by phone, and give them points for an order.
 
-FOR: the four calls an ordering integration makes around a purchase --
-learn the program, look the buyer up by the phone number they typed, enrol
-them if they are new, and accumulate points for the order they just paid.
+Routes -- RetrieveLoyaltyProgram ``GET /v2/loyalty/programs/{program_id}``
+(https://developer.squareup.com/reference/square/loyalty-api/retrieve-loyalty-program);
+SearchLoyaltyAccounts ``POST /v2/loyalty/accounts/search``
+(https://developer.squareup.com/reference/square/loyalty-api/search-loyalty-accounts);
+CreateLoyaltyAccount ``POST /v2/loyalty/accounts``
+(https://developer.squareup.com/reference/square/loyalty-api/create-loyalty-account);
+AccumulateLoyaltyPoints ``POST /v2/loyalty/accounts/{account_id}/accumulate``
+(https://developer.squareup.com/reference/square/loyalty-api/accumulate-loyalty-points).
 
-========================  ======================================================
-RetrieveLoyaltyProgram    ``GET  /v2/loyalty/programs/{program_id}``
-                          https://developer.squareup.com/reference/square/loyalty-api/retrieve-loyalty-program
-SearchLoyaltyAccounts     ``POST /v2/loyalty/accounts/search``
-                          https://developer.squareup.com/reference/square/loyalty-api/search-loyalty-accounts
-CreateLoyaltyAccount      ``POST /v2/loyalty/accounts``
-                          https://developer.squareup.com/reference/square/loyalty-api/create-loyalty-account
-AccumulateLoyaltyPoints   ``POST /v2/loyalty/accounts/{account_id}/accumulate``
-                          https://developer.squareup.com/reference/square/loyalty-api/accumulate-loyalty-points
-========================  ======================================================
+INVARIANT: points are a ledger -- an accumulation inserts a ``LoyaltyEvent`` then updates
+``balance``/``lifetime_points`` by the event's ``points``, so the events always sum to the balance.
 
-INVARIANT: **points are a ledger.** An accumulation inserts a ``LoyaltyEvent``
-and then updates the account's ``balance`` and ``lifetime_points`` by the
-event's ``points``, both journalled; the balance is never written except by
-an event, so the events sum to the balance on every account. That is the
-property a consumer reconciling points against orders depends on.
+JUDGMENT / NOT VERIFIED: an order earning no points from the seeded ``SPEND`` rule
+(``(eligible total // spend amount) * points``) is refused rather than answered with an empty
+``events`` array, and accrues at most once; an order must be neither DRAFT nor CANCELED.
 
-Points from an order
---------------------
-The seeded program has one ``SPEND`` accrual rule -- "buyers earn ``points``
-for every ``amount_money`` spent" -- so an order earns
-``(eligible total // spend amount) * points``, integer division, nothing for
-the remainder. ``tax_mode`` is ``BEFORE_TAX`` and this unit models no tax, so
-the eligible total is the order total. JUDGMENT, three times:
-
-* the numbers in the rule are the scenario's, not Square's;
-* an order that earns **no points** is refused with ``bad_request`` rather
-  than answered with an empty ``events`` array, so a consumer's loyalty step
-  fails loudly on a sub-threshold order. Square documents the response for
-  a qualifying purchase and not this case; NOT VERIFIED;
-* an order accrues **once**. A second accumulation naming the same order is
-  refused, because paying a buyer twice for one purchase is the mistake a
-  retry without an idempotency key would make. Square's page says points are
-  calculated from the order; that it refuses a repeat is NOT VERIFIED.
-
-The order must exist and be neither DRAFT nor CANCELED -- a purchase that was
-never paid for earns nothing -- and OPEN is accepted alongside COMPLETED,
-because the consumer flow accumulates in the same breath as the payment and
-this unit does not insist on an ordering between two calls Square does not
-order either.
-
-SHRINK (prototype): one program, one SPEND rule, no rewards, no promotions,
-no point expiry, no ``ListLoyaltyPrograms`` (deprecated in favour of ``main``),
-``RetrieveLoyaltyAccount``, ``AdjustLoyaltyPoints`` or ``SearchLoyaltyEvents``.
+SHRINK (prototype): one program, one SPEND rule, no rewards, promotions, point expiry,
+``ListLoyaltyPrograms``, ``RetrieveLoyaltyAccount``, ``AdjustLoyaltyPoints`` or ``SearchLoyaltyEvents``.
 """
 
 from __future__ import annotations
@@ -243,19 +212,12 @@ class LoyaltySurface:
     # -- POST /v2/loyalty/accounts ------------------------------------------
 
     def create_account(self, args: HandlerArgs) -> ReplyInit:
-        """Enrol a buyer.
-
-        The program must be the seller's; the phone number must be E.164; and
-        the number must not already be enrolled. That last refusal is
-        ``conflict`` -- a 409 -- JUDGMENT and NOT VERIFIED: Square's page
-        documents the success shape and not the duplicate, and a 409 is the
-        answer that tells the consumer's "search, then create" flow exactly
-        which half it skipped.
-
-        A customer is minted for the account when none is named, because
-        Square's account carries a ``customer_id`` and "creates a customer
-        profile if one does not exist" -- this unit has no Customers surface,
-        so the id is minted and stored and nothing else knows it. JUDGMENT.
+        """Enrol a buyer. The program must be the seller's, the phone number
+        E.164, and not already enrolled -- that refusal is ``conflict`` (409),
+        JUDGMENT and NOT VERIFIED, since Square's page documents only the
+        success shape. A customer is minted for the account when none is
+        named, since Square's account carries a ``customer_id`` and this unit
+        has no Customers surface. JUDGMENT.
         """
         request = validate_body(CreateLoyaltyAccountRequest, args.body())
         spec = request.loyalty_account
@@ -385,11 +347,9 @@ def loyalty_routes(deps: SquareDeps) -> tuple[Route, ...]:
 
 
 def points_for_order(program: LoyaltyProgramEntity, order: OrderEntity) -> int:
-    """The SPEND rule: whole multiples of the spend amount, times the points.
-
-    Integer division, so a remainder earns nothing -- "for every $1 spent"
-    means the dollar has to be spent in full. See the module docstring for
-    what is JUDGMENT here.
+    """The SPEND rule: whole multiples of the spend amount, times the
+    points -- integer division, so a remainder earns nothing. See the module
+    docstring for what is JUDGMENT here.
     """
     spend = program.spend_amount.amount
     if spend <= 0:

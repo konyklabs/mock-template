@@ -1,19 +1,11 @@
-"""The Retailers tag: one route, one retailer.
+"""Retailers tag: one route, one retailer.
 
-DOCUMENTED (``GET /retailer``, operationId ``GetRetailer``, tag "Retailers"):
-"This endpoint returns information about the retailer", answering
-``RetailerResponse`` -- ``{"data": {...}}`` around one ``Retailer``. The
-operation's description carries ``🔒 Requires: `retailer:read`
-`payment_types:read` scopes``: **two** scopes, which is unusual enough to be
-worth stating -- most operations name one, and the machine extraction that
-produced ``surface.txt`` matched none for this operation at all because its
-annotation names a pair. Both are required here, so a token holding only
-``retailer:read`` gets the 403.
+DOCUMENTED (``GET /retailer``, ``GetRetailer``): answers ``{"data": {...}}``
+around one ``Retailer``; requires both ``retailer:read`` and
+``payment_types:read`` scopes, so a token holding only the first gets a 403.
 
-A unit serves exactly ONE retailer -- tenancy in this API is the per-retailer
-subdomain (``{domain_prefix}.retail.lightspeed.app``) and there is no route
-that takes a retailer id. So this route reads the single seeded row and never
-takes a path parameter.
+A unit serves exactly one retailer -- tenancy is the per-retailer subdomain --
+so this route takes no path parameter and reads the single seeded row.
 """
 
 from __future__ import annotations

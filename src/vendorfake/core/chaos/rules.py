@@ -1,51 +1,10 @@
-"""The chaos rule grammar, as an external document.
-
-FOR: stating once what a chaos rule *is*, in the one place both the profile
-loader and ``POST /__unit/chaos/rules`` can reach. A rule arrives from two
-directions -- a JSON file on disk and a JSON request body -- and neither is
-written by this codebase, so it is parsed, not trusted.
-
-INVARIANT: **a rule that cannot fire says so at the moment it is written, not
-by never firing.** That is the whole reason this file is Pydantic (one of the
-four core modules where it is permitted, listed in ``tools/boundary.toml``)
-rather than a dataclass and a pile of ``isinstance`` checks. Three specific
-silences are closed here:
-
-``extra="forbid"``
-    ``{"when": {"nth": [2]}}`` misspelled as ``{"when": {"nth_": [2]}}`` is an
-    unconditional rule in the reference -- ``shouldFire`` sees no recognised
-    condition and fires on every match. The typo that actually happens is a
-    misspelled key, and it is the one a permissive parser cannot catch.
-
-``every`` and ``times`` are bounded
-    ``{"every": 0}`` is ``st.matches % 0`` -- ``NaN`` in JavaScript, so the
-    rule silently never fires; ``ZeroDivisionError`` in Python, so it would be
-    a 500 on the first matching request. ``ge=1`` makes it a field-naming 400
-    at the moment the rule is submitted, which is the only one of the three a
-    consumer can act on.
-
-Numbers are strict, strings are not
-    ``{"every": "3"}`` works in JavaScript because ``matches % "3"`` coerces.
-    Accepting it here would mean a profile could carry a quoted number for
-    years and nobody would learn which of the two the author meant. Strings
-    stay unconstrained because ``fault``, ``route`` and ``event_type`` are open
-    vocabularies by design -- a fork adds a fault name without editing core.
-
-**Wire format is snake_case**, here as everywhere else in this package:
-``event_type``, ``body_contains``. The reference spelled these ``eventType``
-and ``bodyContains``; one convention across profile documents, control-plane
-bodies and response keys was chosen in an earlier stage of this build, and a
-rule document is on the wire in both directions. ``params`` keys follow the
-same convention -- ``delay_ms``, ``retry_after_seconds``, ``copies`` -- which
-:data:`BUILTIN_FAULTS` states as a promise the fault implementations must keep.
-
-``params`` itself stays ``dict[str, Any]`` and is *not* modelled. Its shape is
-per-fault and a fork may add faults the core has never heard of, so validating
-it here would be the core asserting a vendor's vocabulary. The cost is real and
-is paid at the point of use: values arrive as strings on the magic path
-(``chaos:timeout:delay_ms=250`` is split textually) and as arbitrary JSON on
-the rule path, so every consumption site coerces explicitly rather than
-indexing and hoping.
+"""The chaos rule grammar, as an external document: JSON from disk or a
+request body, parsed rather than trusted. INVARIANT: a rule that cannot fire
+says so when written, not by never firing -- ``extra="forbid"`` catches a
+misspelled condition key, and ``every``/``times`` are bounded to ``ge=1``.
+Wire format is snake_case throughout, including ``params`` keys, a promise
+:data:`BUILTIN_FAULTS` states; ``params`` itself stays ``dict[str, Any]`` and
+is not modelled.
 """
 
 from __future__ import annotations
@@ -77,77 +36,50 @@ __all__ = [
 ]
 
 FaultName = str
-"""Open vocabulary. The reference writes ``'rate_limit' | ... | (string & {})``;
-Python has no such construct and does not need one -- :data:`BUILTIN_FAULTS` is
-the suggestion list and a fork's own fault name is just as valid."""
+"""Open vocabulary: :data:`BUILTIN_FAULTS` is a suggestion list, not a closed set."""
 
 ChaosScope = Literal["request", "webhook"]
-"""Closed, and the only closed vocabulary in the grammar: the two scopes are
-gated by two different capabilities, so a third would be a capability nobody
-declared."""
+"""The only closed vocabulary here: the two scopes are gated by two different capabilities."""
 
 _MODEL = ConfigDict(extra="forbid", frozen=True)
 
-#: An integer the document must have written as an integer. See the module
-#: docstring: a quoted number is a question about intent, not a value.
+#: An integer the document must have written as an integer, not a quoted one.
 _StrictInt = Annotated[int, Field(strict=True)]
 
 
 class ChaosMatch(BaseModel):
-    """Which subjects a rule applies to. Every condition is ANDed.
-
-    An absent condition is not a veto: a rule with no ``match`` at all applies
-    to every subject in its scope. That is the reference's rule
-    (``engine.ts:matches`` returns ``true`` for an absent ``match``) and it is
-    what makes ``{"scope": "request", "fault": "server_error"}`` mean "fail
-    everything", which is the first thing anyone tries.
-    """
+    """Which subjects a rule applies to, every condition ANDed and an absent
+    one not a veto -- a bare ``{"scope": "request", "fault": "server_error"}``
+    means "fail everything"."""
 
     model_config = _MODEL
 
     #: ``POST /v2/orders``; ``*`` wildcards allowed, e.g. ``POST /v2/orders*``.
-    #: Path templates are braces -- ``GET /v2/orders/{order_id}`` -- in every
-    #: place a template is written, this key included.
     route: str | None = None
     path: str | None = None
     method: str | None = None
     capability: str | None = None
-    #: Webhook scope: match on the vendor event type, e.g. ``order.*``.
+    #: Webhook scope: the vendor event type, e.g. ``order.*``.
     event_type: str | None = None
-    #: Header names are compared lower-cased; values are compared exactly.
+    #: Names compared lower-cased; values compared exactly.
     header: dict[str, str] | None = None
     body_contains: str | None = None
 
 
 class ChaosWhen(BaseModel):
-    """When a matching subject actually fires the fault.
-
-    Conditions are ANDed and an absent condition is not a veto, so an empty
-    ``when`` fires on every match. Deliberately counter-based: "the third
-    create fails" is a fact a test can assert, where a coin flip is a flake.
-    :attr:`probability` is the one escape hatch and it draws from the seeded
-    RNG, so even that run is replayable from ``/__unit/info``.
-    """
+    """When a matching subject fires the fault. Conditions ANDed, absent not a
+    veto; deliberately counter-based so "the third create fails" is a fact,
+    not a flake. :attr:`probability` is the one escape hatch, seeded."""
 
     model_config = _MODEL
 
-    #: Fire on these 1-based occurrences of a match.
+    #: 1-based occurrences of a match to fire on.
     nth: tuple[Annotated[int, Field(ge=1, strict=True)], ...] | None = None
-    #: Fire on every Nth match. ``ge=1``: see the module docstring on ``% 0``.
     every: Annotated[int, Field(ge=1, strict=True)] | None = None
-    #: Fire only after N matches have already passed cleanly.
     after: Annotated[int, Field(ge=0, strict=True)] | None = None
-    #: Stop firing after this many fires.
     times: Annotated[int, Field(ge=0, strict=True)] | None = None
-    #: Accepted, and a no-op in both directions -- including ``always: false``.
-    #: The reference declares it and ``shouldFire`` never reads it, so a rule
-    #: with no other condition already fires on every match and one that says
-    #: ``always: false`` still fires. Kept rather than rejected because a
-    #: profile that says what it means is worth more than a 400, and dropping
-    #: the field would make the reference's own documents invalid. Pinned by
-    #: test so nobody "fixes" it into a veto without meeting the decision.
+    #: Accepted and a no-op, including ``always: false`` -- pinned by test.
     always: bool | None = Field(default=None, strict=True)
-    #: Seeded-random firing; see the class docstring.
     probability: Annotated[float, Field(ge=0.0, le=1.0)] | None = None
 
 
@@ -167,42 +99,12 @@ class ChaosRule(BaseModel):
 
 
 FaultProvenance = Literal["vendor", "transport"]
-"""Where a fault's *behaviour* comes from -- not to be confused with
-:data:`vendorfake.core.kernel.shaping.Provenance`, which says where an error
-*status* came from. ``"vendor"``: this fault reproduces something a real
-vendor does (a documented rate limit, an outage, a 5xx) even where the exact
-trigger is this project's own invention. ``"transport"``: nothing a vendor
-documents, because no vendor's API contract covers what a socket, a proxy or
-a flaky link between them can do to a response that already left the
-handler -- a connection dropped mid-body, a body that doesn't parse, a field
-retyped in flight. See ``core/chaos/faults.py`` for the five faults that
-introduced the second value, and ``docs/concepts/chaos-rules-and-faults.md``
-("Transport faults") for the distinction stated to a consumer.
-"""
+"""``"vendor"`` reproduces documented behaviour; ``"transport"`` is a dropped
+connection or mangled body no vendor documents."""
 
 FaultPhase = Literal["request", "response", "delivery"]
-"""*When* a fault fires, relative to the handler -- the axis
-:data:`FaultProvenance` does not carry, and the one that answers "will this
-fault let the handler commit?" (konyklabs/roadmap#101, item 17).
-
-``"request"``
-    Fires instead of the handler. Nothing is committed: the caller's 429,
-    5xx or 504 left no journal entry behind, and a retry starts clean.
-``"response"``
-    Fires on the answer, *after* the handler ran and committed. Against a
-    single-use rotation that means the credential is spent by a call the
-    caller saw fail -- exactly what a real gateway mangling a response after
-    the write does, and the reason a consumer must be able to read this off
-    the catalogue rather than off ``core/chaos/faults.py``. The request log
-    marks such an answer with ``discarded_mutation`` and names the journal
-    seq it committed.
-``"delivery"``
-    A webhook delivery, not a request at all; the ``webhook.*`` faults.
-
-Orthogonal to provenance: ``timeout`` is ``vendor``/``request`` and
-``malformed_body`` is ``transport``/``response``, so neither axis can be
-inferred from the other.
-"""
+"""When a fault fires relative to the handler (konyklabs/roadmap#101, item
+17): instead of it, on its committed answer, or as a webhook delivery."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,23 +114,9 @@ class FaultSpec:
     name: FaultName
     scope: ChaosScope
     summary: str
-    #: Keyword-only, defaulting to ``"vendor"``. This field was added after
-    #: ``summary`` and ahead of the pre-existing ``params``; every shipped
-    #: fault with parameters was constructed on v0.1.0 as four positional
-    #: arguments (``name, scope, summary, params``), and a positional
-    #: ``provenance`` here would silently bind a fork's params prose to it
-    #: instead of raising -- loud constructions (three args, or five) fail
-    #: either way, but the four-arg shape is exactly the one every existing
-    #: parameterised fault used. Keyword-only restores that meaning: a
-    #: four-positional call still means ``(name, scope, summary, params)``,
-    #: and the field is purely additive (found by review round 2 of
-    #: konyklabs/roadmap#73; see CHANGELOG.md's ``Unreleased`` entry).
+    #: Keyword-only so a four-positional call cannot silently misbind this.
     provenance: FaultProvenance = field(kw_only=True, default="vendor")
-    #: Keyword-only for the same reason as ``provenance``. ``"request"`` by
-    #: default because that is what every fault was before the response-phase
-    #: five existed; the catalogue below states it explicitly anyway.
     phase: FaultPhase = field(kw_only=True, default="request")
-    #: Prose description of the ``params`` keys this fault reads, if any.
     params: str | None = None
 
     def as_json(self) -> dict[str, object]:
@@ -345,21 +233,13 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
         phase="response",
     ),
 )
-"""The faults the core implements, as data. The ``params`` prose is a promise:
-a fault implementation reads exactly these keys, in snake_case, and coerces
-them rather than indexing them."""
+"""The faults the core implements, as data; ``params`` is a promise each
+implementation reads exactly those keys and coerces rather than indexes."""
 
 
 def glob_match(pattern: str, value: str) -> bool:
-    """``*`` is the only metacharacter; everything else is literal.
-
-    Ported from ``engine.ts:globMatch``. The exact-equality short circuit comes
-    first, so a pattern with no ``*`` never builds a regex, and a pattern
-    without ``*`` that is not equal cannot match -- which is why a route key is
-    compared verbatim and a typo produces silence rather than a near miss.
-
-    Anchored at both ends: ``POST /v2/orders`` does not match
-    ``POST /v2/orders/search``, and ``POST /v2/orders*`` does.
+    """``*`` is the only metacharacter, matched anchored at both ends: a
+    pattern with no ``*`` short-circuits on equality and never builds a regex.
     """
     if pattern == value:
         return True
@@ -370,18 +250,8 @@ def glob_match(pattern: str, value: str) -> bool:
 
 
 def matched_routes(rule: ChaosRule, route_keys: Sequence[str]) -> tuple[str, ...]:
-    """Which of ``route_keys`` this rule's ``match.route`` selects.
-
-    Pure, and separate from the engine, because the answer is needed at two
-    moments the engine is not present for: unit construction, where a
-    profile-supplied rule matching nothing is worth a NOTE on the log or a hard
-    ``invalid_value`` under a strict setting, and ``POST /__unit/chaos/rules``,
-    where the count is echoed back so a consumer learns immediately rather than
-    from a transcript with a dead rule in it.
-
-    A rule with no ``match.route`` constrains no route and so selects them all:
-    that is what the engine will do, and reporting zero here would be a
-    different answer from the one the engine gives.
+    """Which of ``route_keys`` this rule's ``match.route`` selects; no
+    ``match.route`` selects every route, matching the engine's own behaviour.
     """
     if rule.match is None or rule.match.route is None:
         return tuple(route_keys)
@@ -389,19 +259,9 @@ def matched_routes(rule: ChaosRule, route_keys: Sequence[str]) -> tuple[str, ...
 
 
 def validate_rule_document(document: Mapping[str, Any]) -> None:
-    """Reproduce the reference's ``validateRule`` error kinds, exactly.
-
-    Ported from ``control/plane.ts:validateRule``. It exists beside Pydantic
-    rather than inside it because the three kinds are contract and Pydantic's
-    structural verdicts do not line up with them: an absent ``id`` and an empty
-    ``id`` are both ``missing_field`` in the reference (``if (!r.id)``) where a
-    ``min_length`` constraint would call the second one ``invalid_value``, and
-    an absent ``scope`` is ``invalid_value`` where a required field would be
-    ``missing_field``.
-
-    The webhook-scope capability assertion is deliberately NOT here: it needs
-    the registry, and putting it in a pure parser would make this module the
-    second place that gates ``webhooks.chaos``. The control plane performs it.
+    """An absent or empty ``id``/``fault`` is ``missing_field``; an absent
+    ``scope`` is ``invalid_value``. No capability check here -- that needs the
+    registry, so the control plane performs it.
     """
     identifier = document.get("id")
     if not isinstance(identifier, str) or not identifier:
@@ -427,11 +287,9 @@ def validate_rule_document(document: Mapping[str, Any]) -> None:
 
 def parse_rule(document: object, *, source: str | None = None) -> ChaosRule:
     """Validate one rule document, or raise a field-naming ``UnitError``.
-
-    Order is contract: the three reference-compatible checks run first, so a
-    document missing an ``id`` reports ``missing_field`` on ``id`` and not
-    whichever field Pydantic happened to complain about first.
-    """
+    :func:`validate_rule_document`'s checks run first, so a missing ``id``
+    reports ``missing_field`` on ``id`` and not whichever field Pydantic
+    happens to complain about."""
     if not isinstance(document, Mapping):
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,

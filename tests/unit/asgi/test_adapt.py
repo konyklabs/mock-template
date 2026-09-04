@@ -75,8 +75,7 @@ def test_repeated_query_parameters_keep_every_value_and_the_scalar_view_keeps_th
     ``query_all`` is ``str -> Sequence[str]`` in every binding.
 
     Starlette's ``QueryParams`` is multi-valued; letting it through would give
-    the HTTP binding a list where the in-process and file-drop bindings have a
-    string. ``dict(query_params)`` would instead drop ``x=1`` on the floor.
+    the HTTP binding a list where the in-process binding has a string. ``dict(query_params)`` would instead drop ``x=1`` on the floor.
     """
     body = call(app, "GET", "/v2/orders/abc?x=1&x=2&y=3").json()
     assert body["query"] == {"x": "2", "y": "3"}

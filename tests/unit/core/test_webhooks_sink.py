@@ -1,19 +1,11 @@
-"""The delivery seam: three implementations, one protocol, no HTTP assumption.
-
-``FileSink`` is the cheapest mechanical proof that the core is not HTTP-shaped
--- it is a complete delivery path with no socket in it -- so its tests are as
-load-bearing as the HTTP one's.
-"""
+"""The delivery seam: two implementations, one protocol, no HTTP assumption."""
 
 from __future__ import annotations
-
-import json
-from pathlib import Path
 
 import httpx
 import pytest
 
-from vendorfake.core.webhooks.sink import DeliverySink, FileSink, HttpSink, MemorySink, SinkRequest, SinkResult
+from vendorfake.core.webhooks.sink import DeliverySink, HttpSink, MemorySink, SinkRequest, SinkResult
 
 
 def _req(url: str = "https://sub.test/hooks", body: bytes = b'{"a":1}', timeout_ms: int = 10_000) -> SinkRequest:
@@ -84,57 +76,14 @@ def test_clearing_forgets_deliveries_but_not_the_responder() -> None:
     assert sink.send(_req()).status == 418
 
 
-# ---------------------------------------------------------------------------
-# FileSink -- the proof that delivery is not HTTP.
-# ---------------------------------------------------------------------------
-
-
-def test_a_file_sink_writes_one_numbered_document_per_attempt(tmp_path: Path) -> None:
-    sink = FileSink(dir=tmp_path / "deliveries")
-    assert sink.send(_req()).status == 200
-    assert sink.send(_req(url="https://other.test/x")).status == 200
-
-    names = sorted(p.name for p in (tmp_path / "deliveries").iterdir())
-    assert names == ["delivery-00001.json", "delivery-00002.json"]
-
-    first = json.loads((tmp_path / "deliveries" / "delivery-00001.json").read_text())
-    assert first == {
-        "url": "https://sub.test/hooks",
-        "headers": {"content-type": "application/json"},
-        "body": '{"a":1}',
-    }
-
-
-def test_a_file_sink_creates_its_directory(tmp_path: Path) -> None:
-    """Nested and absent, because a consumer points it at a path rather than
-    at a directory they remembered to create."""
-    sink = FileSink(dir=tmp_path / "a" / "b" / "c")
-    sink.send(_req())
-    assert (tmp_path / "a" / "b" / "c" / "delivery-00001.json").is_file()
-
-
-def test_a_non_utf8_payload_is_written_as_hex_rather_than_not_at_all(tmp_path: Path) -> None:
-    """A vendor whose payload is binary must still produce a transcript.
-
-    The alternative -- letting the encode raise -- turns "this vendor does not
-    send JSON" into "delivery crashes on the worker", which surfaces as a
-    missing delivery record and no explanation.
-    """
-    sink = FileSink(dir=tmp_path)
-    sink.send(_req(body=b"\xff\xfe\x00"))
-    document = json.loads((tmp_path / "delivery-00001.json").read_text())
-    assert "body" not in document
-    assert document["body_hex"] == "fffe00"
-
-
-def test_the_three_sinks_satisfy_one_protocol(tmp_path: Path) -> None:
+def test_the_sinks_satisfy_one_protocol() -> None:
     """Structural, not nominal: nothing here inherits from anything.
 
     The protocol is the design point of this module -- the dispatcher's whole
     knowledge of transport -- so it is asserted rather than assumed.
     """
-    sinks: list[DeliverySink] = [MemorySink(), HttpSink(), FileSink(dir=tmp_path)]
-    assert [s.kind for s in sinks] == ["memory", "http", "file"]
+    sinks: list[DeliverySink] = [MemorySink(), HttpSink()]
+    assert [s.kind for s in sinks] == ["memory", "http"]
 
 
 # ---------------------------------------------------------------------------

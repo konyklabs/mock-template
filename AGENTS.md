@@ -3,8 +3,7 @@
 For an agent working *in this repository* -- building, fixing, or extending
 vendorfake itself. If instead you are writing tests **against** an installed
 vendorfake in a consumer repository, this is the wrong file: run `vendorfake
-agent-setup` there (or `vendorfake explain <kind> <name>` for one answer at a
-time), or read
+explain <kind> <name>` there for one answer at a time, or read
 https://github.com/konyklabs/vendorfake/blob/main/docs/for-agents.md.
 
 ## Layout
@@ -22,9 +21,8 @@ src/vendorfake/
   testing/      the fixture layer a consumer's test suite imports:
                 unit()/async_unit()/served()/serve_in_thread(), Driver,
                 StartedUnit, seeds.
-  agent/        this surface: agent-setup's rules-file template and
-                explain's lookups.
-  square/ clover/ toast/
+  agent/        the lookups behind `vendorfake explain`.
+  square/ clover/ toast/ lightspeed/
                 one vendor surface each: routes, error vocabulary, signature
                 scheme, retry schedule, seed.
   cli.py        the vendorfake command; the only module that reads

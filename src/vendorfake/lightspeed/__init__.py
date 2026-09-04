@@ -1,16 +1,11 @@
 """Lightspeed Retail X-Series (API 2026-07), as a vendorfake vendor.
 
-FOR: publishing one name -- ``VENDOR`` -- that the registry resolves through
-the ``vendorfake.vendors`` entry point, plus the pieces a consumer or a test
-legitimately imports directly.
-
-INVARIANT: **``VENDOR`` is a fresh definition on every access.** A vendor owns
-stateful, seeded id streams, a version counter and a rate-limit window; the
-attribute *is* the factory, through :func:`__getattr__`, so
+INVARIANT: ``VENDOR`` is a fresh definition on every access -- the attribute
+*is* the factory, through :func:`__getattr__`, so
 ``vendorfake.lightspeed.VENDOR is vendorfake.lightspeed.VENDOR`` is False.
 
-Nothing in this package imports a web framework, and nothing in it is imported
-by the core.
+Nothing in this package imports a web framework, and nothing in it is
+imported by the core.
 """
 
 from __future__ import annotations

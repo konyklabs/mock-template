@@ -1,55 +1,12 @@
-"""Cutting a scoped extract from a vendor's published API documents.
+"""Cutting a scoped extract from a vendor's published API documents into the smallest valid OpenAPI 3 document that still says everything the validator needs about the operations a unit models, so it can be committed or cached, diffed by a human, and read by one validator whatever dialect the vendor published in.
 
-FOR: turning one or more upstream documents -- OpenAPI 3 or Swagger 2.0, JSON
-or YAML, megabytes of prose and tooling annotations -- into the smallest valid
-OpenAPI 3 document that still says everything the validator needs about the
-operations a unit models, so the extract can be committed or cached, diffed by
-a human, and read by one validator whatever dialect the vendor published in.
+The cut is a pure function of its inputs: same upstream bytes, same modeled list, same declaration values, same ``fetched`` string give byte-identical output every time. Nothing here reads a clock, the network or the file system -- ``pin.py`` and ``cache.py`` do the fetching and hand bytes in -- which is what lets ``pin --check`` call any difference drift.
 
-INVARIANT: **the cut is a pure function of its inputs.** Same upstream bytes,
-same modeled list, same declaration values, same ``fetched`` string --
-byte-identical output, every time, on every machine. Nothing here reads a
-clock, the network or the file system; ``pin.py`` and ``cache.py`` do the
-fetching and writing and hand bytes in. That is what lets ``pin --check``
-compare a fresh cut against the pinned one and call any difference drift.
+Prose is stripped structurally, never by key name alone, since a schema may have a *property* literally called ``description`` or ``title``. A Swagger 2.0 source is converted to the OAS 3 shape before it is cut, and the cutter sees only that shape (``definitions`` become ``components.schemas``, a ``body`` parameter becomes ``requestBody``, a response ``schema`` moves under ``content``), so the validator, the report and every test read one dialect.
 
-SECOND INVARIANT: **prose is stripped structurally, never by key name alone.**
-A schema may have a *property* called ``description`` or ``title`` (Square's
-``CatalogItem`` does), and stripping by name would delete the property rather
-than the annotation. The stripper knows where in a schema the keys are
-annotations and where they are names. The same knowledge is what renames a
-mapped vendor extension (``x-nullable`` to ``nullable``) only where it is a
-schema keyword.
+Kept per operation: ``operationId``, ``deprecated``, ``parameters`` (name, in, required, schema), ``requestBody`` and each response's schema, with a required ``description`` set to the status string. ``components.schemas`` holds every schema transitively reachable from the kept operations and from the declared error schema; a reference to a name no source defines becomes ``{}`` and is listed under ``x-vendorfake.stubbed`` so the hole is visible.
 
-THIRD INVARIANT: **a Swagger 2.0 source is converted to the OAS 3 shape before
-it is cut, and the cutter sees only that shape.** ``definitions`` become
-``components.schemas`` with every reference rewritten, a ``body`` parameter
-becomes ``requestBody``, a response ``schema`` moves under ``content`` with
-the media type ``produces``/``consumes`` name, a non-body parameter's type
-keywords move under ``schema``, and ``basePath`` becomes the source's base
-path. The validator, the report and every test read one dialect.
-
-What is kept, exactly: per operation ``operationId``, ``deprecated``,
-``parameters`` (name, in, required, schema), ``requestBody.required`` and
-``requestBody.content.<media>.schema``, and
-``responses.<status>.content.<media>.schema``, with each response's required
-``description`` set to the status string. ``components.schemas`` holds the
-schemas transitively reachable from the kept operations -- and from the
-declared error schema, whether or not an operation references it -- through
-``#/components/schemas/<name>`` references; a reference to a name no source
-defines becomes ``{}`` at the component and is listed under
-``x-vendorfake.stubbed`` so the hole is visible rather than silent. Stripped
-everywhere: ``description``, ``summary``, ``example``, ``examples``,
-``externalDocs``, ``title`` inside schemas, and every ``x-*`` key other than
-those the declaration maps and the ``x-vendorfake`` block this module writes.
-
-Several sources: an operation is looked up in declaration order and the first
-source that has it wins. Schemas merge by name: identical definitions dedupe;
-a name a later source defines *differently* is namespaced ``<label>.<Name>``
--- in that source's closure and in its operations, and in every schema of that
-closure whose references moved with it -- and listed under
-``x-vendorfake.namespaced``. A name a later source references but only an
-earlier one defines resolves to that definition rather than a stub.
+Several sources merge in declaration order: identical schema definitions dedupe, a name a later source defines differently is namespaced ``<label>.<Name>`` and listed under ``x-vendorfake.namespaced``, and a name only an earlier source defines resolves to that definition rather than a stub.
 """
 
 from __future__ import annotations
@@ -70,14 +27,7 @@ from vendorfake.fidelity.types import Annotation, SpecSource, route_key, templat
 
 
 class _StrictSafeLoader(yaml.SafeLoader):
-    """SafeLoader without YAML 1.1's ``yes/no/on/off`` booleans.
-
-    A vendor's enum of ``YES``/``NO`` strings is a boolean pair under YAML 1.1,
-    which is what PyYAML implements; the extract would then hold ``[false, true]``
-    where the document says ``[YES, NO]`` and every conforming response would
-    fail the enum. Only ``true``/``false`` (any case) are booleans here, as in
-    YAML 1.2 and JSON.
-    """
+    """SafeLoader without YAML 1.1's ``yes/no/on/off`` booleans, which would turn a vendor's enum of ``YES``/``NO`` strings into ``[false, true]``. Only ``true``/``false`` (any case) are booleans here, as in YAML 1.2 and JSON."""
 
 
 _StrictSafeLoader.yaml_implicit_resolvers = {
@@ -139,8 +89,7 @@ def sha256_hex(data: bytes) -> str:
 
 
 def render_json(document: Mapping[str, Any]) -> str:
-    """The one serialisation every generated fidelity file uses: sorted keys,
-    two-space indent, one trailing newline. Byte-identical for equal inputs."""
+    """The one serialisation every generated fidelity file uses: sorted keys, two-space indent, one trailing newline."""
     return json.dumps(document, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
 
 
@@ -170,9 +119,7 @@ class _Cut:
         out: dict[str, Any] = {}
         for key, value in node.items():
             if key in self.extension_map:
-                # A vendor extension with a standard meaning becomes the OAS
-                # keyword, ahead of the x- strip below. A schema that spells
-                # the keyword out as well keeps its own value.
+                # A vendor extension with a standard meaning becomes the OAS keyword, ahead of the x- strip below.
                 self.renamed[key] = self.renamed.get(key, 0) + 1
                 if self.extension_map[key] not in node:
                     out[self.extension_map[key]] = copy.deepcopy(value)
@@ -187,10 +134,7 @@ class _Cut:
             else:
                 out[key] = copy.deepcopy(value)
         if isinstance(out.get("$ref"), str) and out.get("nullable") is True:
-            # OAS 3.0's ``nullable`` acts within one schema object and a
-            # ``$ref`` sibling is ignored by validators, so a legal null next
-            # to a reference would fail. The equivalent the validator honours:
-            # either the referenced schema, or exactly null.
+            # OAS 3.0's `nullable` acts within one schema object and a `$ref` sibling is ignored by validators.
             self.nullable_refs += 1
             return {"anyOf": [{"$ref": out["$ref"]}, {"enum": [None]}]}
         return out
@@ -222,10 +166,7 @@ def _rewrite_refs(node: Any, rewrite: Callable[[str], str]) -> Any:
 
 
 def _resolve_local(document: Mapping[str, Any], node: Any) -> Any:
-    """Follow a ``#/components/<kind>/<name>`` reference on a non-schema object
-    (parameter, request body, response) so the extract need not ship those
-    component sections. Schema references are left alone: they are the
-    closure's job."""
+    """Follow a ``#/components/<kind>/<name>`` reference on a non-schema object so the extract need not ship those component sections. Schema references are left alone: they are the closure's job."""
     if not isinstance(node, Mapping):
         return node
     ref = node.get("$ref")
@@ -272,9 +213,7 @@ def _jsonable(node: Any) -> Any:
 
 
 def _parse(source: SpecSource, data: bytes) -> Any:
-    """JSON when it is JSON, else YAML. YAML 1.1 reads a bare ``200`` as an
-    integer key and a bare date as a date, so a YAML-read tree is normalised
-    to what JSON would have produced before anything looks at it."""
+    """JSON when it is JSON, else YAML, normalised to what JSON would have produced (YAML 1.1 reads a bare ``200`` as an integer key and a bare date as a date)."""
     try:
         return json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
@@ -324,9 +263,7 @@ def _swagger2_ref(ref: str) -> str:
 
 
 def _media(candidates: Any, default: str) -> str:
-    """The media type a ``consumes``/``produces`` list means to the cutter: its
-    JSON entry when it has one (the one the validator reads), else its first,
-    else ``default``."""
+    """The media type a ``consumes``/``produces`` list means to the cutter: its JSON entry when it has one, else its first, else ``default``."""
     names = [str(name) for name in candidates] if isinstance(candidates, list) else []
     for name in names:
         base = name.split(";")[0].strip().lower()
@@ -345,8 +282,7 @@ def _form_media(candidates: Any) -> str:
 
 
 def _parameter_schema(cut: _Cut, parameter: Mapping[str, Any]) -> dict[str, Any]:
-    """A Swagger 2.0 parameter's type keywords, as the ``schema`` OAS 3 wants.
-    Vendor extensions ride along; ``clean_schema`` maps or strips them."""
+    """A Swagger 2.0 parameter's type keywords, as the ``schema`` OAS 3 wants. Vendor extensions ride along; ``clean_schema`` maps or strips them."""
     schema: dict[str, Any] = {}
     for key, value in parameter.items():
         if key in _PARAMETER_ROW_KEYS:
@@ -359,8 +295,7 @@ def _parameter_schema(cut: _Cut, parameter: Mapping[str, Any]) -> dict[str, Any]
 
 
 def _merged_parameters(reusable: Mapping[str, Any], shared: Any, own: Any) -> list[Mapping[str, Any]]:
-    """Path-level then operation-level parameters, references resolved, the
-    operation's row replacing a shared one with the same ``name`` and ``in``."""
+    """Path-level then operation-level parameters, references resolved, the operation's row replacing a shared one with the same ``name`` and ``in``."""
     merged: dict[tuple[str, str], Mapping[str, Any]] = {}
     for group in (shared, own):
         if not isinstance(group, list):
@@ -437,10 +372,7 @@ def _convert_operation(
 
 
 def _convert_swagger2(raw: Mapping[str, Any], cut: _Cut) -> dict[str, Any]:
-    """The OAS 3 shape of a Swagger 2.0 document, for the cutter. Only what
-    the cutter reads is converted; ``host``, ``schemes`` and
-    ``securityDefinitions`` are not carried, and reusable parameters and
-    responses are resolved into the operations rather than kept."""
+    """The OAS 3 shape of a Swagger 2.0 document, for the cutter. Only what the cutter reads is converted; ``host``, ``schemes`` and ``securityDefinitions`` are not carried."""
     document = _rewrite_refs(raw, _swagger2_ref)
     reusable = {
         "components": {
@@ -565,11 +497,7 @@ def _cut_responses(cut: _Cut, document: Mapping[str, Any], raw: Any) -> dict[str
 
 
 def _index_paths(document: Mapping[str, Any]) -> dict[tuple[str, str], tuple[str, Mapping[str, Any]]]:
-    """``(METHOD, shape) -> (upstream path, operation)`` for every operation upstream.
-
-    Parameter *names* are erased in the key so a unit's ``{id}`` finds the
-    spec's ``{order_id}``; the upstream spelling is what the extract keeps,
-    because that is the spelling its ``parameters`` name."""
+    """``(METHOD, shape) -> (upstream path, operation)`` for every operation upstream. Parameter names are erased in the key so a unit's ``{id}`` finds the spec's ``{order_id}``; the upstream spelling is what the extract keeps."""
     index: dict[tuple[str, str], tuple[str, Mapping[str, Any]]] = {}
     paths = document.get("paths")
     if not isinstance(paths, Mapping):
@@ -612,10 +540,7 @@ def _available(document: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _closure(cut: _Cut, document: Mapping[str, Any], roots: set[str], *, merged: Mapping[str, Any]) -> dict[str, Any]:
-    """Every schema reachable from ``roots`` through ``#/components/schemas/``
-    references, cleaned. A name this document does not define but ``merged``
-    (an earlier source) does is left to that definition; one nobody defines
-    becomes ``{}`` and is recorded on the cut as stubbed."""
+    """Every schema reachable from ``roots`` through ``#/components/schemas/`` references, cleaned. A name this document does not define but ``merged`` does is left to that definition; one nobody defines becomes ``{}`` and is recorded as stubbed."""
     available = _available(document)
     collected: dict[str, Any] = {}
     pending = sorted(roots)
@@ -663,12 +588,7 @@ def _conflicts(
 def _merge_schemas(
     cut: _Cut, loaded: Sequence[_Loaded], roots: Mapping[int, set[str]], error_schema: str | None
 ) -> tuple[dict[str, Any], dict[str, str], dict[int, Mapping[str, str]]]:
-    """``components.schemas`` across every source, the namespaced ledger, and
-    the per-source renames the kept operations must follow.
-
-    Namespacing runs to a fixed point within one source: when ``B`` differs and
-    ``A`` references ``B``, then ``A`` -- identical text upstream -- now refers
-    to ``<label>.B`` and so differs too, and is namespaced in turn."""
+    """``components.schemas`` across every source, the namespaced ledger, and the per-source renames the kept operations must follow. Namespacing runs to a fixed point within one source: when ``B`` differs and ``A`` references ``B``, then ``A`` now refers to ``<label>.B`` and so differs too, and is namespaced in turn."""
     schemas: dict[str, Any] = {}
     namespaced: dict[str, str] = {}
     renames: dict[int, Mapping[str, str]] = {}
@@ -718,19 +638,7 @@ def cut_extract(
 ) -> dict[str, Any]:
     """The scoped extract, as a plain document ready for :func:`render_json`.
 
-    ``modeled`` is ``(METHOD, spec_path)`` pairs with any declaration alias
-    already applied by the caller; ``spec_path`` is spelled as the unit spells
-    it (parameter names free, base path included). ``fetched`` is the ISO
-    date the caller obtained the bytes -- passed in, never read from a clock,
-    so the function stays pure. ``extension_map`` and ``error_schema`` are the
-    declaration's: vendor extension keys to rename to their OAS keyword, and
-    the schema kept as a root of the closure whether or not any operation
-    references it (an error when no source defines it).
-
-    ``annotations`` are the declaration's :class:`~vendorfake.fidelity.types.Annotation`
-    rows: facts read out of each kept operation's ``description`` *before* the
-    prose is stripped, recorded under ``x-vendorfake.annotations``. None
-    declared means the key is absent and the cut is unchanged.
+    ``modeled`` is ``(METHOD, spec_path)`` pairs with any declaration alias already applied, spelled as the unit spells it. ``fetched`` is the ISO date the caller obtained the bytes, passed in rather than read from a clock so the function stays pure. ``extension_map`` and ``error_schema`` are the declaration's; ``annotations`` are its :class:`~vendorfake.fidelity.types.Annotation` rows, read out of each kept operation's ``description`` before the prose is stripped.
     """
     if not sources:
         raise ValueError("cut_extract needs at least one spec source")
@@ -757,9 +665,7 @@ def cut_extract(
             upstream_path, raw = hit
             operation = _cut_operation(cut, item.document, raw)
             out_path = item.base_path + upstream_path
-            # Read the prose annotations before ``_cut_operation``'s strip
-            # threw the description away; keyed by the SPEC's spelling of the
-            # route, which is what the extract's own ``modeled`` list uses.
+            # Read prose annotations before _cut_operation's strip throws the description away.
             described = raw.get("description")
             for annotation in annotations:
                 values = annotation.read(described) if isinstance(described, str) else ()
@@ -802,9 +708,7 @@ def cut_extract(
 
     metadata: dict[str, Any] = {}
     if annotations:
-        # Every declared name is present even when nothing matched, so a
-        # vendor's check can tell "the annotation found nothing" from "the
-        # declaration no longer asks for it".
+        # Every declared name is present even when nothing matched, so "found nothing" differs from "not declared".
         metadata["annotations"] = {
             annotation.name: dict(sorted(annotated.get(annotation.name, {}).items())) for annotation in annotations
         }

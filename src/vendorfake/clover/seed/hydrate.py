@@ -1,22 +1,18 @@
-"""Turning a validated scenario into store state.
+"""Turning a validated scenario into store state -- the one function
+``CloverVendor.hydrate`` calls, at start and again on
+``POST /__unit/state/reset``, so this is the one place deciding what a
+unit's world looks like.
 
-FOR: the one function ``CloverVendor.hydrate`` calls -- at start and again on
-``POST /__unit/state/reset`` -- and therefore the one place that decides what
-a unit's world looks like.
-
-INVARIANT: **a seeded mutation is marked as one.** Every insert carries
-``{"seed": True}`` in its journal meta, which is what stops the webhook
-dispatcher pushing an event for a record that has existed since before the
-process started, and what lets a journal assertion in a test tell scenario
+INVARIANT: a seeded mutation is marked as one -- every insert carries
+``{"seed": True}`` in its journal meta, which stops the webhook dispatcher
+pushing an event for a pre-existing record and lets a test tell scenario
 writes from request traffic.
 
-SECOND INVARIANT: **seeded ids come from the document, never from the id
-stream.** That is what makes the state digest identical across two processes
-and across every profile: the stream is consumed only by requests, and a
-scenario that drew from it would renumber itself whenever a rule was added.
-The only hydrate-time values are the token expirations and the tokens'
-``createdTime`` (stamped from the clock and the configured TTLs), and both
-are volatile fields the digest ignores.
+SECOND INVARIANT: seeded ids come from the document, never the id stream --
+the stream is consumed only by requests, so a scenario that drew from it
+would renumber itself whenever a rule was added. The only hydrate-time
+values are the token expirations and ``createdTime``, stamped from the clock
+and the configured TTLs; both are volatile fields the digest ignores.
 """
 
 from __future__ import annotations
@@ -33,13 +29,13 @@ from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION
 __all__ = ["SEED_META", "hydrate_clover"]
 
 SEED_META = {"seed": True, "operation_id": "SeedScenario"}
-"""Journal meta on every seeded write. See the module docstring."""
+"""Journal meta on every seeded write; see the module docstring."""
 
 
 def hydrate_clover(ctx: UnitContext, seed: object, config: CloverConfig) -> SeedDocument | None:
-    """Load ``seed`` into ``ctx.store``; ``None`` (a profile with no seed)
-    loads nothing and is legal. Returns the document that was loaded so a
-    caller can ask what the unit was seeded with without re-reading the file."""
+    """Load ``seed`` into ``ctx.store``. ``None`` loads nothing and is legal.
+    Returns the document loaded, so a caller can ask what the unit was seeded
+    with without re-reading the file."""
     if seed is None:
         return None
     doc = parse_seed_document(seed)
@@ -53,10 +49,8 @@ def hydrate_clover(ctx: UnitContext, seed: object, config: CloverConfig) -> Seed
     return doc
 
 
-# ---------------------------------------------------------------------------
 # One function per collection, in dependency order: an order needs its items,
 # order type, employee and customers to already be there.
-# ---------------------------------------------------------------------------
 
 
 def _insert_merchant(ctx: UnitContext, doc: SeedDocument) -> None:
@@ -74,8 +68,6 @@ def _insert_merchant(ctx: UnitContext, doc: SeedDocument) -> None:
 
 
 def _insert_reference_data(ctx: UnitContext, doc: SeedDocument) -> None:
-    """The read-only lists, stored as the documents their reference pages
-    list (``surface/merchant.py``, ``surface/inventory.py``)."""
     store = ctx.store
     for rate in doc.tax_rates:
         store.collection(COL.tax_rates).insert(rate.model_dump(), SEED_META)
@@ -83,9 +75,8 @@ def _insert_reference_data(ctx: UnitContext, doc: SeedDocument) -> None:
         store.collection(COL.modifier_groups).insert(group.model_dump(), SEED_META)
     for modifier in doc.modifiers:
         store.collection(COL.modifiers).insert(modifier.model_dump(), SEED_META)
-    # Employees, order types and customers carry the merchant they belong to
-    # (``merchant_id``, internal, stripped on projection): an order's
-    # references resolve against the path merchant's rows only.
+    # merchant_id (internal, stripped on projection) scopes an order's
+    # references to the path merchant's rows only.
     scope = {"merchant_id": doc.merchant.id}
     for employee in doc.employees:
         store.collection(COL.employees).insert(compact({**employee.model_dump(), **scope}), SEED_META)
@@ -185,7 +176,7 @@ def _order_entity(order: SeedOrder, doc: SeedDocument, items: dict[str, Any]) ->
 
 def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: CloverConfig) -> None:
     """Expirations come from the configured TTLs at hydrate time, so a
-    profile that shortens the access TTL shortens the seeded token too."""
+    shortened access TTL shortens the seeded token too."""
     tokens = ctx.store.collection(COL.tokens)
     now = int(ctx.clock.now())
     for token in doc.tokens:
@@ -206,14 +197,9 @@ def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: CloverConfig) ->
 
 
 def _insert_subscriptions(ctx: UnitContext, doc: SeedDocument) -> None:
-    """Subscribers declared by the scenario rather than by the profile.
-
-    Built as a plain dict because the subscription entity belongs to the core
-    -- the dispatcher reads it through ``Subscription.from_entity`` -- and a
-    vendor-side mirror of its field names would be a second place to keep
-    them. No ``verified`` key: that is what the webhook surface reads as
-    pre-verified.
-    """
+    """A plain dict, since the subscription entity belongs to the core (the
+    dispatcher reads it through ``Subscription.from_entity``); no ``verified``
+    key is what the webhook surface reads as pre-verified."""
     subscriptions = ctx.store.collection(SUBSCRIPTION_COLLECTION)
     for subscription in doc.webhook_subscriptions:
         subscriptions.insert(

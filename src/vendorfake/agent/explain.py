@@ -1,21 +1,10 @@
-"""vendorfake.agent.explain -- looking up and rendering one thing a unit knows about.
-
-FOR: the ``vendorfake explain`` subcommand, and nothing else. Every lookup
-here goes through the same channel a running unit would answer -- the control
-plane's ``GET /__unit/routes`` and ``GET /__unit/errors``, or the same
-in-memory tables ``vendorfake routes``/``faults``/``profiles`` already read --
-so an answer here can never be a second, hand-maintained copy of a fact the
-rest of the package already publishes. There is deliberately no sixth lookup
-that reaches into a vendor module directly: if it is not on the wire somewhere,
-``explain`` does not know it either, which is the same discipline the control
-plane itself is built on (see ``core/control/plane.py``'s module docstring).
-
-Every ``explain_*`` function raises ``ValueError`` naming the thing it could
-not find and listing what it *could* have found, in the style
-``vendorfake.registry.resolve_vendor`` already established: a typo is a
-refusal that lists the real answers, not a silent ``None``. ``vendorfake.cli``
-is the only caller and turns that into a ``SystemExit``, exactly as it already
-does for every ``ValueError`` a registry lookup raises.
+"""Looking up and rendering one thing a unit knows about, for ``vendorfake
+explain`` and nothing else. Every lookup goes through the channel a running unit
+would answer -- the control plane's routes and errors, or the same in-memory
+tables the other subcommands read -- so no answer here is a second copy of a fact
+the package already publishes. Each ``explain_*`` raises ``ValueError`` naming
+what it could not find and listing what it could have; ``vendorfake.cli`` is the
+only caller and turns that into a ``SystemExit``.
 """
 
 from __future__ import annotations
@@ -40,26 +29,10 @@ __all__ = [
 
 
 def _check_profile(vendor: str, profile: str) -> None:
-    """Refuse an unknown *named* ``profile`` before a unit is built from it.
-
-    A path-form ``profile`` -- absolute, or ending in ``.json``, the same
-    heuristic ``core/config/profile.py``'s ``profile_path`` uses -- is let
-    through unchecked: every other subcommand accepts ``--profile
-    ./my-profile.json`` alongside ``--profile full``, and this used to be the
-    one command that could not, because it checked ``profile`` against the
-    vendor's *named* profiles only and had no way to say "not a name, but
-    that's fine". A bad path still fails, just one call later, in
-    ``create_unit`` -> ``load_profile`` -- the same ``UnitError``
-    :func:`explain_route`/:func:`explain_error`'s caller (``cli.py:_explain``)
-    now catches alongside ``ValueError``, so it is no longer a traceback
-    (konyklabs/roadmap#74).
-
-    A named ``profile`` is still checked eagerly, before a unit is built,
-    for the same reason ``explain_error`` checks ``kind`` against
-    ``UnitErrorKind`` first: :func:`explain_profile` already uses this
-    message shape for a bad profile name, and the two callers of a bad name
-    should say the identical thing.
-    """
+    """Refuse an unknown named ``profile`` before a unit is built from it, in the
+    message shape :func:`explain_profile` uses. A path-form ``profile`` -- the
+    same heuristic ``profile_path`` uses -- passes unchecked and fails one call
+    later in ``load_profile``, whose ``UnitError`` the caller also catches."""
     from pathlib import Path
 
     from vendorfake.registry import available_profiles
@@ -71,25 +44,13 @@ def _check_profile(vendor: str, profile: str) -> None:
         raise ValueError(f"no profile named {profile!r} for vendor {vendor!r}. Available: {', '.join(offered)}")
 
 
-# ---------------------------------------------------------------------------
-# route
-# ---------------------------------------------------------------------------
+# -- route --
 
 
 def explain_route(vendor: str, profile: str, operation_id: str) -> dict[str, Any]:
-    """One row of ``GET /__unit/routes``, matched by ``operation_id``.
-
-    Read through a real unit's control plane rather than
-    ``vendorfake.registry.routes``: that function trims ``auth`` off every row
-    for its own reasons (see ``registry.RouteInfo``'s docstring), and ``auth``
-    is exactly what this command promises.
-
-    A route carries no structured doc-citation field today -- vendor
-    documentation citations live in comments beside each ``Route(...)``
-    construction, not on the ``Route`` dataclass itself -- so this never emits
-    one. Nothing here loses information if that changes: a future ``citation``
-    key would arrive from the same ``GET /__unit/routes`` row this reads.
-    """
+    """One row of ``GET /__unit/routes``, matched by ``operation_id``, read through
+    a real unit's control plane rather than ``vendorfake.registry.routes``, which
+    trims off the ``auth`` this command promises."""
     from vendorfake.core.transport.inprocess import in_process
     from vendorfake.registry import create_unit
 
@@ -123,20 +84,12 @@ def render_route(row: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# fault
-# ---------------------------------------------------------------------------
+# -- fault --
 
 
 def explain_fault(name: str) -> dict[str, Any]:
-    """One entry of ``core.chaos.rules.BUILTIN_FAULTS``, matched by name.
-
-    Read from the catalogue itself rather than from
-    ``core.chaos.faults.FAULT_PARAM_KEYS``/``FAULT_DESCRIPTIONS``: those two
-    are *derived* from ``BUILTIN_FAULTS`` (see their docstrings) and carry no
-    ``provenance``, which this command promises alongside params and
-    description.
-    """
+    """One entry of ``core.chaos.rules.BUILTIN_FAULTS``, matched by name and read
+    from the catalogue itself, the derived tables carrying no ``provenance``."""
     from vendorfake.core.chaos.rules import BUILTIN_FAULTS
 
     for spec in BUILTIN_FAULTS:
@@ -159,19 +112,13 @@ def render_fault(data: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# profile
-# ---------------------------------------------------------------------------
+# -- profile --
 
 
 def explain_profile(vendor: str, name: str) -> dict[str, Any]:
-    """One entry of ``vendorfake.registry.available_profiles(vendor)``.
-
-    A bad ``vendor`` surfaces as ``available_profiles``'s own ``ValueError``
-    (via ``resolve_vendor``), naming the real vendors -- not reworded here,
-    so the two callers of a bad vendor name (this and ``vendorfake profiles``)
-    say the identical thing.
-    """
+    """One entry of ``vendorfake.registry.available_profiles(vendor)``. A bad
+    ``vendor`` surfaces as ``resolve_vendor``'s own ``ValueError``, not reworded
+    here, so every caller of a bad vendor name says the identical thing."""
     from vendorfake.registry import available_profiles
 
     found = available_profiles(vendor)
@@ -200,19 +147,14 @@ def render_profile(data: Mapping[str, Any]) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# error
-# ---------------------------------------------------------------------------
+# -- error --
 
 
 def explain_error(vendor: str, profile: str, kind: str) -> dict[str, Any]:
-    """One row of ``GET /__unit/errors``'s ``kinds`` array, matched by ``kind``.
-
-    ``kind`` is checked against :class:`~vendorfake.core.kernel.types.UnitErrorKind`
-    before a unit is even built, so a typo is refused with the real twenty
-    names rather than a route-shaped 404 from the control plane itself.
-    ``profile`` is checked the same way, by :func:`_check_profile`.
-    """
+    """One row of ``GET /__unit/errors``'s ``kinds`` array, matched by ``kind``,
+    which is checked against
+    :class:`~vendorfake.core.kernel.types.UnitErrorKind` before a unit is built so
+    a typo is refused with the real names."""
     from vendorfake.core.kernel.types import UnitErrorKind
     from vendorfake.core.transport.inprocess import in_process
     from vendorfake.registry import create_unit
@@ -232,10 +174,8 @@ def explain_error(vendor: str, profile: str, kind: str) -> dict[str, Any]:
     for row in rows:
         if row["kind"] == kind:
             return dict(row)
-    # Unreachable: every vendor's ErrorShaper.assert_error_table_total() (see
-    # core/kernel/shaping.py) refuses at import time to leave any of the
-    # twenty kinds unmapped, which runs long before create_unit above could
-    # have returned a unit at all.
+    # Unreachable: ErrorShaper.assert_error_table_total() refuses an unmapped
+    # kind at import time, long before create_unit could return a unit.
     raise AssertionError(  # pragma: no cover - guarded by assert_error_table_total at import time
         f"{vendor!r}'s error table is missing {kind!r} despite passing its own totality check"
     )
@@ -256,9 +196,7 @@ def render_error(data: Mapping[str, Any]) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# header
-# ---------------------------------------------------------------------------
+# -- header --
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,15 +212,9 @@ class _HeaderInfo:
 
 
 def _display(header: str) -> str:
-    """``vendorfake-near-miss`` -> ``Vendorfake-Near-Miss``.
-
-    HTTP header names are case-insensitive on the wire, so the constants this
-    reads from spell some in lower-case and some in Title-Case (see
-    ``core/kernel/shaping.py`` and ``core/kernel/nearmiss.py``). Every doc and
-    docstring in this package that writes one out for a person uses
-    Title-Case, so that is the one spelling this command matches on lookup and
-    prints on output.
-    """
+    """``vendorfake-near-miss`` -> ``Vendorfake-Near-Miss``. Header names are
+    case-insensitive on the wire and the constants spell them both ways, but
+    Title-Case is the one spelling this command matches and prints."""
     return "-".join(part.capitalize() for part in header.split("-"))
 
 
@@ -327,13 +259,8 @@ def _headers() -> tuple[_HeaderInfo, ...]:
             "on any response to a request that matched no route, over HTTP (served or container) -- "
             "in process the same information is an UnmatchedRequest exception by default",
         ),
-        # `vendorfake-fault` / `vendorfake-rule` have no named constant to import
-        # -- every site that sets or reads them (core/chaos/faults.py's
-        # `_stamp`, core/kernel/unit.py's `_shape`, testing/transport.py) spells
-        # the literal string, so a constant here would be the one place
-        # inventing a name nothing else uses. `docs/api-contract.md`'s
-        # `Vendorfake-*` table is the canonical wording these two summaries are
-        # copied from.
+        # These two have no named constant: every site spells the literal, so a
+        # constant here would invent a name nothing else uses.
         _HeaderInfo(
             _display("vendorfake-fault"),
             "The chaos fault kind that shaped this response, e.g. 'rate_limit'.",

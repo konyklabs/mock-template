@@ -1,27 +1,16 @@
 """The shapes this vendor stores, and the collections it stores them in.
 
-FOR: giving the surfaces one typed reading of every stored entity they read or
-mutate, so the name of a stored field is written down once.
+INVARIANT: absence is absence -- an unset field is missing from the entity
+dict, never present as ``None``, except where the vendor's own schema
+declares the field ``nullable`` and its examples print the null as data (an
+outlet's ``physical_state``, an open register's ``register_close_time``).
 
-INVARIANT: **absence is absence.** A field never set is missing from the
-entity dict, never present as ``None`` -- except where the vendor's own schema
-declares a field ``nullable`` and its examples print the null, which is then
-data rather than absence (an outlet's ``physical_state``, a register's
-``register_close_time`` while it is open).
-
-TWO VERSIONS, AND WHY THE STORED FIELD IS NOT CALLED ``version``
----------------------------------------------------------------
-The core store keeps its own per-entity ``version``, starting at 1 and bumped
-by one on every update; optimistic concurrency and the journal are written
-against it and a vendor may not redefine it. Lightspeed's ``version`` is a
-different thing entirely -- "simply a monotonically increasing integer", one
-sequence **per retailer across every resource type**, bumped on every mutation
-of anything (https://x-series-api.lightspeedhq.com/docs/pagination). So the
-Lightspeed number is stored under :data:`OBJECT_VERSION` and projected to the
-wire as ``version``; the store's own key keeps its meaning. ``versioning.py``
-owns the counter.
-
-Ids: the store needs ``id``, and so does Lightspeed. They are the same field.
+DOCUMENTED: Lightspeed's ``version`` is one monotonically increasing sequence
+per retailer across every resource type, bumped on every mutation
+(https://x-series-api.lightspeedhq.com/docs/pagination) -- a different thing
+from the store's own per-entity version used for optimistic concurrency, so
+it is stored under :data:`OBJECT_VERSION` and projected to the wire as
+``version`` (``versioning.py`` owns the counter).
 """
 
 from __future__ import annotations
@@ -56,54 +45,39 @@ __all__ = [
 ]
 
 OBJECT_VERSION = "object_version"
-"""Where a stored entity carries Lightspeed's retailer-global version number.
-Projected to the wire as ``version``; see the module docstring for why it
-cannot simply BE ``version``."""
+"""Where a stored entity carries Lightspeed's retailer-global version number
+(see the module docstring); projected to the wire as ``version``."""
 
 
 @dataclass(frozen=True, slots=True)
 class LightspeedCollections:
-    """The store collections this vendor uses, named once.
+    """The store collections this vendor uses, named once."""
 
-    Several are declared here and populated by a later slice of
-    konyklabs/roadmap#94 -- ``products``, ``inventory``, ``customers`` and
-    ``sales`` -- so that the collection vocabulary is settled in one place and
-    a surface module added later does not invent a second name for the same
-    thing. Naming a collection costs nothing at run time: the store
-    materialises one on first use.
-    """
-
-    #: One row. The unit serves ONE retailer (its ``domain_prefix``).
+    #: The unit serves ONE retailer (its ``domain_prefix``).
     retailer: str = "retailer"
     outlets: str = "outlets"
     registers: str = "registers"
-    #: Synthesised at ``PUT /registers/{id}/actions/close``. No REST resource
-    #: for a closure exists anywhere in the 135 documented paths; the only
-    #: handles on it are that action and ``GET .../payments_summary``.
+    #: Synthesised at ``PUT /registers/{id}/actions/close``; no REST resource
+    #: for a closure exists in the specification.
     register_closures: str = "register_closures"
     payment_types: str = "payment_types"
     products: str = "products"
     #: One row per product per outlet -- the documented ``Inventory`` record.
     inventory: str = "inventory"
-    #: The immutable log ``POST /stock_adjustments`` appends to. Deliberately
-    #: NOT an event source: no ``WebhookType`` value names a stock adjustment,
-    #: and the inventory row the adjustment moves fires ``inventory.update``.
+    #: The immutable log ``POST /stock_adjustments`` appends to; not an event
+    #: source, since the row it moves fires ``inventory.update`` instead.
     stock_adjustments: str = "stock_adjustments"
     #: The two seeded ``CustomInventoryAdjustmentReason`` rows a ``CUSTOM``
-    #: adjustment may name. The tag's own three operations are deferred, so
-    #: nothing can create a third; see ``capabilities.py``.
+    #: adjustment may name; see ``capabilities.py``.
     adjustment_reasons: str = "adjustment_reasons"
     customers: str = "customers"
-    #: One seeded default group. The Customer Groups tag (7 operations) is
-    #: deferred, so this collection is read by the customer projection and
-    #: written by nothing.
+    #: One seeded default group; the Customer Groups tag is deferred, so this
+    #: is read by the customer projection and written by nothing.
     customer_groups: str = "customer_groups"
-    #: One row per sale, with its line items and payments inline; see
-    #: ``surface/sales.py``.
+    #: One row per sale, with its line items and payments inline.
     sales: str = "sales"
-    #: The webhook subscription list is the CORE's, so that the dispatcher's
-    #: own matcher is what filters a delivery. Lightspeed's ``/webhooks`` CRUD
-    #: reads and writes exactly this collection.
+    #: The webhook subscription list is the core's, so its own matcher
+    #: filters delivery; Lightspeed's ``/webhooks`` CRUD reads and writes it.
     webhooks: str = SUBSCRIPTION_COLLECTION
     #: The OAuth application(s) a code may be issued to.
     oauth_apps: str = "oauth_apps"
@@ -113,8 +87,7 @@ class LightspeedCollections:
     tokens: str = "tokens"
     #: Refresh tokens, retired on use ("rotation").
     refresh_tokens: str = "refresh_tokens"
-    #: Personal tokens -- Plus-plan only, created in the web application, so
-    #: they only ever arrive from the seed.
+    #: Plus-plan only, created in the web application; only arrive from seed.
     personal_tokens: str = "personal_tokens"
 
     def names(self) -> tuple[str, ...]:
@@ -183,12 +156,11 @@ def _texts(value: Any) -> list[str]:
 
 @dataclass(frozen=True, slots=True)
 class RetailerEntity:
-    """The one retailer, stored in the documented ``Retailer`` shape.
+    """The one retailer, in the documented ``Retailer`` shape.
 
-    Only the fields this slice reads back are typed; the rest of the
-    documented document (``gift_cards``, ``loyalty``, ``sku_sequence``,
-    ``on_account``) is carried in :attr:`document` exactly as the seed supplied
-    it, because nothing here computes from those blocks.
+    DOCUMENTED: only the fields this slice reads back are typed; the rest
+    (``gift_cards``, ``loyalty``, ``sku_sequence``, ``on_account``) is carried
+    in :attr:`document` exactly as the seed supplied it.
     """
 
     id: str
@@ -233,9 +205,9 @@ class RetailerEntity:
 class OutletEntity:
     """One outlet, in the documented ``Outlet`` shape.
 
-    ``version`` is ``format: int64`` and REQUIRED on ``Outlet``, as are ``id``,
-    ``name``, ``default_tax_id``, ``currency``, ``display_prices``,
-    ``time_zone``, ``currency_symbol`` and ``attributes``.
+    DOCUMENTED: ``id``, ``name``, ``default_tax_id``, ``currency``,
+    ``display_prices``, ``time_zone``, ``currency_symbol`` and ``attributes``
+    are all REQUIRED on ``Outlet``.
     """
 
     id: str
@@ -309,10 +281,9 @@ class OutletEntity:
 class RegisterEntity:
     """One register (till), in the documented ``Register`` shape.
 
-    ``ask_for_note_on_save`` is ``format: double`` with the documented meanings
-    ``0`` never, ``1`` on save/layby/account/return, ``2`` always;
-    ``invoice_sequence`` is likewise a number rather than an integer. Both are
-    stored as ints and emitted as the JSON numbers the examples print.
+    DOCUMENTED: ``ask_for_note_on_save`` is ``format: double`` (``0`` never,
+    ``1`` on save/layby/account/return, ``2`` always); it and
+    ``invoice_sequence`` are stored as ints and emitted as JSON numbers.
     """
 
     id: str
@@ -396,19 +367,16 @@ class RegisterEntity:
 
 @dataclass(frozen=True, slots=True)
 class RegisterClosureEntity:
-    """One register closure -- synthesised at close, because no REST resource
+    """One register closure -- synthesised at close, since no REST resource
     for one exists.
 
-    The fields are the ones the documented ``payments_summary`` example prints:
-    ``register_closure_id``, ``register_closure_sequence_number``,
-    ``register_open_time`` and the per-payment-type ``payments`` totals. The
-    ``register_id`` and the closing instant are this unit's, so the closure can
-    be found again and carried into the ``register_closure.create`` webhook.
+    DOCUMENTED: the fields mirror the ``payments_summary`` example
+    (``register_closure_id``, ``register_closure_sequence_number``,
+    ``register_open_time``, per-payment-type ``payments`` totals).
 
-    ``counted_payment_ids`` is INTERNAL and deliberately not projected: it is
-    the bookkeeping that stops the next closure on the same register counting
-    money this one already reported, which the second-resolution timestamps
-    cannot do on their own. See ``surface/registers.py::_amounts_taken``.
+    ``counted_payment_ids`` is INTERNAL and not projected: it stops the next
+    closure on the same register from re-counting money this one already
+    reported. See ``surface/registers.py::_amounts_taken``.
     """
 
     id: str
@@ -455,9 +423,9 @@ class RegisterClosureEntity:
 class PaymentTypeEntity:
     """One payment type, in the documented ``PaymentType`` shape.
 
-    ``id``, ``name``, ``type_id``, ``version``, ``disabled`` and ``internal``
-    are the required fields; ``config`` is ``additionalProperties: true`` and
-    is stored as the seed supplied it.
+    DOCUMENTED: ``id``, ``name``, ``type_id``, ``version``, ``disabled`` and
+    ``internal`` are required; ``config`` is ``additionalProperties: true``
+    and is stored as the seed supplied it.
     """
 
     id: str
@@ -511,12 +479,10 @@ class PaymentTypeEntity:
 class TokenEntity:
     """One access token: seeded, exchanged, refreshed, or personal.
 
-    ``kind`` separates the three the vendor names -- ``oauth`` for a token from
-    the code or refresh grant, ``personal`` for one an admin created in the web
-    application (Plus plan only), and it is the only difference a route sees.
-    ``revoked_at_ms`` is set when a refresh call retires the token that was
-    issued with the consumed refresh token: "Using a refresh token will revoke
-    the access token that was returned with it."
+    DOCUMENTED: ``kind`` separates ``oauth`` (code or refresh grant) from
+    ``personal`` (Plus-plan admin-created); ``revoked_at_ms`` is set when a
+    refresh call retires the token issued with the consumed refresh token
+    (https://x-series-api.lightspeedhq.com/docs/authorization).
     """
 
     id: str
@@ -566,15 +532,12 @@ class TokenEntity:
 class AuthorizationCodeEntity:
     """One single-use authorization code from the ``GET /connect`` stand-in.
 
-    Bound to the ``client_id``, the ``scope`` list and the ``redirect_uri`` the
-    authorization request carried, because those three are what the token
-    exchange has to check the code against. ``redirect_uri`` records what was
-    SUPPLIED, not the resolved default: the exchange only has to match one when
-    the authorization request actually named one.
+    Bound to the ``client_id``, ``scope`` and ``redirect_uri`` the
+    authorization request carried, which is what the token exchange checks
+    the code against; ``redirect_uri`` records what was supplied, not the
+    resolved default.
 
-    ``used_at_ms`` marks the code spent. Single use and a ten-minute expiry are
-    both JUDGMENT figures carried from the roadmap#75 spike -- see
-    ``config.py``.
+    JUDGMENT: single use and a ten-minute expiry -- see ``config.py``.
     """
 
     id: str
@@ -616,19 +579,15 @@ class AuthorizationCodeEntity:
 class RefreshTokenEntity:
     """One refresh token.
 
-    ``access_token_id`` is the access token that was issued WITH this refresh
-    token, because refreshing revokes it: "Using a refresh token will revoke
-    the access token that was returned with it"
-    (https://x-series-api.lightspeedhq.com/docs/authorization).
+    DOCUMENTED: ``access_token_id`` is the token issued WITH this refresh
+    token, since refreshing revokes it, and reuse of a retired token is
+    refused because the vendor documents rotation ("you must save this new
+    refresh token and use it the next time")
+    (https://x-series-api.lightspeedhq.com/docs/authorization); the STATUS a
+    reuse gets is JUDGMENT (``errors.py``).
 
-    ``retired_at_ms`` marks the token consumed. A consumed refresh token
-    presented again is refused -- "You must save this new refresh token and use
-    it the next time" documents the rotation; the STATUS a reuse then gets is
-    JUDGMENT (``errors.py``).
-
-    There is no expiry field: the authorization page states no refresh-token
-    lifetime and this pass found none, so a refresh token here is retired only
-    by use. Recorded as a documentation gap in ``capabilities.py``.
+    NOT VERIFIED: no refresh-token expiry is documented, so one here is
+    retired only by use -- recorded as a gap in ``capabilities.py``.
     """
 
     id: str
@@ -667,41 +626,24 @@ class RefreshTokenEntity:
         )
 
 
-# ---------------------------------------------------------------------------
-# konyklabs/roadmap#94, slice L2a: products, inventory, customers.
+# `Product` and `Customer` carry the members this package reads in typed
+# fields and the rest in `document` (in the vendor's `opaque_fields`, so the
+# state digest takes it verbatim), the way `RetailerEntity` does already.
 #
-# THE `document` MEMBER, AND WHY TWO OF THESE FIVE HAVE ONE. `Product` declares
-# 57 members and `Customer` 47, nearly all of them nullable strings the unit
-# never computes from: an address line, a custom field, a weight. Typing all of
-# them here would put a hundred lines of pass-through in this module and buy
-# nothing, so each carries the members this package READS in typed fields and
-# the rest in `document`, exactly as `RetailerEntity` already does for the
-# retailer's `gift_cards`/`loyalty`/`sku_sequence` blocks. `document` is in the
-# vendor's `opaque_fields`, so the state digest takes it verbatim.
-#
-# `Inventory`, `StockAdjustment`, `CustomerGroup` and
-# `CustomInventoryAdjustmentReason` are small enough to type outright, and are.
-#
-# MONEY AND QUANTITIES ARE STORED AS DECIMAL TEXT. Both are JSON *numbers* on
-# this wire (`price_excluding_tax` is `type: number`, `current_inventory_level`
-# is `format: double`) -- unlike the register totals, which are strings. Storing
-# the decimal text and projecting it to a number is what keeps `12.50` from
-# becoming `12.500000000000002` on a round trip, and keeps two units' digests
-# identical. `model/scalars.py` owns both directions.
-# ---------------------------------------------------------------------------
+# JUDGMENT: money and quantities are stored as decimal text though both are
+# JSON *numbers* on this wire (`price_excluding_tax`, `current_inventory_level`
+# format: double) -- this keeps `12.50` from becoming `12.500000000000002` on
+# a round trip. `model/scalars.py` owns both directions.
 
 
 @dataclass(frozen=True, slots=True)
 class ProductEntity:
     """One product, in the documented ``Product`` shape.
 
-    ``family_id`` is present on every product, including one with no variants:
-    the schema types it ``format: uuid`` with no nullability, and a family of
-    one is still a family. ``variant_parent_id`` is set only on a child.
-
-    ``has_variants`` is the PARENT's flag ("Bravo" in the vendor's own example
-    prints ``has_variants: true`` with ``variant_options: []``), and
-    ``variant_name`` is the child's own name within the family.
+    DOCUMENTED: ``family_id`` is present on every product, including one with
+    no variants, since the schema types it non-nullable ``format: uuid``;
+    ``has_variants`` is the parent's flag and ``variant_name`` the child's own
+    name within the family.
     """
 
     id: str
@@ -773,10 +715,9 @@ class ProductEntity:
 class InventoryEntity:
     """One ``Inventory`` record: what one product's stock is at one outlet.
 
-    ``reorder_method`` is the documented ``FIXED``/``MIN_MAX`` enum and is
-    ``nullable``, so a product nobody has set a reorder rule for carries
-    ``None`` -- which the projection emits as an explicit ``null``, because the
-    schema's enum lists ``null`` as one of its own values.
+    DOCUMENTED: ``reorder_method`` is the ``FIXED``/``MIN_MAX`` enum and is
+    ``nullable``, so an unset reorder rule carries ``None``, projected as an
+    explicit ``null`` since the schema's enum lists ``null`` as a value.
     """
 
     id: str
@@ -832,13 +773,13 @@ class InventoryEntity:
 class StockAdjustmentEntity:
     """One row of the stock-adjustment log.
 
-    ``quantity`` is typed ``string`` in the specification -- unlike every other
-    quantity on this surface -- and is signed: the reason decides which sign is
-    legal ("Negative reasons (require ``quantity`` < 0)").
+    DOCUMENTED: ``quantity`` is typed ``string`` (unlike every other quantity
+    on this surface) and signed, per reason ("negative reasons require
+    ``quantity`` < 0").
 
-    ``user_id`` is required on ``StockAdjustment`` and there is no Users
-    surface here, so it is the retailer's id (JUDGMENT, recorded in
-    ``capabilities.py`` under ``stock-adjustment-user``).
+    JUDGMENT: ``user_id`` is required on ``StockAdjustment`` with no Users
+    surface here, so it is the retailer's id -- see ``capabilities.py``'s
+    ``stock-adjustment-user``.
     """
 
     id: str
@@ -882,9 +823,9 @@ class StockAdjustmentEntity:
 class AdjustmentReasonEntity:
     """One ``CustomInventoryAdjustmentReason``.
 
-    ``is_from_external_source`` is required and documents whether an
-    integration created the reason; both seeded reasons are the retailer's own,
-    so it is ``False``.
+    DOCUMENTED: ``is_from_external_source`` records whether an integration
+    created the reason; both seeded reasons are the retailer's own, so
+    ``False``.
     """
 
     id: str
@@ -918,9 +859,8 @@ class AdjustmentReasonEntity:
 
 @dataclass(frozen=True, slots=True)
 class CustomerGroupEntity:
-    """One ``CustomerGroup``. Read-only here: the Customer Groups tag is
-    deferred, and the scenario seeds the retailer's default group so that every
-    customer has one to belong to."""
+    """One ``CustomerGroup``. Read-only: the Customer Groups tag is deferred,
+    and the scenario seeds the retailer's default group."""
 
     id: str
     name: str
@@ -957,21 +897,11 @@ class CustomerGroupEntity:
 class CustomerEntity:
     """One customer, in the documented ``Customer`` shape.
 
-    ``first_name`` and ``last_name`` are the two members ``Customer`` and
-    ``CustomerBase`` both mark required, and both are ALSO ``nullable`` --
-    which this package reads as "the key is always there, the value may be
-    null", so a create that omits either is a 422 and a create that sends
-    ``null`` is not.
-
-    ``name`` is derived, never supplied: the documented examples print
-    ``"first_name": "Anthony", "last_name": "Stark", "name": "Anthony Stark"``
-    and ``CustomerBase`` -- the create and update body -- has no ``name``
-    member for a caller to set.
-
-    The three money members (``balance``, ``loyalty_balance``,
-    ``year_to_date``) are ``format: double`` and are not settable through this
-    surface at all: nothing in issue #94's scoped surface moves a customer's
-    balance, so they stay where the scenario put them.
+    DOCUMENTED: ``first_name``/``last_name`` are required but also
+    ``nullable`` -- an omitted key is a 422, a ``null`` value is not; ``name``
+    is derived (``CustomerBase`` has no ``name`` member to set); the three
+    money members (``balance``, ``loyalty_balance``, ``year_to_date``) are
+    ``format: double`` and not settable through this surface.
     """
 
     id: str
@@ -1006,9 +936,7 @@ class CustomerEntity:
 
     @property
     def name(self) -> str | None:
-        """``"Anthony Stark"`` -- the derived display name, or ``None`` when
-        both halves are null, because a name assembled from nothing is not an
-        empty string."""
+        """The derived display name, or ``None`` when both halves are null."""
         parts = [part for part in (self.first_name, self.last_name) if part]
         return " ".join(parts) if parts else None
 
@@ -1031,36 +959,20 @@ class CustomerEntity:
         )
 
 
-# ---------------------------------------------------------------------------
-# SALES (slice L2b of konyklabs/roadmap#94). Added as one block so that the
-# sibling slice's products/inventory/customers entities merge beside it rather
-# than through it.
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True, slots=True)
 class SaleEntity:
     """One sale, in the documented ``Sale`` shape, with money in minor units.
 
-    WHY THE NESTED ROWS ARE PLAIN DICTS. ``line_items``, ``payments``,
-    ``source`` and ``return`` are stored as the dicts ``model/sale.py`` builds,
-    the same way :class:`RegisterClosureEntity` stores its ``payments``: they
-    are computed wholesale by the surface on every write (a sale's totals are a
-    function of its line items, so there is no partial update of one), and a
-    second dataclass layer per row would be a shape to keep in step with the
-    projection for no reader's benefit.
+    ``line_items``, ``payments``, ``source`` and ``return`` are stored as
+    plain dicts, computed wholesale by the surface on every write, the same
+    way :class:`RegisterClosureEntity` stores its ``payments``.
 
-    MONEY IS MINOR UNITS IN THE STORE and JSON **numbers** on the wire, which
-    is the opposite of the register close totals. Both are the vendor's:
-    ``RegisterClosePaymentType.total`` is typed ``string``, while every money
-    member of a sale (``SaleTotals.price``, ``LineItemPricing.price``,
-    ``SalePayment.amount``, ``LineItemTax.amount``) is typed ``number`` with
-    ``format: double``. ``model/money.py`` owns both conversions.
-
-    ``state`` is the four-value enum ``machine.py`` enforces. ``deleted_at`` is
-    carried because ``Sale`` declares it and because the shared list filter in
-    ``versioning.py`` reads it, not because any route in this slice sets one:
-    the Sales tag has no delete operation.
+    DOCUMENTED: money is minor units in the store but JSON *numbers* on the
+    wire -- the opposite of the register close totals, which are strings
+    (``model/money.py`` owns both conversions). ``state`` is the four-value
+    enum ``machine.py`` enforces; ``deleted_at`` is carried because ``Sale``
+    declares it and ``versioning.py``'s list filter reads it, though the
+    Sales tag has no delete operation.
     """
 
     id: str
@@ -1075,19 +987,13 @@ class SaleEntity:
     invoice_number: str | None = None
     receipt_number: str | None = None
     accounts_transaction_id: str | None = None
-    #: RFC 3339. ``SaleRequestBase.date`` -- "If not provided will be added as
-    #: the time the sale reached the server". This one is the VENDOR's: it is
-    #: an editable member of the request body.
+    #: DOCUMENTED (RFC 3339): an editable member of the request body,
+    #: defaulting server-side to the time the sale reached the server.
     date: str = ""
-    #: ``created_at`` and ``updated_at`` are the CORE STORE's, not this
-    #: package's, and that is why they are empty by default here.
-    #: ``Collection.insert`` stamps both unless the caller supplies them, and
-    #: ``Collection.update`` restores ``created_at`` and rewrites
-    #: ``updated_at`` after every mutator -- so a vendor that also wrote them
-    #: would have its value silently replaced on the first update, leaving a
-    #: sale whose two timestamps were spelled to different precisions. The seed
-    #: DOES supply both (an insert honours them, which is how a scenario states
-    #: that a sale happened last Tuesday); a live create supplies neither.
+    #: Owned by the core store, not this package, so empty by default here;
+    #: ``Collection.insert``/``update`` stamp and restamp them, so a vendor
+    #: value would be silently replaced on update. The seed supplies both
+    #: directly (an insert honours them); a live create supplies neither.
     created_at: str = ""
     updated_at: str = ""
     deleted_at: str | None = None
@@ -1144,9 +1050,7 @@ class SaleEntity:
                 "created_at": self.created_at or None,
                 "updated_at": self.updated_at or None,
                 "deleted_at": self.deleted_at,
-                # Compacted in its own right: `compact` is shallow by design,
-                # so a nested projection compacts itself or the "absence is
-                # absence" invariant stops at the first level.
+                # `compact` is shallow, so a nested projection compacts itself.
                 "return": compact(
                     {
                         "is_return": self.is_return,

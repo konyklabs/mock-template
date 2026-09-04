@@ -1,36 +1,14 @@
 """The seed document's schema, as a model rather than as a cast.
 
-FOR: stating what a scenario file may contain, so that a typo in one is a
-startup failure naming the field instead of a unit that starts with an empty
-world and answers 404 to every read.
+Invariant: a scenario is validated before a single entity is inserted --
+every model here sets ``extra="forbid"``, and every reference (a register's
+outlet, a token's scopes, a payment type a close request could name) must
+resolve inside the document.
 
-INVARIANT: **a scenario is validated before a single entity is inserted.**
-Every model here sets ``extra="forbid"``; hydration parses the whole document
-first, and every reference -- a register's outlet, a token's scopes, a payment
-type a close request could name -- must resolve inside the document.
-
-Keys: the top level is snake_case like every JSON this project publishes, and
-the entity documents use Lightspeed's own field names, which are snake_case
-too, so a documented example pastes straight in.
-
-MONEY AND QUANTITIES IN THE SEED ARE DECIMAL STRINGS -- ``"12.50"``, not
-``12.5`` -- everywhere, whichever shape the surface that owns them puts on the
-wire. A scenario file is read by people and diffed by machines, and a float in
-JSON is neither exact nor stable in either. What differs is only where the
-string is converted: a product price and an inventory level go through
-``model/scalars.decimal_text`` and stay decimal text, and a sale's line prices
-and payments go through ``model/money.to_minor`` into the minor units the
-store holds -- the same call the sales surface makes on a request, which is
-what makes a seeded sale and a posted one indistinguishable. A number is
-accepted for either, so a documented example still pastes straight in.
-
-NEVER the store's minor units. A scenario file a reader has to multiply by a
-hundred in their head is a scenario file that will be written wrong.
-
-The Lightspeed ``version`` is NOT in the seed. It is drawn from the retailer's
-one monotonically increasing counter at hydrate, in document order, so that two
-units stamp the same numbers -- see ``versioning.py``. A seed that pinned a
-version would be pinning a number the counter does not know about.
+Money and quantities are always decimal STRINGS (``"12.50"``, not ``12.5``),
+never the store's minor units; a number is accepted too. The Lightspeed
+``version`` is not in the seed -- it is drawn from the retailer's counter at
+hydrate time, in document order (``versioning.py``).
 """
 
 from __future__ import annotations
@@ -67,10 +45,8 @@ _SEED = ConfigDict(extra="forbid")
 
 
 class SeedRetailer(BaseModel):
-    """The one retailer. ``document`` carries the documented blocks this unit
-    does not compute from (``gift_cards``, ``loyalty``, ``sku_sequence``,
-    ``on_account``, ``store_url`` ...) exactly as the wire should answer
-    them."""
+    """The one retailer; ``document`` carries the wire blocks not computed
+    here (``gift_cards``, ``loyalty``, ``sku_sequence``, ``on_account`` ...)."""
 
     model_config = _SEED
 
@@ -114,8 +90,7 @@ class SeedRegister(BaseModel):
     invoice_prefix: str = ""
     invoice_suffix: str = ""
     invoice_sequence: int = Field(default=1, ge=0)
-    #: 0 never, 1 on save/layby/account/return, 2 always -- the documented
-    #: meanings of ``Register.ask_for_note_on_save``.
+    #: Documented meanings: 0 never, 1 on save/layby/account/return, 2 always.
     ask_for_note_on_save: Literal[0, 1, 2] = 1
     ask_for_user_on_sale: bool = False
     email_receipt: bool = False
@@ -138,8 +113,7 @@ class SeedPaymentType(BaseModel):
     name: str = Field(min_length=1)
     type_id: int
     disabled: bool = False
-    #: An internal type is excluded from the list the ``payment_types:read``
-    #: scope grants; seeding one is what makes that testable.
+    #: Excluded from ``payment_types:read``'s list; seeding one makes that testable.
     internal: bool = False
     gateway: bool = False
     name_changed_by_user: bool = False
@@ -149,8 +123,7 @@ class SeedPaymentType(BaseModel):
 
 class SeedProduct(BaseModel):
     """One product. ``family_id`` groups a parent with its variants; a product
-    with none is a family of one, because ``Product.family_id`` is not
-    nullable."""
+    with none is a family of one, since ``Product.family_id`` isn't nullable."""
 
     model_config = _SEED
 
@@ -173,8 +146,7 @@ class SeedProduct(BaseModel):
     tag_ids: list[str] = Field(default_factory=list)
     attributes: list[dict[str, str]] = Field(default_factory=list)
     product_codes: list[dict[str, str]] = Field(default_factory=list)
-    #: ``[{"outlet_id": ..., "tax_id": ...}]`` -- the documented
-    #: ``ProductAddOutletTax`` shape, echoed back on the product.
+    #: The documented ``ProductAddOutletTax`` shape, echoed back on the product.
     outlet_taxes: list[dict[str, str]] = Field(default_factory=list)
 
 
@@ -196,9 +168,8 @@ class SeedInventory(BaseModel):
 
 
 class SeedAdjustmentReason(BaseModel):
-    """One ``CustomInventoryAdjustmentReason``. There is no route to create
-    another: the tag's three operations are deferred, so a CUSTOM stock
-    adjustment can only ever name one seeded here."""
+    """One ``CustomInventoryAdjustmentReason``; there is no route to create
+    another, so a CUSTOM adjustment can only name one seeded here."""
 
     model_config = _SEED
 
@@ -209,13 +180,9 @@ class SeedAdjustmentReason(BaseModel):
 
 
 class SeedStockAdjustment(BaseModel):
-    """One row of the adjustment log the scenario starts with.
-
-    Seeded adjustments do NOT move the seeded inventory levels: the levels are
-    stated outright and these are the history that produced them, so a scenario
-    stating both is stating one fact twice and gets to keep them consistent
-    itself.
-    """
+    """One row of the adjustment log. Seeded adjustments do NOT move the
+    seeded inventory levels -- the levels are stated outright and these are
+    just the history that produced them."""
 
     model_config = _SEED
 
@@ -238,13 +205,10 @@ class SeedCustomerGroup(BaseModel):
 
 
 class SeedCustomer(BaseModel):
-    """One customer.
-
-    ``document`` carries the flat ``CustomerBase`` members this unit stores
-    verbatim -- addresses, contact details, the four custom fields -- and its
-    keys are checked against ``model/customer.CUSTOMER_DOCUMENT_FIELDS`` so a
-    misspelling in a scenario is a startup failure naming the key.
-    """
+    """One customer. ``document`` carries the flat ``CustomerBase`` members
+    stored verbatim, checked against
+    ``model/customer.CUSTOMER_DOCUMENT_FIELDS`` so a misspelling is a startup
+    failure naming the key."""
 
     model_config = _SEED
 
@@ -268,8 +232,7 @@ class SeedToken(BaseModel):
     id: str = Field(min_length=1)
     access_token: str = Field(min_length=1)
     scopes: list[str] = Field(min_length=1)
-    #: Absent means "expires ``access_token_ttl_s`` from the unit's start",
-    #: which is what a token issued a moment ago would do.
+    #: Absent means "expires ``access_token_ttl_s`` from the unit's start".
     expires_in_s: int | None = None
 
 
@@ -294,26 +257,21 @@ class SeedRefreshToken(BaseModel):
     access_token_id: str = Field(min_length=1)
 
 
-# -- sales (slice L2b of konyklabs/roadmap#94). A seeded sale resolves its
-# line items against :class:`SeedProduct` and its customer against
-# :class:`SeedCustomer` above -- the models the products and customers
-# surfaces own. The sales slice carried cut-down copies of both while it was
-# built alone; they are gone, and `_check_sale_references` is what holds the
-# two halves together.
+# A seeded sale's line items resolve against SeedProduct and its customer
+# against SeedCustomer; `_check_sale_references` enforces both.
 
 
 class SeedSaleLineItem(BaseModel):
-    """One line of a seeded sale, in the request's own vocabulary flattened one
-    level: ``product.id`` is ``product_id``, ``pricing.price`` is ``price``,
-    ``tax.id``/``tax.amount`` are ``tax_id``/``tax``."""
+    """One line of a seeded sale, the request's vocabulary flattened one
+    level: ``product.id``/``pricing.price``/``tax.id``/``tax.amount`` become
+    ``product_id``/``price``/``tax_id``/``tax``."""
 
     model_config = _SEED
 
     id: str = Field(min_length=1)
     product_id: str = Field(min_length=1)
     quantity: float = Field(gt=0)
-    #: Decimal text, like every other amount in a scenario -- see the module
-    #: docstring. A number is accepted and means the same thing.
+    #: Decimal text like every scenario amount; a number means the same thing.
     price: str | float
     tax_id: str = Field(min_length=1)
     tax: str | float = "0"
@@ -324,8 +282,7 @@ class SeedSaleLineItem(BaseModel):
 
 
 class SeedSalePayment(BaseModel):
-    """One payment of a seeded sale. ``register_id`` defaults to the sale's
-    own ``source.register_id``."""
+    """One payment; ``register_id`` defaults to the sale's ``source.register_id``."""
 
     model_config = _SEED
 
@@ -349,17 +306,15 @@ class SeedSaleSource(BaseModel):
 
 
 class SeedSale(BaseModel):
-    """One sale. ``state`` is validated against the machine's four values by
-    :func:`_check_references`, so a typo in a scenario is a startup failure
-    naming the field rather than a sale in a state nothing can move."""
+    """One sale. ``state`` is validated against the machine's declared states
+    by :func:`_check_references`."""
 
     model_config = _SEED
 
     id: str = Field(min_length=1)
     state: str = Field(min_length=1)
     source: SeedSaleSource
-    #: RFC 3339 with a Z, the way `surface/common.py::wire_time` spells one --
-    #: the register payments summary compares these as strings.
+    #: RFC 3339 with a Z, like `surface/common.py::wire_time`.
     date: str = Field(min_length=1)
     line_items: list[SeedSaleLineItem] = Field(default_factory=list)
     payments: list[SeedSalePayment] = Field(default_factory=list)
@@ -449,7 +404,6 @@ def _check_references(doc: SeedDocument) -> None:
                 f"webhooks[{index}].type",
                 f"{webhook.type!r} is not one of the seven documented WebhookType values",
             )
-    # -- konyklabs/roadmap#94 slice L2a --------------------------------------
     product_ids = {product.id for product in doc.products}
     for index, product in enumerate(doc.products):
         if product.variant_parent_id is not None and product.variant_parent_id not in product_ids:
@@ -514,8 +468,7 @@ def _check_references(doc: SeedDocument) -> None:
 
 
 def _check_sale_references(doc: SeedDocument, *, outlet_ids: set[str], payment_type_ids: set[str]) -> None:
-    """Every id a seeded sale names resolves inside the document, and its state
-    is one the machine declares."""
+    """Every id a seeded sale names resolves inside the document."""
     from vendorfake.lightspeed.machine import SALE_MACHINE
 
     register_ids = {register.id for register in doc.registers}

@@ -34,7 +34,7 @@ curl -s http://127.0.0.1:8124/__unit/health
 ```
 
 ```json
-{"status":"ok","vendor":"lightspeed","profile":"full","uptime_ms":19,"framework_answered":0}
+{"status":"ok","vendor":"lightspeed","profile":"full","uptime_ms":19}
 ```
 
 ### 1. Authorize, then exchange the code

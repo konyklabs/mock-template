@@ -1,38 +1,10 @@
 """The registry, rendered as one pytest test per (contract x profile x transport).
 
-FOR: giving a vendor outside this distribution the contracts for free. It
-installs the wheel, publishes one
-:class:`~vendorfake.conformance.types.ConformanceTarget`, and runs::
+A vendor outside this distribution installs the wheel, publishes one :class:`~vendorfake.conformance.types.ConformanceTarget`, and runs ``pytest --pyargs vendorfake.conformance -p vendorfake.conformance.plugin --conformance-target my_pkg.testing:target``; a red run names ``test_contract[C13-full-inprocess]``.
 
-    pytest --pyargs vendorfake.conformance -p vendorfake.conformance.plugin --conformance-target my_pkg.testing:target
+This file imports no pytest: ``tools/boundary.toml`` allows this package exactly one third-party dependency, ``httpx``, so it stays runnable by a consumer with no test runner at all. pytest's plugin protocol is duck-typed, so a plugin needs no import, and a skip is raised as :class:`unittest.SkipTest`.
 
-Every registered contract is then applied to *its* unit on every profile *it*
-declares, and a red run names ``test_contract[C13-full-inprocess]`` rather than
-"the conformance suite failed".
-
-WHY THIS FILE IMPORTS NO PYTEST. ``tools/boundary.toml`` allows this package
-exactly one third-party dependency, ``httpx``. That is not an accident to be
-worked around: the whole claim of the suite is that a check talks only to a
-control plane, so the package must stay runnable by a consumer that has no
-test runner at all. pytest's plugin protocol is duck-typed -- hooks are found
-by name and handed the objects they need -- so a plugin can be written without
-the import, and a skip is raised as :class:`unittest.SkipTest`, which pytest
-honours and the standard library owns.
-
-WHY THE COLLECTED MODULE IS A SIBLING. ``pytest --pyargs <package>`` collects
-the test files *inside* that package; ``test_contracts.py`` is that file and
-holds one function, because everything it could hold instead is already in the
-registry. The parametrisation arrives through :func:`pytest_generate_tests`,
-so there is no fixture to define and no second description of the matrix.
-
-WHAT THIS LAYER ADDS OVER ``run_conformance``: exactly one thing, and it is
-the reason the ledger below exists. Per-test rendering loses the cross-profile
-verdict -- 96 green lines are indistinguishable from 96 green lines in which
-one contract skipped on every single profile. :func:`pytest_sessionfinish`
-restores it: when a run covered the whole matrix, a contract that passed
-nowhere fails the session. That is the same anti-vacuity rule
-:class:`~vendorfake.conformance.report.ConformanceReport` applies, asserted in
-the only place a per-test rendering can assert it.
+Per-test rendering loses the cross-profile verdict -- 96 green lines look the same whether or not one contract skipped on every profile. :func:`pytest_sessionfinish` restores it: when a run covered the whole matrix, a contract that passed nowhere fails the session, the same anti-vacuity rule :class:`~vendorfake.conformance.report.ConformanceReport` applies elsewhere.
 """
 
 from __future__ import annotations
@@ -61,9 +33,7 @@ from vendorfake.conformance.types import (
 __all__ = ["ARGNAME", "Case", "run_case"]
 
 ARGNAME = "conformance_case"
-"""The parameter ``test_contracts.py`` takes. Also the switch this plugin
-reads before doing anything, so a pytest run that has nothing to do with this
-package pays one set membership and returns."""
+"""The parameter ``test_contracts.py`` takes, and the switch this plugin checks before doing anything else."""
 
 _UNCONFIGURED = (
     f"no conformance target: pass --conformance-target module:attribute, or set {TARGET_ENV_VAR}. "
@@ -112,9 +82,7 @@ def run_case(case: Case | None, ledger: _Ledger | None = None) -> None:
             )
         raise unittest.SkipTest(f"{result.case_id}: {result.detail}")
     if result.outcome is Outcome.ERROR:
-        # Reported apart from a failure, because it is a different fact: the
-        # contract was never asked. A run where every case says this is a unit
-        # that would not start, not a suite that found sixteen violations.
+        # Distinct from a failure: the contract was never asked.
         raise ConformanceError(f"{result.case_id}: the unit could not be reached\n{result.detail}")
     if result.outcome is Outcome.FAIL:
         raise ConformanceFailure(f"{result.check_id} {result.name}\n{result.detail}")
@@ -127,13 +95,7 @@ def run_case(case: Case | None, ledger: _Ledger | None = None) -> None:
 
 @dataclass
 class _Ledger:
-    """What this session asked, and what came back, per contract id.
-
-    Module-level state, deliberately: the hook that arms it and the hook that
-    reads it are handed different objects and share nothing else. It is armed
-    only by :func:`pytest_generate_tests`, so every pytest run that does not
-    collect this package leaves it empty and the session hooks return at once.
-    """
+    """What this session asked, and what came back, per contract id. Module-level state, since the hook that arms it and the hook that reads it share nothing else; armed only by :func:`pytest_generate_tests`."""
 
     armed: bool = False
     target_name: str = ""
@@ -143,8 +105,7 @@ class _Ledger:
     strict: bool = False
     contracts: int = 0
     inapplicable: dict[str, str] = field(default_factory=dict)
-    #: Contracts whose precondition is about the run rather than the vendor;
-    #: see ``runner.unobserved_contracts``.
+    #: Contracts whose precondition is about the run, not the vendor; see ``runner.unobserved_contracts``.
     run_bound: frozenset[str] = frozenset()
     outcomes: dict[str, set[Outcome]] = field(default_factory=dict)
 
@@ -174,8 +135,7 @@ class _Ledger:
 
     @property
     def never_passed(self) -> tuple[str, ...]:
-        """Contracts that passed nowhere, less the ones the target declared
-        its vendor can never be asked -- the same carve-out the report makes."""
+        """Contracts that passed nowhere, less the ones declared inapplicable -- the same carve-out the report makes."""
         return tuple(
             sorted(
                 cid
@@ -197,14 +157,7 @@ class _Ledger:
 
     @property
     def complete(self) -> bool:
-        """Whether every contract this session generated actually reported.
-
-        ``-k``, ``-x``, ``--lf`` and a distributed run all execute a subset,
-        and "this contract passed nowhere" is unanswerable over a subset --
-        the profile that would have passed it may simply not have run. So the
-        rule applies only when every generated contract reported at least
-        once, and stays silent rather than guessing otherwise.
-        """
+        """Whether every contract this session generated actually reported. ``-k``, ``-x``, ``--lf`` and a distributed run all execute a subset, over which "this contract passed nowhere" is unanswerable."""
         return len(self.outcomes) == self.contracts
 
     @property
@@ -215,9 +168,7 @@ class _Ledger:
     def problems(self) -> tuple[str, ...]:
         if not (self.armed and self.complete):
             return ()
-        # The strict rule for a run-bound contract applies to ANY complete
-        # run, a single profile included: that is the container case it
-        # exists for. The matrix rules below need the whole matrix.
+        # The strict run-bound rule applies to any complete run, single profile included; the matrix rules below need the whole matrix.
         never_observed = (
             tuple(
                 f"NEVER OBSERVED {check_id}: no profile in this run ({', '.join(self.profiles)}) offered a "
@@ -318,9 +269,7 @@ def pytest_generate_tests(metafunc: Any) -> None:
     strict = bool(config.getoption("conformance_strict", False))
 
     profiles = tuple(asked_profiles) or tuple(target.profiles)
-    # One transport by default: the matrix this layer exists to render is
-    # contract x profile, and running every binding by default would triple a
-    # downstream vendor's suite without being asked.
+    # One transport by default, or running every binding would triple a downstream vendor's suite unasked.
     transports = tuple(asked_transports) or tuple(target.transports)[:1]
     specs = select_checks(asked_checks or None)
 
@@ -364,11 +313,6 @@ def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: Any)
 
 
 def pytest_sessionfinish(session: Any, exitstatus: int) -> None:
-    """Fail the session for a contract that passed on no profile at all.
-
-    The only assertion this layer adds, and it cannot live in a test: it is a
-    statement about the whole matrix, and by the time it is answerable every
-    test has already reported green.
-    """
+    """Fail the session for a contract that passed on no profile at all -- a statement about the whole matrix, unanswerable until every test has already reported green."""
     if LEDGER.problems() and session.exitstatus == 0:
         session.exitstatus = 1

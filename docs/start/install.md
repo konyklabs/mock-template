@@ -41,7 +41,7 @@ docker run --rm -p 127.0.0.1:8081:8080 -e VENDORFAKE_VENDOR=clover -e VENDORFAKE
 docker run --rm -p 127.0.0.1:8080:8080 vendorfake serve --vendor square
 
 curl -s http://localhost:8080/__unit/health
-# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"framework_answered":0}
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221}
 ```
 
 Publish the port on loopback (`-p 127.0.0.1:...`), as above: the control

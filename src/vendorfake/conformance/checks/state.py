@@ -1,14 +1,6 @@
-"""C06, C07, C13, C19, C20, C22, C24, C25, C26, C36 -- state is reproducible,
-append-only, honestly gated, deduplicated per operation, paged without overlap,
-and seeded from a document an overlay may narrow but not invent keys in.
+"""C06, C07, C13, C19, C20, C22, C24, C25, C26, C36 -- state is reproducible, append-only, honestly gated, deduplicated per operation, paged without overlap, and seeded from a document an overlay may narrow but not invent keys in.
 
-C06 is the property a consumer's CI depends on: two units built the same way
-hold the same entities, so a test that passed this morning is not going to fail
-this afternoon because an id was drawn from a system random. C07 is what makes
-the journal usable as an event source rather than as decoration. C13 is the
-lifecycle: a state machine that quietly permits a self-transition turns "pay
-this order twice" into a success, which is a bug a consumer will only find in
-production.
+C06 is the property a consumer's CI depends on: two units built the same way hold the same entities, so a test that passed this morning does not fail this afternoon because an id was drawn from a system random. C07 is what makes the journal usable as an event source rather than as decoration. C13 is the lifecycle: a state machine that quietly permits a self-transition turns "pay this order twice" into a success.
 """
 
 from __future__ import annotations
@@ -52,63 +44,21 @@ _PROOF_THE_LOOKUP_MISSED = frozenset(
         "invalid_cursor",
     }
 )
-"""Kinds only the handler -- step 8 of core/kernel/unit.py::_run_pipeline,
-after the step-7 key lookup -- can produce for a probe carrying its key, so a
-partner refusal in this set genuinely proves the lookup missed. Everything
-else proves nothing: the router's 404 and 405, the capability gate, the auth
-step and the pre-auth faults all fire before the lookup, and ``internal`` can
-fire anywhere, a crashed hook included. This used to be a refuse-list of the
-pre-handler kinds; it is an allow-list now so that a kind it has never heard
-of -- every 5xx today, any kind added later -- defaults to "not proof"
-instead of silently becoming proof (konyklabs/roadmap#46). ``missing_field``
-qualifies because every probe carries its key at the published path --
-written along a dotted ``key_path`` the same way step 7's ``dot_get`` reads
-it -- so the step-7 raise for an absent required key cannot be the one
-answering; a partner complaining of a missing field is complaining about some
-other field, from inside the handler. ``bad_request`` qualifies because on a
-vendor route only handlers raise it (request validation -- a probe path's
-placeholder segment failing a handler's guid check is the shipped instance;
-the core's one raise site is an internal control route the router
-short-circuits before the pipeline). ``not_found`` stays out even though a handler can
-raise it too, because from outside it is one kind with the router's: a
-partner that would 404 its probe entity must publish example_params naming a
-seeded one (Route.example_params)."""
+"""Kinds only the handler (step 8 of core/kernel/unit.py::_run_pipeline, after the step-7 key lookup) can produce for a probe carrying its key, so a partner refusal in this set genuinely proves the lookup missed. Everything else proves nothing: routing, capability, auth and pre-auth faults all fire before the lookup, and ``internal`` can fire anywhere. An allow-list rather than a refuse-list, so an unrecognized kind defaults to "not proof" instead of silently becoming proof (konyklabs/roadmap#46). ``missing_field`` qualifies because every probe carries its key at the published path, so the step-7 raise for an absent key cannot be the one answering. ``bad_request`` qualifies because only handlers raise it on a vendor route. ``not_found`` stays out: a partner that would 404 its probe entity must publish ``example_params`` naming a seeded one instead."""
 
 _ABSENT_COLLECTION = "conformance-absent-collection"
-"""A seed-overlay key no vendor's seed document can have.
-
-Not a plausible near-miss of a real collection name, deliberately, and for the
-same reason ``PROBE_SEGMENT`` is not a plausible id: a probe that could
-accidentally be right proves nothing when it is refused. It carries a hyphen,
-which no shipped seed document uses in a top-level key, so it stays wrong for a
-vendor this suite has never seen.
-"""
+"""A seed-overlay key no vendor's seed document can have -- not a plausible near-miss, for the same reason ``PROBE_SEGMENT`` is not a plausible id: a probe that could accidentally be right proves nothing when refused."""
 
 _VALID_COLLECTIONS_MARKER = "Valid collections:"
-"""The phrase the refusal carries before its listing.
-
-Part of the contract rather than of one implementation's prose: the clause is
-"the message names the offending collection AND the vendor's valid ones", and
-a check with no agreed marker could only assert the first half. The Python
-implementation writes it in ``core/config/overlay.py``.
-"""
+"""The phrase the refusal carries before its listing -- part of the contract, since "names the offending collection AND the vendor's valid ones" needs an agreed marker to assert both halves. Written in ``core/config/overlay.py``."""
 
 _DIGEST_PREFIX = "sha256:"
-"""What ``seed_overlay.digest`` is prefixed with, named on the wire so a
-consumer comparing two runs can tell a changed algorithm from a changed
-overlay. Spelled here rather than imported from ``core.util`` because it is a
-*wire* value, the same reason ``control_plane.py``'s own constants are."""
+"""What ``seed_overlay.digest`` is prefixed with, named on the wire so a consumer can tell a changed algorithm from a changed overlay."""
 
 
 _QUERY_A: dict[str, str] = {"conformance": "query-a"}
 _QUERY_B: dict[str, str] = {"conformance": "query-b"}
-"""Two queries that differ only in a value, deliberately.
-
-The fingerprint is a digest of whatever the caller called the query, so two
-that differ in one character are the strongest form of the test: a comparison
-that had degraded to "same length" or "both truthy" would still pass for two
-queries that differed structurally.
-"""
+"""Two queries differing only in a value, deliberately: the fingerprint digests whatever the caller called the query, so a comparison degraded to "same length" or "both truthy" would still pass for these."""
 
 
 @check(
@@ -152,32 +102,12 @@ def seed_is_deterministic_across_units(env: CheckEnv) -> str:
     requires=Requires(mutating_example=True, credentials=True),
 )
 def journal_is_append_only(env: CheckEnv) -> str:
-    """Cause a mutation, then read the journal -- in that order.
-
-    This contract used to read ``/__unit/journal`` and nothing else, over a
-    journal containing only the thirteen seed inserts. Its own failure text
-    named the defect it could not see: ``core/state/store.py`` journalling "the
-    version it read" rather than ``from_version + 1`` left the suite entirely
-    green, because two ``update`` entries in a row are the one shape a journal
-    of pure inserts never contains. Optimistic concurrency was gone, a stale
-    version was accepted twice, and sixteen contracts noticed nothing.
-
-    So the mutation comes first, and it goes through the vendor's own surface
-    using the body the route publishes -- a check cannot invent a body the
-    vendor's validation will accept, which is what ``Route.example_body`` is
-    for. The concurrency half is then driven through
-    ``POST /__unit/state/update`` against the entity that create just made:
-    "the version I was given is stale" is a rule of the CORE's store, and
-    asking it only through whichever endpoint a particular vendor exposes for
-    updating whichever entity it owns would make it a contract about that
-    vendor instead.
-    """
+    """Cause a mutation, then read the journal -- in that order. The mutation goes through the vendor's own surface using the body the route publishes, since a check cannot invent a body the vendor's validation will accept. The concurrency half is then driven through ``POST /__unit/state/update`` against the entity create just made: "the version I was given is stale" is a rule of the core's store, so asking it through a vendor's own update endpoint would make it a contract about that vendor instead."""
     before = env.get_json(f"{CONTROL_PREFIX}journal")
     seq_before = int(before["seq"])
 
     route = env.first_example_route(methods=_MUTATING_METHODS)
-    # _keyed writes along a dotted key_path the way step 7 reads it; a flat
-    # write would miss and draw a step-7 missing_field instead of executing.
+    # _keyed writes along the dotted key_path step 7 reads, or a flat write misses and draws missing_field.
     body = dict(route.example_body or {}) if route.idempotency is None else _keyed(route, "conformance-journal-probe")
     created = env.client.call(
         route.method,
@@ -277,8 +207,7 @@ def journal_is_append_only(env: CheckEnv) -> str:
         key = f"{entry['collection']}/{entry['id']}"
         to_version = entry.get("to_version")
         if to_version is None:
-            # A delete has no resulting version. It ends the entity's history
-            # rather than moving it, so it is not a regression.
+            # A delete has no resulting version; it ends the entity's history rather than moving it.
             latest.pop(key, None)
             continue
         version = int(to_version)
@@ -423,18 +352,7 @@ def state_machines_are_honestly_gated(env: CheckEnv) -> str:
 def a_replayed_idempotency_key_does_not_run_twice(env: CheckEnv) -> str:
     """The contract a route's ``idempotency`` declaration is a promise of.
 
-    Nothing asked it before. Deleting the lookup at step 7 of
-    ``core/kernel/unit.py::_run_pipeline`` -- one line, ``stored = None`` -- made
-    every replayed key re-execute its handler, and the suite stayed green:
-    replay is only observable once a request has actually *succeeded*, and no
-    contract had ever driven one.
-
-    Two observations, because either alone is satisfiable by a broken unit. The
-    stored answer alone would pass for a handler that ran again and happened to
-    be deterministic; an unmoved journal alone would pass for a unit that
-    refused the second request outright. Together they are "it ran once and you
-    were told what happened the first time", which is the whole of what an
-    idempotency key buys a consumer whose network dropped an acknowledgement.
+    Two observations, because either alone is satisfiable by a broken unit: the stored answer alone would pass for a handler that ran again and happened to be deterministic, and an unmoved journal alone would pass for a unit that refused the second request outright. Together they are "it ran once and you were told what happened the first time", the whole of what an idempotency key buys a consumer whose network dropped an acknowledgement.
     """
     route = env.first_example_route(methods=_MUTATING_METHODS, idempotent=True)
     spec = dict(route.idempotency or {})
@@ -449,11 +367,7 @@ def a_replayed_idempotency_key_does_not_run_twice(env: CheckEnv) -> str:
         f"{first.error_kind!r} {first.text[:300]}. A replay contract cannot be asked until "
         f"something has succeeded once.",
     )
-    # The other direction, which nothing asserted until the third adversarial
-    # round stamped the marker on every response and the suite stayed green
-    # (konyklabs/roadmap#10, N-6; konyklabs/roadmap#15). A consumer routes on
-    # this header to tell "this executed" from "this was deduplicated"; a
-    # first execution that claims to be a replay misleads them on every call.
+    # A consumer routes on this header to tell "this executed" from "this was deduplicated" (konyklabs/roadmap#15).
     require(
         _REPLAY_HEADER not in first.headers,
         f"the FIRST execution under {key_path!r} answered with {_REPLAY_HEADER}="
@@ -513,19 +427,7 @@ def a_replayed_idempotency_key_does_not_run_twice(env: CheckEnv) -> str:
     requires=Requires(seed=True),
 )
 def a_cursor_belongs_to_the_query_that_issued_it(env: CheckEnv) -> str:
-    """The fingerprint, asked of the core rather than of a vendor's search route.
-
-    ``if decoded.q != fp`` in ``core/state/store.py`` could be replaced with
-    ``if False`` and nothing went red: a cursor issued for one query silently
-    paged another, which is the failure mode that gives a consumer a page of
-    the wrong rows and no error to notice it by.
-
-    Asked through ``POST /__unit/state/page`` because the rule is the store's.
-    A vendor's own paginated endpoint reaches the same code, but a check
-    driving it would have to know that vendor's spelling for "cursor" and for
-    "filter" -- and a vendor with no paginated endpoint at all would then get
-    no contract about cursors, though its core enforces exactly these rules.
-    """
+    """The fingerprint, asked of the core rather than of a vendor's search route, through ``POST /__unit/state/page`` because the rule is the store's. A vendor's own paginated endpoint reaches the same code, but a check driving it would have to know that vendor's spelling for "cursor" and "filter" -- and a vendor with no paginated endpoint would then get no contract about cursors at all."""
     collections = {str(name): int(count) for name, count in env.state()["entities"].items()}
     pageable = sorted(name for name, count in collections.items() if count >= 2)
     if not pageable:
@@ -603,22 +505,7 @@ def a_cursor_belongs_to_the_query_that_issued_it(env: CheckEnv) -> str:
     requires=Requires(seed=True, out_of_process=True),
 )
 def seed_is_deterministic_across_processes(env: CheckEnv) -> str:
-    """C06's claim, made about the thing C06's claim is about.
-
-    C06 compares two units, and both of them are built in this interpreter --
-    ``uvicorn`` on a background thread is a different *binding*, not a
-    different process. So C06 cannot witness any source of variation the
-    process itself supplies: the pid, ``PYTHONHASHSEED``, an import-time
-    counter, an environment value read at module scope. A hydrate drawing an id
-    from ``os.getpid()`` gives both of C06's units the same wrong answer and
-    C06 goes green.
-
-    But "a test that passed this morning is not going to fail this afternoon"
-    is a claim about *runs*, and runs are processes. This contract is the same
-    comparison across that boundary, and it is a separate contract rather than
-    a clause of C06 because it costs a process to ask and because a target that
-    cannot offer one should skip exactly this and still be held to the rest.
-    """
+    """C06's claim, made about the thing C06's claim is about. C06 compares two units built in this same interpreter, so it cannot witness a source of variation the process itself supplies (a pid, ``PYTHONHASHSEED``, an import-time counter). This is the same comparison across a process boundary instead, kept separate because it costs a process to ask, and a target that cannot offer one should skip exactly this and still be held to the rest."""
     here = env.state()
     entities: dict[str, int] = {str(name): int(count) for name, count in here["entities"].items()}
     transport = env.target.out_of_process[0]
@@ -649,17 +536,7 @@ def seed_is_deterministic_across_processes(env: CheckEnv) -> str:
 
 
 def _keyed(route: RouteRow, key: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The route's example body (or nothing) carrying ``key`` at its declared path.
-
-    Written ALONG the declared ``key_path``, not as one flat dict key: step 7
-    reads it back with ``dot_get``, which splits on dots, so a vendor
-    declaring ``order.idempotency_key`` must find the key nested. A flat write
-    would make step 7 miss it and raise its own ``missing_field`` -- which the
-    allow-list counts as proof the lookup missed, re-opening the vacuity this
-    check exists to close (konyklabs/roadmap#46 review). Each level along the
-    path is copied before descent so the memoised example body is never
-    mutated.
-    """
+    """The route's example body (or nothing) carrying ``key`` at its declared path. Written ALONG the declared ``key_path``, not as one flat dict key, since step 7 reads it back with ``dot_get`` (konyklabs/roadmap#46). Each level along the path is copied before descent so the memoised example body is never mutated."""
     body = dict(route.example_body or {})
     node = body
     steps = str(dict(route.idempotency or {})["key_path"]).split(".")
@@ -689,63 +566,18 @@ def _keyed(route: RouteRow, key: str, extra: dict[str, Any] | None = None) -> di
     requires=Requires(two_idempotent_routes=True, credentials=True),
 )
 def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
-    """The ``scope`` field of every IdempotencySpec, asked rather than read.
+    """The ``scope`` field of every IdempotencySpec, asked rather than read (konyklabs/roadmap#46).
 
-    Collapsing the store's key from ``f"{scope} {key}"`` to ``key`` made a
-    PayOrder sent under a key a CreateOrder had used answer with the
-    CreateOrder body and a 200, and the matrix stayed green
-    (konyklabs/roadmap#10, N-3c; tracked as konyklabs/roadmap#15): C19 sends
-    its key to one route and never to a second.
+    This is a CLASS check, for the same reason C17 is: every example-bearing idempotent route spends a key, every declared scope is then probed against every spent key it must not see, and every route sharing a spent key's scope is probed for the visibility the shared declaration promises. Declaration rules run first, because behaviour probes over incoherent declarations prove nothing:
 
-    This is a CLASS check, for the same reason C17 is (and after the same
-    mistake was made here first: the initial version selected one route pair,
-    and collapsing every scope except that pair's stayed green -- N-3b's
-    shape, found by review). Every example-bearing idempotent route spends a
-    key; every declared scope is then probed against every spent key it must
-    not see, and every route sharing a spent key's scope is probed for the
-    visibility the shared declaration promises. Declaration rules run first,
-    because behaviour probes over incoherent declarations prove nothing:
+    * **Not all one string.** N operations declaring a single scope have removed the namespace the field exists for.
+    * **A shared scope stays inside one capability.** A namespace spanning capabilities is half-disabled whenever one capability is switched off; an alias pair -- the legitimate share -- lives where its operation lives.
+    * **A shared scope declares one on_mismatch.** Two routes sharing a namespace but promising different mismatch answers is a promise that depends on which alias the retry happens to hit.
+    * **A shared scope has a drivable member.** A share none of whose routes publishes an example is a share nothing can verify.
 
-    * **Not all one string.** N operations declaring a single scope have
-      removed the namespace the field exists for.
-    * **A shared scope stays inside one capability.** A namespace spanning
-      capabilities means switching one capability off half-disables another's
-      replay space; an alias pair -- the legitimate share -- lives where its
-      operation lives.
-    * **A shared scope declares one on_mismatch.** Two routes sharing a
-      namespace but promising different mismatch answers is a promise that
-      depends on which alias the retry happens to hit.
-    * **A shared scope has a drivable member.** A share none of whose routes
-      publishes an example is a share nothing can verify, and an unverifiable
-      declaration is exactly where the collapse hid from the paired version
-      of this check.
+    A partner answer of ``idempotency_conflict`` is AFFIRMATIVE evidence the key was found in that scope (the mismatch branch only runs on a stored record); a partner answer otherwise counts as "the route answered for itself" only when it proves the request got past the key lookup -- a 2xx, or a kind in :data:`_PROOF_THE_LOOKUP_MISSED`. The journal is read around every probe: neither a post-lookup refusal nor a shared-scope declared-direction answer may append an entry. The positive direction, "a fresh success journals", is deliberately not asserted, since a no-op 2xx is real vendor behaviour (Square's batch-create under ``ignore_unchanged_counts`` commits nothing). Keys are spent first and probed after, since one route (UpdateOrder) pins its example to the seed's entity version and can succeed only once per unit.
 
-    Two rules from earlier review rounds are kept, the second inverted and
-    widened by konyklabs/roadmap#46: a partner answer of
-    ``idempotency_conflict`` is AFFIRMATIVE evidence the key was found in
-    that scope (the mismatch branch only runs on a stored record), and a
-    partner answer counts as "the route answered for itself" only when it
-    proves the request got past the key lookup -- a 2xx, or a kind in
-    :data:`_PROOF_THE_LOOKUP_MISSED`. The journal is read around every probe:
-    neither a post-lookup refusal nor a shared-scope declared-direction
-    answer may append an entry -- a partner that refuses a request and
-    journals it anyway executed what it refused, a pass condition weaker
-    than its description (N-3's shape). The positive direction, "a fresh
-    success journals", is deliberately not asserted: a no-op 2xx is real
-    vendor behaviour (Square's batch-create drops an unchanged count under
-    ignore_unchanged_counts and commits nothing).
-    Keys are spent first and probed after, because one route (UpdateOrder)
-    pins its example to the seed's entity version and can succeed only once
-    per unit; the probes are read-mostly and order-independent.
-
-    The journal brackets are race-free by construction, and the argument is
-    load-bearing: the seq only moves in ``Store.append_journal``, which is
-    called solely from Collection mutations under the store lock; webhook
-    dispatch is a listener invoked from INSIDE that call and keeps its
-    delivery records outside the store, and this check drives one probe at a
-    time on serialized routes. A vendor whose retry machinery wrote entities
-    from a background thread would break the bracket, and should fail loudly
-    here rather than quietly widening it.
+    The journal brackets are race-free by construction: the seq only moves in ``Store.append_journal``, called solely from Collection mutations under the store lock, and this check drives one probe at a time on serialized routes.
     """
     env.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
     routes = env.idempotent_routes()
@@ -878,12 +710,7 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
                 )
                 continue
             if 200 <= answer.status < 300:
-                # A fresh success is the route answering for itself; the leak
-                # clauses above already refused a marker or the stored bytes.
-                # Nothing is asserted of the journal here because a no-op 2xx
-                # is real vendor behaviour (Square's batch-create with
-                # ignore_unchanged_counts drops a matching count and commits
-                # nothing), so "a success journals" does not hold in general.
+                # A fresh success is the route answering for itself; nothing is asserted of the journal since a no-op 2xx is real vendor behaviour.
                 continue
             if answer.error_kind not in _PROOF_THE_LOOKUP_MISSED:
                 problems.append(
@@ -936,21 +763,9 @@ def an_idempotency_key_is_scoped_to_its_operation(env: CheckEnv) -> str:
     requires=Requires(idempotent_example=True, credentials=True),
 )
 def a_reused_key_with_a_different_body_answers_as_declared(env: CheckEnv) -> str:
-    """``on_mismatch``, in the direction each route declares.
+    """``on_mismatch``, in the direction each route declares (konyklabs/roadmap#15). C19 sends the same body twice and cannot see this: a reused key with new data must not silently get the old answer.
 
-    The ``conflict`` branch of the kernel's ``_replay`` was deleted outright
-    and the matrix stayed green (konyklabs/roadmap#10, N-3d; tracked as
-    konyklabs/roadmap#15): a reused key with new data was handed the old
-    answer and a 200, which is precisely the silent wrong answer the 409
-    exists to prevent. C19 sends the same body twice and cannot see it.
-
-    Asked in the declared direction, like C09's signer bindings, because
-    ``replay`` is real documented vendor behaviour and not a defect -- but a
-    route that declares one and does the other has published a lie. The
-    differing body is the example plus one extra field: the digest is taken
-    at step 7 of the pipeline, before any handler could refuse the field, so
-    the comparison sees a different request without the vendor's validation
-    ever being involved.
+    Asked in the declared direction, like C09's signer bindings, since ``replay`` is real documented vendor behaviour and not a defect -- but a route that declares one and does the other has published a lie. The differing body is the example plus one extra field, since the digest is taken at step 7 of the pipeline before any handler could refuse the field.
     """
     env.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
     driven: list[str] = []
@@ -1095,21 +910,9 @@ def _fetch_page(env: CheckEnv, route: RouteRow, headers: dict[str, str], params:
     requires=Requires(paginated_route=True, credentials=True),
 )
 def declared_pages_never_overlap_and_lose_nothing(env: CheckEnv) -> str:
-    """Pagination as a consumer meets it: through the vendor's own list route.
+    """Pagination as a consumer meets it: through the vendor's own list route (konyklabs/roadmap#15). C20 pages the store through the control plane and proves the cursor's fingerprint, but cannot see a vendor's own list handler slicing wrongly, and a vendor whose lists use offsets never touches the store's cursor at all. So this walks whatever the route table declares, in the style each route declares, and compares the walk against the same route asked once for everything.
 
-    Repeating the last row of each page as the first of the next left the
-    matrix green (konyklabs/roadmap#10, N-3e; tracked as konyklabs/roadmap#15)
-    while five unit tests went red. C20 pages the store through the control
-    plane and proves the cursor's fingerprint; it cannot see a vendor's own
-    list handler slicing wrongly, and a vendor whose lists use offsets never
-    touches the store's cursor at all. So this walks whatever the route table
-    declares, in the style each route declares, and compares the walk against
-    the same route asked once for everything.
-
-    The reference listing is the route's own unpaged answer rather than a
-    count from ``/__unit/state``: a list route legitimately filters -- a
-    merchant's orders, one location's search -- and only the route knows what
-    it should list. What it must not do is disagree with itself.
+    The reference listing is the route's own unpaged answer rather than a count from ``/__unit/state``, since a list route legitimately filters (a merchant's orders, one location's search) and only the route knows what it should list. What it must not do is disagree with itself.
     """
     walked: list[str] = []
     excused: list[str] = []
@@ -1207,13 +1010,7 @@ def declared_pages_never_overlap_and_lose_nothing(env: CheckEnv) -> str:
     require(not problems, "\n".join(problems))
     tail = f"; excused by declaration: {'; '.join(excused)}" if excused else ""
     if not walked:
-        # A SKIP, not a pass: every declared route opted out, so the contract
-        # was never asked and a pass would certify a walk that walked nothing
-        # (review round 2 of konyklabs/roadmap#15). Under --strict the skip is
-        # then held against the target's matrix -- a vendor whose every list
-        # is excused declares that, per profile in expected_skips or wholesale
-        # in ConformanceTarget.inapplicable, and the inapplicable guard fails
-        # the day a walkable list appears and the declaration goes stale.
+        # A SKIP, not a pass: every declared route opted out, so a pass would certify a walk that walked nothing (konyklabs/roadmap#15).
         raise ConformanceSkip(
             f"every paginated route this profile declares opts out of the walk{tail or '; none declares one at all'}"
         )
@@ -1235,45 +1032,13 @@ def declared_pages_never_overlap_and_lose_nothing(env: CheckEnv) -> str:
 def a_seed_overlay_cannot_invent_a_collection(env: CheckEnv) -> str:
     """The one contract about a *partial* document, and why it needs one.
 
-    An overlay is the only input to a unit that has nothing to be wrong
-    against. A whole seed document is validated by the vendor's hydration --
-    a missing field or a wrong shape shows up as an entity that is not there.
-    A partial document naming ``order`` for a vendor whose collection is
-    ``orders`` merges cleanly, hydrates nothing, and presents an hour later
-    as "the fake ignored my scenario", with no message anywhere. So the
-    refusal is a *contract*, not an implementation detail, and it is asserted
-    at the moment it has to happen: while the unit is built.
+    An overlay is the only input to a unit that has nothing to be wrong against: a whole seed document is validated by the vendor's hydration, but a partial document naming ``order`` for a vendor whose collection is ``orders`` merges cleanly, hydrates nothing, and presents an hour later as "the fake ignored my scenario" with no message anywhere. So the refusal is a contract, asserted while the unit is built.
 
-    Four claims. The refusal comes SECOND rather than last, because the
-    positive control is built from what the refusal's own message reports:
-    the collections this vendor's seed carries. That is the only
-    vendor-independent way for a clause in this package to name one, and
-    naming one is what the last claim needs.
+    Four claims. The refusal comes second rather than last, since the positive control is built from what the refusal's own message reports -- the collections this vendor's seed carries, the only vendor-independent way for a clause here to name one.
 
-    THE POSITIVE CONTROL IS NON-EMPTY AND OBSERVABLE, and review is why. It
-    used to be ``{}``, which asserted only that an overlay *arrived*:
-    ``active`` and a digest are computed from the document the unit was
-    handed, not from anything it did with it. An implementation that reported
-    both faithfully and then dropped the overlay on the floor passed this
-    clause, which is the one failure the whole feature exists to prevent --
-    measured, by replacing the merge with ``return document`` and watching
-    every profile still pass. So the overlay now empties a collection the
-    profile actually seeds and the check reads ``GET /__unit/state`` back:
-    the count has to move, and a merge that no-ops fails.
+    The positive control must be non-empty and observable: ``active`` and a digest are computed from the document the unit was handed, not from anything it did with it, so an implementation that reported both faithfully and then dropped the overlay on the floor would otherwise pass. The overlay empties a collection the profile actually seeds and the check reads ``GET /__unit/state`` back: the count has to move, or a merge that no-ops fails. The collection is chosen from whatever the refusal's own listing and this profile's entity counts agree exists, and emptied with ``[]`` rather than an added entity, since no vendor-independent clause knows what one of its entities looks like.
 
-    The collection is chosen, never named: the candidates are the names the
-    refusal listed that also appear in this profile's own entity counts, and
-    the first that hydrates is used. ``[]`` rather than an added entity
-    because "replace the array whole" is the merge rule an empty array
-    exercises with no knowledge of what an entity of that collection looks
-    like -- which is knowledge no vendor-independent clause can have.
-
-    The refusal message is parsed for its ``Valid collections:`` listing
-    rather than merely searched for the offending key, because "names the
-    vendor's valid collections" is half the clause: a message that says only
-    "unknown collection 'ordrs'" leaves the reader to go and find the seed
-    document, which is exactly the trip the message exists to save. The
-    phrase is part of the contract and ``core/config/overlay.py`` writes it.
+    The refusal message is parsed for its ``Valid collections:`` listing rather than merely searched for the offending key, since "names the vendor's valid collections" is half the clause. The phrase is part of the contract; ``core/config/overlay.py`` writes it.
     """
     baseline = env.state()["entities"]
     plain = env.info().get("seed_overlay")
@@ -1327,10 +1092,7 @@ def a_seed_overlay_cannot_invent_a_collection(env: CheckEnv) -> str:
         f"refused cannot also be one it accepts.",
     )
 
-    # The positive control, built from the listing the refusal just gave: a
-    # collection this vendor's seed carries AND whose entities this profile
-    # counts, so that emptying it is visible without knowing which vendor
-    # this is or what one of its entities looks like.
+    # Built from the listing the refusal just gave, so emptying it is visible without knowing which vendor this is.
     candidates = tuple(name for name in named if isinstance(baseline.get(name), int) and baseline[name] > 0)
     require(
         candidates,
@@ -1354,11 +1116,7 @@ def a_seed_overlay_cannot_invent_a_collection(env: CheckEnv) -> str:
         applied = (candidate, entities, overlaid_info)
         break
     if applied is None:
-        # Not a failure: a seed whose every countable collection is referred
-        # to by another cannot have one emptied without breaking the
-        # document's own integrity, and hydration refusing that is correct
-        # behaviour rather than a broken merge. Under --strict the skip is
-        # then held against the target's matrix, so it cannot go unnoticed.
+        # Not a failure: a seed whose every countable collection is referred to by another cannot have one emptied without breaking the document's own integrity.
         raise ConformanceSkip(
             "no seeded collection could be emptied by an overlay without the seed failing to hydrate, so "
             "there is no vendor-independent way to observe the merge here: " + "; ".join(refused_to_build)

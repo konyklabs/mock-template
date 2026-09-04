@@ -1,64 +1,18 @@
-"""The Payments surface: external payments against orders.
+"""The Payments surface: external payments against orders. CreatePayment, GetPayment, CompletePayment,
+CancelPayment let an integration run the payment cycle without a card, nonce or processor (``source_id``
+is always EXTERNAL). https://developer.squareup.com/reference/square/payments-api/create-payment
+https://developer.squareup.com/reference/square/payments-api/get-payment https://developer.squareup.com/reference/square/payments-api/complete-payment
+https://developer.squareup.com/reference/square/payments-api/cancel-payment
 
-FOR: letting an ordering integration run the order cycle it runs against
-Square -- create a payment for an order, capture it on close, void it before
-cancelling -- with the order's tenders and state moving as they would, and
-without a card, a nonce or a processor.
+INVARIANT: a payment moves to COMPLETED before its order is tendered -- ``payment.created``,
+``payment.updated``, ``order.updated`` in that order. Order rules: DRAFT and terminal orders cannot be
+paid; ``amount_money`` may not exceed what is due, checked again at capture (JUDGMENT, NOT VERIFIED)
+(https://developer.squareup.com/docs/orders-api/pay-for-orders); ``tip_money`` is never counted against
+what is due, per Square's ``Tender`` (https://developer.squareup.com/reference/square/objects/Tender);
+a payment's location must match its order's (JUDGMENT). https://developer.squareup.com/reference/square/enums/OrderState
 
-===============  =============================================================
-CreatePayment    ``POST /v2/payments``
-                 https://developer.squareup.com/reference/square/payments-api/create-payment
-GetPayment       ``GET  /v2/payments/{payment_id}``
-                 https://developer.squareup.com/reference/square/payments-api/get-payment
-CompletePayment  ``POST /v2/payments/{payment_id}/complete``
-                 https://developer.squareup.com/reference/square/payments-api/complete-payment
-CancelPayment    ``POST /v2/payments/{payment_id}/cancel``
-                 https://developer.squareup.com/reference/square/payments-api/cancel-payment
-===============  =============================================================
-
-INVARIANT: **a payment and its order move in one request, and the payment
-moves first.** CreatePayment with ``autocomplete`` inserts the payment, moves
-it to COMPLETED, and only then appends a tender to the order -- three
-journal entries, ``payment.created``, ``payment.updated``, ``order.updated``,
-in that order -- so a subscriber that hears ``order.updated`` can already
-retrieve the COMPLETED payment it names. The order update runs without an
-expected version: CreatePayment takes no order version, and the order's own
-optimistic concurrency belongs to UpdateOrder.
-
-SHRINK (prototype): ``source_id`` must be ``EXTERNAL``. A card nonce
-(``cnon:...``), a card on file, a gift card, a wallet -- every source that
-would need a processor, a customer or a card vault -- is refused with
-``invalid_value`` naming the field, and the refusal says why. ``PENDING``,
-``FAILED``, refunds, ``UpdatePayment``, ``ListPayments`` and the delay /
-auto-cancel clock are not modelled; see :mod:`vendorfake.square.model.payment`.
-
-The order rules, and where each comes from
-------------------------------------------
-* an order in DRAFT cannot be paid: "Draft orders can be updated, but cannot
-  be paid or fulfilled" (https://developer.squareup.com/reference/square/enums/OrderState);
-* a terminal order cannot be paid: the order machine has no edge out of
-  COMPLETED or CANCELED;
-* ``amount_money`` must not exceed what is due -- JUDGMENT. Square's guide
-  has the payment "for the order total"
-  (https://developer.squareup.com/docs/orders-api/pay-for-orders) and
-  documents nothing for an overpayment through this route; refusing it is
-  the reading under which the tenders always reconcile to the order, and a
-  partial payment is accepted because split tender is real. ``tip_money`` is
-  on top of the amount and never counts against what is due: a tender's
-  ``amount_money`` is "the total amount of the tender, including
-  `tip_money`" (https://developer.squareup.com/reference/square/objects/Tender),
-  and the order reports the tips it collected in ``total_tip_money``;
-* **the check is made again at capture.** A hold (``autocomplete: false``)
-  is *not* reserved against the due -- two holds for the whole order both
-  create -- so CompletePayment re-checks ``amount_money`` against what is
-  due at that moment and refuses with ``conflict`` (409) when the order has
-  since been paid past it. JUDGMENT, twice: Square publishes neither whether
-  an approved payment reserves the order's due nor the error a late capture
-  gets, and 409 is chosen because the request was well-formed and what
-  changed is the order. NOT VERIFIED;
-* the payment's location is the order's. A ``location_id`` naming a
-  different one is refused rather than either being silently preferred --
-  JUDGMENT, the same rule the legacy CreateOrder path applies.
+SHRINK (prototype): PENDING, FAILED, refunds, UpdatePayment, ListPayments and the delay/auto-cancel clock
+are not modelled.
 """
 
 from __future__ import annotations
@@ -118,8 +72,7 @@ class PaymentsSurface:
                 auth="bearer",
                 scopes=("PAYMENTS_WRITE",),
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="payments.create", required=True),
-                # The one source this unit takes ("source_id should be
-                # EXTERNAL"), with the two fields an external payment needs.
+                # The one source this unit takes, with an external payment's two required fields.
                 example_body={
                     "source_id": "EXTERNAL",
                     "amount_money": {"amount": 500, "currency": "USD"},
@@ -189,8 +142,7 @@ class PaymentsSurface:
                 info={"allowed": list(EXTERNAL_PAYMENT_TYPES)},
             )
         if request.amount_money.amount <= 0:
-            # JUDGMENT: Square publishes no minimum for an external payment;
-            # a zero or negative one records nothing a tender could carry.
+            # JUDGMENT: no minimum; a zero/negative amount records nothing a tender could carry.
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail="amount_money.amount must be positive.",
@@ -246,22 +198,15 @@ class PaymentsSurface:
     # -- POST /v2/payments/{payment_id}/complete ----------------------------
 
     def complete_payment(self, args: HandlerArgs) -> ReplyInit:
-        """Capture. "Completes (captures) a payment. By default, payments are
-        set to complete immediately after they are created."
-
-        The transition is asserted before anything moves, so completing a
-        COMPLETED or a CANCELED payment is ``invalid_transition`` with no
-        version bump -- and no second tender on the order.
-        """
+        """Capture an APPROVED payment; the transition is asserted first, so a COMPLETED/CANCELED
+        payment refuses with no version bump and no second tender."""
         request = validate_body(CompletePaymentRequest, args.body())
         payments = args.ctx.store.collection(COL.payments)
         payment = _require_payment(payments, args.params["payment_id"])
         _check_version_token(payment, request.version_token)
         _MACHINE.assert_transition(payment.status, PaymentState.COMPLETED.value, f"Payment {payment.id}")
         if payment.order_id is not None:
-            # Refuse before writing: an order that can no longer take a tender
-            # -- finished, or since paid past what this hold would apply --
-            # must leave the payment APPROVED, not captured against nothing.
+            # Refuse before writing, so a finished or over-paid order leaves the payment APPROVED.
             order = _payable_order(args.ctx.store.collection(COL.orders), payment.order_id)
             _require_within_due(order, payment.amount_money.amount, UnitErrorKind.CONFLICT)
         stored = self._capture(args.ctx, payments, payment, "CompletePayment")
@@ -270,13 +215,7 @@ class PaymentsSurface:
     # -- POST /v2/payments/{payment_id}/cancel ------------------------------
 
     def cancel_payment(self, args: HandlerArgs) -> ReplyInit:
-        """Void. "Cancels (voids) a payment. You can use this endpoint to
-        cancel a payment with the APPROVED status."
-
-        A COMPLETED payment is refused: Square's sentence names APPROVED, and
-        the way back from a capture is a refund, which this unit does not
-        model.
-        """
+        """Void an APPROVED payment; a COMPLETED one is refused since a refund is not modelled here."""
         validate_body(CancelPaymentRequest, args.body())
         payments = args.ctx.store.collection(COL.payments)
         payment = _require_payment(payments, args.params["payment_id"])
@@ -291,10 +230,7 @@ class PaymentsSurface:
     # -- internals ----------------------------------------------------------
 
     def _capture(self, ctx: UnitContext, payments: Collection, payment: PaymentEntity, operation_id: str) -> Entity:
-        """Move ``payment`` to COMPLETED through the machine, then tender its
-        order if it has one. The status write is the shared
-        :func:`~vendorfake.square.surface.orders.capture_payment`, so a
-        second capture is refused here exactly as it is on PayOrder."""
+        """Move ``payment`` to COMPLETED, then tender its order if it has one."""
         stored = capture_payment(payments, payment, None, operation_id)
         completed = PaymentEntity.from_entity(stored)
         if completed.order_id is not None:
@@ -329,12 +265,8 @@ def _require_payment(payments: Collection, payment_id: str) -> PaymentEntity:
 
 
 def _payable_order(orders: Collection, order_id: str) -> OrderEntity:
-    """The order a payment names, if it can still take one.
-
-    ``invalid_value`` on the id when it does not exist -- the payment does not
-    exist yet, so what is wrong is the value sent -- and the order machine's
-    own refusal when it does but is finished.
-    """
+    """The order a payment names, if it can still take one -- ``invalid_value`` if it doesn't exist,
+    the machine's own refusal if it's finished."""
     stored = orders.get(order_id)
     if stored is None:
         raise UnitError(
@@ -355,12 +287,8 @@ def _payable_order(orders: Collection, order_id: str) -> OrderEntity:
 
 
 def _resolve_location(ctx: UnitContext, requested: str | None, order: OrderEntity | None) -> LocationEntity:
-    """The location a payment is recorded at.
-
-    The order's when there is an order; otherwise the one requested, or the
-    merchant's main location -- "If not specified, the main location is
-    used." -- which is the first seeded one, as on RetrieveMerchant.
-    """
+    """The location a payment records at: the order's if there is one, else requested, else the
+    merchant's first-seeded location."""
     locations = ctx.store.collection(COL.locations)
     if order is not None:
         if requested is not None and requested != order.location_id:
@@ -388,9 +316,8 @@ def _resolve_location(ctx: UnitContext, requested: str | None, order: OrderEntit
 
 
 def _require_within_due(order: OrderEntity, amount: int, kind: UnitErrorKind) -> None:
-    """``amount`` may not exceed what is due on ``order``; ``kind`` is the
-    caller's reading of whose fault that is -- the request's value on create,
-    a conflict with the order's later state on capture."""
+    """``amount`` may not exceed what is due; ``kind`` distinguishes a bad request (create) from a
+    later conflict (capture)."""
     due = amount_due(order)
     if amount > due:
         raise UnitError(

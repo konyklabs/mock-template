@@ -1,23 +1,20 @@
 """The seed document's schema, as a model rather than as a cast.
 
-FOR: stating what a scenario file may contain, so that a typo in one is a
-startup failure naming the field instead of a unit that starts with an empty
-world and answers 404 to every read.
+States what a scenario file may contain, so a typo is a startup failure
+naming the field rather than a unit that starts empty and 404s on every read.
 
-INVARIANT: **a scenario is validated before a single entity is inserted.**
-Every model here sets ``extra="forbid"``; hydration parses the whole document
-first, and every reference (a menu item's tax rate, a modifier group's
-options, a table's service area) must resolve inside the document.
+INVARIANT: a scenario is validated before a single entity is inserted --
+every model sets ``extra="forbid"``, and every reference (a menu item's tax
+rate, a modifier group's options, a table's service area) must resolve
+inside the document.
 
-Keys: the top level is snake_case like every JSON this project publishes; the
-entity documents use Toast's own camelCase field names, so a documented
-example pastes straight in. **Money is integer cents in the seed**, as in the
-store; the wire converts (``model/money.py``).
+Keys: the top level is snake_case; entity documents use Toast's own
+camelCase, so a documented example pastes straight in. Money is integer
+cents in the seed, as in the store; the wire converts (``model/money.py``).
 
-The V3 menu models follow toast-menus-api-v3.yaml field for field where a
-field is modelled; a few deeply nested documented blocks (``pricingRules``,
-``availability.schedule``, ``portions``, ``images``) are carried as opaque
-documents because nothing here computes from them.
+The V3 menu models follow toast-menus-api-v3.yaml field for field; a few
+deeply nested documented blocks (``pricingRules``, ``availability.schedule``,
+``portions``, ``images``) are carried as opaque documents.
 """
 
 from __future__ import annotations
@@ -180,10 +177,8 @@ class SeedDiscount(_ConfigEntity):
 
 
 class SeedPromoCode(BaseModel):
-    """A ``PromoCode`` on a discount: a ToastReference (``guid``, ``entityType``)
-    plus ``code``, ``name`` and ``usageType`` -- the shape the configuration
-    specification gives it. The unit carried bare strings until the fidelity
-    validator found them (konyklabs/roadmap#56)."""
+    """A ``PromoCode`` on a discount: a ToastReference plus ``code``, ``name``
+    and ``usageType``, the documented shape (konyklabs/roadmap#56)."""
 
     model_config = _SEED
 

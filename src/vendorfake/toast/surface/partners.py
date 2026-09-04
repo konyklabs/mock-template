@@ -1,23 +1,16 @@
 """The partners API surface: which restaurants are connected to this client.
 
 DOCUMENTED (toast-partners-api.yaml v1.0.2,
-apiPartnersGettingAccessibleRestaurants.html) -- partner accounts only:
-
-=====================  ==================================================
-ConnectedRestaurants   ``GET /partners/v1/connectedRestaurants?lastModified&pageSize&pageToken``
-Restaurants            ``GET /partners/v1/restaurants?lastModified``
-=====================  ==================================================
-
-The first answers the documented page envelope (``model/partners.py``), the
-second the bare array. 403 "insufficient permissions" is the kernel's scope
-check on ``partners:read``. Neither takes ``Toast-Restaurant-External-ID``:
-these are the routes a partner calls to learn which restaurants it may name
-in that header.
+apiPartnersGettingAccessibleRestaurants.html), partner accounts only:
+``GET /partners/v1/connectedRestaurants?lastModified&pageSize&pageToken``
+answers the documented page envelope (``model/partners.py``); ``GET
+/partners/v1/restaurants?lastModified`` answers the bare array. Neither takes
+``Toast-Restaurant-External-ID``, since these are the routes a partner calls
+to learn which restaurants it may name in that header.
 
 JUDGMENT: ``lastModified`` compares against the row's epoch-ms
 ``modifiedDate`` inclusively; ``pageSize`` above 200 is refused rather than
-clamped (the specification states a maximum and this unit says so); the page
-token is the core's opaque cursor.
+clamped; the page token is the core's opaque cursor.
 """
 
 from __future__ import annotations
@@ -134,11 +127,9 @@ class ToastPartnersSurface:
 
 
 def _omit_none(node: Any) -> Any:
-    """JUDGMENT: a page token or a restaurant field with no value is omitted,
-    not answered null -- the partners specification types them as plain
-    strings; the guide documents null only for ``nextPageNum`` and
-    ``previousPageNum`` (declared deviations). Found by the fidelity
-    validator (konyklabs/roadmap#56)."""
+    """JUDGMENT: a field with no value is omitted, not null, except the
+    documented null cases ``nextPageNum``/``previousPageNum``
+    (konyklabs/roadmap#56)."""
     if isinstance(node, dict):
         return {k: _omit_none(v) for k, v in node.items() if v is not None or k in ("nextPageNum", "previousPageNum")}
     if isinstance(node, list):

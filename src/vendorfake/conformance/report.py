@@ -1,43 +1,10 @@
 """What a run of the suite said, and how it is rendered.
 
-FOR: turning a list of per-check outcomes into a verdict a build can act on,
-and into text a person can read at three in the morning.
+A check that could not run is SKIPPED, never a pass; a check never ASKED is an ERROR, distinct from a FAIL that names a violated contract -- both are red, but only FAIL points at something to fix.
 
-INVARIANT: **a check that could not run is SKIPPED, and a skip is never a
-pass; a check that was never ASKED is an ERROR, and an error is not a
-failure.** The second half is a reporting rule, not a leniency: an error is
-red exactly as a failure is, but it says the unit never started rather than
-naming a contract that was violated, and those are different things to go and
-fix.
+A report is ``ok`` only when nothing failed and every check passed on at least one profile (the anti-vacuity rule, which holds in every mode and is stronger than any count). Under ``strict=True`` it additionally requires that nothing skipped undeclared and every declared skip actually happened.
 
-The reference implementation's floor was ``passed >= 9`` against ten
-checks, which is green for a run in which one contract was never asked -- and
-"never asked" is exactly the state a check silently gated out of every profile
-lands in. That floor is deliberately not reproduced. This report is ``ok``
-only when nothing failed and **every check passed on at least one profile**;
-under ``strict=True`` (the CI posture -- ``--strict`` on the CLI, off by
-default) it additionally requires that nothing skipped that was not declared
-to skip and that every declared skip actually happened. The anti-vacuity rule
-is the one that holds in every mode, and it is strictly stronger than any
-count: a check that skipped everywhere proved nothing, however many others
-passed.
-
-WHY THE EXPECTED-SKIP MATRIX IS DATA. Three of the shipped profiles genuinely
-lack the capability some contract needs, permanently. Failing those under
-``--strict`` would make strict mode unusable, and exempting them in code would
-put a second, silent description of a profile next to the profile. Keeping the
-pairs in ``manifest.json`` fails two ways instead, under ``--strict``: an
-undeclared skip is a failure, and a declared skip that stops happening is a
-failure too, because it means a profile changed and the record did not.
-
-A second vendor brings a second matrix (``ConformanceTarget.expected_skips``)
-and one more kind of record: a contract its API can never be asked -- Clover
-documents no idempotency key, so the replay contract has nothing to replay.
-That is ``ConformanceTarget.inapplicable``: a check id with a reason, printed
-by name, dropped from the anti-vacuity rule, and guarded from the other side
--- a check declared inapplicable that runs is a stale declaration and fails.
-A skip matrix alone never grants this; a contract skipped on every profile
-without a stated reason is still a contract nobody tested.
+The expected-skip matrix (``manifest.json``, or ``ConformanceTarget.expected_skips`` for a second vendor) records skips that are permanent and legitimate, so ``--strict`` fails two ways instead of exempting them silently: an undeclared skip, and a declared skip that stops happening. ``ConformanceTarget.inapplicable`` covers the further case where a vendor's API has no such contract at all (e.g. no idempotency key) -- printed by name, dropped from the anti-vacuity rule, and flagged stale if it ever runs.
 """
 
 from __future__ import annotations
@@ -80,22 +47,9 @@ class ConformanceReport:
     #: Check id -> why the target's vendor can never be asked it. See
     #: ``ConformanceTarget.inapplicable``.
     inapplicable: Mapping[str, str] = field(default_factory=dict)
-    #: Check id -> why strict mode refuses this run for never having observed
-    #: it, computed by the runner. Distinct from ``never_ran``: that rule is
-    #: about a matrix and is switched off for a one-profile container run,
-    #: which is exactly where this one bites -- five of the six shipped
-    #: profiles offer no virtual clock, so a ``--base-url`` run against any
-    #: of them skipped the retry-schedule contract, declared, and was green
-    #: for a unit that retried once against eleven declared intervals
-    #: (konyklabs/roadmap#10, N-2; tracked as konyklabs/roadmap#15).
+    #: Check id -> why strict mode refuses this run for never having observed it, computed by the runner. Distinct from ``never_ran``, which is about the matrix and is off for a one-profile container run (konyklabs/roadmap#15).
     unobserved: Mapping[str, str] = field(default_factory=dict)
-    #: Whether this run covered every profile the target declares.
-    #:
-    #: The anti-vacuity rule -- a check that passed nowhere is a failure -- is a
-    #: statement about the whole matrix and does not exist inside a run narrowed
-    #: to one profile, where a contract legitimately skips. The runner sets this
-    #: from what was actually asked for, so ``--profile oauth-only`` stays
-    #: usable and the aggregation stays strict.
+    #: Whether this run covered every profile the target declares. The anti-vacuity rule doesn't hold inside a run narrowed to one profile; the runner sets this from what was actually asked for.
     cross_profile: bool = True
 
     # -- counts -------------------------------------------------------------
@@ -129,23 +83,14 @@ class ConformanceReport:
 
     @property
     def never_ran(self) -> tuple[str, ...]:
-        """Checks that passed on no profile at all. They proved nothing.
-
-        A check the target declares inapplicable -- by name, with a reason --
-        is not counted: it was never a contract this vendor could be asked.
-        A check that merely skipped everywhere still is.
-        """
+        """Checks that passed on no profile at all -- they proved nothing. A check declared inapplicable is excluded; one that merely skipped everywhere is not."""
         seen = {result.check_id for result in self.results}
         passed = {result.check_id for result in self.results if result.outcome is Outcome.PASS}
         return tuple(sorted(seen - passed - set(self.inapplicable)))
 
     @property
     def stale_inapplicable(self) -> tuple[str, ...]:
-        """Checks declared inapplicable that ran anyway (passed or failed).
-
-        The declaration outlived the gap it described -- the vendor grew the
-        surface -- and the record must move in the same commit.
-        """
+        """Checks declared inapplicable that ran anyway (passed or failed) -- the declaration outlived the gap it described and must move in the same commit."""
         ran = {result.check_id for result in self.results if result.outcome in (Outcome.PASS, Outcome.FAIL)}
         return tuple(sorted(check_id for check_id in self.inapplicable if check_id in ran))
 
@@ -165,12 +110,7 @@ class ConformanceReport:
 
     @property
     def stale_expected_skips(self) -> tuple[str, ...]:
-        """Declared skips that did not happen on a profile this run covered.
-
-        A profile gained the capability a contract needs and nobody updated the
-        record. Harmless to behaviour, fatal to the claim that the matrix
-        describes the profiles.
-        """
+        """Declared skips that did not happen on a profile this run covered -- the profile gained the capability and nobody updated the record."""
         ran = {(result.check_id, result.profile): result.outcome for result in self.results}
         out: list[str] = []
         for check_id, profiles in self.expected_skips.items():
@@ -184,9 +124,7 @@ class ConformanceReport:
     def problems(self) -> tuple[str, ...]:
         """Every reason this report is not ``ok``, in the order to read them."""
         out: list[str] = []
-        # Errors first, and deliberately: when a unit will not construct every
-        # contract errors at once, and the reader needs to see "this unit did
-        # not start" before a wall of contract names that were never asked.
+        # Errors first: "this unit did not start" belongs before a wall of never-asked contract names.
         for result in self.errors:
             out.append(
                 f"ERRORED {result.case_id}: the unit could not be reached, so {result.check_id} was "
@@ -234,12 +172,7 @@ _MARK = {Outcome.PASS: "PASS", Outcome.FAIL: "FAIL", Outcome.SKIP: "SKIP", Outco
 
 
 def format_report(report: ConformanceReport) -> str:
-    """The whole run as text, grouped by (profile, transport).
-
-    Every line carries the evidence or the reason, because a report that only
-    says which checks passed is a report nobody can use to tell whether the
-    run examined anything.
-    """
+    """The whole run as text, grouped by (profile, transport); every line carries the evidence or the reason, not just a pass/fail mark."""
     lines: list[str] = []
     seen: list[tuple[str, str]] = []
     for result in report.results:

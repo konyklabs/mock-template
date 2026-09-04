@@ -1,53 +1,31 @@
 """The product wire shape, and the two documented bodies that write it.
 
-DOCUMENTED SCHEMAS (``api-2026-07``): ``Product`` (57 members, 21 of them
-required), ``ProductCollection`` (``data`` + ``version``), ``ProductResponse``
-(``data``), ``ProductCreateBody`` (``POST /products``) and
-``ProductUpdate21Request`` (``PUT /products/{product_id}``).
+DOCUMENTED (``api-2026-07``): create and update are not the same shape.
+``ProductCreateBody`` is flat with only ``name`` required; the update is
+``{"common": {...}, "details": {...}}`` with no required member at all.
+Both are reproduced as declared, neither normalised into the other. The two
+price members are mutually exclusive (:func:`refuse_both_prices`); the other
+is derived from the one supplied (:data:`PRICE_DERIVATION_NOTE`).
 
-THE CREATE AND THE UPDATE ARE NOT THE SAME SHAPE, which is the first surprise
-this surface holds for a consumer. ``ProductCreateBody`` is a flat object with
-``name`` as its only required member. ``ProductUpdate21Request`` is
-``{"common": {...}, "details": {...}}`` -- a two-block document with a
-different member list and no required member at all. Both are reproduced as
-declared; neither is normalised into the other.
+``Product`` embeds a ``BrandSample``, ``SupplierSample`` and
+``ProductTypeSample`` (each ``{id, name, version}``); the Brands, Suppliers
+and Product Types tags are out of scope, so all three stay ``{}`` -- matching
+the vendor's own example for a product with none -- while ``brand_id``,
+``supplier_id`` and ``product_type_id`` carry through unchanged. Recorded in
+``capabilities.py`` under ``product-reference-tags``.
 
-**Both prices may not be sent together.** The create operation's own
-``requestBody.description`` says so verbatim: "**Note**: You cannot include
-both ``price_including_tax`` and ``price_excluding_tax``." That is the one
-documented 422 on this surface, and :func:`refuse_both_prices` is where it is
-raised. The other price is derived from the one supplied -- see
-:data:`PRICE_DERIVATION_NOTE`.
+The vendor's own attribute shape is inconsistent: ``Product.attributes`` is
+``array[{name, value}]`` but ``ProductCreateBody.attributes`` is a single
+``{key, value}`` object. This module accepts either on the way in and answers
+``{name, value}`` on the way out.
 
-WHAT THIS PACKAGE DOES NOT RESOLVE, and why the wire shows an empty object for
-it. ``Product`` embeds a ``BrandSample``, a ``SupplierSample`` and a
-``ProductTypeSample``, each ``{id, name, version}``. The Brands, Suppliers and
-Product Types tags are outside issue #94's scoped surface, so this unit has no
-brand, supplier or product-type entity to resolve an id against. The three
-sample objects are therefore always ``{}`` -- which is exactly what the
-vendor's own ``GET /products`` example prints for a product with none
-(``"brand": {}``, ``"supplier": {}``, ``"type": {}``) -- while ``brand_id``,
-``supplier_id`` and ``product_type_id`` carry through whatever the caller set.
-Recorded in ``capabilities.py`` under ``product-reference-tags``.
+``POST /products/{id}/actions/image_upload`` and the Product Images tag are
+out of scope, so ``images``/``skuImages`` are always empty and
+``image_url``/``image_thumbnail_url`` are placeholders on a reserved example
+host, never a real CDN URL. ``include_images=false`` drops all four.
 
-THE ATTRIBUTE INCONSISTENCY is the vendor's, not this package's.
-``Product.attributes`` is ``array[ProductAttribute]`` where a
-``ProductAttribute`` is ``{name, value}``; ``ProductCreateBody.attributes``
-``$ref``s ``Attribute``, which is a SINGLE object of ``{key, value}`` -- a
-different shape AND a different member name for the same thing, in the same
-document. This module accepts either shape on the way in and answers the
-documented ``{name, value}`` array on the way out, and says so here rather than
-silently.
-
-IMAGES. ``POST /products/{id}/actions/image_upload`` and the Product Images tag
-are excluded by issue #94, so ``images`` and ``skuImages`` are always empty and
-``image_url``/``image_thumbnail_url`` are stand-in placeholders on a reserved
-example host -- never the vendor's own CDN URLs, which a fake has no business
-pointing a consumer at. ``include_images=false`` drops all four, which is what
-the documented parameter is for.
-
-KEY ORDER. The projection emits members in alphabetical order, because that is
-the order every response example in the specification prints them in.
+Projection emits members in alphabetical order, matching every response
+example in the specification.
 """
 
 from __future__ import annotations
@@ -85,10 +63,9 @@ __all__ = [
 
 IMAGE_PLACEHOLDER_URL = "https://images.example/product/no-image-standard.png"
 IMAGE_PLACEHOLDER_THUMB = "https://images.example/product/no-image-thumb.png"
-"""Stand-ins for ``image_url``/``image_thumbnail_url``. The vendor's example
-prints its own CDN's placeholder; a fake that shipped that value would point a
-consumer's client at a real host it has no business reaching. ``images.example``
-is reserved by RFC 2606 and resolves nowhere. JUDGMENT."""
+"""JUDGMENT: stand-ins for ``image_url``/``image_thumbnail_url`` on
+``images.example`` (RFC 2606, resolves nowhere) rather than the vendor's own
+CDN host."""
 
 PRICE_DERIVATION_NOTE = (
     "The create body may carry price_including_tax or price_excluding_tax and not both (the operation's own "
@@ -107,12 +84,8 @@ _REQUEST = ConfigDict(extra="ignore", frozen=True)
 
 
 class ProductAttributeIn(BaseModel):
-    """One attribute on the way in, in EITHER documented spelling.
-
-    ``ProductCreateBody`` says ``{key, value}`` and ``Product`` says
-    ``{name, value}``; both are accepted and the response uses the latter. See
-    the module docstring.
-    """
+    """One attribute on the way in, in either documented spelling
+    (``{key, value}`` or ``{name, value}``); the response uses the latter."""
 
     model_config = _REQUEST
 
@@ -135,8 +108,7 @@ class ProductCodeIn(BaseModel):
 
 
 class ProductSupplierIn(BaseModel):
-    """``ProductSupplier`` as a caller sends it. ``id`` and ``product_id`` are
-    required on the response schema and are minted/filled by the surface."""
+    """``ProductSupplier`` as sent. ``id``/``product_id`` are minted/filled by the surface."""
 
     model_config = _REQUEST
 
@@ -160,11 +132,10 @@ class ProductInventoryIn(BaseModel):
 class ProductVariantIn(BaseModel):
     """``ProductAddVariantPayload``: one child of the product being created.
 
-    ``variant_definitions`` is ``array[VariantAttribute]``, which is
-    ``{attribute_id, value}``. The Variant Attributes tag -- the only place an
-    ``attribute_id`` could be resolved to a display name -- is deferred, so the
-    ``variant_options`` this becomes carries the ``attribute_id`` verbatim as
-    its ``name``. Recorded in ``capabilities.py`` under ``variant-attributes``.
+    ``variant_definitions`` (``{attribute_id, value}``) carries the
+    ``attribute_id`` verbatim into ``variant_options.name`` -- the Variant
+    Attributes tag that would resolve it to a display name is deferred.
+    Recorded in ``capabilities.py`` under ``variant-attributes``.
     """
 
     model_config = _REQUEST
@@ -236,8 +207,7 @@ class ProductCreateBody(BaseModel):
 
 
 class ProductUpdateCommon(BaseModel):
-    """``ProductUpdate21Request.common`` -- the members shared by every product
-    in a family."""
+    """``ProductUpdate21Request.common`` -- members shared by every product in a family."""
 
     model_config = _REQUEST
 
@@ -253,8 +223,7 @@ class ProductUpdateCommon(BaseModel):
 
 
 class ProductUpdateDetails(BaseModel):
-    """``ProductUpdate21Request.details`` -- the members that belong to this one
-    product (or variant)."""
+    """``ProductUpdate21Request.details`` -- members belonging to this one product (or variant)."""
 
     model_config = _REQUEST
 
@@ -275,12 +244,8 @@ class ProductUpdateDetails(BaseModel):
 
 
 class ProductUpdateBody(BaseModel):
-    """``ProductUpdate21Request``: two blocks, neither of them required.
-
-    An entirely empty body is legal -- the schema declares no ``required``
-    list -- and updates nothing but the version, which is what a caller asking
-    for no change has asked for.
-    """
+    """``ProductUpdate21Request``: two blocks, neither required. An entirely
+    empty body is legal and updates nothing but the version."""
 
     model_config = _REQUEST
 
@@ -290,10 +255,8 @@ class ProductUpdateBody(BaseModel):
 
 def refuse_both_prices(excluding: object, including: object, *, where: str = "") -> None:
     """The documented 422: the two price members are mutually exclusive.
-
-    ``where`` prefixes the field name for a variant payload, so a caller is
-    told *which* element of ``variants`` was refused.
-    """
+    ``where`` prefixes the field name so a variant payload names which
+    element of ``variants`` was refused."""
     if excluding is None or including is None:
         return
     field = f"{where}price_including_tax" if where else "price_including_tax"
@@ -314,12 +277,9 @@ def derive_prices(
     tax_rate: str,
     where: str = "",
 ) -> tuple[str, str]:
-    """The pair ``(price_excluding_tax, price_including_tax)`` as decimal text.
-
-    Exactly one of the two may be supplied (:func:`refuse_both_prices` has
-    already run); the other is derived with ``tax_rate``. Supplying neither is
-    a free product, which the schema permits -- ``ProductCreateBody`` requires
-    only ``name``.
+    """The pair ``(price_excluding_tax, price_including_tax)`` as decimal
+    text. Exactly one may be supplied (:func:`refuse_both_prices` has already
+    run); the other is derived with ``tax_rate``. Neither is a free product.
     """
     rate = Decimal(tax_rate)
     prefix = where
@@ -365,12 +325,9 @@ def product_document(
     product_suppliers: list[dict[str, Any]] | None = None,
     outlet_taxes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """The pass-through half of a stored product, in one fixed key order.
-
-    ``ProductEntity`` types the members this package reads and carries the rest
-    here; see the note at the head of ``entities.py``. Written as a keyword
-    function rather than a dict literal at each call site so the create path,
-    the variant path and the seed loader cannot disagree about a key's name.
+    """The pass-through half of a stored product, in one fixed key order. A
+    keyword function rather than a dict literal per call site, so the create
+    path, the variant path and the seed loader cannot disagree on a key name.
     """
     return compact(
         {
@@ -405,11 +362,8 @@ def product_document(
 
 def project_product(entity: Mapping[str, Any], *, include_images: bool = True) -> dict[str, Any]:
     """The documented ``Product`` document, members in alphabetical order.
-
-    ``active`` and ``is_active`` are BOTH emitted: the schema declares
-    ``active`` (required) and every response example prints both, so a consumer
-    reading either finds it.
-    """
+    ``active`` and ``is_active`` are both emitted -- every response example
+    prints both."""
     product = ProductEntity.from_entity(entity)
     document = dict(product.document)
     projected: dict[str, Any] = {

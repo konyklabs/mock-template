@@ -1,57 +1,18 @@
-"""The Inventory surface: stock counts per variation and location.
+"""The Inventory surface: stock counts per variation and location. BatchChangeInventory,
+BatchRetrieveInventoryCounts, RetrieveInventoryCount.
+https://developer.squareup.com/reference/square/inventory-api/batch-change-inventory https://developer.squareup.com/reference/square/inventory-api/batch-retrieve-inventory-counts
+https://developer.squareup.com/reference/square/inventory-api/retrieve-inventory-count
 
-FOR: giving ``inventory.count.updated`` something to fire on, and answering
-the two reads an integration makes when it marks an item sold out or checks
-what is left -- through the routes Square documents rather than a control
-channel.
+INVARIANT: a batch is validated whole before its first write or minted id, so a rejected batch writes
+nothing, fires no ``inventory.count.updated``, and draws nothing from the id stream.
+JUDGMENT: this unit tracks only ``IN_STOCK`` of Square's ``InventoryState`` values. A
+``PHYSICAL_COUNT`` sets it directly; an ``ADJUSTMENT`` into IN_STOCK adds, out subtracts, and one
+touching neither side is refused; ``TRANSFER`` is refused outright (SHRINK). A count may go negative,
+matching Square's oversold behaviour. ``ignore_unchanged_counts`` (default true) writes and fires
+nothing for a physical count equal to the current quantity, though it is still echoed.
 
-=============================  ===============================================
-BatchChangeInventory           ``POST /v2/inventory/changes/batch-create``
-                               https://developer.squareup.com/reference/square/inventory-api/batch-change-inventory
-BatchRetrieveInventoryCounts   ``POST /v2/inventory/counts/batch-retrieve``
-                               https://developer.squareup.com/reference/square/inventory-api/batch-retrieve-inventory-counts
-RetrieveInventoryCount         ``GET  /v2/inventory/{catalog_object_id}``
-                               https://developer.squareup.com/reference/square/inventory-api/retrieve-inventory-count
-=============================  ===============================================
-
-INVARIANT: **a batch is validated whole before its first write, and before
-its first id.** Every change names a variation and a location that exist, a
-decimal quantity and states this unit can apply; the first that does not is a
-400 naming ``changes[i].<field>`` and nothing has been written -- so a consumer
-never reads back half a batch, and no ``inventory.count.updated`` fires for a
-request that failed. The change ids in the echo are minted after that
-validation, so a rejected batch draws nothing from the id stream and the next
-accepted one mints what it would have minted anyway. Each count that does change is one journalled update,
-hence one event, which is what the webhook page shows: an array of counts,
-one per change.
-
-What a change does -- JUDGMENT, and where the boundary is
---------------------------------------------------------
-Square tracks a count per ``InventoryState``; this unit tracks ``IN_STOCK``
-only, which is the number an ordering integration reads. So:
-
-* a ``PHYSICAL_COUNT`` sets the ``IN_STOCK`` quantity ("the quantity of an
-  item variation that is physically present"); a count in any other state
-  is refused;
-* an ``ADJUSTMENT`` **into** ``IN_STOCK`` (``from_state`` ``NONE``,
-  ``RECEIVED_FROM_VENDOR``, ``RETURNED_BY_CUSTOMER``, ...) adds its quantity,
-  and one **out of** ``IN_STOCK`` (``to_state`` ``SOLD``, ``WASTE``, ...)
-  subtracts it. Both states must be documented ``InventoryState`` values;
-  an adjustment that neither enters nor leaves ``IN_STOCK`` is refused,
-  since it would change nothing this unit holds and Square publishes no
-  answer for it;
-* a ``TRANSFER`` is refused: SHRINK, stated.
-
-A count may go negative. Square allows it -- an oversold variation reads
-``"-2"`` -- and the alternative is a fake that forbids a state the real API
-produces. ``ignore_unchanged_counts`` (default true) is honoured literally: a
-physical count equal to the current quantity writes nothing, journals
-nothing and fires nothing, and is still echoed in ``changes``.
-
-SHRINK (prototype): changes are not persisted -- ``BatchRetrieveInventoryChanges``,
-``RetrieveInventoryAdjustment``, ``RetrieveInventoryPhysicalCount`` and
-``RetrieveInventoryTransfer`` are absent -- and the deprecated
-``RetrieveInventoryChanges`` GET is not implemented.
+SHRINK (prototype): changes are not persisted -- the Retrieve*Adjustment / PhysicalCount / Transfer /
+Changes endpoints are absent.
 """
 
 from __future__ import annotations
@@ -96,16 +57,13 @@ CAPABILITY = "inventory"
 
 COUNTS_DEFAULT_LIMIT = 100
 COUNTS_MAX_LIMIT = 1000
-"""Page bounds for the two reads. Square documents ``limit`` as "Min 1" and
-publishes no default or maximum; both numbers are JUDGMENT, matching
-ListCatalog's."""
+"""Page bounds for the two reads. JUDGMENT -- Square documents no default or maximum."""
 
 
 @dataclass(frozen=True, slots=True)
 class _Planned:
     """One change, resolved: the count it touches, the quantity it leaves,
-    and the body of the ``changes`` echo it produces -- without its id, which
-    is minted only once every change in the batch has been validated."""
+    and its echo body -- id minted only after the whole batch validates."""
 
     count_id: str
     catalog_object_id: str
@@ -130,9 +88,7 @@ class InventorySurface:
         self._deps = deps
 
     def routes(self) -> tuple[Route, ...]:
-        """The literal four-segment paths cannot collide with the
-        two-segment ``/v2/inventory/{catalog_object_id}``; listed writes-first
-        because the read is meaningless until something is counted."""
+        """Writes listed first: the read is meaningless until something is counted."""
         return (
             Route(
                 method="POST",
@@ -142,9 +98,7 @@ class InventorySurface:
                 auth="bearer",
                 scopes=("INVENTORY_WRITE",),
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="inventory.batch-create", required=True),
-                # One physical count of a seeded variation at the seeded
-                # location; occurred_at is fixed so the example is one request,
-                # not a template.
+                # A fixed example request: one physical count of a seeded variation.
                 example_body={
                     "changes": [
                         {
@@ -214,8 +168,7 @@ class InventorySurface:
         counts = ctx.store.collection(COL.inventory_counts)
         now = ctx.clock.iso_ms()
         planned: list[_Planned] = []
-        # Later changes in one batch see earlier ones: two adjustments to one
-        # variation apply in order, as they would at Square.
+        # Later changes in a batch see earlier ones; two adjustments apply in order.
         pending: dict[str, Decimal] = {}
         for index, change in enumerate(request.changes):
             path = f"changes[{index}]"
@@ -432,10 +385,7 @@ class InventorySurface:
     # -- GET /v2/inventory/{catalog_object_id} ------------------------------
 
     def retrieve_count(self, args: HandlerArgs) -> ReplyInit:
-        """One variation across locations. "location_ids: The Location IDs
-        to look up as a comma-separated list." An object with no counts is
-        an empty array, not a 404: Square's count is "calculated", and a
-        variation nobody has counted has none."""
+        """One variation across locations; no counts is an empty array, not a 404."""
         catalog_object_id = args.params["catalog_object_id"]
         raw_locations = args.query("location_ids")
         locations = {part.strip() for part in raw_locations.split(",") if part.strip()} if raw_locations else set()
@@ -486,9 +436,7 @@ def inventory_routes(deps: SquareDeps) -> tuple[Route, ...]:
 
 
 def _require_variation(ctx: UnitContext, catalog_object_id: str, field: str) -> None:
-    """Counts are kept per ITEM_VARIATION: "catalog_object_type: The
-    CatalogObjectType of the CatalogObject being tracked. Tracking is only
-    supported for the `ITEM_VARIATION` type." """
+    """Counts are kept per ITEM_VARIATION only."""
     stored = ctx.store.collection(COL.catalog).get(catalog_object_id)
     if stored is None or not CatalogObjectEntity.from_entity(stored).is_variation:
         raise UnitError(
@@ -510,8 +458,8 @@ def _require_location(ctx: UnitContext, location_id: str, field: str) -> None:
 
 
 def _current_quantity(counts: Collection, count_id: str, pending: Mapping[str, Decimal]) -> Decimal | None:
-    """The quantity a change starts from: an earlier change in the same
-    batch, else the stored count, else nothing counted yet."""
+    """The quantity a change starts from: an earlier change in this batch, else the stored count,
+    else nothing counted yet."""
     if count_id in pending:
         return pending[count_id]
     stored = counts.get(count_id)

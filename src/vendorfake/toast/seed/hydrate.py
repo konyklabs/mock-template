@@ -1,23 +1,19 @@
-"""Turning a validated scenario into store state.
-
-FOR: the one function ``ToastVendor.hydrate`` calls -- at start and again on
+"""Turning a validated scenario into store state; the one function
+``ToastVendor.hydrate`` calls, at start and again on
 ``POST /__unit/state/reset``.
 
-INVARIANT: **a seeded mutation is marked as one.** Every insert carries
-``{"seed": True}`` in its journal meta, which is what stops the webhook
-dispatcher pushing an event for a record that existed before the process
-started.
+INVARIANT: a seeded mutation is marked as one -- every insert carries
+``{"seed": True}`` in its journal meta, which stops the webhook dispatcher
+pushing an event for a record that existed before the process started.
 
-SECOND INVARIANT: **seeded ids come from the document, never from the id
-stream.** The only hydrate-time values are the token expirations and creation
-instants, both volatile fields the digest ignores.
+INVARIANT: seeded ids come from the document, never the id stream; the only
+hydrate-time values are token expirations and creation instants, both
+volatile fields the digest ignores.
 
-Derived collections -- JUDGMENT: the config API's ``menuItems``,
-``menuGroups`` and ``menus`` are derived from the V3 menu at hydrate, so the
-scenario has one menu and the two APIs agree by construction. The shapes are
-the documented config ones (``model/config.py``); the derivation is this
-project's. The partners row is likewise derived from the restaurant plus the
-seed's ``partner`` block.
+JUDGMENT: the config API's ``menuItems``/``menuGroups``/``menus`` are derived
+from the V3 menu at hydrate, so the scenario has one menu and both APIs agree
+by construction; the partners row is likewise derived from the restaurant
+plus the seed's ``partner`` block.
 """
 
 from __future__ import annotations

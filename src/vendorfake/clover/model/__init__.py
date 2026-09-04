@@ -1,9 +1,8 @@
 """Wire models: what Clover's documented JSON looks like, as typed objects.
 
-Nothing here reads the store or raises a ``UnitError``. A model is pure
-vocabulary, which is what lets field defaults and the money/timestamp units be
-tested without a unit. The surfaces (PRs B-D) parse requests into these and
-project entities out through them.
+A model is pure vocabulary -- it never reads the store or raises a
+``UnitError`` -- so field defaults and unit conversions can be tested without
+running a unit.
 """
 
 from __future__ import annotations

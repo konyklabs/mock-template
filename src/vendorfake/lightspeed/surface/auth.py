@@ -1,54 +1,21 @@
-"""The authentication surface: the token endpoint, and a stand-in for the
-authorize redirect.
+"""Auth surface: the token endpoint, and a stand-in for the authorize redirect.
 
-NEITHER ROUTE IS IN ``api-2026-07.yaml``. The specification carries only the
-resource API; the token endpoint lives under a different version segment
-(``/api/1.0/token``) and the authorize redirect on a different host entirely,
-and both are documented only in prose on
-https://x-series-api.lightspeedhq.com/docs/authorization. Every citation below
-is to that page.
+Neither route is in ``api-2026-07.yaml``; both are documented only in prose at
+https://x-series-api.lightspeedhq.com/docs/authorization.
 
-===================  =========================================================
-Authorize            ``GET  /connect``      -- a STAND-IN; see below
-Token                ``POST /api/1.0/token`` -- form-encoded, two grants
-===================  =========================================================
+DOCUMENTED: authorize is ``GET /connect?response_type=code&client_id=...&redirect_uri=...
+&state=...&scope=...``; exchange takes ``code``/``client_id``/``client_secret``/
+``grant_type=authorization_code`` plus ``redirect_uri``; refresh takes
+``grant_type=refresh_token``. Response carries ``access_token``, ``token_type``,
+``expires``, ``expires_in``, ``refresh_token``, ``domain_prefix``, ``scope``. Refreshing
+retires the consumed refresh token AND revokes the access token issued with it.
 
-DOCUMENTED behaviour reproduced here
-------------------------------------
-* the authorize URL is
-  ``.../connect?response_type=code&client_id=...&redirect_uri=...&state=...&scope=...``;
-* the exchange takes ``code``, ``client_id``, ``client_secret``,
-  ``grant_type=authorization_code`` and ``redirect_uri``, and the refresh takes
-  ``grant_type=refresh_token`` with the stored refresh token;
-* the response carries exactly ``access_token``, ``token_type`` ("Bearer"),
-  ``expires`` (a Unix timestamp), ``expires_in`` (seconds), ``refresh_token``,
-  ``domain_prefix`` and ``scope``;
-* **rotation, and both halves of it**: "Using a refresh token will revoke the
-  access token that was returned with it" AND "You must save this new refresh
-  token and use it the next time". So a refresh call retires the consumed
-  refresh token *and* revokes the access token that came with it. A consumer
-  who keeps using the old access token after refreshing fails here, which is
-  the defect this endpoint exists to catch.
-
-JUDGMENT, each labelled at its site
-------------------------------------
-* **``GET /connect`` is a stand-in.** The real page is on the fixed host
-  ``secure.retail.lightspeed.app`` and is an interactive consent screen; a unit
-  serves one origin and has nobody to click it, so this route sits at the
-  documented path, approves automatically and redirects with the code. The
-  summary says "Stand-in" so ``GET /__unit/routes`` and the generated reference
-  page both say so too.
-* **the code's ten-minute, single-use lifetime** -- carried from the
-  roadmap#75 spike and not re-quoted by the deeper pass (``config.py``).
-* **the status a spent or reused credential gets.** The page documents the
-  rotation and never a status; 401 is what the rest of this document uses for
-  a credential that does not check out.
-* **``client_secret`` is required on the refresh call too** -- see
-  ``model/auth.py``.
-* **a form-encoded body is what the page shows, and JSON is accepted as well.**
-  The core's ``HandlerArgs.body()`` is content-type general, so this costs
-  nothing and fails a consumer on the thing under test rather than on a
-  content type.
+JUDGMENT: ``GET /connect`` stands in for the real consent screen on
+``secure.retail.lightspeed.app`` -- it approves automatically and redirects with the
+code (labelled "Stand-in" in ``GET /__unit/routes``). The code's ten-minute, single-use
+lifetime is from roadmap#75. A spent or reused credential is a 401. ``client_secret`` is
+required on refresh too (``model/auth.py``). JSON is accepted alongside the documented
+form encoding, since body parsing here is content-type general.
 """
 
 from __future__ import annotations
@@ -94,11 +61,8 @@ class LightspeedAuthSurface:
         self._deps = deps
 
     def routes(self) -> tuple[Route, ...]:
-        # No `auth` on either: one issues the credential and the other
-        # exchanges it. No `example_body`: the conformance suite aims its
-        # committed-mutation contracts at the first example route, and a token
-        # is a mutation the webhook mapper rightly never announces -- creating
-        # a sale is that route (`surface/sales.py`).
+        # No `example_body`: a token mint isn't a mutation the webhook mapper
+        # announces; `surface/sales.py`'s create is the example route instead.
         return (
             Route(
                 method="GET",
@@ -139,26 +103,17 @@ class LightspeedAuthSurface:
             )
         response_type = args.query("response_type")
         if response_type is not None and response_type != RESPONSE_TYPE:
-            # The documented URL carries response_type=code and the page names
-            # no other value; JUDGMENT that anything else is a bad request
-            # rather than silently treated as `code`.
+            # JUDGMENT: any other response_type is a 400 rather than silently
+            # treated as `code`.
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail=f"response_type must be {RESPONSE_TYPE!r}; the authorization flow documents no other value.",
                 field="response_type",
                 info={"supplied": response_type},
             )
-        # THE EFFECTIVE URL IS WHAT IS RECORDED -- the one supplied, or the
-        # unit's configured default when the request names none. An earlier
-        # version recorded absence and the exchange then skipped its
-        # comparison entirely, so an authorize with no redirect_uri produced a
-        # code that any redirect_uri whatsoever could redeem. That taught a
-        # consumer the weaker rule: Lightspeed documents redirect_uri as one
-        # of the five exchange parameters and matches it, so a consumer whose
-        # redirect-mismatch test passed here failed in production. The build
-        # contract for this surface says the code is bound to
-        # "client_id + scope + redirect_uri", and now it is -- all three,
-        # always.
+        # The effective redirect_uri (supplied, or the unit's configured
+        # default) is what gets recorded on the code, and the exchange must
+        # match it exactly: the code is bound to client_id + scope + redirect_uri.
         redirect_uri = args.query("redirect_uri") or config.redirect_uri
         if not redirect_uri:
             raise UnitError(
@@ -237,13 +192,9 @@ class LightspeedAuthSurface:
                 field="code",
             )
         if grant.redirect_uri != record.redirect_uri:
-            # "redirect_uri" is one of the five documented exchange parameters
-            # and the authorize URL carries it too; checking them against each
-            # other is the whole reason the parameter exists. UNCONDITIONALLY:
-            # the code always carries the effective URL it was issued for (see
-            # `connect`), so there is no branch a caller can take to skip the
-            # comparison -- including omitting the parameter at the exchange,
-            # which no longer matches a code that was bound to a default.
+            # Checked unconditionally: the code always carries the effective
+            # URL it was issued for (see `connect`), so there's no way to skip
+            # the comparison.
             raise UnitError(
                 UnitErrorKind.UNAUTHORIZED,
                 detail="redirect_uri does not match the one the authorization code was issued for.",
@@ -276,10 +227,8 @@ class LightspeedAuthSurface:
                 info={"reason": "refresh_token_reused"},
             )
         now = int(ctx.clock.now())
-        # Rotation, both documented halves. The consumed refresh token is
-        # retired, and the access token it was returned with is revoked --
-        # "Using a refresh token will revoke the access token that was returned
-        # with it".
+        # Rotation: the consumed refresh token is retired, and the access
+        # token issued with it is revoked.
         refresh_tokens.update(
             record.id,
             lambda draft: draft.__setitem__("retired_at_ms", now),
@@ -297,8 +246,8 @@ class LightspeedAuthSurface:
 
     def _check_secret(self, supplied: str) -> None:
         if supplied != self._deps.config.client_secret:
-            # One phrase for a wrong id and a wrong secret: naming which half
-            # was wrong tells an attacker something the real endpoint does not.
+            # Same message for a wrong id or wrong secret: naming which one
+            # leaks info the real endpoint doesn't.
             raise UnitError(
                 UnitErrorKind.UNAUTHORIZED,
                 detail="The client credentials are not valid.",
@@ -341,8 +290,7 @@ class LightspeedAuthSurface:
         )
         return TokenResponseWire(
             access_token=access_token,
-            # "expires" is a Unix timestamp and "expires_in" the seconds
-            # between now and it; both are documented response fields.
+            # `expires`: unix timestamp; `expires_in`: seconds from now -- both documented.
             expires=expires_at_ms // 1000,
             expires_in=config.access_token_ttl_s,
             refresh_token=refresh_token,
@@ -358,9 +306,8 @@ def auth_routes(deps: LightspeedDeps) -> tuple[Route, ...]:
 def _split_scopes(raw: str | None) -> tuple[str, ...]:
     """The authorize URL's ``scope`` parameter as a list.
 
-    Split on whitespace **or** a literal ``+``: a consumer that hand-builds the
-    URL often percent-decodes to ``a+b`` and one that uses a URL builder
-    produces spaces. Both mean the same list.
+    Splits on whitespace or a literal ``+`` -- a hand-built URL often
+    percent-decodes to ``a+b``; a URL builder produces spaces.
     """
     if raw is None or not raw.strip():
         return ()
@@ -368,11 +315,7 @@ def _split_scopes(raw: str | None) -> tuple[str, ...]:
 
 
 def _with_query(url: str, params: Mapping[str, str | None]) -> str:
-    """``url`` with ``params`` appended, dropping the ones with no value.
-
-    ``state`` is echoed only when the authorization request sent one, which is
-    what the documented URL's own optionality implies.
-    """
+    """``url`` with ``params`` appended, dropping the ones with no value (``state`` is optional)."""
     parts = urlsplit(url)
     query = parse_qsl(parts.query, keep_blank_values=True)
     query.extend((name, value) for name, value in params.items() if value is not None)

@@ -11,8 +11,8 @@ cd "$(dirname "$0")/.." || exit 2
 
 # `--quick` is what a pull request runs in CI (konyklabs/roadmap#103): every
 # static check, the wheel and the docs -- about half a minute -- and neither
-# the pytest suite (5371 tests, over four minutes single-threaded on a runner)
-# nor the nine conformance runs below. Those the full script keeps for a push
+# the pytest suite (several thousand tests, minutes on a runner)
+# nor the conformance runs below. Those the full script keeps for a push
 # to main, a dispatch, and a laptop before a push, where they belong: the
 # evidence a PR carries is the self-test output pasted from that laptop run.
 QUICK=0
@@ -92,6 +92,7 @@ step "ruff format"       uv run ruff format --check .
 step "mypy --strict"     uv run mypy
 step "import-linter"     uv run lint-imports
 step "boundary check"    uv run python tools/boundary_check.py -v
+step "prose ratio"       uv run python tools/prose_ratio.py src --max-total 15 --top 0
 if [ "$QUICK" -eq 0 ]; then
   for entry in "${FIDELITY_FETCH_TARGETS[@]}"; do
     vendor="${entry%%=*}"
@@ -142,17 +143,8 @@ fi
 _example_step() {
   (cd examples/pytest-consumer && uv sync -q --reinstall-package vendorfake && uv run pytest -q -p no:randomly)
 }
-# The Vitest example too: it is the side the #49 signer divergence lived on,
-# and its parity vectors guard nothing unless something runs them. Needs npm;
-# a machine without it fails the step rather than skipping it, because a
-# skipped step reads as a pass in the table.
-_vitest_example_step() {
-  command -v npm >/dev/null 2>&1 || { echo "npm is not on PATH; the Vitest example cannot run" >&2; return 1; }
-  (cd examples/vitest-consumer && npm ci --no-audit --no-fund --silent && npm test --silent)
-}
 if [ "$QUICK" -eq 0 ]; then
   step "example (pytest)"  _example_step
-  step "example (vitest)"  _vitest_example_step
 fi
 
 # The conformance suite through its own entry points, which pytest does not

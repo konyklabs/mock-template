@@ -1,22 +1,12 @@
 """The three reference shapes every Toast document is built from.
 
 DOCUMENTED (toast-orders-api.yaml, toast-config-api.yaml):
+``ToastReference`` is ``{guid, entityType}``; ``ExternalReference`` adds
+``externalId``; ``ConfigReference`` adds ``multiLocationId``.
 
-* ``ToastReference`` -- ``{guid, entityType}``;
-* ``ExternalReference`` -- ``{guid, entityType, externalId}``, the shape an
-  order, check or selection is addressed by;
-* ``ConfigReference`` -- ``{guid, entityType, multiLocationId}``, how a
-  selection names its menu item.
-
-The ``entityType`` strings seen in the documentation: ``Order``, ``Check``,
-``MenuItemSelection``, ``MenuItem``, ``MenuGroup``, ``DiningOption``,
-``Discount``, ``AppliedCustomDiscount``, ``SELECTION`` (the last only in the
-``/applicableDiscounts`` answer).
-
-On the way in a reference needs only its ``guid``: the create example sends
-``{"guid": "...", "entityType": "DiningOption"}`` and a consumer copying a
-reference back from a GET sends the whole thing, so ``extra="ignore"`` and
-``entityType`` optional. On the way out every field is emitted.
+On the way in a reference needs only its ``guid`` -- the create example sends
+``{"guid": "...", "entityType": "DiningOption"}`` -- so ``extra="ignore"`` and
+``entityType`` is optional; on the way out every field is emitted.
 """
 
 from __future__ import annotations

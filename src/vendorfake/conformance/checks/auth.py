@@ -1,41 +1,14 @@
-"""C17 -- the unit actually authenticates somebody, on every route that says so.
+"""C17 -- the unit actually authenticates somebody, on every route that declares auth.
 
-The contract this file exists for was, until it was written, the largest hole
-in the suite: replacing the whole authentication step in
-``core/kernel/unit.py::_run_pipeline`` with ``if False:`` left every contract
-green. ``unauthorized`` and ``forbidden_scope`` appeared in the suite only as
-*rows of the error table* read from ``GET /__unit/errors`` -- the shapes, never
-the behaviour -- so a unit that authenticated nobody, and served every seeded
-order to any anonymous caller, was certified conformant.
+This is a class check, not a check of one route (konyklabs/roadmap#15): every enabled route declaring ``auth`` is asked every question that can be asked of it, and a failure names the route.
 
-Then it was a check of one route. The third adversarial round
-(konyklabs/roadmap#10, findings N-3a and N-3b; tracked as konyklabs/roadmap#15)
-skipped authentication for ``ListLocations`` alone, and separately removed
-scope enforcement from every route *except* the one this check probed, and the
-matrix stayed green both times. A check that asks one route out of sixteen can
-be satisfied by a unit that is correct on exactly that route. So this is now a
-class check in the same sense C03 is: every enabled route that declares
-``auth`` is asked every question that can be asked of it, and a failure names
-the route.
+Three observations per route, because the three failures are different failures a consumer routes on differently:
 
-Three observations per route and not one, because the three failures are
-different failures and a consumer routes on which one they got:
+* **no credential** must be refused, or the route is public.
+* **a valid credential** must be accepted -- not refused for a reason about the credential.
+* **an insufficient credential** must be refused as a *scope* failure, never the same answer as a missing credential.
 
-* **no credential** must be refused. Otherwise the route is public.
-* **a valid credential** must be accepted -- that is, must not be refused *for
-  a reason about the credential*. A check that only asserted refusals would
-  pass against a unit that refused everything, which is a fake nobody can use.
-* **an insufficient credential** must be refused as a *scope* failure. A unit
-  that collapsed this into ``unauthorized`` would send a consumer to re-check
-  their token when what they need is a different grant, and one that collapsed
-  it the other way would let an under-scoped integration pass its tests and
-  fail in production.
-
-HOW A CHECK OBTAINS A CREDENTIAL WITHOUT KNOWING A VENDOR. It reads one from
-``GET /__unit/auth``, which publishes ``headers`` verbatim -- the whole
-instruction, name and value -- so nothing here knows that a bearer scheme
-spells itself ``Authorization: Bearer``, and a vendor whose scheme is a signed
-query parameter would be asked exactly the same three questions.
+A check obtains a credential without knowing a vendor by reading one from ``GET /__unit/auth``, which publishes ``headers`` verbatim, so nothing here needs to know how a vendor spells its own auth scheme.
 """
 
 from __future__ import annotations
@@ -49,13 +22,7 @@ __all__ = ["every_auth_route_authenticates"]
 _UNAUTHORIZED = "unauthorized"
 _FORBIDDEN_SCOPE = "forbidden_scope"
 _CREDENTIAL_KINDS = frozenset({_UNAUTHORIZED, _FORBIDDEN_SCOPE, "token_expired", "token_revoked"})
-"""Every kind that means "the problem is your credential".
-
-Named as a set because the acceptance clause is a *negative*: a probe aimed at
-an id no seed contains is entitled to answer ``not_found``, and a route with a
-required idempotency key is entitled to answer ``missing_field``. What it may
-not do is keep talking about the credential.
-"""
+"""Every kind that means "the problem is your credential" -- a negative set, since a probe may legitimately answer ``not_found`` or ``missing_field`` instead; it just may not keep talking about the credential."""
 
 _GARBAGE = "conformance-not-a-real-credential"
 
@@ -105,11 +72,7 @@ def _under_scoped(env: CheckEnv, route: RouteRow) -> Credential | None:
 def every_auth_route_authenticates(env: CheckEnv) -> str:
     routes = env.auth_routes()
 
-    # A profile may preload a rule on a route probed here -- chaos-demo
-    # rate-limits every third POST /v2/orders -- and pre-auth faults run
-    # before AuthAdapter.resolve, so an intercepted probe answers with a fault
-    # kind instead of an auth kind and the acceptance clause observes nothing.
-    # Same reason C12, C14 and C18 reset first.
+    # Pre-auth chaos faults run before AuthAdapter.resolve and would mask the auth outcome; reset first, as C12/C14/C18 do.
     env.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
 
     problems: list[str] = []
@@ -200,11 +163,7 @@ def every_auth_route_authenticates(env: CheckEnv) -> str:
 
     scoped = [route for route in routes if route.scopes]
     if scoped and not scoped_on:
-        # A skip, not a soft pass: the other clauses held on every route, but a
-        # contract that reports PASS while a clause went unasked everywhere is
-        # gated out with no red and no manifest entry -- undeclared_skips and
-        # never_ran both inspect SKIP outcomes only. Raising makes the gap
-        # visible to --strict and forces the profile to declare it.
+        # A skip, not a soft pass: a clause that went unasked everywhere must be visible to --strict.
         raise ConformanceSkip(
             f"{len(scoped)} route(s) declare scopes ({', '.join(unaskable_scope)}) and no published "
             f"credential is under-scoped for any of them, so the forbidden_scope clause cannot be asked "

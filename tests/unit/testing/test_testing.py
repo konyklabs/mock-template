@@ -228,8 +228,6 @@ def test_served_refuses_a_seed_document_in_env_before_spawning_a_child(monkeypat
         "VENDORFAKE_HOST",
         "VENDORFAKE_PORT",
         "VENDORFAKE_LOG_LEVEL",
-        "VENDORFAKE_TRANSPORT",
-        "VENDORFAKE_TRANSPORT_DIR",
     ],
 )
 def test_served_refuses_an_env_entry_a_flag_would_beat_rather_than_ignoring_it(
@@ -244,10 +242,7 @@ def test_served_refuses_an_env_entry_a_flag_would_beat_rather_than_ignoring_it(
     import vendorfake.testing as testing
 
     monkeypatch.setattr(testing, "SERVE_COMMAND", (sys.executable, "-c", "raise SystemExit('spawned')"))
-    # The explanation, not just the name: the transport has no parameter to
-    # point at, and a message that said "use the parameter" for it sent the
-    # reader looking for one (review of konyklabs/roadmap#105).
-    explanation = "only ever binds HTTP" if name.startswith("VENDORFAKE_TRANSPORT") else "Use the parameter instead"
+    explanation = "Use the parameter instead"
     with pytest.raises(ValueError, match=name) as refused:  # noqa: SIM117 - the `with served(...)` is the subject
         with served("square", "no-faults", env={name: "x"}) as driver:
             pytest.fail(f"served() yielded {driver!r} with {name} in env=")
@@ -900,27 +895,6 @@ def test_drain_over_a_thread_server_settles_a_real_retry_cascade() -> None:
         assert [row["attempt"] for row in rows] == list(range(1, 13))
         assert rows[-1]["status"] == "exhausted"
         assert elapsed > 5.0, f"the cascade settled in {elapsed:.1f}s -- it no longer proves the old default fails"
-
-
-def test_the_tripwire_is_wired_so_framework_answered_is_a_measurement() -> None:
-    """The regression tests/conformance/harness.py records: a counter wired
-    at neither end reports a literal 0 forever, and both contracts on it
-    become vacuous. Here the positive half (requests the unit answers leave
-    it at 0) and the negative half (the one request a framework can still
-    answer first -- an exotic verb outside HTTP_METHODS -- moves the number
-    on the wire) prove unit() and serve_in_thread() share a live tripwire."""
-    with unit("square") as square, serve_in_thread(square) as over_http:
-        assert over_http.client.get("/v2/locations", headers=square.seed.auth).status_code == 200
-        assert over_http.health()["framework_answered"] == 0
-        assert square.tripwire.count == 0
-
-        answered = over_http.client.request("PROPFIND", "/v2/locations", headers=square.seed.auth)
-        # The consumer still gets a vendor-shaped answer (the handler
-        # dispatches to the unit after recording), and the counter moved.
-        assert answered.status_code != 500
-        assert over_http.health()["framework_answered"] == 1
-        assert square.health()["framework_answered"] == 1  # same tripwire, read in process
-        assert square.tripwire.count == 1
 
 
 def test_repeated_headers_reach_the_unit_identically_through_the_transport_and_the_server() -> None:

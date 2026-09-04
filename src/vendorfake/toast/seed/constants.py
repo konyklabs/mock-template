@@ -1,18 +1,15 @@
-"""Every identifier the shipped seed scenario contains, as importable names.
+"""Every identifier the shipped seed scenario contains, as importable names,
+so tests and a consumer's own fixtures have one place to learn the scenario.
 
-FOR: giving unit tests, the conformance target and a consumer's own fixtures
-one place to learn what is in the default scenario.
-
-INVARIANT: **these constants and ``default.seed.json`` agree.** A test asserts
+INVARIANT: these constants and ``default.seed.json`` agree; a test asserts
 every name below against the document as shipped.
 
-Guids are lowercase UUIDs, the one documented shape (``ids.py``); the ones
-below are readable-on-purpose fakes (a ``...-4000-8000-...`` middle so they
-also pass a v4 shape check). ``multiLocationId`` values are 18-digit numeric
-strings like the documented ``100000000171239701``. The seeded tokens are
-readable strings rather than JWTs because a human types them into curl
-commands (JUDGMENT, the same call the Clover seed makes); every token the
-login route mints is JWT-shaped.
+Guids are lowercase UUIDs (``ids.py``), readable-on-purpose fakes with a
+``...-4000-8000-...`` middle so they also pass a v4 shape check.
+``multiLocationId`` values are 18-digit numeric strings like the documented
+``100000000171239701``. JUDGMENT: the seeded tokens are readable strings
+rather than JWTs, since a human types them into curl commands; every token
+the login route mints is JWT-shaped.
 """
 
 from __future__ import annotations
@@ -83,9 +80,8 @@ DEFAULT_SEED_PATH = Path(__file__).resolve().parent / "default.seed.json"
 SEED_RESTAURANT_GUID = "e6a4a8d2-0000-4000-8000-000000000001"
 SEED_RESTAURANT_NAME = "Harvest & Rye — Toast"
 SEED_MANAGEMENT_GROUP_GUID = "e6a4a8d2-0000-4000-8000-0000000000a1"
-"""The restaurant's ``managementGroupGuid`` -- also what the auth adapter
-refuses in ``Toast-Restaurant-External-ID`` ("cannot be the GUID of a
-restaurant group")."""
+"""The restaurant's ``managementGroupGuid``, also refused by the auth adapter
+in ``Toast-Restaurant-External-ID`` ("cannot be the GUID of a group")."""
 
 SEED_CLIENT_ID = "unit-toast-client-id"
 SEED_CLIENT_SECRET = "unit-toast-client-secret"
@@ -158,9 +154,8 @@ TABLE_1_GUID = "5d0e2b11-0000-4000-8000-00000000d501"
 TABLE_2_GUID = "5d0e2b11-0000-4000-8000-00000000d502"
 RESTAURANT_SERVICE_DINNER_GUID = "5d0e2b11-0000-4000-8000-00000000d601"
 DISCOUNT_SOUP_GUID = "5d0e2b11-0000-4000-8000-00000000d701"
-"""'Enjoy more soup.' -- the documented AppliedDiscount example's name; a 100%
-ITEM discount, so applying it to the 8.99 soup reproduces the example's
-``discountAmount`` 8.99."""
+"""'Enjoy more soup.', a 100% ITEM discount reproducing the documented
+AppliedDiscount example's ``discountAmount`` 8.99 on the 8.99 soup."""
 SERVICE_CHARGE_GRATUITY_GUID = "5d0e2b11-0000-4000-8000-00000000d801"
 VOID_REASON_GUID = "5d0e2b11-0000-4000-8000-00000000d901"
 
@@ -172,9 +167,8 @@ SEED_ORDER_CHECK_GUID = "9a7b6c5d-0000-4000-8000-00000000f101"
 SEED_ORDER_SELECTION_GUID = "9a7b6c5d-0000-4000-8000-00000000f201"
 SEED_ORDER_OPENED_MS = 1755786102000
 SEED_ORDER_BUSINESS_DATE = 20250821
-"""The existing order: one Lemonade (3.25, tax 0.20, total 3.45), unpaid,
-opened 2025-08-21T14:21:42Z which is 10:21 in New York -- business date
-20250821 after the 4 am closeout."""
+"""The existing order (one Lemonade, unpaid), opened 2025-08-21T14:21:42Z,
+10:21 in New York -- business date 20250821 after the 4am closeout."""
 
 CREDIT_AUTHORIZATION_GUID = "7c65cc16-0000-4000-8000-00000000e001"
 CREDIT_AUTHORIZATION_CENTS = 5000
@@ -183,12 +177,10 @@ CREDIT_AUTHORIZATION_CENTS = 5000
 STOCK_BURGER_QUANTITY = 12.0
 STOCK_LEMONADE_QUANTITY = 3.0
 """Seeded QUANTITY rows: the burger is comfortably stocked; the lemonade sits
-under the documented ``low_quantity`` threshold (5), so an update that lowers
-it further is a ``low_quantity`` event and one that empties it is refused."""
+under the ``low_quantity`` threshold (5)."""
 
 SEED_WEBHOOK_SUBSCRIPTION_ID = "sub_seed_quickstart"
 SEED_WEBHOOK_URL = "https://example.test/webhooks/toast"
 SEED_WEBHOOK_SECRET = "unit-seeded-toast-webhook-secret"
-"""The subscriber the scenario ships -- every category, a readable secret --
-**disabled**: its callback host is the reserved ``.test`` domain where nothing
-listens. The quickstart registers a live one of its own (README)."""
+"""The shipped subscriber, disabled: its callback host is the reserved
+``.test`` domain where nothing listens."""

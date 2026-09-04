@@ -35,7 +35,7 @@ vendorfake serve --vendor lightspeed     # or any other installed vendor
 
 ```sh
 curl -s http://127.0.0.1:8080/__unit/health
-# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"framework_answered":0}
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221}
 ```
 
 Every command names a vendor (`--vendor square|clover|toast|lightspeed`, or
@@ -51,8 +51,8 @@ Everything past the first request lives in the docs site under `docs/`:
 - **[Start here](docs/start/install.md)** — install, the sixty-second
   quickstart above in full, and which binding to use for a test suite
   (in-process sync, in-process async, served, container).
-- **[Recipes](docs/pytest-plugin.md)** — pytest (sync and async), Vitest,
-  Playwright, docker compose, CI.
+- **[Recipes](docs/pytest-plugin.md)** — pytest (sync and async), docker
+  compose, CI.
 - **[Concepts](docs/concepts/unit.md)** — unit, profile, capability and
   roles, seed, driver, journal and request log, clock, chaos rules and
   faults, provenance labels.

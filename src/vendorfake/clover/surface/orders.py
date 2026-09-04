@@ -1,75 +1,21 @@
 """The orders surface: CRUD, line items, and the two atomic calculators.
 
-FOR: reproducing what a Clover consumer drives against ``/v3/merchants/{mId}/
-orders`` with the documented shapes and the one documented behaviour a
-Square-habituated consumer gets wrong first: **plain orders never total
-themselves**.
-
-====================  ==========================================================
-CreateOrder           ``POST   /v3/merchants/{mId}/orders``
-GetOrders             ``GET    /v3/merchants/{mId}/orders``
-GetOrder              ``GET    /v3/merchants/{mId}/orders/{orderId}``
-UpdateOrder           ``POST   /v3/merchants/{mId}/orders/{orderId}``  (POST, not PUT)
-DeleteOrder           ``DELETE /v3/merchants/{mId}/orders/{orderId}``
-CreateLineItem        ``POST   /v3/merchants/{mId}/orders/{orderId}/line_items``
-BulkCreateLineItems   ``POST   /v3/merchants/{mId}/orders/{orderId}/bulk_line_items``
-CreateAtomicOrder     ``POST   /v3/merchants/{mId}/atomic_order/orders``
-CheckoutAtomicOrder   ``POST   /v3/merchants/{mId}/atomic_order/checkouts``
-====================  ==========================================================
+DOCUMENTED: plain orders never total themselves; update is sparse POST; a
+line item needs a price or an item.id; bulk create takes at most 100 items;
+the atomic endpoints take an ``orderCart`` (``/atomic_order/orders`` creates
+and totals it, ``/atomic_order/checkouts`` totals only); lists use the
+``elements`` envelope with ``filter=``/``expand=``/``limit``/``offset``
 (https://docs.clover.com/dev/docs/creating-custom-orders,
 https://docs.clover.com/dev/docs/orderupdateorder,
 https://docs.clover.com/dev/docs/ordercreatelineitem,
 https://docs.clover.com/dev/docs/orderbulkcreatelineitems,
 https://docs.clover.com/dev/docs/ordercreateatomicorder,
-https://docs.clover.com/dev/docs/ordergetorders)
+https://docs.clover.com/dev/docs/ordergetorders).
 
-Documented behaviour reproduced here
-------------------------------------
-* create takes the example body ``{"orderType":{"id"},"currency","total",
-  "state":"Open"}`` and stores every field as sent; **no auto-totaling** --
-  "Order totals are calculated dynamically and updated by the app the
-  merchant uses... If your app modifies an order, it must update the total as
-  well" -- so adding a line item leaves ``total`` exactly where it was;
-* update is ``POST``, sparse: only the fields sent change;
-* a line item needs "either a ``price`` or an ``item`` object with an
-  inventory item ``id``"; ``unitQty`` is x1000; 3,000 line items per order;
-* bulk create takes at most 100 and "Each item must include a price";
-* the atomic endpoints take an ``orderCart``: ``/atomic_order/orders``
-  creates the order *and* "calculate[s] the order totals";
-  ``/atomic_order/checkouts`` calculates and creates nothing;
-* lists use the ``{"elements": [...]}`` envelope with per-element ``href``,
-  ``limit`` default 100 / max 1000, ``offset``; ``filter=<field><op><value>``
-  on ``state``, ``createdTime``, ``modifiedTime``, ``total``,
-  ``externalReferenceId``, ``id``; ``expand=`` up to three fields, dotted one
-  level; nested arrays cap at 100 and are not pageable.
+JUDGMENT calls are labelled at their own sites below.
 
-JUDGMENT, each labelled at its site
------------------------------------
-* **Delete is soft** (gap 5): ``DELETE`` sets ``deletedTime`` -- a documented
-  filter field, which is the hook -- and the order then 404s and leaves the
-  list. The 200 body is this package's; the docs publish none.
-* **The state machine** (gap 6): ``open -> locked``, ``locked`` terminal; a
-  state is compared case-insensitively and stored verbatim, because Clover's
-  own pages write ``Open`` and ``open``; an order with no state (the
-  documented null, "hidden") is treated as ``open`` for transition purposes.
-  Any write to a ``locked`` order -- update, line item -- is a 400.
-* **Filters**: ``filter=`` repeats, as Clover's list pages show
-  (``filter=createdTime>=...&filter=createdTime<=...``), and the clauses are
-  ANDed; every value is read through ``args.query_all``
-  (konyklabs/roadmap#37). An unknown filter field is a 400; the docs list
-  the fields and not the response to a wrong one. ``deletedTime`` is not
-  filterable here because deleted orders are never listed.
-* **Defaults on create**: a missing ``currency`` is the merchant's (an order
-  cannot be denominated in something the seller does not take); a missing
-  ``total`` is ``0`` (the field is client-owned, and the client said
-  nothing); ``clientCreatedTime`` defaults to ``createdTime``.
-* **Rounding** in the atomic total is half-up on cents (``model/order.py``).
-* **Atomic responses** carry the full order -- line items, discounts and
-  service charge expanded -- because that is what the tutorial's response
-  shows and what a caller who just sent a cart is asking about.
-
-THE ORDERING INVARIANT: **no 4xx leaves a journal entry.** Every refusal --
-lock, cap, missing price, unknown item -- is computed before the write.
+Invariant: no 4xx leaves a journal entry -- every refusal is checked before
+its write.
 """
 
 from __future__ import annotations
@@ -132,13 +78,12 @@ CAPABILITY = "orders"
 """The capability every route below belongs to."""
 
 BULK_MAX = 100
-""""max 100" line items per bulk request (orderbulkcreatelineitems)."""
+"""DOCUMENTED: max line items per bulk request (orderbulkcreatelineitems)."""
 
 _MACHINE = StateMachine(ORDER_MACHINE)
 
 _CANNOT_BE_CLEARED = frozenset({"currency", "total"})
-"""Required on the wire with no default: clearing either would store an
-order the wire cannot project."""
+"""Required on the wire with no default; clearing either is refused."""
 
 _ATOMIC_EXPAND = frozenset(
     {"lineItems", "discounts", "serviceCharge", "customers", "lineItems.discounts", "lineItems.modifications"}
@@ -152,9 +97,8 @@ _FILTER_FIELDS: Mapping[str, str] = {
     "externalReferenceId": "str",
     "id": "str",
 }
-"""Filterable fields and their comparison kind. ``state`` compares
-case-insensitively; ``int`` fields take ``=``, ``>=``, ``<=``; ``str`` fields
-take ``=`` only."""
+"""Filterable fields and comparison kind: ``state`` case-insensitive,
+``int`` takes ``=``/``>=``/``<=``, ``str`` takes ``=`` only."""
 
 
 class CloverOrdersSurface:
@@ -166,8 +110,6 @@ class CloverOrdersSurface:
         self._deps = deps
 
     def routes(self) -> tuple[Route, ...]:
-        """Literal segments before parameters: ``atomic_order`` sits beside
-        ``orders``, so the two collection paths never shadow each other."""
         base = "/v3/merchants/{mId}"
         return (
             Route(
@@ -274,8 +216,6 @@ class CloverOrdersSurface:
             ),
         )
 
-    # -- POST /orders --------------------------------------------------------
-
     def create_order(self, args: HandlerArgs) -> ReplyInit:
         merchant_id = require_merchant(args)
         request = validate_body(OrderCreateRequest, args.body())
@@ -288,7 +228,6 @@ class CloverOrdersSurface:
         entity = OrderEntity(
             id=self._deps.ids.order(),
             merchant_id=merchant_id,
-            # JUDGMENT defaults; see the module docstring.
             currency=request.currency or merchant.currency,
             total=0 if request.total is None else request.total,
             state=request.state,
@@ -311,13 +250,8 @@ class CloverOrdersSurface:
         stored = args.ctx.store.collection(COL.orders).insert(entity.to_entity(), {"operation_id": "CreateOrder"})
         return json_(project_order(stored, expand))
 
-    # -- GET /orders ---------------------------------------------------------
-
     def list_orders(self, args: HandlerArgs) -> ReplyInit:
-        """Insertion order, filtered, then windowed. Stable under inserts: a
-        row created between two pages lands after the walk, never inside it,
-        so pages never overlap. A soft delete between two pages drops that
-        row from the union -- the list reports what exists now."""
+        """Insertion order, filtered, then windowed; a page never repeats a row."""
         merchant_id = require_merchant(args)
         expand = expansions(args, EXPANDABLE)
         predicate = _filters(args.query_all("filter"))
@@ -336,15 +270,11 @@ class CloverOrdersSurface:
             )
         )
 
-    # -- GET /orders/{orderId} ----------------------------------------------
-
     def get_order(self, args: HandlerArgs) -> ReplyInit:
         merchant_id = require_merchant(args)
         expand = expansions(args, EXPANDABLE)
         order = _require_order(args.ctx.store.collection(COL.orders), args.params["orderId"], merchant_id)
         return json_(project_order(order.to_entity(), expand))
-
-    # -- POST /orders/{orderId} ---------------------------------------------
 
     def update_order(self, args: HandlerArgs) -> ReplyInit:
         merchant_id = require_merchant(args)
@@ -364,8 +294,7 @@ class CloverOrdersSurface:
         _check_references(args.ctx, merchant_id, request.orderType, request.employee, request.customers, field="")
 
         # Terminality first, then the move: "this order is locked" explains
-        # "that move is not allowed". Compared on the lowercase canon, stored
-        # verbatim (module docstring).
+        # "that move is not allowed".
         _MACHINE.assert_mutable(_canonical(current.state), subject)
         if supplied(request, "state"):
             if request.state is None:
@@ -382,9 +311,6 @@ class CloverOrdersSurface:
                 elif name == "orderType":
                     draft[name] = value.wire()
                 elif name == "employee":
-                    # Round-tripped as a reference: consumers attach it before
-                    # paying, and a fake that dropped it would lose the field
-                    # silently.
                     draft[name] = {"id": value.id}
                 elif name == "customers":
                     draft[name] = [{"id": customer.id} for customer in value]
@@ -397,13 +323,8 @@ class CloverOrdersSurface:
         updated = orders.update(current.id, mutate, meta={"operation_id": "UpdateOrder"})
         return json_(project_order(updated, expand))
 
-    # -- DELETE /orders/{orderId} -------------------------------------------
-
     def delete_order(self, args: HandlerArgs) -> ReplyInit:
-        """Soft delete (JUDGMENT, module docstring). The body names what was
-        deleted and when; Clover documents a 200 and no schema. A locked
-        order is not deletable -- "any write to a locked order is a 400", and
-        a paid order vanishing is the worse surprise (JUDGMENT)."""
+        """Soft delete; a locked order is not deletable (JUDGMENT)."""
         merchant_id = require_merchant(args)
         orders = args.ctx.store.collection(COL.orders)
         current = _require_order(orders, args.params["orderId"], merchant_id)
@@ -416,8 +337,6 @@ class CloverOrdersSurface:
 
         orders.update(current.id, mutate, meta={"operation_id": "DeleteOrder"})
         return json_({"id": current.id, "deletedTime": now})
-
-    # -- POST /orders/{orderId}/line_items ----------------------------------
 
     def create_line_item(self, args: HandlerArgs) -> ReplyInit:
         merchant_id = require_merchant(args)
@@ -437,8 +356,6 @@ class CloverOrdersSurface:
         orders.update(current.id, mutate, meta={"operation_id": "CreateLineItem"})
         return json_(LineItemWire.model_validate(line).wire())
 
-    # -- POST /orders/{orderId}/bulk_line_items -----------------------------
-
     def bulk_create_line_items(self, args: HandlerArgs) -> ReplyInit:
         merchant_id = require_merchant(args)
         request = validate_body(BulkLineItemsRequest, args.body())
@@ -456,8 +373,7 @@ class CloverOrdersSurface:
         lines: list[dict[str, Any]] = []
         for index, item in enumerate(request.items):
             if item.price is None:
-                # "Each item must include a price" -- an item reference does
-                # not stand in for it on this endpoint, unlike line_items.
+                # DOCUMENTED: "Each item must include a price" (unlike line_items, no item-reference fallback here).
                 raise UnitError(
                     UnitErrorKind.MISSING_FIELD,
                     detail="Each item must include a price.",
@@ -473,14 +389,9 @@ class CloverOrdersSurface:
         orders.update(current.id, mutate, meta={"operation_id": "BulkCreateLineItems"})
         return json_({"items": [LineItemWire.model_validate(line).wire() for line in lines]})
 
-    # -- POST /atomic_order/orders and /checkouts ---------------------------
-
     def create_atomic_order(self, args: HandlerArgs) -> ReplyInit:
-        """ "Creates an order and calculates the order totals" -- the one
-        create path that totals, and it does so exactly once, here. The
-        answer is the stored order plus the documented totals block
-        (``subtotal``, ``totalTaxAmount``, ``taxSummaries``) the checkout
-        reference lists."""
+        """DOCUMENTED: the one create path that totals. Answers the stored
+        order plus the totals block."""
         merchant_id = require_merchant(args)
         cart = validate_body(AtomicOrderRequest, args.body()).orderCart
         merchant = _the_merchant(args.ctx, merchant_id)
@@ -491,9 +402,7 @@ class CloverOrdersSurface:
             merchant_id=merchant_id,
             currency=cart.currency or merchant.currency,
             total=totals.total,
-            # JUDGMENT: the docs recommend "manually setting the order state
-            # value to Open"; an atomic order is created open.
-            state=OrderState.OPEN.value,
+            state=OrderState.OPEN.value,  # JUDGMENT: docs recommend "manually setting the order state to Open"
             createdTime=now,
             modifiedTime=now,
             clientCreatedTime=now,
@@ -511,13 +420,8 @@ class CloverOrdersSurface:
         return json_({**project_order(stored, _ATOMIC_EXPAND), **totals.wire()})
 
     def checkout_atomic_order(self, args: HandlerArgs) -> ReplyInit:
-        """The calculator: the same arithmetic, nothing stored, nothing
-        journalled. The answer is order-shaped without an id, because no
-        order exists (its lines still draw ids from the unit's stream so the
-        answer is line-shaped -- deterministic, and JUDGMENT-labelled here
-        because it advances the stream without storing anything), plus the
-        documented ``total``/``subtotal``/
-        ``totalTaxAmount``/``taxSummaries`` block."""
+        """Same arithmetic as create, nothing stored; lines still draw ids
+        from the unit's stream (JUDGMENT)."""
         merchant_id = require_merchant(args)
         cart = validate_body(AtomicOrderRequest, args.body()).orderCart
         merchant = _the_merchant(args.ctx, merchant_id)
@@ -540,18 +444,12 @@ class CloverOrdersSurface:
             )
         )
 
-    # -- POST /print_event ---------------------------------------------------
-
     def create_print_event(self, args: HandlerArgs) -> ReplyInit:
-        """ "Submits the Printrequest" for one order
-        (https://docs.clover.com/dev/reference/ordercreateprintevent-3). The
-        response is the documented event -- ``id``, ``orderRef{id}``,
-        ``state: CREATED``, ``createdTime``, ``modifiedTime``, ``printTime``
-        (https://docs.clover.com/dev/docs/printing-orders-rest-api) -- minus
-        ``deviceRef``: the real response names the firing device, and this
-        unit has none (JUDGMENT: omitted rather than invented). The event is
-        stored and journalled so a consumer can assert the print was asked
-        for; nothing else happens."""
+        """DOCUMENTED: "Submits the Printrequest" for one order
+        (https://docs.clover.com/dev/reference/ordercreateprintevent-3); the
+        response is the documented event shape
+        (https://docs.clover.com/dev/docs/printing-orders-rest-api), minus
+        ``deviceRef`` (JUDGMENT: omitted rather than invented)."""
         merchant_id = require_merchant(args)
         request = validate_body(PrintEventRequest, args.body())
         _require_order(args.ctx.store.collection(COL.orders), request.orderRef.id, merchant_id)
@@ -567,14 +465,10 @@ class CloverOrdersSurface:
         args.ctx.store.collection(COL.print_events).insert(event, {"operation_id": "CreatePrintEvent"})
         return json_(event)
 
-    # -- shared --------------------------------------------------------------
-
     def _price_cart(
         self, ctx: UnitContext, merchant_id: str, cart: OrderCartRequest
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None, AtomicTotals]:
-        """Resolve a cart's lines and their tax rates, validate its discounts,
-        resolve a service charge that references the merchant's default, and
-        compute the documented totals block."""
+        """Resolve a cart into stored lines/discounts/charge plus the totals block."""
         if len(cart.lineItems) > MAX_LINE_ITEMS_PER_ORDER:
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
@@ -594,9 +488,7 @@ class CloverOrdersSurface:
         return lines, discounts, charge, atomic_totals(lines, line_rates, discounts, charge)
 
     def _service_charge(self, ctx: UnitContext, cart: OrderCartRequest) -> dict[str, Any] | None:
-        """A cart's service charge: inline values, or the merchant's default
-        when the cart references it by ``id`` (the ``GET
-        /default_service_charge`` record). An unknown id is a 400."""
+        """Inline values, or the merchant's default by ``id``; unknown id is a 400."""
         requested = cart.serviceCharge
         if requested is None:
             return None
@@ -625,13 +517,8 @@ class CloverOrdersSurface:
         )
 
     def _build_line(self, ctx: UnitContext, request: LineItemRequest, *, field: str, with_rates: bool = False) -> Any:
-        """One stored line from a request: "either a price or an item object
-        with an inventory item id". An item reference must resolve, and it
-        supplies the price and name the request left out; a modification's
-        modifier must resolve and supplies its price when ``amount`` is
-        absent. With ``with_rates`` the line's tax rates come back too: the
-        item's (its explicit associations or the merchant's defaults), or
-        the line's own ``taxRates`` references for a bare-price line."""
+        """One stored line; an item reference supplies price/name if
+        omitted. ``with_rates`` also returns the line's tax rates."""
         item: ItemEntity | None = None
         if request.item is not None:
             stored = ctx.store.collection(COL.items).get(request.item.id)
@@ -688,8 +575,7 @@ class CloverOrdersSurface:
         return line, rates
 
     def _modification(self, ctx: UnitContext, request: Any, field: str) -> dict[str, Any]:
-        """A line modification, as the atomic tutorial shows one:
-        ``{"modifier": {"id", "name", "available"}, "amount"}``."""
+        """DOCUMENTED shape: ``{"modifier": {...}, "amount"}``."""
         stored = ctx.store.collection(COL.modifiers).get(request.modifier.id)
         if stored is None:
             raise UnitError(
@@ -710,13 +596,10 @@ class CloverOrdersSurface:
         )
 
 
-# ---------------------------------------------------------------------------
-# Module-level helpers: pure, and testable without a unit.
-# ---------------------------------------------------------------------------
+# Module-level helpers: pure, testable without a unit.
 
 
 def order_routes(deps: CloverDeps) -> tuple[Route, ...]:
-    """The order routes for one vendor."""
     return CloverOrdersSurface(deps).routes()
 
 
@@ -725,9 +608,7 @@ def _now(ctx: UnitContext) -> int:
 
 
 def _canonical(state: str | None) -> str:
-    """The machine's reading of a stored state: lowercase, and an absent
-    (null, "hidden") state reads as ``open`` for transition purposes
-    (JUDGMENT, module docstring)."""
+    """Lowercased; an absent state reads as ``open`` (JUDGMENT)."""
     return OrderState.OPEN.value if state is None else state.lower()
 
 
@@ -743,10 +624,8 @@ def _check_state_value(state: str | None) -> None:
 
 
 def _check_payment_state(request: OrderCreateRequest) -> None:
-    """JUDGMENT: ``paymentState`` is moved by payments, never set by a client
-    write. Clover documents the values and nothing about who sets them; a
-    client declaring an order PAID with no payment behind it would make the
-    field a lie, so only the initial ``OPEN`` is accepted here."""
+    """JUDGMENT: ``paymentState`` is moved by payments, never set by a
+    client write; only the initial ``OPEN`` is accepted here."""
     if request.paymentState is not None and request.paymentState.value != "OPEN":
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,
@@ -758,11 +637,8 @@ def _check_payment_state(request: OrderCreateRequest) -> None:
 def _check_references(
     ctx: UnitContext, merchant_id: str, order_type: Any, employee: Any, customers: Any, *, field: str
 ) -> None:
-    """``orderType``, ``employee`` and ``customers`` must name records of
-    the path merchant, exactly as a line item's ``item`` and a payment's
-    ``employee`` must (JUDGMENT: consistent refusal, 400 naming the field;
-    Clover documents no answer to a dangling reference). Another merchant's
-    row is as absent as none (``merchant_row``)."""
+    """``orderType``, ``employee`` and ``customers`` must name records of the
+    path merchant (JUDGMENT: 400 naming the field on a dangling reference)."""
     checks = [
         (order_type, COL.order_types, f"{field}orderType.id", "Order type"),
         (employee, COL.employees, f"{field}employee.id", "Employee"),
@@ -790,9 +666,7 @@ def _check_capacity(order: OrderEntity, adding: int) -> None:
 
 
 def _discount(request: DiscountRequest, field: str) -> dict[str, Any]:
-    """A stored discount: ``amount`` or ``percentage``, one of them required
-    (JUDGMENT on refusing an empty discount; Clover documents both forms and
-    nothing about neither)."""
+    """``amount`` or ``percentage`` required (JUDGMENT: refuses neither)."""
     if request.amount is None and request.percentage is None:
         raise UnitError(
             UnitErrorKind.MISSING_FIELD,
@@ -813,8 +687,8 @@ def _the_merchant(ctx: UnitContext, merchant_id: str) -> MerchantEntity:
 
 
 def _require_order(orders: Collection, order_id: str, merchant_id: str) -> OrderEntity:
-    """The order, or a 404. A soft-deleted order and another merchant's
-    order are both "not found": neither exists from this caller's side."""
+    """The order, or a 404 -- a soft-deleted or another merchant's order is
+    equally "not found"."""
     stored = orders.get(order_id)
     if stored is not None:
         order = OrderEntity.from_entity(stored)
@@ -832,9 +706,8 @@ def _filters(raws: Sequence[str]) -> Any:
 def _filter(raw: str) -> Any:
     """One ``filter=<field><op><value>`` as a predicate over orders, or a 400.
 
-    ``>=`` and ``<=`` are tried before ``=`` so ``total>=1500`` is not read
-    as the field ``total>`` equal to ``1500``; a bare ``>`` or ``<`` is
-    named as unsupported rather than reported as "no operator".
+    ``>=``/``<=`` are tried before ``=`` so ``total>=1500`` doesn't parse as
+    field ``total>``.
     """
     for op in (">=", "<=", "="):
         if op in raw:

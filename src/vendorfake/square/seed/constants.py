@@ -1,22 +1,7 @@
 """Every identifier the shipped seed scenario contains, as importable names.
 
-FOR: giving unit tests, integration tests, the conformance fidelity cases and a
-consumer's own fixtures one place to learn what is in the default scenario, so
-that ``"CAISENgvlJ6jLWAzERDzjyHVybY"`` is never typed twice and a change to the
-document is a change to one file.
-
-INVARIANT: **these constants and ``default.seed.json`` agree.** A test asserts
-every name below against the document as shipped, so editing one without the
-other is a red run rather than a fixture that silently stops matching anything.
-
-The values are taken from Square's own documentation examples, so a consumer
-reading the docs recognises what comes back:
-
-===================  =======================================================================
-merchant, location   https://developer.squareup.com/reference/square/locations-api/list-locations
-catalog item         https://developer.squareup.com/reference/square/catalog-api/retrieve-catalog-object
-order id shape       https://developer.squareup.com/reference/square/orders-api/create-order
-===================  =======================================================================
+Both this module and ``default.seed.json`` must agree -- a test asserts each
+name below against the document as shipped, so the two files stay in sync.
 """
 
 from __future__ import annotations
@@ -75,55 +60,38 @@ SEED_OPEN_ORDER_ID = "CAISENgvlJ6jLWAzERDzjyHVybY"
 SEED_COMPLETED_ORDER_ID = "CAISEM82RcpmcFBM0TfOyiHV3es"
 
 SEED_COMPLETED_ORDER_CLOSED_AT = "2026-07-15T08:05:00.000Z"
-"""When the COMPLETED order reached its terminal state.
-
-"The timestamp for when the order reached a terminal state, in RFC 3339
-format" (https://developer.squareup.com/reference/square/objects/Order). A
-terminal order in the scenario has to have one, or a ``closed_at`` date filter
--- the documented pairing with ``sort_field: CLOSED_AT`` -- matches nothing
-over the only terminal order the unit ships, and a consumer debugging that
-query concludes the query is wrong.
-"""
+"""When the COMPLETED order reached its terminal state (https://developer.squareup.com/reference/square/objects/Order)."""
 
 SEED_COMPLETED_ORDER_TENDER_ID = "EnZdNAlWCmfh6Mt5FMNST1o7taB"
-"""The tender that paid the COMPLETED order, id and shape from Square's
-PayOrder example response
-(https://developer.squareup.com/reference/square/orders-api/pay-order). It
-covers the whole 1125-minor-unit total, because "Completed orders are fully
-paid" (https://developer.squareup.com/reference/square/enums/OrderState)."""
+"""The tender that paid the COMPLETED order, covering its full total
+(https://developer.squareup.com/reference/square/orders-api/pay-order); COMPLETED orders are documented as fully paid
+(https://developer.squareup.com/reference/square/enums/OrderState)."""
 
 SEED_COMPLETED_ORDER_TOTAL = 1125
-"""3 x the 375 Cold Brew Small, in minor units: the order total, and therefore
-the tender amount and the reason nothing is due on it."""
+"""3 x the 375 Cold Brew Small, in minor units."""
 
 SEED_LOYALTY_PROGRAM_ID = "d619f755-2d17-41f3-990d-c04ecedd64dd"
-"""The program id from Square's RetrieveLoyaltyProgram example
-(https://developer.squareup.com/reference/square/loyalty-api/retrieve-loyalty-program)."""
+"""Program id from Square's RetrieveLoyaltyProgram example (https://developer.squareup.com/reference/square/loyalty-api/retrieve-loyalty-program)."""
 
 SEED_LOYALTY_REWARD_TIER_ID = "e1b39225-9da5-43d1-a5db-782cdd8ad94f"
 """The reward tier id from the same example."""
 
 SEED_LOYALTY_SPEND_AMOUNT = 100
-"""The seeded SPEND accrual rule: one point per 100 minor units. JUDGMENT --
-the numbers are this scenario's, chosen so that a 500-cent order earns a
-round five points; Square's example program is one point per dollar too."""
+"""JUDGMENT: one point per 100 minor units, so a 500-cent order earns five."""
 
 SEED_LOYALTY_SECOND_ACCOUNT_ID = "5f2b7c14-9a3e-4d68-8c01-7d54c2a90b31"
-"""The second enrolled buyer, seeded so the loyalty search survives the
-conformance page walk (konyklabs/roadmap#15)."""
+"""Second enrolled buyer (konyklabs/roadmap#15)."""
 
 SEED_LOYALTY_ACCOUNT_ID = "79b807d2-d786-46a9-933b-918028d7a8c5"
 SEED_LOYALTY_ACCOUNT_PHONE = "+14155551234"
 SEED_LOYALTY_CUSTOMER_ID = "QPTXM8PQNX3Q726ZYHPMNP46XC"
-"""The seeded buyer: ids from Square's loyalty examples, phone in the E.164
-form the mapping documents."""
+"""Seeded buyer: ids from Square's loyalty examples; phone in E.164 form."""
 
 SEED_INVENTORY_TEA_MUG_QUANTITY = "25"
 SEED_INVENTORY_COLD_BREW_SMALL_QUANTITY = "8"
 SEED_INVENTORY_CALCULATED_AT = "2026-08-01T09:00:00.000Z"
-"""Two IN_STOCK counts at the Grant Park location, so a batch-retrieve on a
-fresh unit returns something and a physical count has a baseline to change.
-Quantities are decimal strings, as Square's ``InventoryCount`` sends them."""
+"""Two IN_STOCK counts at the Grant Park location; quantities are decimal
+strings, as Square's ``InventoryCount`` sends them."""
 
 SEED_ACCESS_TOKEN = "EAAAl-unit-seeded-access-token-full-scopes"
 SEED_REFRESH_TOKEN = "EQAAl-unit-seeded-refresh-token-full-scopes"
@@ -141,16 +109,8 @@ SEED_SCOPES: tuple[str, ...] = (
     "INVENTORY_WRITE",
     "DEVELOPER_APPLICATION_WEBHOOKS_WRITE",
 )
-"""The full seeded grant.
-
-The last entry is this unit's stand-in for the application credential Square
-requires on the Webhook Subscriptions API -- see
-:data:`~vendorfake.square.config.WEBHOOK_SUBSCRIPTIONS_SCOPE` for why an
-application-owned API is modelled as a scope here. It is deliberately absent
-from :data:`SEED_READ_ONLY_SCOPES`, so "a read-only token cannot register a
-subscriber or read a signing key" is testable against a token the fixtures
-already define.
-"""
+"""The full seeded grant, including the webhook-subscriptions scope withheld
+from :data:`SEED_READ_ONLY_SCOPES`."""
 
 SEED_READ_ONLY_ACCESS_TOKEN = "EAAAl-unit-seeded-access-token-read-only"
 SEED_READ_ONLY_REFRESH_TOKEN = "EQAAl-unit-seeded-refresh-token-read-only"

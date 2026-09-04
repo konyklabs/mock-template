@@ -1,41 +1,16 @@
-"""The shapes this vendor stores, and the collections it stores them in.
+"""The shapes this vendor stores, one typed reading per entity so a field is
+spelled once rather than respelled as a dict key per handler.
 
-FOR: giving the surfaces one typed reading of every stored entity, so that the
-name of a stored field is written down once instead of being spelled as a
-dictionary key in each handler that touches it.
-
-INVARIANT: **absence is absence.** A field never set is *missing* from the
-entity dict, never present as ``None``: every :meth:`to_entity` drops unset
-optionals through the core's ``compact()``, and a field is cleared with
-``pop`` and never with ``= None``. The entity digest, the journal's
-``changed`` list and the wire projections all depend on it, exactly as in the
-Square package.
-
-Time, in this package's entities
---------------------------------
-Every stored instant is **epoch milliseconds**, matching both the core clock
-(``Clock.now()`` is ms) and Clover's own entity timestamps (``createdTime``,
-``modifiedTime``, ``ts`` are documented ms). The two OAuth expirations are
-stored as ``access_token_expiration_ms`` / ``refresh_token_expiration_ms`` --
-the ``_ms`` suffix is load-bearing, because the *wire* fields they project to
-(``access_token_expiration``, documented Unix **seconds**) differ by a factor
-of 1000 and an unsuffixed name would invite exactly that bug. The one
-conversion lives in ``surface/common.py``'s :func:`~.common.wire_seconds`.
-
-The stored model is this unit's own; internal bookkeeping fields
-(``used_at_ms``, ``refresh_used_at_ms``) are snake_case like the Square
-package's, while fields Clover itself names keep Clover's camelCase.
-
-There is deliberately no ``revoked_at``: Clover's v2 OAuth documents no revoke
-endpoint at all (the audit found authorize, token, refresh and the unmodelled
-migrate), so a revocation state would be a state nothing can enter. A rotated
-refresh token is recorded with ``refresh_used_at_ms`` instead -- "Refresh
-token is for single use and becomes invalid immediately after a new
-access_token and refresh_token pair is generated"
-(https://docs.clover.com/dev/docs/refresh-access-tokens) -- and the *access*
-token on that record stays valid until its own expiry (JUDGMENT: the docs are
-silent on prior access tokens, and inventing revocation teaches consumers an
-invalidation rule Clover does not publish).
+INVARIANT: absence is absence -- an unset field is missing from the entity
+dict, never ``None`` (:meth:`to_entity` compacts it away; clearing pops
+rather than sets ``None``), since the digest, the journal and the wire
+projections all depend on it. Instants are epoch milliseconds; the OAuth
+``_ms``-suffixed fields project to documented Unix-seconds wire fields
+(``surface/common.py``'s :func:`~.common.wire_seconds`). There is no
+``revoked_at`` -- Clover's v2 OAuth has no revoke endpoint -- so rotation is
+marked with ``refresh_used_at_ms`` instead (refresh tokens are documented
+single-use, https://docs.clover.com/dev/docs/refresh-access-tokens;
+JUDGMENT: the access token stays valid to its own expiry).
 """
 
 from __future__ import annotations
@@ -67,11 +42,8 @@ MAX_LINE_ITEMS_PER_ORDER = 3000
 class CloverCollections:
     """The store collections this vendor uses, named once.
 
-    The reference-data collections (employees, tenders, order types, the
-    default service charge, tax rates, modifier groups, modifiers) hold plain
-    documents shaped as their Clover reference pages list them and are
-    projected as stored; only the entities the surfaces *mutate* have typed
-    readers below.
+    Only entities the surfaces *mutate* get typed readers below; the rest
+    are plain documents shaped as Clover's reference pages list them.
     """
 
     merchants: str = "merchants"
@@ -115,11 +87,8 @@ COL = CloverCollections()
 """The one place a collection name is spelled."""
 
 
-# ---------------------------------------------------------------------------
-# Readers. Tolerant on type, strict on presence: a stored entity is produced by
-# this package, so a wrong type is a defect here rather than bad input, and
-# coercing it quietly beats raising from inside a projection.
-# ---------------------------------------------------------------------------
+# Readers: tolerant on type, strict on presence -- a stored entity is
+# produced by this package, so a wrong type is a defect here, not bad input.
 
 
 def _str(value: Any, default: str = "") -> str:
@@ -160,13 +129,11 @@ def _dict_list(value: Any) -> list[dict[str, Any]]:
 
 @dataclass(frozen=True, slots=True)
 class MerchantEntity:
-    """The merchant this unit represents. One per unit, in practice.
+    """The merchant this unit represents; one per unit in practice.
 
-    ``owner`` and ``address`` are stored as the nested documents the merchant
-    reference lists (https://docs.clover.com/dev/docs/merchantgetmerchant --
-    "owner{...}", "address{...}", contents undocumented; see
-    ``model/merchant.py``). ``currency`` is what an order created without one
-    is denominated in (JUDGMENT; see the orders surface).
+    ``owner``/``address`` are Clover's own undocumented nested shapes
+    (https://docs.clover.com/dev/docs/merchantgetmerchant). ``currency`` is
+    the default for an order created without one (JUDGMENT).
     """
 
     id: str
@@ -264,23 +231,13 @@ class ItemEntity:
 class OrderEntity:
     """One order, stored under Clover's own field names.
 
-    Everything documented is client-owned, ``total`` above all: "Order totals
-    are calculated dynamically and updated by the app the merchant uses... If
-    your app modifies an order, it must update the total as well"
-    (https://docs.clover.com/dev/docs/creating-custom-orders). Nothing here
-    recomputes it; the atomic endpoints compute a total *once*, at creation.
-
-    ``merchant_id`` is this unit's own scoping field (snake_case, internal):
-    every order route lives under ``/v3/merchants/{mId}/`` and a token for one
-    merchant must not see another's. ``state`` is stored **verbatim** --
-    ``Open`` and ``open`` both appear in Clover's docs -- and compared
-    case-insensitively against the machine's lowercase canon (``machine.py``).
-    Absent means null, "the default for hidden orders".
-
-    ``lineItems``, ``discounts`` and ``serviceCharge`` are stored as the plain
-    documents the wire carries; the line-item and discount shapes are typed
-    on the request side (``model/order.py``) and projected back through the
-    wire models.
+    DOCUMENTED: totals are client-owned -- "If your app modifies an order,
+    it must update the total as well"
+    (https://docs.clover.com/dev/docs/creating-custom-orders); only the
+    atomic endpoints recompute ``total``. ``state`` is stored verbatim --
+    Clover's docs use both ``Open`` and ``open`` -- and compared
+    case-insensitively (``machine.py``). ``lineItems``, ``discounts`` and
+    ``serviceCharge`` are typed on the request side (``model/order.py``).
     """
 
     id: str
@@ -379,14 +336,10 @@ class OrderEntity:
 
 @dataclass(frozen=True, slots=True)
 class AuthorizationCodeEntity:
-    """An issued authorization code. ``id`` is the opaque code value itself.
+    """An issued authorization code; ``id`` is the code value itself.
 
-    Single-use with a ten-minute expiry -- both JUDGMENT: Clover documents
-    neither a code lifetime nor its reuse behaviour (the high-trust flow page
-    shows only the redirect carrying ``code``); single-use is RFC 6749's own
-    rule and the TTL is :attr:`~vendorfake.clover.config.CloverConfig.authorization_code_ttl_ms`.
-    ``code_challenge`` is set when the authorize request carried one, which is
-    what routes the exchange down the PKCE path.
+    Single-use, ten-minute TTL (JUDGMENT: Clover documents neither).
+    ``code_challenge`` set means the exchange follows the PKCE path.
     """
 
     id: str
@@ -425,10 +378,8 @@ class AuthorizationCodeEntity:
 class TokenEntity:
     """One issued access token and the refresh token that came with it.
 
-    ``refresh_used_at_ms`` is the single-use rotation mark: set when this
-    record's refresh token is exchanged for a new pair, at which point the
-    refresh token is dead and the access token lives on to its own expiry.
-    See the module docstring for the provenance of both halves.
+    ``refresh_used_at_ms`` marks single-use rotation (provenance: module
+    docstring); the access token then lives on to its own expiry.
     """
 
     id: str

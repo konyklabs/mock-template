@@ -1,46 +1,17 @@
-"""Lightspeed error shaping -- the entire vendor-side error story, in one table.
+"""Lightspeed error shaping: maps each of the core's error kinds to an HTTP status and body.
 
-FOR: turning each of the core's twenty vendor-neutral error kinds into an HTTP
-status and a body, so that adding this vendor is a lookup table rather than
-error handling scattered through handlers.
+INVARIANT: the table is exhaustive, checked at import and again against ``describe()``.
 
-INVARIANT: **the table is exhaustive, and every row says where its status came
-from.** Exhaustiveness is checked at import and again at unit construction on
-``describe()``'s answer.
+JUDGMENT: Lightspeed publishes no error envelope (see ``model/error.py``); this table
+generalises the 429 body documented at
+https://x-series-api.lightspeedhq.com/docs/rate_limiting to every refusal, except the
+webhooks routes' own one-member ``{"error": "..."}`` shape. DOCUMENTED statuses: 409 on
+``POST /webhooks``, 404 on ``/webhooks/{webhookId}``, 429 for rate limiting, 401 globally
+via ``bearerAuth``; everything else here is judgment, labelled row by row.
 
-THE ENVELOPE IS A JUDGMENT CALL, and the loudest one in this package.
-Lightspeed publishes no error envelope at all -- see the long note in
-``model/error.py``, which records how that absence was verified. This table
-generalises the 429 body the rate-limiting page prints verbatim
-(``{"error": "Too Many Requests", "message": "Rate limiting enforced"}``) to
-every refusal; the webhooks surface keeps the one-member ``{"error": "..."}``
-shape its own 409 and 404 schemas declare. Every row below is therefore
-``provenance: judgment`` EXCEPT the four the specification's own operations
-declare for the routes this slice serves.
-
-WHERE A STATUS IS DOCUMENTED, and where it is not
--------------------------------------------------
-Across the whole document 401 appears on 29 operations, 403 on 24, 404 on 39,
-409 on 12 and 422 on 10 -- so the *vocabulary* is the vendor's even where a
-body is not. For this slice's own surface the specification declares:
-
-* **409** on ``POST /webhooks``, with its message: "A webhook with this type
-  and URL already exists."
-* **404** on ``GET``/``PUT``/``DELETE /webhooks/{webhookId}``.
-* **429** and its body and headers, on the rate-limiting page.
-* **401** as the whole document's authentication failure (``bearerAuth`` is
-  applied globally at the root and 29 operations declare the status).
-
-Everything else here -- 403 for a missing scope, 422 for a bad field, 400 for
-malformed JSON, and every 5xx -- is this project's choice, taken to match the
-statuses the document uses elsewhere, and labelled ``judgment`` row by row.
-
-``Retry-After`` IS AN HTTP-DATE, NOT SECONDS. The rate-limiting page prints
-``Retry-After: Wed, 15 Jul 2020 15:04:05 GMT`` -- an absolute instant in RFC
-1123 form. The core's ``mechanism_headers`` emits delta-seconds, which is what
-every other vendor here documents, so this shaper replaces the value with the
-formatted date computed from the unit's clock. A consumer's retry code that
-parses an integer fails here, which is the point.
+DOCUMENTED: ``Retry-After`` there is an RFC 1123 HTTP-date, not delta-seconds like every
+other vendor here -- this shaper replaces the core's delta-seconds value with a formatted
+date computed from the unit's clock.
 """
 
 from __future__ import annotations
@@ -90,24 +61,12 @@ __all__ = [
 
 RATE_LIMIT_LIMIT_HEADER = "x-ratelimit-limit"
 RATE_LIMIT_REMAINING_HEADER = "x-ratelimit-remaining"
-"""The two headers the rate-limiting page says are present on EVERY response.
-They are stamped by ``vendor.decorate`` for every answer, not only for a 429;
-see ``ratelimit.py``.
-
-**Lower-cased, deliberately, and it is not a deviation.** HTTP header names are
-case-insensitive, the rate-limiting page's own example prints them lower-cased
-(``x-ratelimit-limit: 100``) even where its prose spells them
-``X-RateLimit-Limit``, and every header this project emits is lower-cased at
-the one place a response is built
-(:func:`vendorfake.core.kernel.reply.normalize`). ``decorate`` writes into the
-response AFTER that point, so a mixed-case name here would be the only header
-on the wire that kept its casing -- and conformance C10 compares the two
-bindings' header names, where an HTTP client that normalises and an in-process
-one that does not would then disagree."""
+"""Present on every response (see ``vendor.decorate`` in ``ratelimit.py``). DOCUMENTED at
+https://x-series-api.lightspeedhq.com/docs/rate_limiting; lower-cased here like every header
+this project emits, though the page's own prose uses mixed case."""
 
 RETRY_AFTER_HEADER = "retry-after"
-"""DOCUMENTED on the 429, and documented as an RFC 1123 HTTP-date rather than
-delta-seconds. Lower-cased for the reason above."""
+"""DOCUMENTED on the 429, as an RFC 1123 HTTP-date rather than delta-seconds."""
 
 RATE_LIMITED_TITLE = "Too Many Requests"
 RATE_LIMITED_MESSAGE = "Rate limiting enforced"
@@ -119,22 +78,13 @@ WEBHOOK_DUPLICATE_MESSAGE = "A webhook with this type and URL already exists."
 ``error`` value."""
 
 ONE_MEMBER_BODY_INFO_KEY = "lightspeed_one_member_body"
-"""``UnitError.info`` key a handler sets to ask for the ``{"error": "..."}``
-shape the Webhooks tag declares, instead of the generalised two-member body.
-An info key rather than a second shaper method because it is a property of the
-*refusal* -- which operation raised it -- and the shaper has the error, not the
-route."""
+"""``UnitError.info`` key a handler sets to request the webhooks ``{"error": "..."}`` shape
+instead of the generalised two-member body -- a property of the refusal, not the route."""
 
 CATALOGUE_RETRY_AFTER = "Thu, 01 Jan 1970 00:00:00 GMT"
-"""``Retry-After`` on a *described* 429, never on a real one.
-
-``GET /__unit/errors`` renders every kind as a description of this table. A
-live value is ``now + retry_after``, so the catalogue would move whenever a
-read crossed a wall-clock second and conformance C10 -- which compares the
-two bindings byte for byte on exactly this route -- could never pass. The
-epoch is not a plausible retry instant, which is the point: a description says
-the header exists and what shape it has, not when a window that never opened
-would close."""
+"""``Retry-After`` on a *described* 429 (``GET /__unit/errors``), never a real one -- a live
+value would drift with the wall clock and break C10's byte-for-byte comparison. The epoch is
+not a plausible retry instant, deliberately."""
 
 _DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 _MONTHS = (
@@ -166,12 +116,10 @@ _ENVELOPE_NOTE = (
 
 
 def http_date(epoch_ms: float) -> str:
-    """``Wed, 15 Jul 2020 15:04:05 GMT`` -- RFC 1123, as the 429 documents it.
+    """RFC 1123 HTTP-date, as the 429 documents it (e.g. ``Wed, 15 Jul 2020 15:04:05 GMT``).
 
-    Written out rather than taken from :func:`email.utils.formatdate`, which
-    reads the C library's locale for the day and month abbreviations: a
-    consumer's byte-for-byte comparison of two bindings must not depend on
-    ``LC_TIME``, and neither must this fake's own transcript.
+    Written out rather than via :func:`email.utils.formatdate`, which reads the C library's
+    locale -- this must not depend on ``LC_TIME``.
     """
     import time as _time
 
@@ -305,14 +253,12 @@ LIGHTSPEED_ERROR_TABLE: dict[UnitErrorKind, LightspeedErrorMapping] = {
     UnitErrorKind.UNAVAILABLE: LightspeedErrorMapping(503, "judgment", "Service Unavailable", "Service unavailable."),
     UnitErrorKind.INTERNAL: LightspeedErrorMapping(500, "judgment", "Internal Server Error", "Internal server error."),
 }
-"""Twenty rows, one per core error kind."""
 
 
 class LightspeedErrorShaper:
     """Turns a :class:`UnitError` into this vendor's body. Satisfies ``ErrorShaper``.
 
-    Frozen configuration rather than a live read of the profile, because the
-    vendor rebuilds the shaper when its configuration resolves.
+    Frozen configuration: the vendor rebuilds the shaper when its config resolves.
     """
 
     __slots__ = ("_retry_after_header", "_sidecar", "_window_ms")
@@ -323,12 +269,9 @@ class LightspeedErrorShaper:
         self._window_ms = window_ms
 
     def shape(self, err: UnitError, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
-        """One core error, as this unit's Lightspeed would send it.
+        """One core error, shaped as this vendor would send it.
 
-        ``message`` follows the error's own wording when it has one and the
-        table's otherwise: a handler quoting the vendor's own phrase ("A
-        webhook with this type and URL already exists") is exactly what should
-        reach the wire.
+        ``message`` follows the error's own wording when set, the table's default otherwise.
         """
         mapping = LIGHTSPEED_ERROR_TABLE[err.kind]
         info = dict(err.info or {})
@@ -338,11 +281,8 @@ class LightspeedErrorShaper:
         if info.get(ONE_MEMBER_BODY_INFO_KEY) is True:
             body = WebhookConflictWire(error=detail).wire()
         elif isinstance(payment_code, int) and not isinstance(payment_code, bool):
-            # The Sales surface's payment refusals, in the one error shape the
-            # specification actually names (``PaymentErrorResponse``). The
-            # STATUS is still this table's -- a closed register is the 409 an
-            # invalid transition gets, an unresolvable id the 422 a bad value
-            # gets -- because the schema carries no status of its own.
+            # Payment refusals use the spec's own PaymentErrorResponse shape; the STATUS is
+            # still this table's, since that schema carries none of its own.
             body = PaymentErrorWire(code=payment_code, message=detail).wire()
         else:
             body = ErrorWire(error=mapping.title, message=detail).wire()
@@ -354,9 +294,8 @@ class LightspeedErrorShaper:
                 body["unit_error"] = sidecar
             if mode != "body":
                 headers.update(sidecar_headers(sidecar))
-        # The core's mechanism header is delta-seconds; Lightspeed's is an
-        # absolute HTTP-date. Replace the value rather than suppress the
-        # header, so the switch still means "send Retry-After or do not".
+        # Core's mechanism header is delta-seconds; Lightspeed's is an absolute HTTP-date --
+        # replace the value rather than suppress the header.
         headers.pop("retry-after", None)
         if err.kind is UnitErrorKind.RATE_LIMITED and self._retry_after_header:
             headers[RETRY_AFTER_HEADER] = (
@@ -367,8 +306,7 @@ class LightspeedErrorShaper:
         return ShapedError(status=mapping.status, body=body, headers=headers)
 
     def not_found(self, req: UnitRequest, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
-        """The body for a path that matched no route at all; it names the
-        control route that lists the surface."""
+        """The body for a path that matched no route at all; names the control route."""
         return self.shape(
             UnitError(
                 UnitErrorKind.NOT_FOUND,
@@ -387,6 +325,5 @@ class LightspeedErrorShaper:
         return {kind.value: mapping.as_json() for kind, mapping in LIGHTSPEED_ERROR_TABLE.items()}
 
 
-# Exhaustiveness, at import, as a raise and never as an `assert` -- see
-# core/kernel/shaping.py for why.
+# A raise, not an `assert` -- see core/kernel/shaping.py for why.
 assert_error_table_total(LIGHTSPEED_ERROR_TABLE, name="LIGHTSPEED_ERROR_TABLE")

@@ -1,27 +1,10 @@
 """The webhook wire vocabulary: the documented payload, and the dashboard
-stand-in's request and response shapes.
+stand-in's request/response shapes.
 
-FOR: stating the documented notification payload once, as models, so that the
-event mapper composes a document rather than a nested dictionary literal, and
-so that key order -- which is the order the documentation shows and the order
-the delivered bytes carry -- is decided in one place.
-
-THE PAYLOAD is DOCUMENTED, verbatim on https://docs.clover.com/dev/docs/webhooks::
-
-    {"appId":"DRKVJT2ZRRRSC",
-     "merchants":{"XYZVJT2ZRRRSC":[{"objectId":"O:GHIVJT2ABCRSC","type":"CREATE","ts":1537970958000}]}}
-
-``tests/unit/clover/test_events.py`` reproduces those exact bytes through the
-mapper and :func:`~vendorfake.core.util.json.dump_json`.
-
-THE SUBSCRIPTION SHAPES are JUDGMENT, all of them. Clover has no subscription
-API -- webhooks are configured in the developer dashboard -- so the request a
-consumer sends to register a callback with this fake, and the record it gets
-back, are this project's stand-in for that dashboard: a callback URL and the
-event keys to subscribe to, camelCase like every Clover field, with the
-documented verification and auth codes attached once they exist. Nothing here
-is a Clover wire shape and a consumer must not build against it as one; the
-``__clover`` path prefix on the routes says the same thing.
+DOCUMENTED payload shape, verbatim (https://docs.clover.com/dev/docs/webhooks):
+``{"appId": ..., "merchants": {"<id>": [{"objectId": ..., "type": "CREATE",
+"ts": ...}]}}``. JUDGMENT: Clover has no subscription API (dashboard-
+configured), so the register/verify shapes below are this project's stand-in.
 """
 
 from __future__ import annotations
@@ -42,17 +25,14 @@ __all__ = [
 ]
 
 _WIRE = ConfigDict(extra="forbid", frozen=True, strict=True)
-"""Strict on the way out: a value this unit produced with the wrong type is a
-defect here, and coercing it would hide one."""
+"""Strict on the way out: a wrong type is this unit's own defect."""
 
 _REQUEST = ConfigDict(extra="ignore", frozen=True)
 """Lax on the way in, per the package convention on ``model/oauth.py``."""
 
 ALL_EVENT_KEYS: tuple[str, ...] = ("O", "I", "C", "P")
-"""The documented event keys this unit can emit, in the documented order:
-orders, inventory, customers, payments. ``E`` (employees) and ``M``
-(merchants) are documented keys nothing here mutates, so subscribing to them
-is refused rather than accepted and never honoured."""
+"""Documented keys this unit emits, in documented order; ``E``/``M`` exist but
+nothing here mutates them, so subscribing to them is refused."""
 
 
 class EventWire(BaseModel):
@@ -85,12 +65,8 @@ class PayloadWire(BaseModel):
 
 
 class RegisterSubscriptionRequest(BaseModel):
-    """``POST /__clover/webhooks/subscriptions``: a callback and its keys.
-
-    ``eventKeys`` defaults to every key, which is what an operator who ticks
-    nothing in the dashboard would most plausibly expect from a fake; a
-    subscription to no keys at all is refused because it could never deliver.
-    """
+    """``POST /__clover/webhooks/subscriptions``. ``eventKeys`` defaults to
+    every key; a subscription to none at all is refused."""
 
     model_config = _REQUEST
 
@@ -105,8 +81,7 @@ class RegisterSubscriptionRequest(BaseModel):
         unknown = [key for key in keys if key not in ALL_EVENT_KEYS]
         if unknown:
             raise ValueError(f"unknown event key(s) {unknown}; this unit emits {list(ALL_EVENT_KEYS)}")
-        # Documented order, deduplicated, so the record reads the same however
-        # the request spelled it.
+        # Documented order, deduplicated.
         return tuple(key for key in ALL_EVENT_KEYS if key in keys)
 
 
@@ -119,16 +94,8 @@ class VerifySubscriptionRequest(BaseModel):
 
 
 class SubscriptionWire(BaseModel):
-    """One subscription as the stand-in reports it.
-
-    ``authCode`` is present only once the callback is verified, because that
-    is when the documented flow hands it out. This is a property of the
-    stand-in's projection and nothing stronger: the code is the core's
-    ``signature_key``, and ``GET /__unit/webhooks/subscriptions`` -- the open
-    control plane -- returns that verbatim for every subscriber, pending or
-    not. A consumer who wants to skip the handshake can; the stand-in simply
-    does not hand them the shortcut in the flow it models.
-    """
+    """One subscription as reported. ``authCode`` appears only once verified
+    (JUDGMENT: the control plane's introspection endpoint returns it always)."""
 
     model_config = _WIRE
 

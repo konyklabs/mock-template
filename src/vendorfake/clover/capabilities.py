@@ -1,29 +1,13 @@
-"""What this vendor can be asked to do, and what it deliberately does not model.
+"""What this vendor can be asked to do, and what it deliberately does not
+model -- declares the capability set once, so the route table, the control
+plane and the core's gating all read the same list.
 
-FOR: declaring the capability set once, so that the route table, the control
-plane's capability index and the core's own gating all read the same list --
-and recording, with reasons, every documented Clover behaviour this fake
-chooses not to implement.
-
-INVARIANT: **every capability the core gates on is accounted for.** The core
-fails at construction when one of its gated capabilities (``chaos``,
-``webhooks``, ``webhooks.chaos``) is neither declared here nor excused in
-``VendorDefinition.not_supported`` with a reason. This vendor declares all
-three: ``webhooks`` and ``webhooks.chaos`` arrived together with the signer,
-the event mapper and the dashboard stand-in surface (PR D), which is the
-order the declaration system demands -- a capability *declared* while the
-dispatcher would silently no-op on a missing seam is the enabled-but-dead
-state it exists to prevent, and PRs A-C excused both names for exactly that
-reason.
-
-The core is also strict the other way: ``not_supported`` may not name anything
-the core does *not* gate on ("not_supported names {name}, which the core does
-not gate on" is a startup failure). So the list of documented Clover features
-this fake deliberately omits cannot live on the protocol property; it lives in
-:data:`CLOVER_NOT_MODELED`, an informational map this package exports and its
-surfaces cite in refusals. The distinction: ``not_supported`` answers the
-*core* ("do you have webhooks?"), ``CLOVER_NOT_MODELED`` answers the
-*consumer* ("why is there no payments endpoint?").
+INVARIANT: every capability the core gates on (``chaos``, ``webhooks``,
+``webhooks.chaos``) must be declared here or excused in
+``VendorDefinition.not_supported``, which may not name anything it doesn't
+gate on -- so documented Clover features this fake omits outright live in
+:data:`CLOVER_NOT_MODELED` instead, an informational map surfaces cite in
+refusals.
 """
 
 from __future__ import annotations
@@ -80,13 +64,7 @@ CLOVER_CAPABILITIES: tuple[CapabilityDecl, ...] = (
 )
 
 CLOVER_NOT_SUPPORTED: Mapping[str, str] = {}
-"""Empty, and deliberately so: every core-gated capability is declared above.
-
-A name here would be one the core gates on and this vendor does not
-implement, with the reason it does not apply. The documented Clover features
-this fake omits outright are a different kind of fact and are recorded in
-:data:`CLOVER_NOT_MODELED` instead -- see the module docstring.
-"""
+"""Empty: every core-gated capability is declared above; see :data:`CLOVER_NOT_MODELED`."""
 
 CLOVER_NOT_MODELED: Mapping[str, str] = {
     "card-payments": (
@@ -122,10 +100,5 @@ CLOVER_NOT_MODELED: Mapping[str, str] = {
         "learn from this fake that old orders are filterable on the real API."
     ),
 }
-"""Documented Clover behaviour this fake deliberately omits, each with its why.
-
-Informational -- published for consumers and cited by surface refusals, never
-handed to the core (see the module docstring). "This vendor has no payments
-surface" and "payments are on the roadmap" are different facts, and a bare set
-would lose both.
-"""
+"""Documented Clover behaviour this fake omits, with why -- informational,
+cited by surface refusals, never handed to the core."""

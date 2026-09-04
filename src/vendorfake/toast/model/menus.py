@@ -1,22 +1,20 @@
 """The Menus API V3 document: how it is stored, projected, and indexed.
 
 DOCUMENTED (toast-menus-api-v3.yaml, https://doc.toasttab.com/doc/devguide/apiMenusV3.html):
-``GET /menus/v3/menus`` answers ``{restaurantGuid, lastUpdated,
-restaurantTimeZone, menus[], modifierGroupReferences{}, modifierOptionReferences{},
-preModifierGroupReferences{}}`` where the three reference maps are keyed by the
-integer ``referenceId`` spelled as a string ("2", "6", "10"), and
-``GET /menus/v3/metadata`` answers ``{restaurantGuid, lastUpdated}``.
+``GET /menus/v3/menus``
+answers ``{restaurantGuid, lastUpdated, restaurantTimeZone, menus[],
+modifierGroupReferences{}, modifierOptionReferences{},
+preModifierGroupReferences{}}``, the three reference maps keyed by integer
+``referenceId`` spelled as a string; ``GET /menus/v3/metadata`` answers
+``{restaurantGuid, lastUpdated}``.
 
-STORED as one entity per restaurant in the ``menus`` collection: the seed's
-document with money in cents and ``lastUpdated`` in epoch ms. The projection
-walks it, converting the money keys (``price``, ``fixedPrice``, ``basePrice``,
-``timeSpecificPrice``) to decimal dollars and the instant to the REST spelling,
-and turns the reference lists into the documented maps.
+Stored as one entity per restaurant, money in cents and ``lastUpdated`` in
+epoch ms; the projection converts money keys to dollars, the instant to the
+REST spelling, and the reference lists into the documented maps.
 
-The index -- :func:`menu_items_by_guid`, :func:`modifier_options_by_guid`,
-:func:`pre_modifiers_by_guid` -- is what the orders surface prices a selection
-from: an item's ``price`` and ``taxInfo``, an option's ``price``, a
-pre-modifier's ``multiplicationFactor``/``fixedPrice``.
+The index (:func:`menu_items_by_guid`, :func:`modifier_options_by_guid`,
+:func:`pre_modifiers_by_guid`) is what the orders surface prices a selection
+from.
 """
 
 from __future__ import annotations
@@ -59,12 +57,9 @@ def _by_reference(rows: Any) -> dict[str, Any]:
 
 
 def _omit_nulls(node: Any) -> Any:
-    """JUDGMENT: an optional field the document has no value for is omitted,
-    not answered null. The menus specification marks the fields it means to
-    be null with ``x-nullable`` and types the rest as plain strings and
-    objects; the guide page that would show a full response answers 403 to
-    anything but a browser, so the specification is the source. Found by the
-    fidelity validator (konyklabs/roadmap#56)."""
+    """JUDGMENT: an optional field with no value is omitted, not null -- the
+    specification marks nullable fields with ``x-nullable``
+    (konyklabs/roadmap#56)."""
     if isinstance(node, dict):
         return {key: _omit_nulls(value) for key, value in node.items() if value is not None}
     if isinstance(node, list):

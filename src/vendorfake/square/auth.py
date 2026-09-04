@@ -1,44 +1,14 @@
 """Who a presented credential is, in Square's two documented schemes.
 
-FOR: turning an ``Authorization`` header into an
-:class:`~vendorfake.core.kernel.types.AuthResult` the kernel can check scopes
-against, and producing the three distinct 401s Square publishes rather than one
-generic refusal.
-
-INVARIANT: **token validity is not gated by the ``oauth`` capability.** A
-profile with the OAuth dance switched off still authenticates a seeded token,
-so a consumer testing orders is never forced to run an authorization flow it
-does not care about. That is why this module is reachable from every route's
-``auth`` mode while ``/oauth2/*`` lives behind the capability.
-
-The three failure codes are documented, not invented:
-``UNAUTHORIZED``, ``ACCESS_TOKEN_REVOKED`` and ``ACCESS_TOKEN_EXPIRED`` all
-appear on https://developer.squareup.com/docs/build-basics/handling-errors, and
-the detail string "This request could not be authorized." is the verbatim
-detail from Square's own example error body. The two schemes are
-
-``bearer``
-    ``Authorization: Bearer {ACCESS_TOKEN}`` on every v2 call.
-    https://developer.squareup.com/docs/build-basics/access-tokens
-
-``client-secret``
-    ``Authorization: Client {APPLICATION_SECRET}`` on ``POST /oauth2/revoke``.
-    https://developer.squareup.com/reference/square/oauth-api/revoke-token
-
-Two 401/403 codes Square documents are unreachable here and recorded rather
-than faked: ``CLIENT_DISABLED``, which describes an application state this unit
-has no way to enter, and the general ``FORBIDDEN``, which this unit only ever
-produces as a scope failure.
-
-A superseded token still authenticates
---------------------------------------
-A code-flow refresh marks the previous token record ``superseded_at`` so the
-refresh lookup stays single-valued, and that mark is deliberately **not**
-consulted here: "A refresh token obtained using the code flow can be used to
-get multiple active access tokens"
-(https://developer.squareup.com/docs/oauth-api/overview), so the older access
-token stays valid until its own expiry. Only ``revoked_at`` and the clock end a
-token.
+INVARIANT: token validity is not gated by the ``oauth`` capability -- a profile with the OAuth dance off
+still authenticates a seeded token. DOCUMENTED: ``bearer`` is ``Authorization: Bearer {ACCESS_TOKEN}``;
+``client-secret`` is ``Authorization: Client {APPLICATION_SECRET}`` on ``POST /oauth2/revoke``
+(https://developer.squareup.com/reference/square/oauth-api/revoke-token).
+https://developer.squareup.com/docs/build-basics/access-tokens
+DOCUMENTED: a superseded token still authenticates -- a code-flow refresh marks the previous record
+``superseded_at``, deliberately not consulted here (a refresh token can mint multiple active access
+tokens, https://developer.squareup.com/docs/oauth-api/overview). Only ``revoked_at`` and the clock end
+a token.
 """
 
 from __future__ import annotations
@@ -67,23 +37,14 @@ _INCORRECT = "The `Authorization` http header of your request was incorrect or e
 
 
 def _split_scheme(header: str) -> tuple[str, str]:
-    """``"Bearer abc def"`` -> ``("Bearer", "abc def")``.
-
-    The credential keeps its inner spaces, matching the reference's
-    ``rest.join(' ')``: a token is opaque, and splitting on every space would
-    make this unit reject a credential a real client had pasted intact.
-    """
+    """``"Bearer abc def"`` -> ``("Bearer", "abc def")``; the credential keeps its inner spaces."""
     scheme, separator, credential = header.partition(" ")
     return (scheme, credential if separator else "")
 
 
 class SquareAuth:
-    """Square's authentication. Satisfies ``AuthAdapter``.
-
-    Holds the vendor rather than the secret, because the secret is resolved
-    again on every hydrate: a copy taken at construction would be the default
-    long after a profile replaced it.
-    """
+    """Square's authentication. Satisfies ``AuthAdapter``. Holds the vendor, since the secret is
+    re-resolved on every hydrate."""
 
     __slots__ = ("_deps", "_scopes")
 
@@ -103,19 +64,7 @@ class SquareAuth:
         }
 
     def credentials(self, ctx: UnitContext) -> Sequence[AuthCredential]:
-        """Every credential this unit would currently accept, both schemes.
-
-        Read out of the store rather than out of the seed document, so a token
-        an OAuth flow minted a moment ago is offered and one that has since
-        been revoked or expired is not. That is the difference between "what
-        the scenario shipped with" and "what works now", and only the second is
-        a useful answer to a consumer asking how to authenticate.
-
-        The scopes come from the token record itself, which is what makes an
-        under-scoped credential discoverable: the shipped scenario contains a
-        read-only token alongside the full one, so "this token cannot reach
-        that route" is observable without minting anything.
-        """
+        """Every credential this unit would currently accept, read from the store, not the seed."""
         offered: list[AuthCredential] = [
             AuthCredential(
                 label="client-secret",
@@ -158,8 +107,7 @@ class SquareAuth:
                 detail=_INCORRECT,
                 info={"expected": "Authorization: Client {APPLICATION_SECRET}"},
             )
-        # The application, not a merchant: revocation acts on behalf of the
-        # application and there is no seller identity in a client-secret call.
+        # The application, not a merchant: a client-secret call has no seller identity.
         return AuthResult(principal_id="application", scopes=self._scopes, meta={"mode": "client-secret"})
 
     def _resolve_bearer(self, args: HandlerArgs, header: str) -> AuthResult:

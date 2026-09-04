@@ -1,35 +1,13 @@
-"""Clover-shaped identifiers, minted deterministically.
+"""Clover-shaped identifiers, minted deterministically from a seeded stream
+(:class:`~vendorfake.core.rand.ids.IdStream`) so a scenario transcript is
+reproducible across runs.
 
-FOR: producing ids that *look* like the ones in Clover's own documentation
-examples, from a seeded stream, so that a transcript of a scenario is the same
-on every run and can be diffed between runs.
-
-The stream itself -- seeding, salting away from the chaos stream, re-seeding
-at hydrate, the draw count -- is :class:`~vendorfake.core.rand.ids.IdStream`;
-this module is only the shapes.
-
-Two shapes, two confidence levels
----------------------------------
-**Entity ids: 13 uppercase alphanumerics.** PARTIAL -- consistent across every
-official example (``DRKVJT2ZRRRSC``, ``XYZVJT2ZRRRSC``, ``VXQEY3VMTT74T``,
-``KFRPRVCZ73JHM``, ``MXHW24RNRHW16`` across the webhooks, orders and
-pagination pages, e.g. https://docs.clover.com/dev/docs/paginating-elements),
-but no Clover page states the format as a rule. Consumers pattern-match on id
-shape more often than they admit -- log scrapers, fixture assertions, column
-widths -- so the shape is followed while its provenance is labelled.
-
-**Tokens and codes: UUID-format strings.** JUDGMENT -- the v2 OAuth docs show
-only ``{access_token}``-style placeholders, and Clover's legacy examples and
-the documented webhook artifacts (``{"verificationCode": "<uuid>"}``,
-``X-Clover-Auth: <uuid>`` on https://docs.clover.com/dev/docs/webhooks) are
-UUID-shaped, so access tokens, refresh tokens, authorization codes and both
-webhook codes are all minted as lowercase UUIDs here. The version-4 layout
-(the ``4`` and variant nibbles) is this project's choice for plausibility, not
-a documented Clover property.
-
-:meth:`CloverIds.reseed` exists for the same reason ``SquareIds.reseed`` does:
-a unit that re-hydrates on ``POST /__unit/state/reset`` must mint *the same
-ids again*, so the stream restarts from the seed rather than continuing.
+PARTIAL: entity ids are 13 uppercase alphanumerics, consistent across every
+official example (e.g. ``KFRPRVCZ73JHM``,
+https://docs.clover.com/dev/docs/paginating-elements) but never stated as a
+rule. JUDGMENT: tokens and codes are lowercase v4-layout UUIDs, matching the
+webhook docs' examples (https://docs.clover.com/dev/docs/webhooks); the v4
+layout itself is not documented.
 """
 
 from __future__ import annotations
@@ -38,26 +16,19 @@ from vendorfake.core.rand.ids import HEX, UPPER_ALNUM, IdStream
 
 __all__ = ["CloverIds"]
 
-#: RFC 4122 variant nibble: 8, 9, a or b.
 _VARIANT = "89ab"
 
 
 class CloverIds(IdStream):
-    """Clover's shapes over the core's stream."""
-
     __slots__ = ()
 
     def _entity(self) -> str:
-        """13 uppercase alphanumerics -- the one shape every Clover example uses."""
         return self._pick(UPPER_ALNUM, 13)
 
     def _uuid(self) -> str:
-        """A v4-layout UUID from the stream. See the module docstring; JUDGMENT."""
         hexes = self._pick(HEX, 30)
         variant = _VARIANT[self._rng.int(len(_VARIANT))]
         return f"{hexes[0:8]}-{hexes[8:12]}-4{hexes[12:15]}-{variant}{hexes[15:18]}-{hexes[18:30]}"
-
-    # -- entities: 13-char uppercase alphanumeric (PARTIAL) -----------------
 
     def merchant(self) -> str:
         return self._entity()
@@ -69,8 +40,6 @@ class CloverIds(IdStream):
         return self._entity()
 
     def item(self) -> str:
-        """An inventory item, e.g. ``NEWITEM123ABC`` in
-        https://docs.clover.com/dev/docs/inventorycreateitem's response."""
         return self._entity()
 
     def order_type(self) -> str:
@@ -83,10 +52,7 @@ class CloverIds(IdStream):
         return self._entity()
 
     def print_event(self) -> str:
-        """``P5WWTQ44VRY74`` in https://docs.clover.com/dev/docs/printing-orders-rest-api."""
         return self._entity()
-
-    # -- tokens and codes: UUID-format (JUDGMENT) ---------------------------
 
     def access_token(self) -> str:
         return self._uuid()
@@ -98,12 +64,9 @@ class CloverIds(IdStream):
         return self._uuid()
 
     def verification_code(self) -> str:
-        """The code Clover POSTs to a callback URL during webhook verification:
-        ``{"verificationCode": "<uuid>"}`` (https://docs.clover.com/dev/docs/webhooks)."""
+        """The ``verificationCode`` Clover POSTs during webhook verification."""
         return self._uuid()
 
     def webhook_auth_code(self) -> str:
-        """The static ``X-Clover-Auth`` header value, documented as a UUID sent
-        "in every message header after the webhook callback URL is validated"
-        (https://docs.clover.com/dev/docs/webhooks)."""
+        """The static ``X-Clover-Auth`` header value sent with every delivery."""
         return self._uuid()

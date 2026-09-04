@@ -1,40 +1,12 @@
 """Turning what a handler returned into the exact bytes that go out.
 
-FOR: giving every handler in every vendor one way to say "200 with this
-object", "302 to there", "204" or "these exact bytes", and one place where that
-becomes a :class:`UnitResponse`.
-
-INVARIANT: **precedence is contract, and it is keyed on presence, never on
-truthiness.** ``raw`` wins, then ``text``, then JSON, and each is chosen with
-``is not None``. That distinction is the whole reason this docstring is long:
-
-* :func:`redirect` and :func:`no_content` both return ``text=""``. Under a
-  truthiness test (``if init.text:``) an empty string is false, so both fall
-  through to the JSON branch and a 302 goes out as ``{}`` with
-  ``content-type: application/json`` and a two-byte body. The reference writes
-  ``r.text !== undefined`` for exactly this reason, and its ``GET
-  /oauth2/authorize`` -- the first thing an OAuth consumer touches -- is a
-  redirect.
-* A zero-length text body gets **no** ``content-type`` at all
-  (``r.text.length > 0 && !headers['content-type']`` in the reference), so a
-  204 carries no content type, which is what RFC 9110 asks for.
-* ``json=None`` serialises to ``b"{}"``, never ``b"null"``: the reference's
-  ``JSON.stringify(r.json ?? {})`` collapses both of JavaScript's empty values
-  onto the same two bytes, and Python has only one of them. A handler that
-  genuinely wants a JSON ``null`` body says so with ``raw=b"null"``.
-
-Serialisation goes through :func:`vendorfake.core.util.json.dump_json` and
-nowhere else, so a response body, a webhook body and a log line agree on
-separators and on non-ASCII text -- which is not cosmetic, because a webhook
-signature is computed over those bytes.
-
-One deviation from the reference, taken deliberately: header names are
-lower-cased here. The reference looks ``headers['content-type']`` up by exact
-key, so a handler returning ``Content-Type`` would receive a *second*,
-conflicting ``content-type: application/json``. HTTP header names are
-case-insensitive; lower-casing once, at the only place a response is built,
-makes that unrepresentable and makes a byte-for-byte comparison of two
-bindings' headers meaningful.
+INVARIANT: **precedence is keyed on presence, never on truthiness.** ``raw`` wins, then ``text``, then JSON, each
+chosen with ``is not None``, because :func:`redirect` and :func:`no_content` both return ``text=""`` and a
+truthiness test would send them out as a JSON ``{}``. A zero-length text body gets no ``content-type`` at all, per
+RFC 9110. ``json=None`` serialises to ``b"{}"``, never ``b"null"``; a handler wanting a JSON ``null`` says
+``raw=b"null"``. Serialisation goes through :func:`vendorfake.core.util.json.dump_json` and nowhere else, so a
+response body, a webhook body and a log line agree on separators and on non-ASCII text, which a webhook signature is
+computed over. Header names are lower-cased here, the only place a response is built.
 """
 
 from __future__ import annotations
@@ -63,8 +35,7 @@ TEXT_CONTENT_TYPE = "text/plain; charset=utf-8"
 
 
 def json_(body: Any, status: int = 200, headers: Mapping[str, str] | None = None) -> ReplyInit:
-    """A JSON reply. Named with a trailing underscore so the module can still
-    reach the standard library's ``json``, which :func:`dump_json` uses."""
+    """A JSON reply; trailing underscore to leave ``json`` free."""
     return ReplyInit(status=status, json=body, headers=headers)
 
 
@@ -84,12 +55,8 @@ def no_content() -> ReplyInit:
 
 
 def normalize(init: ReplyInit | UnitResponse) -> UnitResponse:
-    """Resolve a handler's return into serialised bytes exactly once.
-
-    A :class:`UnitResponse` passes through untouched -- a handler that has
-    already produced bytes (an idempotent replay, a proxied body) must not have
-    them re-encoded.
-    """
+    """Resolve a handler's return into serialised bytes exactly once. A
+    :class:`UnitResponse` passes through untouched, never re-encoded."""
     if isinstance(init, UnitResponse):
         return init
 
@@ -113,20 +80,13 @@ def normalize(init: ReplyInit | UnitResponse) -> UnitResponse:
 
 
 def decode_body(res: UnitResponse) -> str:
-    """The response body as text. Undecodable bytes become U+FFFD rather than
-    raising, matching ``TextDecoder``: a test asserting on a garbled body must
-    see the garble, not an exception from its own assertion helper."""
+    """The response body as text; undecodable bytes become U+FFFD."""
     return res.body.decode("utf-8", errors="replace")
 
 
 def parse_body(res: UnitResponse) -> Any:
-    """The response body parsed as JSON; ``None`` for an empty body.
-
-    Raises whatever :mod:`json` raises for a non-JSON body. Callers that must
-    tolerate one -- the in-process binding, which cannot know what a route
-    returns -- catch it themselves rather than being handed a silent ``None``
-    that hides the difference between "no body" and "not JSON".
-    """
+    """The response body parsed as JSON; ``None`` for an empty body, and
+    whatever :mod:`json` raises for a non-JSON one."""
     raw = decode_body(res)
     if not raw:
         return None

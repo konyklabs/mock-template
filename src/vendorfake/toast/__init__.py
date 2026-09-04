@@ -1,16 +1,15 @@
 """Toast (REST v2/v3), as a vendorfake vendor.
 
-FOR: publishing one name -- ``VENDOR`` -- that the registry resolves through
-the ``vendorfake.vendors`` entry point, plus the pieces a consumer or a test
-legitimately imports directly.
+Publishes ``VENDOR``, resolved through the ``vendorfake.vendors`` entry
+point, plus the pieces a consumer or test legitimately imports directly.
 
-INVARIANT: **``VENDOR`` is a fresh definition on every access.** A vendor owns
-stateful, seeded id streams; the attribute *is* the factory, through
-:func:`__getattr__`, so ``vendorfake.toast.VENDOR is vendorfake.toast.VENDOR``
+INVARIANT: ``VENDOR`` is a fresh definition on every access -- a vendor owns
+stateful, seeded id streams, so the attribute is the factory (via
+:func:`__getattr__`) and ``vendorfake.toast.VENDOR is vendorfake.toast.VENDOR``
 is False.
 
-Nothing in this package imports a web framework, and nothing in it is imported
-by the core.
+Nothing in this package imports a web framework, and nothing in it is
+imported by the core.
 """
 
 from __future__ import annotations

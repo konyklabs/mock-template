@@ -1,101 +1,16 @@
-"""What an armed request-scope fault actually does.
-
-FOR: turning a :class:`ChaosDecision` -- which is only a name, a rule id and a
-bag of untyped parameters -- into the ``UnitError`` the pipeline raises, in one
-place, so that adding a fault is one branch and not a search.
-
-INVARIANT: **which phase of the pipeline a fault fires in is a property of the
-fault, not of the call site.** ``token_expiry`` means "the token expired while
-the request was in flight", so it must fire *after* authentication has
-succeeded -- firing it before would be indistinguishable from an ordinary
-``unauthorized`` and would prove nothing about a consumer's refresh path.
-Every other request-scope fault fires before authentication, because a rate
-limit or an outage does not care who is calling. The pipeline therefore calls
-this function twice with the same decision, once per phase, and this module
-decides which call does something. Both calls are unconditional on the
-pipeline's side, which is what stops "we only ran the post-auth phase for
-authenticated routes" from becoming a second, divergent rule.
-
-THE ``timeout`` FAULT AND THE CLOCK -- two reversals, recorded because neither
-piece of reasoning is obvious.
-
-FIRST REVERSAL: it does not park on a virtual timer. An earlier design routed
-``timeout`` through :class:`Clock` unconditionally, on the grounds that a fake
-should never really sleep. That is a deadlock. The pipeline holds one
-re-entrant lock for the duration of a serialized request; in virtual-clock mode
-the only thing that can fire a virtual timer is ``POST /__unit/clock/advance``,
-which is itself a request. A request parked on a virtual timer would hold the
-unit while the one call that could release it waited for the same lock -- on
-the very profile the chaos demonstration runs on.
-
-So the fault splits by clock mode, and neither half ever waits for another
-request:
-
-real mode
-    The delay is *reported*, on :attr:`UnitError.delay_ms`, and the binding
-    carries it out. See the second reversal below.
-
-virtual mode
-    :meth:`Clock.advance` on the calling thread, which returns as soon as the
-    timers that came due have fired. Time moves by ``delay_ms`` and the request
-    is answered immediately, with ``delay_ms=0`` on the response because the
-    waiting has already happened -- in scenario time, which is the only clock a
-    virtual-mode test is measuring. An elapsed-wall-time assertion is
-    meaningless on this branch and is not made; what a virtual-mode test
-    asserts instead is that the response is a ``timeout`` and that ``now()``
-    moved. The delay the rule asked for still travels out, in ``info`` and
-    as the ``Vendorfake-Delay-Ms`` header ``kernel/unit.py`` stamps from it,
-    so the in-process transport can still race it against the caller's read
-    timeout: past the threshold the caller gets ``ReadTimeout`` on this
-    branch exactly as on the real one (konyklabs/roadmap#101, item 18).
-
-SECOND REVERSAL: on a real clock this module no longer sleeps. It used to call
-:func:`time.sleep` here, exactly as the reference does (``await
-sleep(delayMs)``), and the reference's own assertion -- ``Date.now() - started
->= 20`` for ``delay_ms: 25`` -- was written against that branch. Two things
-were wrong with it.
-
-*It produced no timeout.* In process there is no socket, so a consumer's
-``httpx.Client(timeout=...)`` was not consulted by anything: the ``timeout``
-fault made the call slow and then answered 504, and the one thing a consumer
-wants to rehearse -- their client raising :class:`httpx.ReadTimeout` and their
-retry path running -- was unreachable without starting a real server.
-
-*It made the kernel choose a thread to block.* The ASGI binding must not block
-the event loop, the async in-process transport must yield to it, and a
-file-drop binding wants an interruptible wait so shutdown does not have to
-outlast the delay. One ``time.sleep`` in here forces every one of them to be
-wrong in the same way.
-
-So the kernel decides *whether* to delay and the binding decides *how*: the
-delay travels out on :attr:`UnitError.delay_ms`, the pipeline copies it onto
-:attr:`UnitResponse.delay_ms`, and each binding honours it in the terms of the
-caller it is holding. The in-process transport turns a delay longer than the
-client's read timeout into an immediate ``ReadTimeout``, which is why a
-consumer's retry test now runs in a millisecond instead of five seconds.
-
-PARAMETERS ARE COERCED, NEVER INDEXED. They arrive as strings on the in-band
-path (``chaos:timeout:delay_ms=250`` is split textually) and as arbitrary JSON
-on the rule path, so ``params["delay_ms"] / 1000`` is a ``TypeError`` waiting
-for the first consumer who writes a fault into a request field.
-:data:`FAULT_PARAM_KEYS` is the promise :data:`BUILTIN_FAULTS` makes about
-which keys each fault reads, in one machine-readable place, so the catalogue
-prose and the implementation cannot drift apart unnoticed.
-
-RESPONSE-SCOPE FAULTS ARE A THIRD PHASE, NOT A THIRD CALL SITE HERE. The five
-faults in :data:`RESPONSE_PHASE_FAULTS` -- ``malformed_body``,
-``body_mutation``, ``connection_reset``, ``empty_response``, ``slow_body`` --
-do not raise a ``UnitError`` at all: a fault that corrupts "the vendor
-returned garbage" needs an answer to corrupt, so it runs once the pipeline has
-one rather than before or after auth. :func:`apply_response_fault` is that
-third call site, in ``kernel/unit.py`` where an answer is in scope -- and the
-answer is not always the handler's: it may be a replay, or an error the
-pipeline raised. This module still owns the vocabulary, so ``apply_request_fault``
-recognises the five names and does nothing for them at either phase, rather
-than falling through to "unknown fault ignored" -- which is a real warning for
-a fault this core has genuinely never heard of, and would be a false one here.
-See ``core/kernel/types.py`` (:class:`~vendorfake.core.kernel.types.TransportDirective`)
-and ``docs/concepts/chaos-rules-and-faults.md`` ("Transport faults").
+"""What an armed request-scope fault does: turns a :class:`ChaosDecision` into
+the ``UnitError`` the pipeline raises, in one place.
+INVARIANT: which phase a fault fires in is a property of the fault, not the
+call site. ``token_expiry`` fires only after authentication; every other
+request-scope fault fires before it, and the pipeline calls this function
+twice, unconditionally, once per phase.
+``timeout`` never parks on a virtual timer, which would deadlock the request
+lock; real mode reports the delay on :attr:`UnitError.delay_ms`, virtual mode
+advances :class:`Clock` and reports ``delay_ms=0`` (konyklabs/roadmap#101,
+item 18). Parameters are coerced, never indexed -- :data:`FAULT_PARAM_KEYS` is
+the promise of which keys each fault reads. Response-scope faults
+(:data:`RESPONSE_PHASE_FAULTS`) are a third phase, run by
+:func:`apply_response_fault` once an answer exists to corrupt.
 """
 
 from __future__ import annotations
@@ -137,49 +52,23 @@ __all__ = [
 ]
 
 RequestMoment = Literal["pre", "post_auth"]
-"""The two moments the pipeline offers a request-phase fault. Response-phase
-faults (:data:`RESPONSE_PHASE_FAULTS`) are a third moment with no argument of
-their own -- see :func:`apply_response_fault`. Named ``moment`` rather than
-``phase`` because *phase* is the published word
-(:data:`~vendorfake.core.chaos.rules.FaultPhase`: ``request`` / ``response``
-/ ``delivery``) and both of these moments are inside the ``request`` phase.
-This module used to export ``FaultPhase`` for the two moments; the name is
-gone from here on purpose (imported privately as ``_PublishedPhase``), so an
-old ``from ...faults import FaultPhase`` fails loudly rather than binding a
-different Literal."""
+"""The two moments the pipeline offers a request-phase fault; response-phase
+faults are a third, with no argument of their own."""
 
 AUTH_PHASE_FAULTS: frozenset[str] = frozenset({"token_expiry"})
-"""Faults that fire after authentication. Exactly one today; a set rather than
-an equality test so a second one is a data change, not a rewritten condition."""
+"""Faults that fire after authentication. Exactly one today."""
 
 FAULT_PHASE: Mapping[str, _PublishedPhase] = {spec.name: spec.phase for spec in BUILTIN_FAULTS}
-""":attr:`~vendorfake.core.chaos.rules.FaultSpec.phase` per fault, keyed by
-name exactly as :data:`FAULT_PARAM_KEYS` -- derived from the catalogue for the
-same reason :data:`FAULT_PROVENANCE` is, and what ``vendorfake faults`` reads
-for its ``phase`` column."""
+"""Phase per fault, derived from the catalogue."""
 
 RESPONSE_PHASE_FAULTS: frozenset[str] = frozenset(name for name, phase in FAULT_PHASE.items() if phase == "response")
-"""Faults applied to a successful handler response, after it returns -- see
-:func:`apply_response_fault`. ``apply_request_fault`` checks membership here
-first so it can skip these silently instead of warning "unknown fault".
-
-Derived from the catalogue's ``phase`` rather than written out, so the set the
-pipeline acts on and the phase ``GET /__unit/chaos`` publishes for a fault are
-one fact: a fault cannot be ``phase: "request"`` in the listing and be applied
-after the handler here."""
+"""Faults applied to a successful handler response -- see :func:`apply_response_fault`."""
 
 INTACT_RESPONSE_FAULTS: frozenset[str] = frozenset({"slow_body"})
-"""The response-phase faults that hand the caller the handler's answer
-*unchanged* -- status, headers and body -- and only shape how it travels.
-``slow_body`` is the one today: both bindings deliver the whole body, just
-late. So a committed mutation under it is not "discarded" from the caller's
-view, and ``kernel/unit.py`` leaves ``RequestRecord.discarded_mutation`` false
-for it (found by review of konyklabs/roadmap#101). A client whose read
-timeout gives up between chunks did not get the answer -- but that is the
-binding's doing, after the kernel answered, and the kernel cannot see it."""
+"""Response-phase faults that hand back the handler's answer *unchanged* and
+only shape how it travels (``kernel/unit.py``'s ``discarded_mutation``)."""
 
-#: Reference defaults, ported: ``Number(d.params.delayMs ?? 100)`` and
-#: ``Number(d.params.retryAfterSeconds ?? 1)``.
+#: Defaults when a fault's own param is absent.
 DEFAULT_TIMEOUT_DELAY_MS = 100.0
 DEFAULT_RETRY_AFTER_SECONDS = 1
 
@@ -200,47 +89,22 @@ FAULT_PARAM_KEYS: Mapping[str, tuple[str, ...]] = {
     "empty_response": (),
     "slow_body": ("chunk_bytes", "chunk_delay_ms"),
 }
-"""Every parameter key a built-in fault reads, snake_case, keyed by fault name.
-
-Published so the catalogue in ``chaos/rules.py`` and the implementations here
-are checkable against each other rather than merely written next to each other.
-The ``webhook.*`` rows are the delivery-scope faults, whose implementations
-live with the dispatcher; their keys are declared here so the catalogue has one
-owner."""
+"""Every parameter key a built-in fault reads, snake_case, keyed by fault
+name -- checkable against the catalogue in ``chaos/rules.py``."""
 
 FAULT_DESCRIPTIONS: Mapping[str, str] = {spec.name: spec.summary for spec in BUILTIN_FAULTS}
-"""One-line description per fault, keyed by name exactly as :data:`FAULT_PARAM_KEYS`
--- the same summaries :data:`~vendorfake.core.chaos.rules.BUILTIN_FAULTS` already
-publishes, derived rather than retyped so ``vendorfake faults``, ``vendorfake info``
-(which prints ``GET /__unit/info`` unchanged) and the catalogue cannot say two
-different things about the same fault, and so a fault added to the catalogue
-(the five transport-fidelity kinds, for one) appears in every listing at once."""
+"""One-line description per fault, derived from
+:data:`~vendorfake.core.chaos.rules.BUILTIN_FAULTS`."""
 
 FAULT_PROVENANCE: Mapping[str, FaultProvenance] = {spec.name: spec.provenance for spec in BUILTIN_FAULTS}
-""":attr:`~vendorfake.core.chaos.rules.FaultSpec.provenance` per fault, keyed
-by name exactly as :data:`FAULT_PARAM_KEYS` and :data:`FAULT_DESCRIPTIONS` --
-what :func:`is_transport_fault` reads instead of re-deciding per-kind which
-faults are transport-level, and what ``vendorfake faults`` reads for its own
-``provenance`` column. Derived from :data:`~vendorfake.core.chaos.rules.BUILTIN_FAULTS`
-for the same reason :data:`FAULT_DESCRIPTIONS` is: one fault added there with
-``provenance="transport"`` is transport-level everywhere at once, including
-here, with nothing else to update."""
+""":attr:`~vendorfake.core.chaos.rules.FaultSpec.provenance` per fault, what
+:func:`is_transport_fault` reads."""
 
 
 def _delay_owed(clock: Clock, delay_ms: float) -> int:
-    """Account for ``delay_ms`` without ever blocking on another request.
-
-    Returns what the binding still owes the caller in wall-clock milliseconds:
-    zero on a virtual clock, where the waiting has already happened by moving
-    scenario time; ``delay_ms`` on a real one, where only the binding knows
-    whose clock to spend it on. Nothing here sleeps -- see the module
-    docstring's second reversal.
-
-    Rounded up to a whole millisecond because :attr:`UnitResponse.delay_ms` is
-    an ``int``: ``math.ceil`` rather than ``round`` so a sub-millisecond delay
-    does not silently become no delay at all -- ``round`` is banker's rounding
-    to even and sends both ``0.4`` and ``0.5`` to zero, which would make the
-    guarantee false for exactly the case it names.
+    """What the binding still owes in wall-clock milliseconds: zero on a
+    virtual clock, ``delay_ms`` on a real one. ``math.ceil``, not ``round`` --
+    banker's rounding would send ``0.4`` and ``0.5`` both to zero.
     """
     if delay_ms <= 0:
         return 0
@@ -258,19 +122,13 @@ def apply_request_fault(
     log: Logger,
 ) -> None:
     """Raise the ``UnitError`` this decision stands for, if this is its phase.
-
-    Returns normally -- doing nothing -- in three cases, all of them ordinary:
-    the decision belongs to the other phase, the fault is a delivery-scope one
-    that a request-scope rule named by mistake, or the fault name is one this
-    core has never heard of. The last is a ``warn`` and not an error because
-    the fault vocabulary is open by design: a fork adds a fault name without
-    editing the core, and a unit that refused to start on an unrecognised one
-    would make that impossible.
+    Returns normally -- doing nothing -- when the decision belongs to the
+    other phase, is a response-scope fault, or names a fault this core has
+    never heard of. The last only warns: the fault vocabulary is open by
+    design, and a fork adds a name without editing the core.
     """
     if decision.fault in RESPONSE_PHASE_FAULTS:
-        # A real fault this core knows well; it just does not fire here. See
-        # the module docstring's "RESPONSE-SCOPE FAULTS" note and
-        # ``kernel/unit.py``'s call to :func:`apply_response_fault`.
+        # A real fault; it fires from apply_response_fault instead.
         return
 
     is_auth_fault = decision.fault in AUTH_PHASE_FAULTS
@@ -316,11 +174,6 @@ def apply_request_fault(
         raise UnitError(
             UnitErrorKind.TIMEOUT,
             detail=f"Injected timeout after {shown}ms.",
-            # ``info`` is the consumer-visible copy, published in the sidecar
-            # and unchanged by this reversal: it still reports the delay the
-            # rule asked for, on either clock. ``delay_ms=`` is the instruction
-            # to the binding, and is zero in virtual mode because scenario time
-            # has already moved.
             info={"chaos_rule": rule, "delay_ms": shown},
             delay_ms=owed,
             fault=decision.fault,
@@ -338,57 +191,25 @@ def apply_request_fault(
     log.warn("unknown request-scope fault ignored", {"fault": decision.fault, "rule": rule})
 
 
-# ---------------------------------------------------------------------------
-# Response-scope faults: transport-fidelity, provenance: transport.
-#
-# Everything below corrupts a *successful* handler response rather than
-# refusing the request, which is why it is a function the pipeline calls after
-# ``route.handler(args)`` returns rather than a branch in the function above.
-# See the module docstring's "RESPONSE-SCOPE FAULTS" note.
-# ---------------------------------------------------------------------------
+# -- Response-scope faults: transport-fidelity, provenance: transport. -------
+# Corrupts a *successful* handler response, called after it returns.
 
 _HTML_ERROR_PAGE = (
     b"<html><head><title>Bad Gateway</title></head>"
     b"<body><h1>Bad Gateway</h1><p>vendorfake: injected transport fault.</p></body></html>"
 )
-"""``malformed_body`` mode ``html``. A generic, vendor-neutral error page -- no
-vendor documents *this* body, because no vendor sent it; a proxy or a load
-balancer did. That is the point under test."""
+"""``malformed_body`` mode ``html``: a generic, vendor-neutral error page,
+because no vendor sent it -- a proxy or load balancer did."""
 
 
 def is_transport_fault(response: UnitResponse) -> bool:
-    """Whether ``response`` was produced by one of the five transport-fidelity
-    faults (``provenance: "transport"`` in
-    :data:`~vendorfake.core.chaos.rules.BUILTIN_FAULTS`), as opposed to any
-    fault at all.
-
-    FOR: stream #55's ``ValidatingClient``, which checks a response against the
-    vendor's documented schema and must not fail a request this fake never
-    claimed matches one -- a ``malformed_body`` or ``body_mutation`` response
-    is supposed to violate the schema, and its transport-level cousins
-    (``connection_reset``, ``empty_response``, ``slow_body``) never reach a
-    validator as a parsed body at all. A ``rate_limit`` 429 or a
-    ``server_error`` 500, by contrast, IS the vendor's own documented error
-    envelope and must still be validated -- it is a real fault, just not a
-    transport one.
-
-    Reads the ``vendorfake-fault`` header rather than deciding from
-    ``response.transport`` or a ``ChaosDecision``: the header is the one thing
-    every faulted response carries and the only place a fault's *name*
-    reaches this predicate, so a fork's own transport-provenance fault is
-    caught the same way a built-in one is, with nothing to update here.
-
-    Earlier this returned ``"vendorfake-fault" in response.headers`` on the
-    claim that nothing else in this distribution sets that header. That claim
-    was false within this same PR: ``kernel/unit.py``'s ``_shape`` stamps
-    ``vendorfake-fault`` on *every* faulted response, old kinds included --
-    E2's "every response produced by any fault (old kinds too) carries
-    Vendorfake-Fault" -- so the old body answered ``True`` for a ``rate_limit``
-    or ``token_expiry`` response too, telling a schema validator to skip a
-    body it is required to check (found by review round 3 of
-    konyklabs/roadmap#73). An unrecognised fault name -- the header missing,
-    or naming a kind this process has never heard of -- answers ``False``:
-    unknown is not transport.
+    """Whether ``response`` came from a transport-fidelity fault
+    (``provenance: "transport"``) rather than any fault at all -- a validator
+    must not fail a ``malformed_body`` response for violating the vendor's
+    schema, but must still validate a ``rate_limit`` 429. Reads the
+    ``vendorfake-fault`` header and looks up its provenance, since every
+    faulted response carries that header regardless of kind
+    (konyklabs/roadmap#73). Unrecognised is not transport.
     """
     fault = response.headers.get("vendorfake-fault")
     if fault is None:
@@ -397,27 +218,9 @@ def is_transport_fault(response: UnitResponse) -> bool:
 
 
 def apply_response_fault(decision: ChaosDecision, response: UnitResponse, *, log: Logger) -> UnitResponse:
-    """Corrupt the answer the pipeline produced for a response-scope fault, or
-    hand it back unchanged.
-
-    Called once per request, on whatever answer that is, with the
-    :class:`ChaosDecision` fault selection armed for this request -- the same
-    decision :func:`apply_request_fault` already saw twice and did nothing
-    with, because a fault in :data:`RESPONSE_PHASE_FAULTS` is this function's
-    alone. Three answers reach it:
-
-    * a fresh one, after the handler ran *and* after its clean response was
-      stored against the idempotency key, so no fault can enter the store;
-    * a replayed one, where the handler did not run on this request at all;
-    * a shaped error, raised anywhere after the decision was drawn.
-
-    So a fault here must not assume this request produced any handler state,
-    nor that the response was freshly built. Read ``response`` and the
-    decision's params; reach for nothing else.
-
-    ``log`` is accepted for symmetry with :func:`apply_request_fault` and
-    because a future fault kind may want it; none of today's five do.
-    """
+    """Corrupt the answer for a response-scope fault, or hand it back
+    unchanged. Runs after any clean response is stored against the
+    idempotency key, so no fault enters the store."""
     fault = decision.fault
     if fault not in RESPONSE_PHASE_FAULTS:
         return response
@@ -431,28 +234,14 @@ def apply_response_fault(decision: ChaosDecision, response: UnitResponse, *, log
 
 
 def _stamp(headers: dict[str, str], fault: str, rule: str) -> None:
-    """The two mechanism headers every faulted response carries -- old kinds
-    too, via ``UnitError.fault``/``UnitError.rule_id`` and ``kernel/unit.py``'s
-    ``_shape``. Lower-case keys, matching every other header this package sets
-    (``x-unit-error``, ``retry-after``, ...); the prose name is
-    ``Vendorfake-Fault`` / ``Vendorfake-Rule``, HTTP being case-insensitive
-    about it either way.
-    """
+    """The two mechanism headers every faulted response carries."""
     headers["vendorfake-fault"] = fault
     headers["vendorfake-rule"] = header_text(rule)
 
 
 def _malformed_body(response: UnitResponse, params: Mapping[str, Any], *, fault: str, rule: str) -> UnitResponse:
-    """``mode: invalid_json | html | empty | truncate``.
-
-    The answer keeps its own status unless the rule says otherwise. An
-    explicit ``params.status`` always wins, and ``html`` defaults to 502
-    because a proxy's HTML error page is plausible in front of any answer;
-    every other mode inherits ``response.status``, which is 200 on a success
-    exactly as before and the real status on a shaped error. Substituting 200
-    there would turn a 401 into a success and tell a consumer's code the
-    opposite of what happened.
-    """
+    """``mode: invalid_json | html | empty | truncate``. Keeps its own status
+    unless ``params.status`` says otherwise; ``html`` defaults to 502."""
     mode = params.get("mode")
     if mode not in ("invalid_json", "html", "empty", "truncate"):
         raise UnitError(
@@ -474,8 +263,7 @@ def _malformed_body(response: UnitResponse, params: Mapping[str, Any], *, fault:
         body = b""
         headers["content-type"] = "application/json"
     elif mode == "invalid_json":
-        # The real body with its last byte dropped -- so the JSON never
-        # closes -- and a stray comma appended in its place.
+        # Last byte dropped, so the JSON never closes, and a comma appended.
         body = response.body[:-1] + b","
     else:  # truncate
         body = response.body[: len(response.body) // 2]
@@ -485,14 +273,7 @@ def _malformed_body(response: UnitResponse, params: Mapping[str, Any], *, fault:
 
 def _body_mutation(response: UnitResponse, params: Mapping[str, Any], *, fault: str, rule: str) -> UnitResponse:
     """Apply every ``ops`` entry, in order, to the response's own JSON body.
-
-    Firing this against a route whose response is not JSON is reported at fire
-    time, not at rule-add time: the grammar in ``chaos/rules.py`` validates a
-    rule with no route table and no vendor in reach (see its module
-    docstring), and the route's *response shape* is knowable only once a
-    response actually exists. Said plainly in the ``Open questions`` of the
-    stream that added this.
-    """
+    A non-JSON response is reported at fire time, not rule-add time."""
     raw_ops = params.get("ops")
     if not isinstance(raw_ops, list) or not raw_ops:
         raise UnitError(
@@ -522,9 +303,7 @@ def _body_mutation(response: UnitResponse, params: Mapping[str, Any], *, fault: 
 
 def _directive(response: UnitResponse, fault: str, params: Mapping[str, Any], *, rule: str) -> UnitResponse:
     """``connection_reset`` / ``empty_response`` / ``slow_body``: leave the
-    body alone and attach the instruction a binding interprets. See
-    :class:`~vendorfake.core.kernel.types.TransportDirective`.
-    """
+    body alone and attach the instruction a binding interprets."""
     headers = dict(response.headers)
     _stamp(headers, fault, rule)
     directive: TransportDirective
@@ -659,9 +438,8 @@ def _apply_pointer_op(document: Any, raw_op: object, *, rule: str) -> Any:
 
 
 def _retype(current: Any, as_type: object, *, pointer: str, rule: str) -> Any:
-    """ "number -> its decimal string, string -> number if parseable else
-    error, anything -> null" -- unless ``as`` names the target explicitly.
-    """
+    """Number to string, string to number if parseable, else null -- unless
+    ``as`` names the target explicitly."""
     target = as_type if as_type in ("string", "number", "null") else _default_retype_target(current)
     if target == "string":
         return as_str(current, json.dumps(current))
@@ -684,17 +462,9 @@ def _retype(current: Any, as_type: object, *, pointer: str, rule: str) -> Any:
 
 
 def _default_retype_target(current: Any) -> Literal["string", "number", "null"]:
-    """The target ``retype`` picks when ``as`` is absent.
-
-    JUDGMENT: a boolean goes to ``null``, not to ``"true"``/``"false"`` and not
-    to ``1``/``0``. JSON booleans are the one scalar consumers parse with the
-    least defensiveness, and a vendor that turns one into a *string* is a
-    documented case nowhere; ``null`` is the corruption a real "field went
-    missing in a refactor" produces, so it is the one worth rehearsing by
-    default. An explicit ``as: "number"`` on a boolean is refused rather than
-    coerced (``True`` is not "a number" a consumer's parser would accept from a
-    vendor), and ``as: "string"`` gives the JSON spelling.
-    """
+    """The target ``retype`` picks when ``as`` is absent. JUDGMENT: a boolean
+    goes to ``null`` rather than a string or number, the corruption a real
+    "field went missing" produces."""
     if isinstance(current, bool):
         return "null"
     if isinstance(current, int | float):

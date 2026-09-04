@@ -1,47 +1,22 @@
 """The Catalog surface beyond the listing: resolve one object, search by name or
 by change time, and upsert.
 
-FOR: answering the catalog calls an ordering integration makes between syncs --
-resolve an item to its variations when marking it sold out, find an item or a
-modifier by name, poll for what changed since the last webhook -- and giving
-the unit one documented way to *change* the catalog, without which
-``catalog.version.updated`` could never fire.
+Routes: ``GET /v2/catalog/object/{object_id}``, ``POST /v2/catalog/search``,
+``POST /v2/catalog/object``
+(https://developer.squareup.com/reference/square/catalog-api). All three share
+the ``merchant-directory`` capability with ``ListCatalog`` in
+:mod:`vendorfake.square.surface.directory`.
 
-=====================  =========================================================
-RetrieveCatalogObject  ``GET  /v2/catalog/object/{object_id}``
-                       https://developer.squareup.com/reference/square/catalog-api/retrieve-catalog-object
-SearchCatalogObjects   ``POST /v2/catalog/search``
-                       https://developer.squareup.com/reference/square/catalog-api/search-catalog-objects
-UpsertCatalogObject    ``POST /v2/catalog/object``
-                       https://developer.squareup.com/reference/square/catalog-api/upsert-catalog-object
-=====================  =========================================================
+INVARIANT -- a rejected upsert changes nothing: every object in the request is
+resolved and version-checked before the first write, and a rejected request
+mints no temporary ids.
 
-All three belong to ``merchant-directory``, with ``ListCatalog`` in
-:mod:`vendorfake.square.surface.directory`: a consumer that syncs the catalog
-wants every catalog route or none of them, and a capability split between
-"catalog reads" and "catalog writes" would be a taxonomy nobody asked for.
-
-INVARIANT: **a rejected upsert changes nothing.** The write goes through
-``Collection.insert``/``update`` per object, and the whole request is validated
--- every id resolved, every version checked -- before the first write. A version
-conflict on the object therefore leaves no partial catalog behind and, because
-the journal is the event source, no ``catalog.version.updated`` either. Nor
-does a rejected request draw from the id stream: temporary ids are minted only
-after the last object has been validated, so the next accepted upsert mints
-exactly the ids it would have minted had the rejected one never been sent --
-the discipline PayOrder keeps for tender ids.
-
-SHRINK (prototype): of Square's eleven ``CatalogQuery`` kinds only
-``prefix_query`` and ``exact_query`` are answered, and only on the ``name``
-attribute -- the two a consumer uses to find a thing by what it is called.
-``text_query``, ``sorted_attribute_query``, the range and set queries and the
-``items_for_*`` reverse lookups are refused with ``invalid_value`` naming the
-key rather than silently ignored, because a query that is ignored looks exactly
-like a query that matched everything. ``include_related_objects`` answers a
-variation's parent ITEM and nothing else, there being no categories, taxes or
-modifier lists in this unit to relate. Upsert takes ``ITEM`` and
-``ITEM_VARIATION``; ``BatchUpsertCatalogObjects``, ``DeleteCatalogObject`` and
-``BatchDeleteCatalogObjects`` are not implemented.
+SHRINK (prototype) -- of Square's eleven ``CatalogQuery`` kinds only
+``prefix_query`` and ``exact_query`` are answered, only on ``name``; the rest
+are refused with ``invalid_value`` naming the key, rather than silently
+ignored. ``include_related_objects`` answers a variation's parent ITEM only.
+Upsert takes ``ITEM`` and ``ITEM_VARIATION``; batch upsert/delete are not
+implemented.
 """
 
 from __future__ import annotations
@@ -88,8 +63,7 @@ SEARCHABLE_ATTRIBUTE = "name"
 """The one attribute a prefix or exact query may name here. See the SHRINK."""
 
 TEMPORARY_ID_PREFIX = "#"
-""""To create a new object, use a temporary ID prefixed with ``#``" -- the
-documented way a caller says "mint one for me".
+"""DOCUMENTED -- how a caller says "mint one for me" on upsert.
 https://developer.squareup.com/reference/square/catalog-api/upsert-catalog-object
 """
 
@@ -126,10 +100,6 @@ class CatalogSurface:
         self._deps = deps
 
     def routes(self) -> tuple[Route, ...]:
-        """``/v2/catalog/search`` and ``/v2/catalog/object`` are three segments
-        each and ``/v2/catalog/object/{object_id}`` is four, so nothing here can
-        shadow anything; listed reads-first because that is how a consumer
-        meets them."""
         return (
             Route(
                 method="GET",
@@ -150,9 +120,7 @@ class CatalogSurface:
                 scopes=("ITEMS_READ",),
                 operation_id="SearchCatalogObjects",
                 summary="Catalog objects by type, by name prefix or exactly, or changed since a time.",
-                # Every filter is optional, so the page walk needs no example
-                # body: an empty query lists the whole catalog, which is what
-                # the walk compares its pages against.
+                # An empty query lists the whole catalog; no example body needed.
                 pagination=PaginationSpec(style="cursor", where="body", items_path="objects"),
             ),
             Route(
@@ -177,18 +145,12 @@ class CatalogSurface:
 
     def retrieve_catalog_object(self, args: HandlerArgs) -> ReplyInit:
         """One object, with ``related_objects`` on request.
+        https://developer.squareup.com/reference/square/catalog-api/retrieve-catalog-object
 
-        "include_related_objects: If `true`, the response will include
-        additional objects that are related to the requested objects."
-        Here that is a variation's parent ITEM -- the only relation this unit
-        has. An ITEM's variations are nested inside it, as the documented
-        example shows, and are not repeated as related objects.
+        DOCUMENTED -- ``include_related_objects`` adds a variation's parent ITEM only; an ITEM's
+        own variations are nested inside it already.
 
-        JUDGMENT -- a deleted object is returned, flagged ``is_deleted``, rather
-        than answered 404. Square documents the flag and not the status a
-        retrieve of such an object gets; NOT VERIFIED. There is no delete route
-        in this unit yet, so the case is reachable only from a scenario that
-        seeds one.
+        JUDGMENT / NOT VERIFIED -- a deleted object returns flagged ``is_deleted`` rather than 404.
         """
         collection = args.ctx.store.collection(COL.catalog)
         stored = collection.get(args.params["object_id"])
@@ -216,31 +178,16 @@ class CatalogSurface:
     # -- POST /v2/catalog/search -------------------------------------------
 
     def search_catalog_objects(self, args: HandlerArgs) -> ReplyInit:
-        """Search by type, by name, or by change time -- any combination.
+        """Search by type, name, or change time -- any combination.
+        https://developer.squareup.com/reference/square/catalog-api/search-catalog-objects
 
-        ``object_types`` defaults to the top-level types, which in this unit
-        is ``ITEM`` alone; asking for ``ITEM_VARIATION`` returns variations
-        flat, exactly as ListCatalog does. ``begin_time`` keeps objects
-        "modified after this timestamp" -- strictly after, on the store's
-        ``updated_at`` -- which is how a consumer polls for what changed since
-        the ``latest_time`` it was last told.
+        DOCUMENTED -- ``begin_time`` keeps objects strictly newer than ``updated_at``;
+        ``latest_time`` is the newest ``updated_at`` across the catalog, not the page, so polling
+        with it as the next ``begin_time`` sees each change exactly once. An out-of-range ``limit``
+        is ignored, not refused, and pages at the default.
 
-        ``latest_time`` is "When the associated product catalog was last
-        updated": the newest ``updated_at`` across the whole catalog, not the
-        page, so a consumer that stores it and sends it back as the next
-        ``begin_time`` sees each change exactly once.
-
-        ``limit`` follows the one documented rule that differs from every
-        other list here: "If the supplied limit is negative, zero, or is higher
-        than the maximum limit of 1,000, it will be ignored." Ignored, not
-        refused -- so an out-of-range value pages at the default. The default
-        itself is JUDGMENT, as it is on ListCatalog.
-
-        JUDGMENT -- name matching is case-insensitive. Square documents the
-        prefix and exact queries by shape and says nothing about case; a
-        consumer typing ``tea`` to find ``Tea`` is the whole use case, and the
-        alternative teaches one to reproduce the catalog's capitalisation.
-        NOT VERIFIED for ``exact_query`` in particular.
+        JUDGMENT / NOT VERIFIED -- name matching is case-insensitive; Square says nothing about
+        case for prefix/exact queries.
         """
         body = args.body()
         request = validate_body(SearchCatalogObjectsRequest, body)
@@ -301,9 +248,8 @@ class CatalogSurface:
         return json_(
             compact(
                 {
-                    # The answer to the request, so present even when empty --
-                    # the envelope half of the one empty-array rule in
-                    # :mod:`vendorfake.square.model.order`.
+                    # Present even when empty; see the empty-array rule in
+                    # vendorfake.square.model.order.
                     "objects": [project_catalog_object(entity, catalog) for entity in page.items],
                     "related_objects": related or None,
                     "cursor": page.cursor,
@@ -317,38 +263,16 @@ class CatalogSurface:
     def upsert_catalog_object(self, args: HandlerArgs) -> ReplyInit:
         """Create or update one object and, for an ITEM, its variations.
 
-        Ids: "To create a new object, use a temporary ID prefixed with `#`";
-        the response's ``id_mappings`` pairs each temporary id with the one
-        minted for it. An id without the prefix names an existing object, and
-        naming one that does not exist is ``invalid_value`` on ``object.id``
-        rather than a silent create under a caller-chosen id -- Square mints
-        catalog ids, and a fake that let a caller pick them would teach a
-        consumer that Square does.
+        DOCUMENTED -- a temporary id (``#``-prefixed) creates; an existing id must supply a
+        matching ``version`` or the write is rejected as conflicting
+        (https://developer.squareup.com/reference/square/objects/CatalogObject). A non-prefixed id
+        that doesn't exist is ``invalid_value``, since Square mints catalog ids.
 
-        Versions: "When updating an object, the version supplied must match the
-        version in the database, otherwise the write will be rejected as
-        conflicting." That is the catalog's optimistic concurrency and it is
-        checked against ``catalog_version`` -- the millisecond-epoch number on
-        the wire -- not the store's mutation counter. An update that omits it
-        is ``missing_field`` on ``object.version``.
-        https://developer.squareup.com/reference/square/objects/CatalogObject
-
-        Every object in the request is resolved and version-checked before the
-        first write, so a conflict on the third variation leaves the item and
-        the first two untouched. The writes that follow each journal separately
-        -- the mapper turns every one into a ``catalog.version.updated`` -- and
-        each written object takes the same new ``version``: the clock's
-        millisecond instant, which is what Square's catalog version is shaped
-        like, or one more than the highest version being replaced when the
-        clock has not moved past it. Strictly advancing on every write is what
-        makes the version a concurrency token at all: two upserts inside one
-        millisecond -- every pair, on a virtual clock -- would otherwise stamp
-        the same number and a write carrying the first's version would be
-        accepted over the second's.
-
-        A variation's ``item_variation_data.item_id`` may name the enclosing
-        item's temporary id, which is how Square's own example creates an item
-        and its variations in one call.
+        INVARIANT -- every object is resolved and version-checked before the first write, so a
+        conflict on the third variation leaves the item and the first two untouched; each written
+        object takes the same new, strictly-advancing version. A variation's
+        ``item_variation_data.item_id`` may name the enclosing item's temporary id, creating both
+        in one call.
         """
         request = validate_body(UpsertCatalogObjectRequest, args.body())
         collection = args.ctx.store.collection(COL.catalog)
@@ -411,13 +335,10 @@ class CatalogSurface:
         path: str,
         parent_item_id: str | None = None,
     ) -> list[_Planned]:
-        """Resolve one request object -- and an ITEM's nested variations --
-        into the entities to write, checking versions and leaving temporary
-        ids in place for the caller to mint once everything has passed.
-
-        Recursion carries ``parent_item_id`` so a nested variation is bound to
-        the item that encloses it whatever ``item_id`` it states; a variation
-        sent at the top level must name an ``item_id`` that resolves.
+        """Resolve one request object -- and an ITEM's nested variations -- into the entities to
+        write, checking versions and leaving temporary ids for the caller to mint once everything
+        has passed. ``parent_item_id`` binds a nested variation to its enclosing item regardless
+        of any stated ``item_id``; a top-level variation must name one that resolves.
         """
         kind = spec.type.upper()
         if kind not in (ITEM, ITEM_VARIATION):
@@ -556,10 +477,8 @@ def catalog_routes(deps: SquareDeps) -> tuple[Route, ...]:
 def _classify_id(collection: Collection, raw: str, temporaries: set[str], path: str) -> tuple[str, str | None]:
     """``(id as sent, temporary id or None)`` for one request object.
 
-    A temporary id may appear once per request: a second object naming the
-    same ``#tmp`` is refused, since ``id_mappings`` could carry only one
-    answer for it. Nothing is minted here; the surface mints after the whole
-    request has passed.
+    A temporary id may appear once per request, since ``id_mappings`` could
+    carry only one answer for it. Nothing is minted here.
     """
     if raw.startswith(TEMPORARY_ID_PREFIX):
         if raw in temporaries:

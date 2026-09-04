@@ -116,12 +116,8 @@ def test_describe_names_the_header_the_payload_and_the_judgment(signer: ToastWeb
         (b"[1,2]", "4OGec3FSLo4jYVHtIb2SAZ4Mwdc7XMo0SaREpuPd7gQ="),
     ],
 )
-def test_the_signature_vectors_the_vitest_example_pins_too(body: bytes, expected: str) -> None:
-    """konyklabs/roadmap#49: the Vitest example's helper appended the
-    timestamp unconditionally and threw on a body without one, while this
-    signer signs such a body alone. These four vectors -- no timestamp, a
-    string one, a numeric one, an array -- are pinned identically in
-    ``examples/vitest-consumer/tests/toast.test.ts``, and the full self-test
-    runs both suites, so the two implementations cannot drift apart again
-    without a step going red. The secret is ``unit-toast-secret``."""
+def test_the_signature_vectors_are_pinned(body: bytes, expected: str) -> None:
+    """Four fixed vectors (no timestamp, a string one, a numeric one, an
+    array) under the secret ``unit-toast-secret``. konyklabs/roadmap#49 was a
+    second implementation that appended the timestamp unconditionally."""
     assert toast_signature("unit-toast-secret", body) == expected

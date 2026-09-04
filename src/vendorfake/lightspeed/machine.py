@@ -1,65 +1,11 @@
-"""The sale lifecycle, as data the core's state machine enforces.
+"""The sale lifecycle, as data the core's state machine enforces; published
+at ``GET /__unit/machines``, probeable at ``POST /__unit/machines/probe``.
 
-FOR: stating which values a sale's ``state`` may hold and which moves between
-them are legal, once, as a table -- so that the rule is enforced by the core,
-published at ``GET /__unit/machines``, and probeable at
-``POST /__unit/machines/probe`` without any consumer importing this module.
-
-INVARIANT: **terminal means no outgoing edges, and nothing else.** The core
-derives terminality from an empty ``to`` tuple.
-
-DOCUMENTED: the four values and the field name. ``SaleRequestBase.state`` is
-``{"description": "State of the sale.", "enum": ["parked", "pending",
-"voided", "closed"], "example": "closed", "type": "string"}`` and it is one of
-the schema's two ``required`` members (the other is ``source``); the ``Sale``
-response schema declares the same four-value enum on the same field name. The
-enum is lower-case, and that is worth stating because Lightspeed's *older*
-API 1.0 vocabulary -- ``SAVED``, ``CLOSED``, ``LAYBY``, ``ONACCOUNT``,
-``VOIDED`` -- still shows up in this document, in exactly one place: the
-``initReturnSale`` operation's response EXAMPLE, which prints an API 1.0 sale
-carrying BOTH ``"state": "parked"`` and ``"status": "SAVED"``. Nothing in the
-2026-07 schemas declares a ``status`` member on a sale, and no schema anywhere
-in the document declares ``LAYBY`` or ``ONACCOUNT`` as an enum value at all
-(checked over all 373 component schemas). So the machine below is the schema's
-four-value ``state``, and ``status`` is recorded as a deviation rather than
-modelled -- see ``capabilities.py``'s ``sale-status-vocabulary``.
-
-An account sale is expressed the way the schema expresses it, through
-``attributes``: ``SaleRequestBase.attributes`` is "An array of attributes" with
-the documented example value ``["onaccount"]``. A layby or account sale is
-therefore a ``parked``/``pending`` sale carrying that attribute, not a fifth
-state, which is also what makes the webhooks page's "may fire multiple times
-for layby/account sales" reachable here -- such a sale is updated more than
-once before it closes, and every update fires ``sale.update``.
-
-JUDGMENT -- **every edge below.** The document declares the four values and
-says nothing whatever about which moves between them are legal; there is no
-sale-lifecycle page. The reading taken here, and why:
-
-* ``parked -> pending``, ``parked -> closed``, ``parked -> voided``. A parked
-  sale is the one a cashier can still change, so it can move anywhere.
-* ``pending -> closed``, ``pending -> voided``, and deliberately **not**
-  ``pending -> parked``. A pending sale is one whose line items may be
-  ``CONFIRMED`` and therefore "added as **read-only**"
-  (``SaleLineItem.status``); moving it back to parked would make a read-only
-  line item editable again, which is the thing that flag exists to prevent.
-* ``parked`` and ``pending`` each ``allow_self``, because re-sending the state
-  a sale is already in is what ``PUT /sales/{sale_id}`` does on every ordinary
-  edit -- adding a line item to a parked sale sends ``state: "parked"`` again.
-* ``closed`` is **terminal**, and this is the load-bearing call. The one
-  documented operation on a closed sale is the return: "Initializes a return
-  for an existing **closed** sale and returns the newly created SAVED return
-  sale" (``initReturnSale``). A return creates a *second* sale rather than
-  editing the first, which is precisely how a system that treats a closed sale
-  as a financial record behaves -- so ``PUT`` on a closed sale is refused here,
-  with the 409 the chassis shapes from ``invalid_transition``. The return
-  route is the one carve-out and says so at its own site: it appends the new
-  sale's id to the original's ``return.return_sale_ids`` without asking the
-  machine, because that is the documented effect of a documented operation.
-* ``voided`` is terminal. A voided sale is the cancellation of a sale; there is
-  nothing to move it to. ``sales:write`` is documented as "Create sales and
-  payments, and adjust, void or return sales", which names voiding as an
-  end state and returning as the alternative to it.
+DOCUMENTED: ``SaleRequestBase.state`` declares the four-value enum used here;
+older API 1.0 values appear in one example only (``capabilities.py``'s
+``sale-status-vocabulary``). INVARIANT: terminal means no outgoing edges.
+JUDGMENT: no lifecycle page states which moves are legal -- each state's own
+``summary`` below gives the reading and its reason.
 """
 
 from __future__ import annotations
@@ -115,5 +61,4 @@ SALE_MACHINE = MachineDef(
         ),
     },
 )
-"""The sale lifecycle. The four values are the vendor's; every edge is this
-project's -- see the module docstring for the reading and its reasons."""
+"""The sale lifecycle: values are the vendor's, edges are JUDGMENT (see the module docstring)."""

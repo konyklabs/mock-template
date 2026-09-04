@@ -1,44 +1,24 @@
 """The Inventory tag: four reads, and the batch that moves stock.
 
-DOCUMENTED, six of the tag's ten operations:
+DOCUMENTED: six of the tag's ten operations are in scope -- four bare-array
+reads (records/levels, whole-retailer and per-product) plus the
+stock-adjustment list and create. The other four (``POST
+/inventory/reorder_points`` and the three custom-reason operations) are out;
+``capabilities.py`` records why. ``GET /stock_adjustments`` is gated on
+``inventory:write``, reproducing the vendor's own annotation on what is
+otherwise a read.
 
-===============================================  ================================  ===================
-``POST /inventory``                              ``ListInventoryRecords``          ``inventory:read``
-``GET /inventory/{product_id}``                  ``ListProductInventoryRecords``   ``inventory:read``
-``POST /inventory_levels``                       ``ListInventoryLevels``           ``inventory:read``
-``GET /inventory_levels/{product_id}``           ``ListProductInventoryLevels``    ``inventory:read``
-``GET /stock_adjustments``                       ``ListStockAdjustments``          ``inventory:write``
-``POST /stock_adjustments``                      ``CreateStockAdjustments``        ``inventory:write``
-===============================================  ================================  ===================
+The four reads answer a bare JSON array; the adjustment list answers the
+``{"data": ..., "version": ...}`` envelope (``model/inventory.py``).
 
-``GET /stock_adjustments`` is gated on ``inventory:WRITE``. That is the
-vendor's own annotation on a read operation, reproduced rather than corrected,
-and it is why the scenario's read-only token cannot see the adjustment log.
+Any change to an ``inventory`` row fires ``inventory.update``, once per row
+moved -- so two adjustments against the same product/outlet in one batch
+fire once, not twice; creating a product with an ``inventory`` payload fires
+it too (``surface/products.py``).
 
-The four left out are ``POST /inventory/reorder_points`` and the three
-``custom_inventory_adjustment_reasons`` operations; ``capabilities.py`` records
-why each.
-
-**The two response shapes are different, and neither was chosen here.** The
-four reads declare a bare JSON array; the adjustment list declares
-``StockAdjustmentCollection``, which is the ``{"data": ..., "version": ...}``
-envelope. See ``model/inventory.py`` for the whole note.
-
-WHAT FIRES ``inventory.update``: any change to a row in the ``inventory``
-collection. A stock adjustment moves a level, so it fires one per row moved --
-never one per adjustment, because two adjustments against the same product and
-outlet in one batch move one row twice and the journal has two entries for it.
-Creating a product with an ``inventory`` payload fires them too
-(``surface/products.py``). The adjustment log itself fires NOTHING: no value of
-the documented ``WebhookType`` enum names a stock adjustment.
-
-THE BATCH IS ALL-OR-NOTHING, and that is JUDGMENT. The operation is documented
-as "Creates one or more stock adjustments in a single batch (1-1000 items per
-request)" and says nothing about partial failure; ``StockAdjustmentBatchResponse``
-has one member and no per-item status. So every item is validated before any is
-applied, and a batch whose fifth item names an unknown product moves no stock
-at all. The alternative -- committing four adjustments and then answering 422 --
-would leave a consumer with no way to find out which four.
+JUDGMENT: the batch is all-or-nothing, since the operation documents no
+partial-failure behaviour and ``StockAdjustmentBatchResponse`` carries no
+per-item status, so every item is validated before any is applied.
 """
 
 from __future__ import annotations
@@ -104,10 +84,8 @@ CAPABILITY = "inventory"
 
 DEFAULT_PRODUCT_PAGE_SIZE = 1000
 MAX_PRODUCT_PAGE_SIZE = 5000
-"""DOCUMENTED on ``GET /inventory/{product_id}``'s ``page_size``:
-``"default": 1000, "maximum": 5000``. This is the one list in the package whose
-ceiling the vendor states, so it is the vendor's number rather than
-``versioning.MAX_PAGE_SIZE``."""
+#: DOCUMENTED on ``GET /inventory/{product_id}``'s ``page_size``:
+#: ``"default": 1000, "maximum": 5000`` -- the vendor's own ceiling.
 
 _UNWALKABLE = (
     "The 200 body is a bare JSON array, not the {data, version} envelope, so there is no version.max in "
@@ -127,9 +105,8 @@ BARE_ARRAY_PAGINATION = PaginationSpec(
     walkable=False,
     unwalkable_reason=_UNWALKABLE,
 )
-"""What the four bare-array inventory reads publish: they page, and the walk
-cannot drive them. ``items_path`` is empty because the rows ARE the document.
-Declared rather than omitted, so a paginating route is excused on the record."""
+#: The four bare-array inventory reads: they page, but the walk cannot drive
+#: them. ``items_path`` is empty because the rows ARE the document.
 
 
 class LightspeedInventorySurface:
@@ -190,9 +167,7 @@ class LightspeedInventorySurface:
                 capability=CAPABILITY,
                 handler=self.list_stock_adjustments,
                 auth=BEARER_AUTH,
-                # DOCUMENTED, and worth a second look: a READ gated on the
-                # WRITE scope. The operation's own annotation says
-                # `inventory:write`.
+                # DOCUMENTED: a READ gated on `inventory:write`, the vendor's own annotation.
                 scopes=(SCOPE_INVENTORY_WRITE,),
                 pagination=VERSION_CURSOR_PAGINATION,
                 operation_id="ListStockAdjustments",
@@ -325,8 +300,7 @@ class LightspeedInventorySurface:
                     adjustments.insert(row.to_entity(), {"operation_id": "CreateStockAdjustments"})
                 )
             )
-        # DOCUMENTED 201 and `StockAdjustmentBatchResponse`, which is `data`
-        # alone -- no `version` envelope on the create, unlike the list.
+        # DOCUMENTED: 201, `StockAdjustmentBatchResponse` is `data` alone -- no `version` envelope, unlike the list.
         return json_({"data": created}, 201)
 
     # -- helpers ------------------------------------------------------------
@@ -357,13 +331,8 @@ class LightspeedInventorySurface:
 
     def _custom_reason_type(self, ctx: UnitContext, item: CreateStockAdjustmentItem, where: str) -> str | None:
         """``POSITIVE``/``NEGATIVE`` for a ``CUSTOM`` adjustment, or ``None``.
-
-        JUDGMENT, twice over, and both because the Custom Inventory Adjustment
-        Reasons tag is deferred (``capabilities.py``): a ``CUSTOM`` reason must
-        name one of the two the scenario seeds, and a custom reason id sent
-        WITH a built-in reason is refused rather than ignored -- it would have
-        no effect, and a caller who sent one meant something by it.
-        """
+        JUDGMENT: a custom reason id sent with a built-in reason is refused
+        rather than ignored, since it would otherwise have no effect."""
         supplied = item.custom_inventory_adjustment_reason_id
         if item.reason != CUSTOM_REASON:
             if supplied is not None:
@@ -421,12 +390,9 @@ class LightspeedInventorySurface:
         inventory.update(str(existing["id"]), mutate, meta={"operation_id": "CreateStockAdjustments"})
 
     def _require_product(self, args: HandlerArgs) -> dict[str, Any]:
-        """The product a ``{product_id}`` inventory read names.
-
-        JUDGMENT: an unknown id is a 404, although both operations declare only
-        a 200. An empty array would be the same answer a real product with no
-        stock gives, and those are different facts.
-        """
+        """The product a ``{product_id}`` inventory read names. JUDGMENT: an
+        unknown id is a 404, though both operations declare only a 200 --
+        an empty array would read the same as a real product with no stock."""
         product_id = args.params["product_id"]
         stored = args.ctx.store.collection(COL.products).get(product_id)
         if stored is None:
@@ -460,13 +426,10 @@ def _window(
     size: int | None,
     descending: bool,
 ) -> list[dict[str, Any]]:
-    """``after``/``before``/``size`` over the version, in the asked direction.
-
-    The same exclusive-``after``, inclusive-``before`` reading
-    ``versioning.select`` uses; the ordering is this operation's own
-    ``sort_direction``/``order_direction`` parameter, which the version-cursor
-    lists do not have.
-    """
+    """``after``/``before``/``size`` over the version, in the asked direction
+    (exclusive-``after``, inclusive-``before``, like ``versioning.select``);
+    the direction is this operation's own parameter, absent from the
+    version-cursor lists."""
     chosen = [
         dict(row) for row in rows if version_of(row) > (after or 0) and (before is None or version_of(row) <= before)
     ]

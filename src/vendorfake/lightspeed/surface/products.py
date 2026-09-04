@@ -1,62 +1,32 @@
 """The Products tag: the version-cursor list, one product, and the three writes.
 
-DOCUMENTED, five of the tag's eight operations:
+DOCUMENTED: five of the tag's eight operations are in scope (list, get,
+create, update, delete); the other three -- ``UploadImage`` (multipart,
+images excluded), ``GetPriceBooksForProduct`` (Price Books excluded) and
+``DeleteProductFamily`` -- are not, per ``capabilities.py``.
 
-============================================  ====================  =================
-``GET /products``                             ``ListProducts``      ``products:read``
-``GET /products/{product_id}``                ``GetProductByID``    ``products:read``
-``POST /products``                            ``CreateProduct``     ``products:write``
-``PUT /products/{product_id}``                ``UpdateProduct``     ``products:write``
-``DELETE /products/{product_id}``             ``DeleteProduct``     ``products:write``
-============================================  ====================  =================
+Every write fires ``product.update`` via the journal's collection mapping
+(``events.py``); a delete fires it too, since it is a soft delete and the
+row is still there to carry.
 
-The three left out are ``UploadImage`` (multipart, and images are excluded by
-issue #94), ``GetPriceBooksForProduct`` (the Price Books tag is excluded) and
-``DeleteProductFamily`` -- see ``capabilities.py`` for each.
+``sku``/``name``/``family_name`` override every other list parameter, per
+their own descriptions ("all other query params are ignored if this is
+provided"); with one present, this handler does not read the version-cursor
+parameters at all. ``name`` selects a whole product family, not one product
+("retrieves all products from the product family with the provided name"),
+and ``family_name`` is its documented alias.
 
-**Every write fires ``product.update``**, which is the journal's doing rather
-than this module's: the mapper keys on the ``products`` collection
-(``events.py``). A delete fires it too, because a delete here is a soft delete
-and the entity is still there to carry.
+Variants are inline: ``POST /products`` answers an array of ids because
+``ProductCreateBody.variants`` can create a parent and several children in
+one request (the separate Variant Attributes tag is not implemented; see
+``capabilities.py``).
 
-THE LIST'S RESOURCE FILTERS OVERRIDE EVERYTHING, and that is documented in the
-parameters' own descriptions: ``sku`` is "Allows loading a product by one of
-its SKUs. Note that all other query params are ignored if this is provided",
-and ``name``/``family_name`` say the same. So this handler branches: with
-``sku`` or ``name`` present it does not read ``after``/``before``/
-``page_size``/``deleted``/``include_images`` at all -- not even to validate
-them, because "ignored" means ignored. Without them it is an ordinary
-version-cursor page.
-
-``name`` SELECTS A FAMILY, not a product: "This query typically retrieves all
-products from the product family with the provided name." So a name match on
-any product returns every product sharing that product's ``family_id``, which
-is how a caller finds a parent and its variants in one request.
-``family_name`` is documented as an alias for it and is treated as one.
-
-VARIANTS ARE INLINE, and this is why ``POST /products`` answers an ARRAY of
-ids. ``ProductCreateBody.variants`` is a list of ``ProductAddVariantPayload``,
-and the create's own response schema describes ``data`` as "An array containing
-the ID or IDs of the new products" -- plural, because a body with three variants
-creates a parent and three children. The Variant Attributes TAG (five
-operations that manage the attribute vocabulary) is deliberately not
-implemented; see ``capabilities.py``.
-
-THE TWO GENERATED MEMBERS, both JUDGMENT. ``Product`` requires ``handle`` and
-``sku`` and ``ProductCreateBody`` requires neither, so:
-
-* ``handle`` defaults to a slug of the name (``"Ridgeline Tee"`` ->
-  ``"ridgeline-tee"``), which is what the vendor's own example shows for
-  ``"Bravo"`` -> ``"bravo"``;
-* ``sku`` defaults to the handle. Nothing in the specification says a SKU is
-  unique -- the ``sku`` filter is documented as loading "a product by one of
-  its SKUs" -- so no uniqueness is enforced and no 409 is invented for it.
-
-THE UPDATE'S RESPONSE IS JUDGMENT. ``PUT /products/{product_id}`` declares its
-200 as a bare ``{"type": "object"}`` with no properties. This unit answers
-``{"data": {...the product...}}``, the single-record envelope every other
-``Get``/``Update`` on this API uses, because a caller who has just written
-wants to read back what was written.
+JUDGMENT: ``handle`` defaults to a slug of the name, matching the vendor's
+own ``"Bravo"`` -> ``"bravo"`` example, and ``sku`` defaults to the handle,
+with no uniqueness enforced since the specification never claims a SKU is
+unique. ``PUT``'s documented 200 has no properties; this unit answers the
+single-record envelope every other ``Get``/``Update`` uses, so a caller can
+read back what it just wrote.
 """
 
 from __future__ import annotations
@@ -120,9 +90,8 @@ SKU_PARAM = "sku"
 NAME_PARAM = "name"
 FAMILY_NAME_PARAM = "family_name"
 INCLUDE_IMAGES_PARAM = "include_images"
-"""The four documented ``GET /products`` parameters beyond the version four.
-``includes[]`` is the fifth and is accepted and unmodelled -- its one supported
-value is ``composite_products`` and this unit has no composites."""
+#: One of the four documented ``GET /products`` parameters beyond the version
+#: four; ``includes[]`` is a fifth, accepted and unmodelled (no composites here).
 
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 
@@ -139,11 +108,8 @@ class LightspeedProductsSurface:
         self._deps = deps
 
     def routes(self) -> tuple[Route, ...]:
-        # No `example_body`: the vendor's published example lives on
-        # `POST /sales`, which is the repeatable, create-shaped,
-        # event-producing route conformance C18 needs. `POST /products` would
-        # serve as well, and publishing a second one would only make which of
-        # the two C18 drives depend on route order. See surface/sales.py.
+        # No `example_body`: the published example lives on `POST /sales`
+        # (the route C18 drives); see surface/sales.py.
         return (
             Route(
                 method="GET",
@@ -255,9 +221,7 @@ class LightspeedProductsSurface:
             price_excluding_tax=net,
             price_including_tax=gross,
             supply_price=_optional_decimal(body.supply_price, "supply_price"),
-            # A parent that has variants does not itself hold stock: the
-            # variants do. JUDGMENT -- the schema carries `has_inventory` on
-            # every product and never says which one of a family owns it.
+            # JUDGMENT: a parent with variants does not itself hold stock.
             has_inventory=not body.variants,
             has_variants=bool(body.variants),
             variant_name=body.name,
@@ -296,14 +260,11 @@ class LightspeedProductsSurface:
         for index, variant in enumerate(body.variants):
             child_id = self._create_variant(args.ctx, parent=parent, family_id=family_id, variant=variant, index=index)
             created.append(child_id)
-        # DOCUMENTED: "An array containing the ID or IDs of the new products",
-        # and a documented 200 rather than a 201 -- CreateProduct declares only
-        # `"200": {"description": "OK"}`, unlike CreateCustomer's 201.
+        # DOCUMENTED: "An array containing the ID or IDs of the new products"; 200 not 201, unlike CreateCustomer.
         return json_({"data": created})
 
     def update_product(self, args: HandlerArgs) -> ReplyInit:
-        # The body first, then the 404: a malformed body is malformed whichever
-        # product it named. See `surface/registers.py::open_register`.
+        # Body first, then the 404: malformed is malformed whichever product it named.
         body = validate_body(ProductUpdateBody, args.body())
         refuse_both_prices(body.details.price_excluding_tax, body.details.price_including_tax, where="details.")
         stored = self._require_live(args)
@@ -346,9 +307,7 @@ class LightspeedProductsSurface:
             if common.tag_ids is not None:
                 document["tag_ids"] = list(common.tag_ids)
             if common.track_inventory is not None:
-                # `common.track_inventory` is the update body's name for the
-                # response schema's `has_inventory`; nothing else in the
-                # document connects the two, so the mapping is JUDGMENT.
+                # JUDGMENT: `track_inventory` is the update body's name for `has_inventory`.
                 draft["has_inventory"] = common.track_inventory
             if details.is_active is not None:
                 document["active"] = details.is_active
@@ -386,8 +345,7 @@ class LightspeedProductsSurface:
         return json_(single(project_product(updated)))
 
     def delete_product(self, args: HandlerArgs) -> ReplyInit:
-        # `_require_live`, so a REPEAT delete is a 404 rather than a second
-        # 200 that re-stamps `deleted_at` and fires another `product.update`.
+        # `_require_live`, so a repeat delete is a 404, not a second 200.
         stored = self._require_live(args)
         product = ProductEntity.from_entity(stored)
         deleted_at = wire_time(args.ctx.clock)
@@ -398,15 +356,9 @@ class LightspeedProductsSurface:
             stamp_version(draft, deps)
 
         args.ctx.store.collection(COL.products).update(product.id, mutate, meta={"operation_id": "DeleteProduct"})
-        # A SOFT delete: the row keeps its id and its version, gains a
-        # `deleted_at`, and leaves every list that does not ask for
-        # `deleted=true`. That is what the `deleted` list parameter --
-        # "Indicates whether deleted items should be included in the
-        # response" -- means: a hard delete would leave nothing for it to
-        # include. It is also what lets `product.update` carry the tombstone.
-        #
-        # 200 with no body: DeleteProduct declares `"200": {"description":
-        # "OK"}` and no content, exactly like DeleteWebhook.
+        # A soft delete: gains `deleted_at`, keeps its id and version, leaves
+        # lists that don't ask `deleted=true`. DOCUMENTED: 200, no content,
+        # like DeleteWebhook.
         return ReplyInit(status=200, text="")
 
     # -- helpers ------------------------------------------------------------
@@ -435,8 +387,7 @@ class LightspeedProductsSurface:
             where=where,
         )
         if variant.price_excluding_tax is None and variant.price_including_tax is None:
-            # A variant that names no price inherits the family's, which is
-            # what a size variant of one shirt costs. JUDGMENT.
+            # JUDGMENT: a variant that names no price inherits the family's.
             net, gross = parent.price_excluding_tax, parent.price_including_tax
         parent_document = dict(parent.document)
         child = ProductEntity(
@@ -489,11 +440,8 @@ class LightspeedProductsSurface:
         rows: Sequence[ProductInventoryIn],
         field: str,
     ) -> None:
-        """The opening stock a create declared, one ``Inventory`` row per outlet.
-
-        Each insert fires ``inventory.update``: the level went from "no record"
-        to a number, which is a level change.
-        """
+        """The opening stock a create declared, one ``Inventory`` row per
+        outlet; each insert fires ``inventory.update``."""
         inventory = ctx.store.collection(COL.inventory)
         for index, row in enumerate(rows):
             entity = InventoryEntity(
@@ -507,22 +455,15 @@ class LightspeedProductsSurface:
                     row.reorder_amount, f"{field}[{index}].reorder_amount", allow_none=True
                 ),
                 reorder_point=_optional_decimal(row.reorder_point, f"{field}[{index}].reorder_point", allow_none=True),
-                # DOCUMENTED enum, and a reorder rule the caller has only half
-                # stated: a `reorder_point` with no method is FIXED, which is
-                # the method whose two members are exactly the two this payload
-                # carries. JUDGMENT.
+                # JUDGMENT: a `reorder_point` with no method defaults to FIXED.
                 reorder_method=None if row.reorder_point is None else "FIXED",
                 object_version=self._deps.versions.bump(),
             )
             inventory.insert(entity.to_entity(), {"operation_id": "CreateProduct"})
 
     def _check_outlets(self, ctx: UnitContext, body: ProductCreateBody) -> None:
-        """Every ``outlet_id`` an opening-stock payload names must exist.
-
-        A 422 rather than a silently orphaned inventory row: the row would be
-        invisible to every read, since both inventory reads are scoped by
-        outlet or by product and neither would ever return it.
-        """
+        """Every ``outlet_id`` an opening-stock payload names must exist: a 422
+        rather than a silently orphaned, unreadable inventory row."""
         outlets = {str(row["id"]) for row in ctx.store.collection(COL.outlets).all()}
         groups: list[tuple[str, Sequence[ProductInventoryIn]]] = [("inventory", body.inventory)]
         groups.extend(
@@ -538,8 +479,8 @@ class LightspeedProductsSurface:
                     )
 
     def _product_codes(self, rows: Sequence[ProductCodeIn], field: str) -> list[dict[str, Any]]:
-        """``ProductCode`` rows with the ``id`` the schema requires and the
-        caller never sends, and the documented ``type`` enum checked."""
+        """``ProductCode`` rows with the ``id`` the schema requires (the
+        caller never sends one) and the documented ``type`` enum checked."""
         out: list[dict[str, Any]] = []
         for index, row in enumerate(rows):
             if row.type is not None and row.type not in PRODUCT_CODE_TYPES:
@@ -558,9 +499,8 @@ class LightspeedProductsSurface:
     def _product_suppliers(
         self, rows: Sequence[ProductSupplierIn], product_id: str, field: str
     ) -> list[dict[str, Any]]:
-        """``ProductSupplier`` rows, with ``id`` minted and ``product_id``
-        filled in: both are required on the response schema and neither is
-        something a caller can know at the moment it writes the body."""
+        """``ProductSupplier`` rows with ``id`` minted and ``product_id``
+        filled in: both required, neither known to the caller."""
         out: list[dict[str, Any]] = []
         for index, row in enumerate(rows):
             out.append(
@@ -585,16 +525,9 @@ class LightspeedProductsSurface:
         return stored
 
     def _require_live(self, args: HandlerArgs) -> dict[str, Any]:
-        """The row a WRITE addresses: present, and not already deleted.
-
-        The soft delete leaves the row READABLE -- ``GET`` answers it and
-        ``?deleted=true`` lists it, which is the whole point of the
-        ``deleted`` parameter -- and stops it being WRITABLE. The same
-        judgment ``surface/customers.py::_require_live`` records, for the same
-        reason: a ``PUT`` that answered 200 on a deleted product told the
-        caller its update had landed on a live record while every default list
-        omitted it.
-        """
+        """The row a WRITE addresses: present, and not already deleted. A soft
+        delete leaves it READABLE (``GET``, ``?deleted=true``) but not
+        WRITABLE -- the same judgment ``surface/customers.py`` records."""
         stored = self._require(args)
         if stored.get("deleted_at") is not None:
             raise UnitError(

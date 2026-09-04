@@ -25,7 +25,11 @@ def _files() -> list[Path]:
             found.append(path)
         elif path.is_dir():
             found.extend(
-                p for p in path.rglob("*") if p.is_file() and p.suffix in {".py", ".md", ".sh", ".toml", ".txt", ".yml"}
+                p
+                for p in path.rglob("*")
+                if p.is_file()
+                and p.suffix in {".py", ".md", ".sh", ".toml", ".txt", ".yml"}
+                and not {".venv", "node_modules"} & set(p.parts)
             )
     return found
 

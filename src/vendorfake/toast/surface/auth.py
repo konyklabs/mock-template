@@ -1,35 +1,17 @@
 """The authentication surface: one endpoint, the login.
 
-FOR: reproducing ``POST /authentication/v1/authentication/login`` with the
-documented request, the documented success document and the documented 401 --
-so that an integration's token handling passes here exactly as it would
-against Toast.
-
 DOCUMENTED (https://doc.toasttab.com/doc/devguide/authentication.html,
-toast-authentication-api.yaml):
+toast-authentication-api.yaml): the body is ``{clientId, clientSecret,
+userAccessType: "TOAST_MACHINE_CLIENT"}``; the answer is
+``{"@class": ".SuccessfulResponse", "token": {...}, "status": "SUCCESS"}``
+with ``expiresIn`` counting down the token's remaining lifetime; 401 for bad
+credentials; no refresh flow.
 
-* the body is ``{clientId, clientSecret, userAccessType: "TOAST_MACHINE_CLIENT"}``;
-* the answer is ``{"@class": ".SuccessfulResponse", "token": {...}, "status":
-  "SUCCESS"}`` with ``expiresIn`` counting down the token's remaining
-  lifetime in seconds;
-* 401: the submitted client id and secret didn't check out;
-* there is no refresh: a client logs in again when the token expires.
+JUDGMENT: the token lifetime defaults to the documented example (19168 s);
+an unrecognized ``userAccessType`` is a 400 naming the field; a minted token
+is journalled as a ``Login`` operation, since it is observable state.
 
-JUDGMENT, each labelled at its site:
-
-* **the token lifetime** is the configured ``access_token_ttl_s``, defaulting
-  to the one documented example (19168 s);
-* **``userAccessType``** other than ``TOAST_MACHINE_CLIENT`` is a 400 naming
-  the field -- the specification documents one value and no answer to
-  another;
-* **the token's claims** beyond ``partner_guid`` (``jwt.py``);
-* **the token is journalled** as a ``Login`` operation: a minted token is real
-  state a consumer can observe (it authenticates), and the seed loads its
-  tokens the same way.
-
-THE ORDERING INVARIANT: **no 4xx leaves a journal entry or draws an id.** The
-credential check precedes the mint; a refused login leaves the world exactly
-as it found it.
+INVARIANT: no 4xx leaves a journal entry or draws an id.
 """
 
 from __future__ import annotations
@@ -48,11 +30,8 @@ __all__ = ["CAPABILITY", "INVALID_CREDENTIALS_MESSAGE", "LOGIN_PATH", "ToastAuth
 CAPABILITY = "auth"
 
 LOGIN_PATH = LOGIN
-"""Deprecated alias of ``vendorfake.toast.paths.LOGIN``, kept because v0.1.0
-consumers may already import it from here. New code should import ``LOGIN``
-from ``vendorfake.toast.paths``, which ``tests/unit/test_paths_drift.py``
-keeps honest against the route table; this name will not be removed without a
-CHANGELOG entry of its own."""
+"""Deprecated alias of ``vendorfake.toast.paths.LOGIN``, kept for v0.1.0
+consumers; new code should import ``LOGIN`` directly."""
 
 INVALID_CREDENTIALS_MESSAGE = "The credentials in your request are not valid."
 """The documented 401 phrase, as this unit prints it."""
@@ -67,10 +46,8 @@ class ToastAuthSurface:
         self._deps = deps
 
     def routes(self) -> tuple[Route, ...]:
-        # No `example_body`, deliberately: the conformance suite aims its
-        # committed-mutation contracts at the FIRST example route, and a login
-        # produces a token the webhook mapper (rightly) never announces, so
-        # C18 would measure nothing. POST /orders is that route.
+        # No `example_body`: C18's committed-mutation contract targets the
+        # first example route, and login produces no webhook-visible mutation.
         return (
             Route(
                 method="POST",
@@ -94,9 +71,8 @@ class ToastAuthSurface:
                 info={"supplied": request.userAccessType},
             )
         if request.clientId != config.client_id or request.clientSecret != config.client_secret:
-            # Documented 401. One phrase for a wrong id and a wrong secret: the
-            # page says "credentials", and naming which half was wrong would
-            # be telling an attacker something the real endpoint does not.
+            # One phrase for both mismatches, since naming which half was
+            # wrong would leak information the real endpoint does not.
             raise UnitError(
                 UnitErrorKind.UNAUTHORIZED,
                 detail=INVALID_CREDENTIALS_MESSAGE,

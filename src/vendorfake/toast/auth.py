@@ -1,34 +1,30 @@
 """Who a presented credential is: the bearer, and the restaurant it is acting for.
 
-FOR: turning an ``Authorization`` header -- and, on restaurant-scoped routes,
-the ``Toast-Restaurant-External-ID`` header -- into an
+Turns an ``Authorization`` header, and on restaurant-scoped routes the
+``Toast-Restaurant-External-ID`` header, into an
 :class:`~vendorfake.core.kernel.types.AuthResult` the kernel can check
 required scopes against.
 
 DOCUMENTED: ``Authorization: Bearer <accessToken>`` on every call
-(https://doc.toasttab.com/doc/devguide/authentication.html); 401 when the
-token is invalid or expired (apiResponsesAndErrors.html); 403 when the token
-lacks the scope an endpoint requires (``POST /orders/v2/prices`` in
-toast-orders-api.yaml) -- the kernel raises ``forbidden_scope`` and the error
-table maps it to 403, so this adapter only reports scopes.
+(https://doc.toasttab.com/doc/devguide/authentication.html); 401 for an invalid/expired token
+(apiResponsesAndErrors.html); 403 for a missing scope (``POST
+/orders/v2/prices``, toast-orders-api.yaml) -- the kernel raises
+``forbidden_scope`` and the error table maps it, so this adapter only reports
+scopes.
 
 DOCUMENTED: ``Toast-Restaurant-External-ID`` "cannot be the GUID of a
-restaurant group" (apiOrdersGetDetailedInfoAboutOneOrder.html). Two auth modes
-carry the difference: ``bearer`` for the handful of routes that are not
-restaurant-scoped (partners, restaurants) and ``restaurant`` for everything
-else. Both are published at ``GET /__unit/auth`` with the whole header set a
-caller must send, so a language-independent probe can drive either.
+restaurant group" (apiOrdersGetDetailedInfoAboutOneOrder.html). ``bearer``
+mode covers the routes that are not restaurant-scoped (partners,
+restaurants); ``restaurant`` mode covers everything else; both are published
+at ``GET /__unit/auth``.
 
-JUDGMENT, the two statuses (audit: "missing/unknown -> 400/404, choose and
-label"): a *missing* header is **400** -- the request is malformed, the
-documented "unsupported data" class -- and an *unknown* guid, or a management
-group's guid, is **404**, following ``POST /orders``' documented 404 for "a
-referenced entity missing or unauthorized". The bearer is checked first, so a
-bad token is a 401 whatever the header says.
+JUDGMENT: a missing restaurant header is 400 (malformed request); an unknown
+or management-group guid is 404, following ``POST /orders``' documented 404
+for a missing referenced entity. The bearer is checked first, so a bad token
+is a 401 regardless.
 
-The token is looked up as an opaque string: the JWT shape is for the consumer's
-benefit, and a token this unit never minted is unknown however well it is
-signed (``jwt.py``).
+The token is looked up as an opaque string; a token this unit never minted is
+unknown however well it is JWT-signed (``jwt.py``).
 """
 
 from __future__ import annotations
@@ -84,9 +80,8 @@ class ToastAuth:
         }
 
     def credentials(self, ctx: UnitContext) -> Sequence[AuthCredential]:
-        """Every live token, in both modes: bare, and paired with the unit's
-        restaurant. Read from the store, so a token login just minted is
-        offered and one the clock has ended is not."""
+        """Every live token, in both modes, read from the store so a just-minted
+        token is offered and an expired one is not."""
         restaurant = _the_restaurant(ctx)
         offered: list[AuthCredential] = []
         for entity in ctx.store.collection(COL.tokens).all():

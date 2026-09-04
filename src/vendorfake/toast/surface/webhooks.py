@@ -1,36 +1,24 @@
 """The subscription stand-in: what the Toast developer portal does, as routes.
 
-TOAST HAS NO SUBSCRIPTION API. Two official pages describe how a subscription
-comes to exist -- "you work with the Toast Integrations team" on
-apiSubscriptions.html, "View and manage your webhooks" in the developer
-portal on apiDeveloperPortal.html -- and neither is an endpoint (audit gap
-10). Every route in this module is this fake's own, under the ``/__toast/``
-prefix that says so; a consumer's production code never calls these, their
-test fixtures do.
+JUDGMENT: Toast has no subscription API -- two official pages describe a
+human process (apiSubscriptions.html, apiDeveloperPortal.html) with no
+endpoint (audit gap 10) -- so every route here is this fake's own, under the
+``/__toast/`` prefix, used only by test fixtures.
 
-=====================================  ===============================================
-Add a subscription (portal: add URL)   ``POST   /__toast/webhooks/subscriptions``
-See what is registered                 ``GET    /__toast/webhooks/subscriptions``
-Remove one                             ``DELETE /__toast/webhooks/subscriptions/{guid}``
-=====================================  ===============================================
+DOCUMENTED, and enforced: the callback "must be HTTPS" with TLS 1.2+
+(apiEndpointRequirements.html), unless ``allow_insecure_callbacks`` lifts it
+for a local receiver (JUDGMENT, labelled on ``ToastConfig``); a subscription
+carries its own secret ("the webhook secret", apiMessageSigning.html),
+minted from the id stream when the caller supplies none.
 
-DOCUMENTED, and enforced: the endpoint "must be HTTPS" with TLS 1.2 or later
-(apiEndpointRequirements.html) -- any other scheme is refused unless the
-vendor config's ``allow_insecure_callbacks`` lifts it for a local receiver
-(JUDGMENT, labelled on ``ToastConfig``); a subscription has a secret of its
-own ("the webhook secret", generated per subscription per environment,
-apiMessageSigning.html) -- minted here from the id stream when the caller
-supplies none. There is no verification handshake: Toast documents none.
+INVARIANT: there is one subscription list, and the core owns it -- these
+handlers touch only ``SUBSCRIPTION_COLLECTION``, storing categories as the
+core's ``event_types`` so the dispatcher's own matcher filters them. A
+profile's ``webhooks.subscribers`` and ``POST /__unit/webhooks/subscriptions``
+land in the same list.
 
-INVARIANT: **there is one subscription list, and the core owns it.** These
-handlers read and write ``SUBSCRIPTION_COLLECTION`` and nothing else; a
-subscription's categories are stored as the core's ``event_types`` -- the
-documented type names of each category -- so the filter is the dispatcher's
-own matcher. A profile's ``webhooks.subscribers`` and the control plane's
-``POST /__unit/webhooks/subscriptions`` land in the same list.
-
-KNOWN LIMITATION, tracked as konyklabs/roadmap#38: nothing machine-readable
-marks these routes as not-Toast; every summary starts with the stand-in label.
+KNOWN LIMITATION (konyklabs/roadmap#38): nothing machine-readable marks these
+routes as not-Toast; every summary starts with the stand-in label.
 """
 
 from __future__ import annotations
