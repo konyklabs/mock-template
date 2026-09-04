@@ -52,8 +52,7 @@ from typing import Any
 
 from vendorfake.conformance.client import MISSING, ConformanceClient, ConformanceResponse, FormPairs, QueryPairs
 from vendorfake.core.capability.gates import CoreCapability
-from vendorfake.core.capability.registry import CapabilityRegistry
-from vendorfake.core.chaos.engine import ChaosDecision, ChaosEngine, ChaosSubject
+from vendorfake.core.chaos.engine import ChaosDecision, ChaosSubject
 from vendorfake.core.chaos.selector import FaultSelection, FaultSelector
 from vendorfake.core.config.models import ProfileDocument
 from vendorfake.core.kernel.magic import MagicExtraction
@@ -661,26 +660,3 @@ def carries_magic(args: HandlerArgs) -> bool:
         return False
     values = (*args.req.query.values(), *args.req.headers.values())
     return any(value.startswith(spec.prefix) for value in values)
-
-
-def shaped(status: int, body: object) -> ShapedError:
-    return ShapedError(status=status, body=body)
-
-
-def unit_error(kind: UnitErrorKind, detail: str) -> UnitError:
-    return UnitError(kind, detail=detail)
-
-
-def subject_of(args: HandlerArgs) -> ChaosSubject:
-    """A request-scope chaos subject for the route now running."""
-    return ChaosSubject(
-        scope="request",
-        route_key=args.route.key if args.route is not None else None,
-        method=args.req.method,
-        path=args.req.path,
-    )
-
-
-def make_selector(engine: ChaosEngine, capabilities: CapabilityRegistry) -> FaultSelector:
-    """The production selector, spelled as the factory the seam expects."""
-    return FaultSelector(engine, capabilities)

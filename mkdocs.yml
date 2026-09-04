@@ -96,4 +96,5 @@ nav:
       - CLI: reference/cli.md
   - For agents: for-agents.md
   - Contract: api-contract.md
+  - Testing: testing.md
   - Changelog: changelog.md
