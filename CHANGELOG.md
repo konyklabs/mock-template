@@ -34,6 +34,11 @@ Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
 * `tools/self-test.sh` runs the pytest consumer example as its own uv project
   against the checkout, in full mode -- the step that would have caught the
   example regression above (#105).
+* `tools/self-test.sh --quick` skips the fidelity pin and report of a vendor
+  whose extract is fetched rather than committed (Toast), and says so: the
+  fetch step does not run under `--quick`, and a pull request's check must
+  not depend on a vendor's documentation site answering. The first quick run
+  after the fidelity legs landed failed exactly there (#105).
 * `tools/self-test.sh` runs `pip-audit` over the runtime dependencies and
   `bandit -ll` over the package in its full mode (main and a laptop before a
   push; not `--quick`). Bandit's two findings -- the wildcard-bind comparison

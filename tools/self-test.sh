@@ -183,6 +183,14 @@ done
 for entry in "${FIDELITY_TARGETS[@]}"; do
   vendor="${entry%%=*}"
   TARGET="${entry#*=}"
+  # A vendor whose extract is fetched rather than committed has nothing to
+  # check under --quick, where the fetch step above did not run: a pull
+  # request's check must not depend on a vendor's documentation site
+  # answering. The full run (main, a laptop) fetches first and checks both.
+  if [ "$QUICK" -eq 1 ] && printf '%s\n' "${FIDELITY_FETCH_TARGETS[@]}" | grep -qx "$entry"; then
+    printf '\n\033[1m== fidelity (%s) ==\033[0m\nskipped under --quick: the extract is fetched, never committed\n' "$vendor"
+    continue
+  fi
   step "fidelity pin ($vendor)" \
     uv run python -m vendorfake.fidelity pin --check --offline --target "$TARGET"
   step "fidelity report ($vendor)" \
