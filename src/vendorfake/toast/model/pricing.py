@@ -37,8 +37,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
+
+from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
 __all__ = ["TaxRate", "discount_amount", "quantity_price", "tax_on", "taxes_on"]
 
@@ -74,13 +76,33 @@ class TaxRate:
         )
 
 
-def _round(value: Decimal, rounding: str) -> int:
-    return int(value.quantize(Decimal(1), rounding=_ROUNDING.get(rounding, ROUND_HALF_UP)))
+def _round(value: Decimal, rounding: str, *, field: str | None = None) -> int:
+    """``value`` to whole cents, or the documented 400 when it cannot be.
+
+    ``quantize`` raises ``InvalidOperation`` for any amount needing more than
+    the context's 28 significant digits -- ten billion times the world economy
+    in cents -- and for the infinities a float product overflows into. Every
+    such value entered as caller input somewhere upstream, so the answer is
+    the 400 the route documents, naming the field when the caller gave one,
+    never a 500 carrying the exception's own text (konyklabs/roadmap#41).
+    """
+    try:
+        return int(value.quantize(Decimal(1), rounding=_ROUNDING.get(rounding, ROUND_HALF_UP)))
+    except InvalidOperation:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                f"{field} multiplies out to an amount too large to price."
+                if field
+                else "An amount in this order multiplies out too large to price or total."
+            ),
+            field=field,
+        ) from None
 
 
-def quantity_price(unit_cents: int, quantity: float, factor: float = 1.0) -> int:
+def quantity_price(unit_cents: int, quantity: float, factor: float = 1.0, *, field: str | None = None) -> int:
     """``unit x quantity x factor``, half-up to the cent."""
-    return _round(Decimal(unit_cents) * Decimal(str(quantity)) * Decimal(str(factor)), "HALF_UP")
+    return _round(Decimal(unit_cents) * Decimal(str(quantity)) * Decimal(str(factor)), "HALF_UP", field=field)
 
 
 def tax_on(cents: int, rate: TaxRate) -> int:

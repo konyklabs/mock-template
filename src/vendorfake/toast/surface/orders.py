@@ -374,7 +374,10 @@ class ToastOrdersSurface:
                 "createdDate": now,
                 "promisedDate": promised,
                 "businessDate": business_date(
-                    opened, time_zone=restaurant.time_zone, closeout_hour=restaurant.closeout_hour
+                    opened,
+                    time_zone=restaurant.time_zone,
+                    closeout_hour=restaurant.closeout_hour,
+                    field=None if request.openedDate is None else "openedDate",
                 ),
                 "channelGuid": request.channelGuid,
                 "diningOption": {
