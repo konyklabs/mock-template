@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 
 from vendorfake.core.kernel.reply import json_, no_content
 from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitError, UnitErrorKind
-from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION
+from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION, require_postable_target
 from vendorfake.toast.model.common import validate_body
 from vendorfake.toast.model.webhooks import (
     ALL_CATEGORIES,
@@ -92,6 +92,7 @@ class ToastWebhooksSurface:
         ctx = args.ctx
         request = validate_body(RegisterSubscriptionRequest, args.body())
         self._require_https(request.url)
+        require_postable_target(request.url, field="url")
         ids = self._deps.ids
         guid = ids.internal("sub")
         secret = request.secret if request.secret is not None else ids.guid()

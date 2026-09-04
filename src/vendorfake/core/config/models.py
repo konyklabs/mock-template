@@ -13,9 +13,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
+from vendorfake.core.webhooks.models import check_notification_url
 
 __all__ = [
     "UNMATCHED_POLICIES",
@@ -29,7 +30,6 @@ __all__ = [
     "SubscriberConfig",
     "TransportSection",
     "UnmatchedPolicy",
-    "UnmatchedSection",
     "WebhooksSection",
     "merged_over",
     "parse_profile_document",
@@ -78,6 +78,11 @@ class SubscriberConfig(BaseModel):
     signature_key: str
     enabled: bool = True
 
+    @field_validator("notification_url")
+    @classmethod
+    def _target_the_unit_will_post_to(cls, value: str) -> str:
+        return check_notification_url(value)
+
 
 class WebhooksSection(BaseModel):
     model_config = _MODEL
@@ -112,13 +117,6 @@ class RequestsSection(BaseModel):
 
     #: Records the ring buffer holds before evicting the oldest.
     capacity: int = Field(default=10_000, ge=0)
-
-
-class UnmatchedSection(BaseModel):
-    model_config = _MODEL
-
-    #: ``None`` means "the binding decides" -- see ``vendorfake.testing.unit``.
-    policy: UnmatchedPolicy | None = None
 
 
 class ErrorsSection(BaseModel):
@@ -159,7 +157,6 @@ class ProfileDocument(BaseModel):
     chaos: ChaosSection = Field(default_factory=ChaosSection)
     clock: ClockSection = Field(default_factory=ClockSection)
     requests: RequestsSection = Field(default_factory=RequestsSection)
-    unmatched: UnmatchedSection = Field(default_factory=UnmatchedSection)
     errors: ErrorsSection = Field(default_factory=ErrorsSection)
 
 
@@ -202,7 +199,6 @@ class ResolvedConfig(BaseModel):
     errors: ErrorsSection = Field(default_factory=ErrorsSection)
     transport: TransportSection
     requests: RequestsSection = Field(default_factory=RequestsSection)
-    unmatched: UnmatchedSection = Field(default_factory=UnmatchedSection)
     #: Read here, not by the logger, so no module reaches the environment on its own.
     log_level: str = "info"
     #: What ``create_unit(capabilities=[...])`` was asked for; ``None`` for a

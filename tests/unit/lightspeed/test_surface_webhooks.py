@@ -138,6 +138,19 @@ def test_the_switch_can_require_https() -> None:
         gen.close()
 
 
+def test_a_link_local_url_is_refused(h: Harness) -> None:
+    """A cloud instance's metadata service lives at a link-local address; this route refuses it
+    the same way the control plane's own subscription route already does."""
+    answered = _create(h, url="http://169.254.169.254/latest")
+    assert answered.status == 422
+    assert answered.json()["unit_error"]["field"] == "url"
+
+
+def test_a_loopback_url_is_accepted(h: Harness) -> None:
+    """Loopback stays allowed -- that is where a test's own receiver lives."""
+    assert _create(h, url="http://127.0.0.1:9/hook").status == 201
+
+
 # -- get, update, delete -----------------------------------------------------
 
 

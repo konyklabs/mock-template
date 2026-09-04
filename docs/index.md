@@ -32,14 +32,14 @@ and a behaviour had to be decided, the wire says so — see
 ## Sixty seconds to a first request
 
 ```sh
-pip install "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
+pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.1.0"   # [serve] for `vendorfake serve`; in-process tests need no extra
 vendorfake vendors                       # -> clover, lightspeed, square, toast
 vendorfake serve --vendor square         # http://127.0.0.1:8080
 ```
 
 ```sh
 curl -s http://127.0.0.1:8080/__unit/health
-# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221}
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.5.0"}
 ```
 
 The full walkthrough, including the container and the pytest fixtures, is

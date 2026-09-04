@@ -2,10 +2,11 @@
 behind it committed. Delivery is at-least-once and every attempt carries the same
 ``event_id``, the consumer's dedup handle. **The core sends no delivery headers of its
 own**: ``signer.sign(...)`` for the signature, ``signer.headers(meta)`` for the rest.
-**The delivery log has exactly one writer**, the worker thread, ids being ``dlv_00001``
-in write order. :meth:`enqueue` runs on the request thread and completes each first
-attempt's preparation but does not send, so :meth:`prepared` is populated once the
-request returns while a record is only observable after :meth:`drain`.
+**The delivery log has one writer**, the worker thread, ids being ``dlv_00001`` in write
+order -- with the one exception of a job the full queue refused, recorded by the
+submitter. :meth:`enqueue` runs on the request thread and completes each first attempt's
+preparation but does not send, so :meth:`prepared` is populated once the request returns
+while a record is only observable after :meth:`drain`.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
@@ -59,6 +61,12 @@ _FIRST_ATTEMPT_POLL_S = 0.005
 
 _BODY_PREVIEW_LIMIT = 400
 
+DELIVERY_LOG_CAPACITY = 10_000
+"""Delivery records kept, oldest evicted; ``GET /__unit/webhooks/deliveries`` shows what remains."""
+
+PREPARED_CAPACITY = 10_000
+"""Prepared events kept, oldest evicted."""
+
 DEFAULT_DUPLICATE_COPIES = 1
 DEFAULT_WEBHOOK_DELAY_MS = 50.0
 
@@ -98,6 +106,7 @@ class WebhookDispatcher:
         "_prepared",
         "_request_lock",
         "_retry",
+        "_retry_lock",
         "_selector",
         "_sink",
         "_store",
@@ -121,20 +130,22 @@ class WebhookDispatcher:
         self._selector = selector
         self._sink = sink
         self._retry = MutableRetryPolicy.of(retry)
+        #: Guards the swap only; a reader takes the attribute, never this lock.
+        self._retry_lock = threading.Lock()
         self._get_context = get_context
         self._disabled = disabled
         self._on_log = on_log
 
         self._worker = DeliveryWorker()
-        #: Written only on the worker thread; read under `_log_lock`.
-        self._log: list[DeliveryRecord] = []
+        #: Bounded, newest kept; written on the worker thread and read under `_log_lock`.
+        self._log: deque[DeliveryRecord] = deque(maxlen=DELIVERY_LOG_CAPACITY)
         self._log_lock = threading.Lock()
         self._delivery_seq = 0
         #: Re-entrant: `enqueue` runs inside a journal listener and may read the store.
         self._request_lock = threading.RLock()
         self._event_seq = 0
         self._held_for_reorder: _Queued | None = None
-        self._prepared: list[PreparedEvent] = []
+        self._prepared: deque[PreparedEvent] = deque(maxlen=PREPARED_CAPACITY)
         self._enabled_flag = True
 
     @property
@@ -159,7 +170,12 @@ class WebhookDispatcher:
         return self._retry
 
     def set_retry_policy(self, patch: Mapping[str, Any]) -> MutableRetryPolicy:
-        return self._retry.apply(patch)
+        """Swap in a patched policy under the lock, so an attempt already running keeps the
+        policy it read rather than seeing half of two."""
+        with self._retry_lock:
+            updated = self._retry.patched(patch)
+            self._retry = updated
+        return updated
 
     def deliveries(self) -> tuple[DeliveryRecord, ...]:
         """Every attempt, oldest first, each a private copy of the evidence."""
@@ -355,13 +371,13 @@ class WebhookDispatcher:
             if delay_ms > 0:
                 self._schedule(attempt, delay_ms, f"{_TIMER_PREFIX}:{queued.event.event_id}")
             else:
-                self._worker.submit(partial(self._run_attempt, attempt))
+                self._submit_attempt(attempt)
 
         if release is not None:
             released = replace(release, chaos_applied=("released-after-reorder",))
             attempt = self._build_attempt(released)
             if attempt is not None:
-                self._worker.submit(partial(self._run_attempt, attempt))
+                self._submit_attempt(attempt)
 
     def _build_attempt(self, queued: _Queued) -> _Attempt | None:
         """Serialise, sign and collect headers -- the whole vendor surface. ``None`` when the
@@ -400,24 +416,43 @@ class WebhookDispatcher:
     def _schedule(self, attempt: _Attempt, delay_ms: float, label: str) -> None:
         """Put a built attempt on the clock. The callback only submits, running on whichever
         thread fires the timer."""
-        self._clock.after(delay_ms, label, partial(self._worker.submit, partial(self._run_attempt, attempt)))
+        self._clock.after(delay_ms, label, partial(self._submit_attempt, attempt))
+
+    def _submit_attempt(self, attempt: _Attempt) -> None:
+        """Queue one attempt, recording a failed delivery when the queue refused it: an
+        overloaded unit reports the loss rather than dropping the event silently."""
+        queued = attempt.queued
+        if not self._worker.submit(partial(self._run_attempt, attempt), label=self._job_label(queued)):
+            self._record(queued, "failed", 0, error="queue full")
 
     def _submit_terminal(self, queued: _Queued, status: str, error: str) -> None:
         """Record an outcome that never reaches the sink, on the worker, so the ids stay ordered."""
-        self._worker.submit(partial(self._record, queued, status, 0, error=error))
+        if not self._worker.submit(
+            partial(self._record, queued, status, 0, error=error), label=self._job_label(queued)
+        ):
+            self._record(queued, "failed", 0, error="queue full")
+
+    @staticmethod
+    def _job_label(queued: _Queued) -> str:
+        """How ``worker_failures()`` names a dropped job."""
+        return f"{queued.event.event_id}->{queued.subscription.id}"
 
     def _run_attempt(self, attempt: _Attempt) -> None:
         """Send once, record the outcome, schedule the retry if there is one. Runs entirely
         before the worker's busy flag clears, so a returning ``quiesce()`` has seen both the
         record and the next retry's timer. ``drop_ack`` is applied *after* the send, the
-        record keeping the real status that distinguishes it from an outage."""
+        record keeping the real status that distinguishes it from an outage. The retry policy
+        is read ONCE, at the top, because ``schedule_exhausted`` and ``retry_delay_ms`` must
+        agree about one schedule: a concurrent patch shortening it between the two would index
+        past the end of the new one."""
         queued = attempt.queued
+        policy = self._retry
         result = self._sink.send(
             SinkRequest(
                 url=queued.subscription.notification_url,
                 headers=attempt.headers,
                 body=attempt.body,
-                timeout_ms=self._retry.timeout_ms,
+                timeout_ms=policy.timeout_ms,
             )
         )
         ok = not queued.drop_ack and 200 <= result.status < 300
@@ -427,7 +462,7 @@ class WebhookDispatcher:
             self._record(queued, "delivered", result.status, headers=attempt.headers, body_text=attempt.body_text)
             return
 
-        if schedule_exhausted(self._retry, queued.retry_number):
+        if schedule_exhausted(policy, queued.retry_number):
             self._record(
                 queued,
                 "exhausted",
@@ -438,7 +473,7 @@ class WebhookDispatcher:
             )
             return
 
-        delay = retry_delay_ms(self._retry, queued.retry_number)
+        delay = retry_delay_ms(policy, queued.retry_number)
         error = result.error
         if error is None and queued.drop_ack:
             error = "acknowledgement dropped by chaos rule"
@@ -470,8 +505,9 @@ class WebhookDispatcher:
         body_text: str = "",
         next_attempt_in_ms: int | None = None,
     ) -> None:
-        """Append one record, from the worker thread only. ``body_hash`` is empty, not the
-        hash of the empty string, when there was no delivery."""
+        """Append one record under the log lock, from the worker thread or, for a
+        queue-full drop, the enqueueing thread. ``body_hash`` is empty, not the hash of
+        the empty string, when there was no delivery."""
         with self._log_lock:
             self._delivery_seq += 1
             delivery_id = f"dlv_{self._delivery_seq:05d}"

@@ -16,6 +16,7 @@ import pytest
 
 from tests.unit.asgi.test_adapt import call
 from vendorfake.asgi import HTTP_METHODS, OPENAPI_PATH, create_app, registered_methods
+from vendorfake.asgi.adapt import MAX_BODY_BYTES
 from vendorfake.core.transport.inprocess import in_process
 
 EXPECTED_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"})
@@ -90,6 +91,46 @@ def test_a_malformed_json_body_is_400_and_never_422(app: Any) -> None:
     )
     assert response.status_code == 400
     assert response.headers["x-unit-error"] == "invalid_json"
+
+
+def test_a_body_at_exactly_the_limit_is_accepted(app: Any) -> None:
+    """The boundary itself must not be refused: the limit is "exceeds", not
+    "reaches"."""
+    payload = b"x" * MAX_BODY_BYTES
+    response = call(app, "POST", "/v2/orders/abc", content=payload)
+    assert response.status_code == 200
+    assert response.json()["raw_len"] == MAX_BODY_BYTES
+
+
+def test_an_oversized_body_is_refused_unread_as_the_vendor_s_bad_request(app: Any) -> None:
+    """audit O4: a body over ``MAX_BODY_BYTES`` gets the vendor's own 400, and
+    the adapter never finishes reading it.
+
+    The body is a generator that counts every byte it yields, so this proves
+    the second half by construction rather than by timing: if the adapter had
+    read the whole 9 MiB before answering, ``sent[0]`` would equal it. The
+    generator has no declared length, so httpx cannot short-circuit this by
+    setting ``content-length`` itself -- the adapter's own streaming cutoff is
+    what stops the read.
+    """
+    total_bytes = MAX_BODY_BYTES + 1024 * 1024  # 9 MiB
+    chunk_bytes = 64 * 1024
+    sent = [0]
+
+    async def counting_body() -> Any:
+        remaining = total_bytes
+        while remaining > 0:
+            piece = min(chunk_bytes, remaining)
+            sent[0] += piece
+            remaining -= piece
+            yield b"x" * piece
+
+    response = call(app, "POST", "/v2/orders/abc", content=counting_body())
+    assert response.status_code == 400
+    assert response.headers["x-unit-error"] == "bad_request"
+    assert response.json()["error"]["code"] == "bad_request"
+    assert str(MAX_BODY_BYTES) in response.json()["error"]["detail"]
+    assert sent[0] < total_bytes, f"the adapter read all {sent[0]} bytes instead of stopping at the limit"
 
 
 def test_a_form_encoded_body_is_understood_over_the_transport(app: Any) -> None:

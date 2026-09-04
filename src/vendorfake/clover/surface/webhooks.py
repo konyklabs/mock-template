@@ -45,7 +45,7 @@ from vendorfake.core.kernel.types import (
     UnitError,
     UnitErrorKind,
 )
-from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION
+from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION, require_postable_target
 
 __all__ = ["CAPABILITY", "PENDING_NAME", "CloverWebhooksSurface", "webhook_routes"]
 
@@ -112,6 +112,7 @@ class CloverWebhooksSurface:
         ctx = args.ctx
         request = validate_body(RegisterSubscriptionRequest, args.body())
         self._require_https(request.url)
+        require_postable_target(request.url, field="url")
         if not ctx.webhooks.enabled:
             raise UnitError(
                 UnitErrorKind.UNAVAILABLE,

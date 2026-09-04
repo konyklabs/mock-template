@@ -9,17 +9,20 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
-from fastapi import FastAPI
-from fastapi.concurrency import run_in_threadpool
-from fastapi.exceptions import RequestValidationError
-from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.requests import Request
-from starlette.responses import Response, StreamingResponse
+try:
+    from fastapi import FastAPI
+    from fastapi.concurrency import run_in_threadpool
+    from fastapi.exceptions import RequestValidationError
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+    from starlette.requests import Request
+    from starlette.responses import Response, StreamingResponse
+except ImportError as exc:
+    raise ImportError("vendorfake serve needs the 'serve' extra: pip install 'vendorfake[serve]'") from exc
 
 from vendorfake.asgi.adapt import to_response, to_unit_request
 from vendorfake.core.control.openapi import document_for_unit
-from vendorfake.core.kernel.reply import JSON_CONTENT_TYPE
-from vendorfake.core.kernel.types import Logger, TransportDirective
+from vendorfake.core.kernel.reply import JSON_CONTENT_TYPE, normalize
+from vendorfake.core.kernel.types import Logger, ReplyInit, TransportDirective, UnitError
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.util.json import dump_json
 
@@ -66,6 +69,23 @@ async def _slow_body(body: bytes, chunk_bytes: int, chunk_delay_ms: int) -> Asyn
         yield body[offset : offset + chunk_bytes]
 
 
+def _transport_error_response(unit: Unit, err: UnitError) -> Response:
+    """Shape an error raised before a :class:`UnitRequest` could be built --
+    the adapter's own transport-level refusals, such as an oversized body --
+    through the vendor's own error table, so the consumer sees the vendor's
+    document and never a framework one.
+
+    No route was matched and no :class:`UnitRequest` exists, so this cannot
+    go through ``Unit.handle``; it mirrors the small slice of ``Unit._shape``
+    that applies with no route, no chaos decision and no request to log.
+    """
+    ctx = unit.context
+    shaped = ctx.vendor.errors.shape(err, ctx)
+    headers = dict(shaped.headers)
+    headers["x-unit-error"] = err.kind.value
+    return to_response(normalize(ReplyInit(status=shaped.status, json=shaped.body, headers=headers)))
+
+
 def _directive_response(status: int, headers: dict[str, str], directive: TransportDirective, body: bytes) -> Response:
     if directive.kind == "slow_body":
         # Kernel-resolved: an explicit ``0`` delay is honoured as given.
@@ -101,7 +121,10 @@ def create_app(
 
     async def dispatch(request: Request) -> Response:
         """The one path from a socket to the unit and back."""
-        unit_request = await to_unit_request(request)
+        try:
+            unit_request = await to_unit_request(request)
+        except UnitError as err:
+            return _transport_error_response(unit, err)
         response = await run_in_threadpool(unit.handle, unit_request)
         if response.transport is not None:
             return _directive_response(response.status, dict(response.headers), response.transport, response.body)

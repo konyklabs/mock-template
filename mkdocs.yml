@@ -93,6 +93,7 @@ nav:
       - Faults: reference/faults.md
       - Environment variables: reference/env.md
       - Control plane: reference/control-plane.md
+      - Manifest: reference/manifest.md
       - CLI: reference/cli.md
   - For agents: for-agents.md
   - Contract: api-contract.md

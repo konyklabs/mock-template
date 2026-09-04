@@ -27,13 +27,24 @@ dependencies = ["vendorfake @ git+https://github.com/konyklabs/vendorfake"]
 | `test_toast.py` | Toast | Machine-client login → quote → order → payment, with the money asserted as decimal dollars (8.99 → 9.55, not 955); the published menu's prices; a bearer without `Toast-Restaurant-External-ID` refused, but not as bad auth; one payment still sent as a list; an `order_updated` webhook verified with `verify_toast_signature`; a 429 and a transient 401 |
 | `test_lightspeed.py` | Lightspeed | Authorize stand-in → form-encoded code exchange → a refresh that **revokes the bearer it was issued with**; a forward sync over the version cursor (`after=<previous version.max>`, ending on an empty `data` with a null version pair); a sale with its payments inline and the `PaymentErrorResponse` refusal at a closed register; a `sale.update` delivery, form-encoded, verified with `verify_lightspeed_signature`; a 429 whose `Retry-After` is an RFC 1123 date rather than a number |
 | `test_cross_vendor.py` | Square, Clover, Toast | One parametrized body over Square, Clover and Toast: the app credentials read through `seed.credentials`, a token obtained, and the refresh-versus-relogin branch taken from `credentials.grant`. No `isinstance` anywhere |
-| `test_container.py` | all three | The order-and-pay path against the image, via Testcontainers. Skipped unless `VENDORFAKE_IMAGE` is set |
+| `test_container.py` | all three | The order-and-pay path against the image, via Testcontainers, addressed entirely from the manifest. Skipped unless `VENDORFAKE_IMAGE` is set |
 
 Against the container (needs Docker and a built image — `docker build -t vendorfake:verify ../..`):
 
 ```sh
 VENDORFAKE_IMAGE=vendorfake:verify uv run --extra container pytest test_container.py
 ```
+
+## The manifest, and why `test_container.py` hard-codes nothing
+
+`test_container.py` holds no token, no merchant path and no guid. It reads
+them from the manifest — one document carrying the credentials, the webhook
+signing keys and every entity id, by collection. Against the fake it comes
+from `GET /__unit/manifest`; against a real vendor sandbox there is no control
+plane to ask, so a setup script writes the same shape to a file and
+`VENDORFAKE_MANIFEST_SQUARE=/path/to/square.json` (or `_CLOVER`, `_TOAST`)
+points the fixture at it. Below the fixture the two runs are the same requests.
+See [the manifest reference](../../docs/reference/manifest.md).
 
 On a Mac with colima, Testcontainers' reaper sidecar needs to be told where
 the socket really is: prefix the command with

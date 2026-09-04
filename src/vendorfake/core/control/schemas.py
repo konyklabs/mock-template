@@ -16,12 +16,13 @@ import math
 from collections.abc import Mapping
 from typing import Any, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from vendorfake.core.config.models import unit_error_from_validation
 from vendorfake.core.kernel.types import JournalEntry, UnitError, UnitErrorKind
 from vendorfake.core.state.store import Entity, IdempotencyRecord, StoreSnapshot
 from vendorfake.core.util.json import compact
+from vendorfake.core.webhooks.models import check_notification_url
 
 __all__ = [
     "CapabilitiesBody",
@@ -215,6 +216,11 @@ class SubscriptionCreateBody(BaseModel):
     signature_key: str = DEFAULT_CONTROL_SIGNATURE_KEY
     enabled: bool = Field(default=True, strict=True)
     api_version: str | None = None
+
+    @field_validator("notification_url")
+    @classmethod
+    def _target_is_postable(cls, value: str) -> str:
+        return check_notification_url(value)
 
 
 class RetryPolicyPatchBody(BaseModel):

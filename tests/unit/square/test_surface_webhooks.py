@@ -175,6 +175,30 @@ def test_a_non_boolean_enabled_is_refused_rather_than_read_as_false(h: Harness) 
     assert first_error(response)["field"] == "subscription.enabled"
 
 
+def test_a_link_local_notification_url_is_refused(h: Harness) -> None:
+    """A cloud instance's metadata service lives at a link-local address; this vendor route
+    refuses it the same way the control plane's own subscription route already does."""
+    response = h.api.post(
+        "/v2/webhooks/subscriptions",
+        {
+            "subscription": {
+                "notification_url": "http://169.254.169.254/latest",
+                "event_types": [ORDER_CREATED],
+            }
+        },
+        headers=h.auth,
+    )
+    assert response.status == 400
+    assert response.headers["x-unit-error"] == "invalid_value"
+    assert first_error(response)["field"] == "subscription.notification_url"
+
+
+def test_a_loopback_notification_url_is_accepted(h: Harness) -> None:
+    """Loopback stays allowed -- that is where a test's own receiver lives."""
+    subscription = create_subscription(h, notification_url="http://127.0.0.1:9/hook")
+    assert subscription["notification_url"] == "http://127.0.0.1:9/hook"
+
+
 def test_create_is_idempotent_on_its_key(h: Harness) -> None:
     """Two sends of one request return one subscriber, not two -- which is what
     a retrying HTTP client produces and what the idempotency spec is for."""
@@ -533,7 +557,7 @@ def test_the_test_route_reports_the_status_code_of_the_subscriber_under_test(h: 
     response = h.api.post(f"/v2/webhooks/subscriptions/{healthy['id']}/test", {}, headers=h.auth)
 
     result = response.json()["subscription_test_result"]
-    assert result["status_code"] == 200, "reported the other subscriber's failure"
+    assert result["status_code"] == 200, f"got {result['status_code']}: reported the other subscriber's failure"
     (request,) = sink.received
     assert request.url == OTHER_HOOKS
 

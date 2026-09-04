@@ -1,11 +1,9 @@
-"""``vendorfake`` -- the command line, and the one place that reads ``os.environ``.
+"""``vendorfake`` -- the command line.
 
-Invariant: this is the only module that resolves a unit's config from
-``os.environ``. ``create_unit``'s ``env`` defaults to an empty mapping, so a
-variable set by one test cannot change the profile a unit built by another
-resolves to. ``vendorfake.testing.served()`` is the one documented exception,
-spawning this module's ``serve`` subcommand as a child that inherits the real
-environment by construction.
+Invariant: the process environment reaches a unit through one function,
+``registry.ambient_env()``, which this module, ``unit()`` and ``served()`` all
+layer explicit configuration over; ``create_unit``'s ``env`` itself defaults to
+an empty mapping.
 
 Invariant: ``vendorfake --help`` imports no web framework. Every first-party
 import happens inside a subcommand body, and ``serve`` is the only one that
@@ -122,6 +120,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-internal",
         action="store_true",
         help="Omit the /__unit/* control plane, describing only the vendor surface.",
+    )
+
+    manifest = subcommands.add_parser(
+        "manifest",
+        help="Print the world-neutral manifest: credentials, webhook keys and entity ids.",
+        parents=[_json_flag_parent()],
+    )
+    _add_unit_flags(manifest)
+    manifest.add_argument(
+        "--base-url",
+        default=None,
+        help="The address the unit will be reached at, recorded in the document. Omitted, base_url is null.",
     )
 
     subcommands.add_parser("vendors", help="List the vendors that would resolve here.", parents=[_json_flag_parent()])
@@ -337,6 +347,26 @@ def _info(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
         response = in_process(unit).get("/__unit/info")
         print(response.text, file=out)
         return 0 if response.status == 200 else 1
+    finally:
+        unit.stop()
+
+
+def _manifest(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
+    """Print the document ``GET /__unit/manifest`` serves, without a server.
+
+    The same function builds both, so the two cannot drift. ``--json`` is
+    implicit -- the output *is* the document, and nothing else goes to stdout --
+    and ``--base-url`` is the one thing a process with no request cannot infer:
+    a unit reached over a container port mapping does not know its own address.
+    """
+    from vendorfake.core.control.plane import manifest_document
+    from vendorfake.core.util.json import dump_json
+
+    unit = _make_unit(args, env)
+    try:
+        document = manifest_document(unit.context, base_url=args.base_url)
+        print(dump_json(document).decode("utf-8"), file=out)
+        return 0
     finally:
         unit.stop()
 
@@ -562,9 +592,8 @@ def _conformance(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Parse, dispatch, and return an exit code. ``os.environ`` is read here and
-    nowhere else, copied into a plain ``dict`` so nothing downstream can mutate
-    the process environment and a test can substitute one."""
+    """Parse, dispatch, and return an exit code. The environment is copied into a
+    plain ``dict`` so nothing downstream can mutate it and a test can substitute one."""
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     env: Mapping[str, str] = dict(os.environ)
@@ -584,6 +613,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _serve(args, env, out)
     if args.command == "info":
         return _info(args, env, out)
+    if args.command == "manifest":
+        return _manifest(args, env, out)
     if args.command == "openapi":
         return _openapi(args, env, out)
     if args.command == "vendors":

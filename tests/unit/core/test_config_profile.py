@@ -203,7 +203,7 @@ def test_vendor_prefixed_variables_become_snake_case_keys() -> None:
 def test_every_env_table_row_is_complete() -> None:
     """The generated env reference is built from ENV_TABLE: every row carries a
     VENDORFAKE_ name, what it applies to and a summary, and exactly one is a prefix."""
-    assert len(ENV_TABLE) == 19
+    assert len(ENV_TABLE) == 18
     assert all(name.startswith("VENDORFAKE_") for name in env_names())
     assert sum(1 for var in ENV_TABLE if var.is_prefix) == 1
     assert all(var.applies_to and var.summary for var in ENV_TABLE)
@@ -399,6 +399,22 @@ def test_a_missing_required_subscriber_field_reports_missing_field() -> None:
     err = caught.value
     assert err.kind is UnitErrorKind.MISSING_FIELD
     assert err.field == "webhooks.subscribers.0.event_types"
+
+
+def test_a_profile_subscriber_on_a_link_local_target_is_refused_like_a_control_plane_one() -> None:
+    """The same target rule at both seams: a profile cannot name the instance
+    metadata address any more than POST /__unit/webhooks/subscriptions can."""
+    subscriber = {
+        "notification_url": "http://169.254.169.254/latest",
+        "event_types": ["order.created"],
+        "signature_key": "k",
+    }
+    with pytest.raises(UnitError) as caught:
+        parse_profile_document({"webhooks": {"subscribers": [subscriber]}})
+    assert caught.value.kind is UnitErrorKind.INVALID_VALUE
+    assert "link-local" in (caught.value.detail or "")
+    loopback = {**subscriber, "notification_url": "http://127.0.0.1:9/hook"}
+    assert parse_profile_document({"webhooks": {"subscribers": [loopback]}}).webhooks.subscribers[0].enabled
 
 
 def test_chaos_rules_stay_opaque_documents_here() -> None:

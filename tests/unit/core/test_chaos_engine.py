@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from vendorfake.core.chaos.engine import ChaosEngine, ChaosSubject
+from vendorfake.core.chaos.engine import CHAOS_HISTORY_CAPACITY, ChaosEngine, ChaosSubject
 from vendorfake.core.chaos.rules import ChaosRule
 from vendorfake.core.kernel.types import UnitError
 from vendorfake.core.rand.rng import Rng
@@ -443,3 +443,31 @@ def test_the_engine_parses_documents_at_construction() -> None:
 def test_already_parsed_rules_are_accepted_too() -> None:
     unit = engine(ChaosRule(id="a", scope="request", fault="server_error"))
     assert unit.evaluate(post_orders()) is not None
+
+
+def test_the_history_keeps_the_most_recent_fires_and_evicts_the_oldest() -> None:
+    """``GET /__unit/chaos/history`` is a debugging read; the interesting fire is
+    the last one, so the ring drops from the front. Under a rule with no ``times``
+    the history would otherwise grow once per request for the life of the unit.
+
+    The per-rule counters are deliberately not bounded with it: ``fires`` is the
+    number a test asserts on, and a capped count would be a wrong one.
+    """
+    unit = engine({"id": "a", "scope": "request", "fault": "server_error"})
+    for _ in range(CHAOS_HISTORY_CAPACITY + 3):
+        assert unit.evaluate(post_orders()) is not None
+    events = unit.events()
+    assert len(events) == CHAOS_HISTORY_CAPACITY
+    assert events[0].occurrence == 4
+    assert events[-1].occurrence == CHAOS_HISTORY_CAPACITY + 3
+    assert statuses(unit, "a") == (CHAOS_HISTORY_CAPACITY + 3, CHAOS_HISTORY_CAPACITY + 3)
+
+
+def test_the_history_stays_bounded_after_a_reset() -> None:
+    """``reset`` and ``reset_counters`` both rebuild the ring; one that rebuilt it
+    as an unbounded list would silently un-cap the engine on the first reset."""
+    unit = engine({"id": "a", "scope": "request", "fault": "server_error"})
+    unit.reset_counters()
+    for _ in range(CHAOS_HISTORY_CAPACITY + 1):
+        unit.evaluate(post_orders())
+    assert len(unit.events()) == CHAOS_HISTORY_CAPACITY

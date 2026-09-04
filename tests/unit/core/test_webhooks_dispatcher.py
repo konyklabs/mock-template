@@ -25,6 +25,7 @@ WHAT IS BEING PINNED, and why each is a decision rather than a detail:
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -42,8 +43,10 @@ from vendorfake import create_unit
 from vendorfake.core.kernel.types import JournalEntry, MappedEvent, PreparedEvent, ReplyInit
 from vendorfake.core.kernel.unit import Unit, make_request
 from vendorfake.core.transport.inprocess import in_process
+from vendorfake.core.webhooks import dispatcher as dispatcher_module
+from vendorfake.core.webhooks import worker as worker_module
 from vendorfake.core.webhooks.models import DeliveryOutcome
-from vendorfake.core.webhooks.sink import MemorySink
+from vendorfake.core.webhooks.sink import MemorySink, SinkRequest, SinkResult
 
 SUB_URL = "https://subscriber.test/hooks"
 SECRET = "top-secret-key"
@@ -131,6 +134,22 @@ def build(
         **config,
     )
     return unit, the_sink, the_signer
+
+
+class BlockingSink(MemorySink):
+    """A sink that holds the worker inside one attempt, so the queue behind it fills
+    to a known depth instead of to whatever the scheduler allowed."""
+
+    def __init__(self) -> None:
+        super().__init__(200)
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def send(self, req: SinkRequest) -> SinkResult:
+        result = super().send(req)
+        self.entered.set()
+        assert self.release.wait(5), "the test never released the blocking sink"
+        return result
 
 
 def create_order(unit: Unit, order_id: str = "ord_1", **fields: object) -> None:
@@ -1341,4 +1360,101 @@ def test_enqueue_is_stopped_by_disable_delivery_too() -> None:
         "arrive through the journal listener"
     )
     assert unit.webhooks.deliveries() == ()
+    unit.stop()
+
+
+# ---------------------------------------------------------------------------
+# The three bounded collections on the delivery path. Each cap is asserted with
+# a small capacity patched in rather than by driving ten thousand deliveries:
+# the property is which end is evicted, and that is the same at three as at
+# ten thousand.
+# ---------------------------------------------------------------------------
+
+
+def test_the_delivery_log_keeps_the_newest_records(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A soak run delivers for hours and reads the log at the end, so the oldest
+    records are the ones nobody will ask for. Delivery ids keep counting past an
+    eviction, because two records numbered ``dlv_00001`` would make the log's
+    write order unreadable."""
+    monkeypatch.setattr(dispatcher_module, "DELIVERY_LOG_CAPACITY", 3)
+    unit, sink, _ = build(subscribers=[subscriber()])
+    for n in range(5):
+        create_order(unit, f"ord_{n}")
+    unit.webhooks.drain()
+    records = unit.webhooks.deliveries()
+    assert [r.id for r in records] == ["dlv_00003", "dlv_00004", "dlv_00005"]
+    assert [r.entity_id for r in records] == ["ord_2", "ord_3", "ord_4"]
+    assert len(sink.received) == 5
+    unit.stop()
+
+
+def test_the_prepared_event_list_keeps_the_newest_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``prepared()`` answers "what did this request emit"; it is read right after
+    the request, so the newest events are the ones with a reader."""
+    monkeypatch.setattr(dispatcher_module, "PREPARED_CAPACITY", 2)
+    unit, _, _ = build(subscribers=[subscriber()])
+    for n in range(4):
+        create_order(unit, f"ord_{n}")
+    unit.webhooks.drain()
+    assert [e.entity_id for e in unit.webhooks.prepared()] == ["ord_2", "ord_3"]
+    unit.stop()
+
+
+def test_a_delivery_the_full_queue_refused_is_recorded_as_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The queue bound must not turn into a silent loss.
+
+    A fake whose delivery vanished with no record would teach a consumer's test
+    suite that the event was never emitted, which is the one lie a fake cannot
+    afford. The dropped attempt gets a record of its own, from the thread that
+    tried to queue it, so ``deliveries()`` accounts for every event enqueued.
+    """
+    monkeypatch.setattr(worker_module, "QUEUE_CAPACITY", 1)
+    sink = BlockingSink()
+    unit, _, _ = build(sink=sink, subscribers=[subscriber()])
+
+    create_order(unit, "ord_held")
+    assert sink.entered.wait(5), "the sink never received the first attempt"
+    create_order(unit, "ord_queued")
+    create_order(unit, "ord_dropped")
+
+    dropped = [r for r in unit.webhooks.deliveries() if r.entity_id == "ord_dropped"]
+    assert [(r.status, r.error, r.response_status) for r in dropped] == [("failed", "queue full", 0)]
+    assert unit.webhooks.worker_failures() == (f"queue full: {dropped[0].event_id}->sub_1",)
+
+    sink.release.set()
+    unit.webhooks.drain()
+    assert [r.entity_id for r in unit.webhooks.deliveries() if r.status == "delivered"] == ["ord_held", "ord_queued"]
+    assert len(sink.received) == 2, "the dropped attempt must never reach the sink"
+    unit.stop()
+
+
+def test_a_schedule_shortened_between_two_reads_of_the_policy_cannot_crash_an_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``POST /__unit/webhooks/retry-policy`` runs on the request thread while an
+    attempt runs on the worker's.
+
+    An attempt that re-read the live policy would ask ``schedule_exhausted`` of one
+    schedule and ``retry_delay_ms`` of a shorter one, and index past its end: an
+    ``IndexError`` on the worker, which is captured rather than raised, so the
+    delivery would simply stop -- no retry, no ``exhausted`` record, and a consumer
+    waiting for an attempt that will never come. Reading the policy once per attempt
+    is what makes that impossible, so this patches the schedule to empty in the exact
+    window between the two reads.
+    """
+    unit, sink, _ = build(subscribers=[subscriber()], schedule_ms=(60_000,))
+    sink.respond_with = 500
+    real_exhausted = dispatcher_module.schedule_exhausted
+
+    def shorten_the_schedule_mid_attempt(policy: Any, retry_number: int) -> bool:
+        verdict = bool(real_exhausted(policy, retry_number))
+        unit.webhooks.set_retry_policy({"schedule_ms": []})
+        return verdict
+
+    monkeypatch.setattr(dispatcher_module, "schedule_exhausted", shorten_the_schedule_mid_attempt)
+
+    create_order(unit)
+    unit.webhooks.drain()
+    assert unit.webhooks.worker_failures() == ()
+    assert statuses(unit) == ["failed", "exhausted"]
     unit.stop()

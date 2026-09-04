@@ -191,12 +191,8 @@ class UnitTransport(httpx.BaseTransport, httpx.AsyncBaseTransport):
     __slots__ = ("_unit", "_unmatched")
 
     def __init__(self, unit: Unit, *, unmatched: UnmatchedPolicy | None = None) -> None:
-        unmatched = checked_unmatched(unmatched)
         self._unit = unit
-        declared = unit.context.config.unmatched.policy
-        self._unmatched: UnmatchedPolicy = (
-            unmatched if unmatched is not None else (declared if declared is not None else DEFAULT_INPROCESS_POLICY)
-        )
+        self._unmatched: UnmatchedPolicy = checked_unmatched(unmatched) or DEFAULT_INPROCESS_POLICY
 
     @property
     def unmatched(self) -> UnmatchedPolicy:

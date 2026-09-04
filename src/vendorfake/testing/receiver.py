@@ -50,9 +50,14 @@ class WebhookReceiver:
 
     @property
     def url(self) -> str:
-        """The receiver as this machine reaches it; a wildcard bind needs its own."""
-        host = "127.0.0.1" if self.host == "0.0.0.0" else self.host  # nosec B104  # a comparison, not a bind
-        return f"http://{host}:{self.port}{self.path}"
+        """The receiver as this machine reaches it. Refuses to guess for a wildcard
+        bind: the address a container reaches depends on who is asking."""
+        if self.host == "0.0.0.0":  # nosec B104  # a comparison, not a bind
+            raise ValueError(
+                f"WebhookReceiver bound to 0.0.0.0 has no single URL: build it from .port ({self.port}) with the "
+                f"address the subscriber reaches this host at, e.g. http://host.docker.internal:{self.port}{self.path}"
+            )
+        return f"http://{self.host}:{self.port}{self.path}"
 
     def start(self) -> None:
         receiver = self

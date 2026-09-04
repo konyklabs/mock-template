@@ -21,6 +21,7 @@ Every `/__unit/*` route -- the operator's side channel for state, time and obser
 | GET | `/__unit/journal` | UnitJournal | Append-only log of committed state mutations. |
 | GET | `/__unit/machines` | UnitMachines | Declared state machines, with terminal states derived. |
 | POST | `/__unit/machines/probe` | UnitProbeMachine | Evaluate a transition without mutating state. |
+| GET | `/__unit/manifest` | UnitManifest | Credentials, webhook keys and entity ids: what an end-to-end script needs to address this unit. |
 | GET | `/__unit/requests` | UnitRequests | Every request the unit handled, newest first. |
 | DELETE | `/__unit/requests` | UnitClearRequests | Forget every recorded request. State is untouched. |
 | GET | `/__unit/requests/unmatched/near-misses` | UnitNearMisses | Unmatched requests, each with the routes it nearly asked for. |

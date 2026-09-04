@@ -22,6 +22,7 @@ from vendorfake.core.control.schemas import (
     SnapshotDocument,
     StateRestoreBody,
     SubscriptionCreateBody,
+    check_notification_url,
     idempotency_as_json,
     journal_entry_as_json,
     parse_or_raise,
@@ -301,3 +302,63 @@ def test_a_restore_body_with_no_snapshot_parses_so_the_handler_can_name_it() -> 
     field would report the same kind but the handler would lose its own
     wording, which is the reference's ('snapshot is required')."""
     assert parse_or_raise(StateRestoreBody, {}).snapshot is None
+
+
+# ---------------------------------------------------------------------------
+# The webhook target. A subscription body names a URL the unit will POST to,
+# from inside whatever network the unit is running in, so the seam that accepts
+# it is the seam that decides where the unit's own credentials-free but
+# perfectly real HTTP request can land.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "why"),
+    [
+        ("file:///etc/passwd", "a file URL is not a webhook target and httpx would not post to it"),
+        ("gopher://host/x", "an unknown scheme is a mistake, not an extension point"),
+        ("//host/hook", "a scheme-relative URL names no scheme at all"),
+        ("http://169.254.169.254/latest/meta-data/", "the IPv4 cloud metadata service"),
+        ("http://169.254.0.1/hook", "the whole 169.254.0.0/16 link-local range, not one address"),
+        ("http://[fe80::1]/hook", "fe80::/10, the IPv6 half of the same range"),
+        ("http://[::ffff:169.254.169.254]/hook", "the metadata address wearing an IPv4-mapped disguise"),
+        ("https:///hook", "no host to post to"),
+    ],
+)
+def test_a_webhook_target_the_unit_must_not_post_to_is_refused(url: str, why: str) -> None:
+    """Refusal is the ordinary ``invalid_value`` naming the field, because this is a
+    bad request rather than a new error vocabulary. The metadata address is the
+    reason the rule exists: a consumer's test suite that can register a subscriber
+    can otherwise make the fake fetch instance credentials and write the response
+    body into a delivery record it is allowed to read back."""
+    with pytest.raises(UnitError) as caught:
+        parse_or_raise(SubscriptionCreateBody, {"notification_url": url})
+    assert caught.value.kind is UnitErrorKind.INVALID_VALUE, why
+    assert caught.value.field == "notification_url"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:9/hook",
+        "http://localhost:8080/hook",
+        "http://10.0.0.5/hook",
+        "http://192.168.1.10:3000/hook",
+        "http://[::1]:9/hook",
+        "https://subscriber.test/hooks",
+    ],
+)
+def test_a_loopback_or_private_webhook_target_stays_allowed(url: str) -> None:
+    """The receiver in a consumer's own test suite lives on 127.0.0.1, and the one
+    in a compose network lives on a private address. A validator that refused those
+    would refuse the only targets vendorfake is ever pointed at, so the rule is
+    narrow on purpose: it is about the link-local range, not about privacy."""
+    assert parse_or_raise(SubscriptionCreateBody, {"notification_url": url}).notification_url == url
+
+
+def test_a_hostname_is_not_resolved_to_decide_whether_it_is_allowed() -> None:
+    """A name that resolves to the metadata address is accepted, and that is the
+    deliberate limit of this check: resolving here would make a body's validity
+    depend on the network and on the moment, and would still not bind what the
+    sink resolves later. The scheme and the literal are what a seam can decide."""
+    assert check_notification_url("http://metadata.example.invalid/latest") is not None

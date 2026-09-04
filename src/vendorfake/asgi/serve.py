@@ -11,8 +11,11 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
-import uvicorn
-from fastapi import FastAPI
+try:
+    import uvicorn
+    from fastapi import FastAPI
+except ImportError as exc:
+    raise ImportError("vendorfake serve needs the 'serve' extra: pip install 'vendorfake[serve]'") from exc
 
 __all__ = ["DEFAULT_HOST", "DEFAULT_PORT", "bind", "run_server", "serve_in_thread"]
 

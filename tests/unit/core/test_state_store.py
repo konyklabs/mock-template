@@ -16,10 +16,13 @@ import pytest
 from vendorfake.core.kernel.types import JournalEntry, UnitError, UnitErrorKind
 from vendorfake.core.state.store import (
     DEFAULT_CURSOR_TTL_MS,
+    IDEMPOTENCY_CAPACITY,
+    JOURNAL_CAPACITY,
     VOLATILE_PRESENT,
     Entity,
     IdempotencyRecord,
     Store,
+    StoreSnapshot,
     diff_keys,
 )
 from vendorfake.core.time.clock import Clock
@@ -956,3 +959,93 @@ def test_restore_replaces_rather_than_merges() -> None:
     store.collection("payments").insert({"id": "p1"})
     store.restore(snap)
     assert store.stats() == {"orders": 2}
+
+
+# ---------------------------------------------------------------------------
+# The two bounded collections. A long-running unit -- a soak test, a demo left
+# open overnight -- writes to both without ever reading them back, so an
+# unbounded journal or idempotency map is a leak with no natural ceiling.
+# What is bounded is memory; what is NOT bounded is `journal_seq`, because a
+# consumer polls `/__unit/journal?since=` with the last sequence it saw and a
+# sequence that restarted would replay the whole journal as new.
+# ---------------------------------------------------------------------------
+
+
+def test_the_journal_keeps_the_newest_entries_and_evicts_the_oldest() -> None:
+    """Past the cap the ring drops from the front, so what a poller most recently
+    missed is what survives; dropping the newest would make the journal useless."""
+    store = make_store()
+    for n in range(JOURNAL_CAPACITY + 5):
+        store.append_journal(
+            collection="orders", entity_id=f"o{n}", op="insert", from_version=None, to_version=1, changed=["id"]
+        )
+    entries = store.journal()
+    assert len(entries) == JOURNAL_CAPACITY
+    assert entries[0].seq == 6
+    assert entries[-1].seq == JOURNAL_CAPACITY + 5
+
+
+def test_journal_seq_keeps_counting_past_the_cap_and_since_selects_from_what_is_left() -> None:
+    """The sequence is the consumer's cursor, not an index into the ring."""
+    store = make_store()
+    for n in range(JOURNAL_CAPACITY + 5):
+        store.append_journal(
+            collection="orders", entity_id=f"o{n}", op="insert", from_version=None, to_version=1, changed=["id"]
+        )
+    assert store.journal_seq == JOURNAL_CAPACITY + 5
+    assert [e.seq for e in store.journal(since_seq=JOURNAL_CAPACITY + 3)] == [
+        JOURNAL_CAPACITY + 4,
+        JOURNAL_CAPACITY + 5,
+    ]
+    # An evicted sequence asks for everything still held, not for nothing.
+    assert len(store.journal(since_seq=1)) == JOURNAL_CAPACITY
+
+
+def test_restoring_an_over_long_journal_keeps_the_newest_entries() -> None:
+    """A snapshot is an external document: restoring one bigger than the cap must
+    leave the store inside the same bound a live one obeys."""
+    store = make_store()
+    oversized = [
+        JournalEntry(
+            seq=n + 1,
+            at=START,
+            collection="orders",
+            id=f"o{n}",
+            op="insert",
+            from_version=None,
+            to_version=1,
+            changed=(),
+        )
+        for n in range(JOURNAL_CAPACITY + 3)
+    ]
+    store.restore(StoreSnapshot(collections={}, journal=oversized, idempotency=[], seq=JOURNAL_CAPACITY + 3))
+    kept = store.journal()
+    assert len(kept) == JOURNAL_CAPACITY
+    assert kept[0].seq == 4
+    assert store.snapshot().seq == JOURNAL_CAPACITY + 3
+
+
+def test_idempotency_evicts_the_oldest_inserted_record() -> None:
+    """The oldest key is the one least likely to be retried; evicting the newest
+    would drop the record of the request currently in flight."""
+    store = make_store()
+    for n in range(IDEMPOTENCY_CAPACITY + 2):
+        store.put_idempotent(record(key=f"k{n}"))
+    assert store.get_idempotent("CreateOrder", "k0") is None
+    assert store.get_idempotent("CreateOrder", "k1") is None
+    assert store.get_idempotent("CreateOrder", "k2") is not None
+    assert store.get_idempotent("CreateOrder", f"k{IDEMPOTENCY_CAPACITY + 1}") is not None
+    assert len(store.snapshot().idempotency) == IDEMPOTENCY_CAPACITY
+
+
+def test_re_storing_a_key_does_not_move_it_to_the_back_of_the_queue() -> None:
+    """ "Oldest inserted" is the stated policy, not "least recently used": a key
+    rewritten by a second retry keeps its original place, so one hot key cannot
+    hold the whole map open."""
+    store = make_store()
+    for n in range(IDEMPOTENCY_CAPACITY):
+        store.put_idempotent(record(key=f"k{n}"))
+    store.put_idempotent(record(key="k0"))
+    store.put_idempotent(record(key="new"))
+    assert store.get_idempotent("CreateOrder", "k0") is None
+    assert store.get_idempotent("CreateOrder", "new") is not None

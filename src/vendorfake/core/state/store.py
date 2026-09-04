@@ -20,6 +20,7 @@ import copy
 import json
 import math
 import threading
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeAlias, TypeVar
@@ -31,6 +32,8 @@ from vendorfake.core.util.json import MISSING, canonical_json, digest_of, dump_j
 
 __all__ = [
     "DEFAULT_CURSOR_TTL_MS",
+    "IDEMPOTENCY_CAPACITY",
+    "JOURNAL_CAPACITY",
     "VOLATILE_PRESENT",
     "Collection",
     "Entity",
@@ -48,6 +51,12 @@ Entity: TypeAlias = dict[str, Any]
 _T = TypeVar("_T")
 
 DEFAULT_CURSOR_TTL_MS = 5 * 60 * 1000
+
+JOURNAL_CAPACITY = 10_000
+"""Journal entries kept, oldest evicted; ``journal_seq`` still counts every one."""
+
+IDEMPOTENCY_CAPACITY = 10_000
+"""Idempotency records kept, evicting the oldest inserted."""
 
 _DIFF_EXCLUDED = frozenset({"version", "updated_at"})
 
@@ -408,7 +417,8 @@ class Store:
         self.lock = threading.RLock()
         self._collections: dict[str, dict[str, Entity]] = {}
         self._wrappers: dict[str, Collection] = {}
-        self._journal: list[JournalEntry] = []
+        #: Bounded rings: the newest entries are the ones a test is asking about.
+        self._journal: deque[JournalEntry] = deque(maxlen=JOURNAL_CAPACITY)
         self._idempotency: dict[str, IdempotencyRecord] = {}
         self._listeners: list[JournalListener] = []
         self._seq = 0
@@ -485,7 +495,8 @@ class Store:
             return entry
 
     def journal(self, since_seq: int = 0) -> list[JournalEntry]:
-        """Every entry after ``since_seq``, each a private copy."""
+        """Every retained entry after ``since_seq``, each a private copy; past
+        :data:`JOURNAL_CAPACITY` the oldest are gone and this selects from what is left."""
         with self.lock:
             return [copy.deepcopy(e) for e in self._journal if e.seq > since_seq]
 
@@ -506,6 +517,14 @@ class Store:
     def put_idempotent(self, record: IdempotencyRecord) -> None:
         with self.lock:
             self._idempotency[self.idempotency_key(record.scope, record.key)] = copy.deepcopy(record)
+            self._evict_idempotency()
+
+    def _evict_idempotency(self) -> None:
+        """Drop the oldest inserted records past the cap, the caller holding the lock. A dict
+        keeps insertion order and re-storing a key does not move it, which is what makes
+        "oldest inserted" rather than "least recently used" true."""
+        while len(self._idempotency) > IDEMPOTENCY_CAPACITY:
+            del self._idempotency[next(iter(self._idempotency))]
 
     def snapshot(self) -> StoreSnapshot:
         with self.lock:
@@ -520,21 +539,24 @@ class Store:
             )
 
     def restore(self, snapshot: StoreSnapshot) -> None:
-        """Replace everything the store holds. Listeners are **not** notified, so a restored journal does not redeliver."""
+        """Replace everything the store holds, an over-long journal or idempotency set being
+        trimmed to the caps as a live one is. Listeners are **not** notified, so a restored
+        journal does not redeliver."""
         with self.lock:
             self._collections = {
                 name: {k: copy.deepcopy(v) for k, v in entities.items()}
                 for name, entities in snapshot.collections.items()
             }
-            self._journal = [copy.deepcopy(e) for e in snapshot.journal]
+            self._journal = deque((copy.deepcopy(e) for e in snapshot.journal), maxlen=JOURNAL_CAPACITY)
             self._idempotency = {self.idempotency_key(r.scope, r.key): copy.deepcopy(r) for r in snapshot.idempotency}
+            self._evict_idempotency()
             self._seq = snapshot.seq
 
     def reset(self) -> None:
         """Empty the store. Listener registrations survive."""
         with self.lock:
             self._collections.clear()
-            self._journal = []
+            self._journal = deque(maxlen=JOURNAL_CAPACITY)
             self._idempotency.clear()
             self._seq = 0
 

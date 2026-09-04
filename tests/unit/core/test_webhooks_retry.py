@@ -88,33 +88,41 @@ def test_a_patch_coerces_rather_than_indexes() -> None:
     ``TypeError`` -- which would surface as an unhandled exception on the
     delivery worker rather than as a bad request.
     """
-    policy = MutableRetryPolicy(schedule_ms=(1,), time_scale=1.0, timeout_ms=100)
-    policy.apply({"time_scale": "0.5", "timeout_ms": "250", "schedule_ms": ["10", 20.9]})
-    assert policy.time_scale == 0.5
-    assert policy.timeout_ms == 250
-    assert policy.schedule_ms == (10, 20)
+    patched = MutableRetryPolicy(schedule_ms=(1,), time_scale=1.0, timeout_ms=100).patched(
+        {"time_scale": "0.5", "timeout_ms": "250", "schedule_ms": ["10", 20.9]}
+    )
+    assert patched.time_scale == 0.5
+    assert patched.timeout_ms == 250
+    assert patched.schedule_ms == (10, 20)
 
 
 def test_a_patch_touches_only_the_keys_it_names() -> None:
     policy = MutableRetryPolicy(schedule_ms=(1, 2), time_scale=2.0, timeout_ms=99)
-    assert policy.apply({"time_scale": 0.5}) is policy
-    assert (policy.schedule_ms, policy.time_scale, policy.timeout_ms) == ((1, 2), 0.5, 99)
+    patched = policy.patched({"time_scale": 0.5})
+    assert (patched.schedule_ms, patched.time_scale, patched.timeout_ms) == ((1, 2), 0.5, 99)
+
+
+def test_a_patch_leaves_the_policy_it_was_given_untouched() -> None:
+    """The dispatcher swaps the whole object precisely so that an attempt which has
+    already read the policy keeps the schedule it read. A patch that mutated in place
+    would put a shortened schedule under an attempt mid-flight, which is the race
+    ``_run_attempt``'s single read exists to close."""
+    policy = MutableRetryPolicy(schedule_ms=(1, 2), time_scale=2.0, timeout_ms=99)
+    patched = policy.patched({"schedule_ms": [5], "time_scale": 0.5, "timeout_ms": 1})
+    assert patched is not policy
+    assert (policy.schedule_ms, policy.time_scale, policy.timeout_ms) == ((1, 2), 2.0, 99)
 
 
 def test_an_unparseable_value_leaves_the_field_alone() -> None:
     """Rejection is the control-plane schema's job. Doing it here as well would
     mean doing it differently in one of the two places eventually."""
-    policy = MutableRetryPolicy(time_scale=0.5)
-    policy.apply({"time_scale": "not a number"})
-    assert policy.time_scale == 0.5
+    assert MutableRetryPolicy(time_scale=0.5).patched({"time_scale": "not a number"}).time_scale == 0.5
 
 
 def test_a_string_schedule_is_not_iterated_character_by_character() -> None:
     """``"10"`` is a ``Sequence``; iterating it would give ``("1", "0")`` and a
     schedule of ``(1, 0)``, which is a plausible-looking wrong answer."""
-    policy = MutableRetryPolicy(schedule_ms=(7,))
-    policy.apply({"schedule_ms": "10"})
-    assert policy.schedule_ms == (7,)
+    assert MutableRetryPolicy(schedule_ms=(7,)).patched({"schedule_ms": "10"}).schedule_ms == (7,)
 
 
 def test_the_live_policy_is_a_copy_of_the_resolved_configuration() -> None:
@@ -124,8 +132,7 @@ def test_the_live_policy_is_a_copy_of_the_resolved_configuration() -> None:
     scenario would describe the scenario as it ended rather than as it began.
     """
     resolved = ConfigRetryPolicy(schedule_ms=(1, 2), time_scale=1.0, timeout_ms=500)
-    live = MutableRetryPolicy.of(resolved)
-    live.apply({"time_scale": 0.25})
+    live = MutableRetryPolicy.of(resolved).patched({"time_scale": 0.25})
     assert resolved.time_scale == 1.0
     assert live.time_scale == 0.25
 

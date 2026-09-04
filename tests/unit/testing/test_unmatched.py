@@ -12,6 +12,7 @@ profile has, needs no credential, and is the first thing a consumer types.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -82,17 +83,32 @@ def test_the_same_request_answers_the_vendors_own_404_when_asked(vendor: str) ->
 
 
 @pytest.mark.parametrize("vendor", sorted(MISSPELLED_AUTH))
-def test_a_served_unit_answers_and_never_raises(vendor: str) -> None:
-    """Over a socket there is no caller stack to raise into, and the unit is
-    standing in for the vendor rather than acting as a double. The header
-    survives the ASGI adapter, which is the only way the diagnosis reaches a
-    consumer in another language."""
+def test_a_served_unit_answers_404_with_the_header_on_the_wire(vendor: str) -> None:
+    """On the wire the unit stands in for the vendor: 404, with the diagnosis in
+    the header for a consumer in any language."""
     path, operation = MISSPELLED_AUTH[vendor]
-    with unit(vendor) as started, serve_in_thread(started) as driver:
+    with unit(vendor, unmatched="vendor-404") as started, serve_in_thread(started) as driver:
         answered = driver.client.post(path, json={})
         assert answered.status_code == 404
         misses = json.loads(answered.headers[NEAR_MISS_HEADER])
         assert misses[0]["operation_id"] == operation
+
+
+@pytest.mark.parametrize("vendor", sorted(MISSPELLED_AUTH))
+def test_an_http_driver_raises_by_default_like_the_in_process_one(vendor: str) -> None:
+    """The Python driver over a socket applies the same default policy: the
+    response hook turns the near-miss header into ``UnmatchedRequest``."""
+    path, operation = MISSPELLED_AUTH[vendor]
+    with unit(vendor) as started, serve_in_thread(started) as driver:
+        with pytest.raises(UnmatchedRequest, match=operation):
+            driver.client.post(path, json={})
+
+        async def over_async() -> None:
+            await driver.async_client.post(path, json={})
+            await driver.aclose()
+
+        with pytest.raises(UnmatchedRequest, match=operation):
+            asyncio.run(over_async())
 
 
 def test_a_real_404_from_a_real_route_is_not_a_failure() -> None:
@@ -123,33 +139,6 @@ def test_the_in_process_default_is_strict() -> None:
     with unit("square") as square:
         assert DEFAULT_INPROCESS_POLICY == "error"
         assert UnitTransport(square.unit).unmatched == "error"
-
-
-def test_the_environment_sets_the_policy_for_a_whole_suite() -> None:
-    """`VENDORFAKE_UNMATCHED` is how a consumer with a suite full of
-    deliberate probes opts out once rather than per call."""
-    with unit("square", env={"VENDORFAKE_UNMATCHED": "vendor-404"}) as square:
-        assert square.client.post("/oauth2/tokens", json={}).status_code == 404
-
-
-def test_the_argument_beats_the_environment() -> None:
-    """Precedence, stated the way every other layer in this project states it:
-    the caller is last and loudest."""
-    with (
-        unit("square", env={"VENDORFAKE_UNMATCHED": "vendor-404"}, unmatched="error") as square,
-        pytest.raises(UnmatchedRequest),
-    ):
-        square.client.post("/oauth2/tokens", json={})
-
-
-def test_a_policy_that_is_not_one_of_the_two_is_refused_at_startup() -> None:
-    """A typo'd variable falling back to the default would leave a CI run
-    configured to fail loudly still answering 404s."""
-    with pytest.raises(Exception, match="VENDORFAKE_UNMATCHED"), unit("square", env={"VENDORFAKE_UNMATCHED": "err"}):
-        pass
-
-
-# -- konyklabs/roadmap#99, item 1: the argument is validated, not stored ------
 
 
 @pytest.mark.parametrize("bad", ["raise", True, "ERROR", 0])

@@ -30,7 +30,12 @@ from vendorfake.core.kernel.types import (
     UnitError,
     UnitErrorKind,
 )
-from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION, Subscription, matches_event_type
+from vendorfake.core.webhooks.models import (
+    SUBSCRIPTION_COLLECTION,
+    Subscription,
+    matches_event_type,
+    require_postable_target,
+)
 from vendorfake.square.config import WEBHOOK_SUBSCRIPTIONS_SCOPE
 from vendorfake.square.events import ORDER_CREATED, SQUARE_EVENT_TYPES
 from vendorfake.square.model.common import validate_body
@@ -170,6 +175,7 @@ class WebhooksSurface:
                 detail="event_types is required.",
                 field="subscription.event_types",
             )
+        require_postable_target(spec.notification_url, field="subscription.notification_url")
         entity = args.ctx.store.collection(SUBSCRIPTION_COLLECTION).insert(
             {
                 "id": self._deps.ids.subscription(),

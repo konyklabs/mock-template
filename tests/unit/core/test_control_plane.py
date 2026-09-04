@@ -1,4 +1,4 @@
-"""The control plane's thirty-three routes, asserted on shape rather than on 200.
+"""The control plane's thirty-four routes, asserted on shape rather than on 200.
 
 Every test here pins something a reviewer could reasonably disagree about: a
 path, a key name, an error kind, an ordering, or which of two plausible
@@ -59,7 +59,7 @@ REFERENCE_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/__unit/clock/advance"),
 )
 
-#: Nine the conformance design requires so that every check can be driven
+#: Ten the conformance design requires so that every check can be driven
 #: through a URL instead of an in-process object graph -- three of those closed
 #: measured holes: with no ``/__unit/auth`` no check could obtain a credential,
 #: so the whole authentication layer could be deleted and the suite stayed
@@ -78,6 +78,7 @@ ADDED_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/__unit/webhooks/emit"),
     ("POST", "/__unit/webhooks/sink"),
     ("GET", "/__unit/auth"),
+    ("GET", "/__unit/manifest"),
     ("POST", "/__unit/state/update"),
     ("POST", "/__unit/state/page"),
     ("GET", "/__unit/requests"),
@@ -159,13 +160,13 @@ def test_every_reference_path_is_present_byte_for_byte() -> None:
     assert missing == []
 
 
-def test_the_plane_is_exactly_the_twenty_one_plus_twelve_and_nothing_else() -> None:
+def test_the_plane_is_exactly_the_twenty_one_plus_thirteen_and_nothing_else() -> None:
     """A count, and then the set, because a count alone would pass if one route
     were dropped and an unrelated one added."""
     unit = _unit()
     control = {(r.method, r.path) for r in unit.routes if r.internal}
     assert control == set(REFERENCE_ROUTES) | set(ADDED_ROUTES)
-    assert len(control) == 33
+    assert len(control) == 34
 
 
 def test_every_control_route_is_internal_and_owns_the_control_capability() -> None:
@@ -211,6 +212,7 @@ def test_health_names_the_vendor_the_profile_and_the_uptime() -> None:
     assert body["vendor"] == "acme"
     assert body["profile"] == "test"
     assert isinstance(body["uptime_ms"], int)
+    assert isinstance(body["version"], str) and body["version"]
 
 
 def test_info_carries_all_eight_keys_the_conformance_suite_asserts_by_name() -> None:
@@ -1021,3 +1023,69 @@ def test_the_control_plane_survives_every_capability_being_switched_off() -> Non
     assert api.post("/__unit/capabilities", {"set": []}).status == 200
     assert api.get("/__unit/capabilities").status == 200
     assert api.post("/__unit/capabilities", {"enable": ["orders"]}).status == 200
+
+
+# ---------------------------------------------------------------------------
+# GET /__unit/manifest -- the world-neutral document
+# ---------------------------------------------------------------------------
+
+
+def test_the_manifest_publishes_the_same_credentials_as_the_auth_route() -> None:
+    """One helper builds both. A manifest carrying a credential `/__unit/auth`
+    would not offer -- or missing one it would -- is a consumer authenticating
+    against a document that disagrees with the unit that wrote it."""
+    api, _ = _api()
+    manifest = api.get("/__unit/manifest").json()
+    assert manifest["credentials"] == api.get("/__unit/auth").json()["credentials"]
+
+
+def test_the_manifest_lists_every_collection_ids_only_in_stored_order() -> None:
+    """Ids, not entities. The document is what a script needs to *address* the
+    unit; shipping whole entities would make it a state dump, and a script that
+    asserted against one would be asserting against a fake rather than against
+    the vendor's own API."""
+    api, unit = _api()
+    unit.context.store.collection("widgets").insert({"id": "w_2", "colour": "red"}, {})
+    unit.context.store.collection("widgets").insert({"id": "w_1", "colour": "blue"}, {})
+    ids = api.get("/__unit/manifest").json()["ids"]
+    assert ids["widgets"] == ["w_2", "w_1"]
+
+
+def test_the_manifest_collects_signature_keys_from_subscriber_collections_only() -> None:
+    """Matched on the collection's name -- vendors spell it `subscriptions`,
+    `webhooks`, `webhook_subscriptions` -- because a key on an unrelated entity
+    is not a key that signs a delivery. Deduplicated, since one key shared by
+    two subscribers is one key a receiver has to try."""
+    api, unit = _api()
+    store = unit.context.store
+    store.collection("subscriptions").insert({"id": "s_1", "signature_key": "shared"}, {})
+    store.collection("subscriptions").insert({"id": "s_2", "signature_key": "shared"}, {})
+    store.collection("webhook_endpoints").insert({"id": "e_1", "webhook_secret": "second"}, {})
+    store.collection("merchants").insert({"id": "m_1", "secret": "not-a-webhook-key"}, {})
+    keys = api.get("/__unit/manifest").json()["webhooks"]["signature_keys"]
+    assert keys == ["shared", "second"]
+
+
+def test_the_manifest_takes_its_base_url_from_the_host_that_was_asked() -> None:
+    """A unit behind a container port mapping does not know its own address, so
+    the only honest answer is where the caller reached it. Absent a Host header
+    the field is null rather than a guess a webhook URL would be built from."""
+    api, _ = _api()
+    reached = api.get("/__unit/manifest", headers={"host": "unit.internal:8080"}).json()
+    assert reached["base_url"] == "http://unit.internal:8080"
+    forwarded = api.get(
+        "/__unit/manifest",
+        headers={"host": "unit.example.com", "x-forwarded-proto": "https"},
+    ).json()
+    assert forwarded["base_url"] == "https://unit.example.com"
+    assert api.get("/__unit/manifest").json()["base_url"] is None
+
+
+def test_the_manifest_names_its_schema_and_the_unit_it_describes() -> None:
+    """`schema` is what a consumer branches on and what a hand-written
+    deployed-world manifest has to declare; without it a later shape is
+    indistinguishable from a malformed document."""
+    api, unit = _api()
+    manifest = api.get("/__unit/manifest").json()
+    assert manifest["schema"] == "vendorfake.manifest/1"
+    assert (manifest["vendor"], manifest["profile"]) == (unit.context.vendor.name, unit.context.config.profile)
