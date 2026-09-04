@@ -3,13 +3,14 @@
 Thin: it knows the seeded credentials and the version prefix, and seeds nothing
 itself.
 
-NO FIDELITY VALIDATION, unlike the Toast harness. That suite routes every
-response through ``vendorfake.fidelity``'s ``ValidatingClient`` so each one is
-checked against the vendor's published schema; this vendor's fidelity package
-is a stub in this slice of konyklabs/roadmap#94 (``fidelity/__init__.py`` says
-so), so there is no extract to validate against yet. Slice L3 fills it in and
-this harness gains the validating client then -- deliberately not before, so
-nothing here can claim a check it is not making.
+EVERY RESPONSE IS SCHEMA-VALIDATED, as the Toast and Square harnesses do it.
+The client below is ``vendorfake.fidelity``'s ``ValidatingClient`` over the
+committed extract of ``api-2026-07.yaml``, so each of this suite's several
+hundred calls is also a check that the body matches the vendor's published
+schema for that operation and status (D-006). Slice L3 of
+konyklabs/roadmap#94 added the extract; before it existed this harness used
+the plain client, deliberately, so that nothing here claimed a check it was
+not making.
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ from vendorfake import create_unit
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.transport.inprocess import InProcessClient, InProcessResponse, in_process
 from vendorfake.core.webhooks.sink import MemorySink
+from vendorfake.fidelity import Surface, load_declaration, load_extract
+from vendorfake.fidelity.validate import Ledger, ValidatingClient
 from vendorfake.lightspeed.entities import COL, TokenEntity
 from vendorfake.lightspeed.seed.constants import (
     SEED_ACCESS_TOKEN,
@@ -39,6 +42,14 @@ TOKEN_PATH = f"{TOKEN_PREFIX}/token"
 FORM = {"content-type": "application/x-www-form-urlencoded"}
 
 SEED_META = {"operation_id": "TestSeed", "seed": True}
+
+FIDELITY_ANCHOR = "vendorfake.lightspeed.fidelity"
+SURFACE = Surface(load_declaration(FIDELITY_ANCHOR), load_extract(FIDELITY_ANCHOR))
+LEDGER = Ledger()
+"""The extract is committed beside the declaration (``vendored: true``: the
+specification is published under Apache 2.0), so building this costs one file
+read and never the network -- unlike Toast, whose extract is cut from a fetch
+into a local cache."""
 
 #: Far enough out that no test's clock reaches it.
 NEVER_MS = 2**53
@@ -145,6 +156,21 @@ class Harness:
         return list(self.sink.received)
 
 
+def unvalidated(h: Harness) -> InProcessClient:
+    """The plain client over the same unit, for the ONE call this suite makes
+    that the vendor's own schema rejects.
+
+    ``GET /products?include_images=false`` is documented, and ``images`` and
+    ``skuImages`` are among ``Product``'s required members: the document
+    contradicts itself and a fake that honours the parameter cannot satisfy the
+    required list. Every use of this helper is a claim that the contradiction
+    is the vendor's, and each one is paired with a test that asserts the
+    violation happens -- see
+    ``test_include_images_false_answers_a_body_the_vendors_own_schema_rejects``.
+    """
+    return in_process(h.unit)
+
+
 def harness(profile: str = "full", **kwargs: Any) -> Iterator[Harness]:
     """Start a unit on ``profile``, yield it with the seeded bearer, stop it
     however the test ends.
@@ -161,7 +187,11 @@ def harness(profile: str = "full", **kwargs: Any) -> Iterator[Harness]:
     try:
         yield Harness(
             unit=unit,
-            api=in_process(unit),
+            # Lenient on an undeclared route, as the Toast harness is: a route
+            # the extract does not describe is counted and printed in capitals
+            # by `fidelity report`, which is where it should fail, rather than
+            # reddening every test that happens to touch it.
+            api=ValidatingClient(unit, SURFACE, LEDGER, strict_undeclared=False),
             auth={"authorization": f"Bearer {SEED_ACCESS_TOKEN}"},
             sink=sink,
         )

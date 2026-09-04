@@ -88,10 +88,25 @@ REQUIRED = (
     "vendorfake/lightspeed/profiles/orders-only.json",
     "vendorfake/lightspeed/profiles/chaos-demo.json",
     "vendorfake/lightspeed/seed/default.seed.json",
-    # The declaration is a stub in this slice of konyklabs/roadmap#94: it names
-    # the source and the Apache-2.0 licence and nothing else. `extract.json`,
-    # `pin.json` and `corpus/` are filled by slice L3 and join this list then.
+    # Lightspeed's extract IS committed (`vendored: true`): api-2026-07.yaml is
+    # published under Apache 2.0 (`info.license`), so a structural extract of it
+    # may live here and there is no fetch step before a check can run.
     "vendorfake/lightspeed/fidelity/declaration.json",
+    "vendorfake/lightspeed/fidelity/extract.json",
+    "vendorfake/lightspeed/fidelity/pin.json",
+    "vendorfake/lightspeed/fidelity/corpus/auth.token.authorization-code.json",
+    "vendorfake/lightspeed/fidelity/corpus/auth.token.refresh-rotation.json",
+    "vendorfake/lightspeed/fidelity/corpus/customers.status-codes.json",
+    "vendorfake/lightspeed/fidelity/corpus/inventory.bare-array.json",
+    "vendorfake/lightspeed/fidelity/corpus/pagination.forward-walk.json",
+    "vendorfake/lightspeed/fidelity/corpus/products.list.envelope.json",
+    "vendorfake/lightspeed/fidelity/corpus/ratelimit.headers-and-429.json",
+    "vendorfake/lightspeed/fidelity/corpus/registers.close.register-closure-event.json",
+    "vendorfake/lightspeed/fidelity/corpus/sales.create.inline-payments.json",
+    "vendorfake/lightspeed/fidelity/corpus/sales.payment-error.json",
+    "vendorfake/lightspeed/fidelity/corpus/webhooks.create.duplicate-409.json",
+    "vendorfake/lightspeed/fidelity/corpus/webhooks.delivery.signature-header.json",
+    "vendorfake/lightspeed/fidelity/corpus/webhooks.retry.schedule.json",
 )
 
 

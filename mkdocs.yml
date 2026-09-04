@@ -84,6 +84,8 @@ nav:
       - Fidelity: concepts/fidelity.md
       - Chaos rules and faults: concepts/chaos-rules-and-faults.md
       - Provenance labels: concepts/provenance-labels.md
+  - Vendors:
+      - Lightspeed Retail X-Series: vendors/lightspeed.md
   - Reference:
       - Square routes: reference/routes-square.md
       - Clover routes: reference/routes-clover.md

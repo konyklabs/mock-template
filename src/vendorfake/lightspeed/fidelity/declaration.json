@@ -8,12 +8,68 @@
       "label": "api-2026-07"
     }
   ],
+  "error_schema": "PaymentErrorResponse",
   "aliases": [],
-  "excused": [],
-  "deviations": [],
+  "excused": [
+    {
+      "method": "GET",
+      "path": "/connect",
+      "reason": "The authorization page. It lives on the fixed host secure.retail.lightspeed.app, is an interactive consent screen, and is documented in prose on the authorization page rather than as an operation in api-2026-07.yaml. This unit serves a stand-in at the documented path that approves automatically; its route summary says so."
+    },
+    {
+      "method": "POST",
+      "path": "/api/1.0/token",
+      "reason": "The token endpoint. It sits under a different version segment (/api/1.0) from the whole of api-2026-07.yaml, which describes only the resource API, and is documented in prose on the authorization page. Form-encoded request, JSON response, two grants."
+    }
+  ],
+  "deviations": [
+    {
+      "pointer": "/error",
+      "keyword": "type",
+      "pattern": "[A-Z][A-Za-z]*( [A-Z][A-Za-z]*)*",
+      "reason": "JUDGMENT, and the loudest one in this vendor. Lightspeed publishes no error envelope: of 373 component schemas exactly one is an error schema (PaymentErrorResponse, whose `error` is an OBJECT of code+message) and it is scoped to payments, most operations declare a 4xx with a bare description and no content, and the documentation site has no error-codes page. So this unit generalises the one error body the vendor does print verbatim -- the 429's {\"error\": \"Too Many Requests\", \"message\": \"Rate limiting enforced\"} -- to every refusal, and `error` is therefore the status's reason phrase as a STRING where PaymentErrorResponse types an object. Narrow on purpose: one keyword, one pointer, and a pattern that admits only a reason phrase. A payment refusal answers the declared object shape and is validated against it unexcused.",
+      "url": "https://x-series-api.lightspeedhq.com/docs/rate_limiting"
+    },
+    {
+      "pointer": "/error",
+      "keyword": "type",
+      "pattern": "A webhook with this type and URL already exists\\.",
+      "routes": [
+        "PUT /api/2026-07/webhooks/{webhookId}"
+      ],
+      "reason": "The Webhooks tag is the one place in api-2026-07.yaml that declares an error body for an operation this unit serves, and it declares ONE member: post-webhooks' 409 and the three /webhooks/{webhookId} 404s are all {\"error\": <string>}, with the 409's own description supplying the sentence. PUT /webhooks/{webhookId} refuses a duplicate type+url pair the same way its sibling POST does -- the uniqueness rule belongs to the pair, not to the verb -- but put-webhooks-id declares no 409, so the body falls to error_schema (PaymentErrorResponse, whose `error` is an object) and the declared one-member string is what fails. Excusing the sentence itself, on that one route, keeps the unit answering what the tag declares.",
+      "url": "https://x-series-api.lightspeedhq.com/openapi/api-2026-07.yaml"
+    }
+  ],
   "overrides": [],
   "stubs_accepted": [],
+  "annotations": [
+    {
+      "name": "scopes",
+      "select": "Requires: (.+?) scopes?\\s*$",
+      "item": "`([^`]+)`",
+      "reason": "Lightspeed states the scope an operation requires as a line of its description -- \"🔒 Requires: `products:write` scope\", or two backticked scopes and \"scopes\" for the three operations that need a pair -- and NOT as an OAuth2 security scheme: components.securitySchemes has one flat http/bearer scheme with no scopes at all, and the document's root security is [{\"bearerAuth\": []}]. The cut strips prose, so without this row the scope table in capabilities.py would be checkable against nothing."
+    }
+  ],
   "variables": {
-    "domain_prefix": "unit-lightspeed"
+    "domain_prefix": "unit-lightspeed",
+    "client_id": "unit-lightspeed-client-id",
+    "client_secret": "unit-lightspeed-client-secret",
+    "refresh_token": "seedfullscoperefreshtoken00000000000001A",
+    "access_token": "seedfullscopeaccesstoken000000000000001A",
+    "user_id": "1a000000-0000-1000-8000-000000000001",
+    "tax_id": "1a000000-0000-1000-8000-0000000000a1",
+    "outlet_main_id": "1a000000-0000-1000-8000-000000000101",
+    "register_main_id": "1a000000-0000-1000-8000-000000000201",
+    "register_second_id": "1a000000-0000-1000-8000-000000000202",
+    "payment_type_cash_id": "1a000000-0000-1000-8000-000000000301",
+    "payment_type_card_id": "1a000000-0000-1000-8000-000000000302",
+    "webhook_id": "1a000000-0000-1000-8000-000000000401",
+    "product_trail_mix_id": "1a000000-0000-1000-8000-000000000701",
+    "product_socks_id": "1a000000-0000-1000-8000-000000000702",
+    "customer_ada_id": "1a000000-0000-1000-8000-000000000911",
+    "sale_saved_id": "1a000000-0000-1000-8000-000000000a01",
+    "sale_closed_id": "1a000000-0000-1000-8000-000000000a02",
+    "webhook_url": "https://consumer.example/hooks/lightspeed"
   }
 }

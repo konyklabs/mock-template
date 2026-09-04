@@ -184,6 +184,38 @@
         "type": "string"
       }
     },
+    "annotations": {
+      "type": "array",
+      "description": "Machine-readable facts a vendor writes into operation prose (a required scope, say). The cutter strips prose, so each row lifts its fact out first and records it under x-vendorfake.annotations[name] keyed by route, where the extract's sha256 covers it and a vendor test can compare it against the unit's own table.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "select"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "select": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Regular expression searched (MULTILINE) in each modeled operation's description; group 1 is the text `item` reads."
+          },
+          "item": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Regular expression found repeatedly in select's group 1; group 1 of each match is one recorded value. Omitted means select's group 1 is the one value."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
     "stubs_accepted": {
       "type": "array",
       "items": {

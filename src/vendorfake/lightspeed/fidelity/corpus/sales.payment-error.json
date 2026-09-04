@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "id": "sales.payment-error",
+  "title": "A payment refusal answers PaymentErrorResponse: {\"error\": {\"code\": <int>, \"message\": <string>}}, the one error schema the document names",
+  "source": {
+    "url": "https://x-series-api.lightspeedhq.com/openapi/api-2026-07.yaml",
+    "fetched": "2026-09-04",
+    "provenance": "documented",
+    "note": "PaymentErrorResponse is the only error schema in the 373 components of api-2026-07.yaml: `error` is an OBJECT requiring an integer `code` and a string `message`. This case asserts that SHAPE and nothing about the code's value -- `code` is declared \"type: integer\" with no enum, no example and no range, the documentation site has no error-codes page, so every code this unit sends is JUDGMENT and lives in one table (lightspeed/model/error.py PaymentErrorCode). The status is JUDGMENT too: the schema carries none, and a closed register is the conflict this unit's error table gives an invalid transition. The rule it enforces is the register:open scope's own wording, \"Open a register to create sales and payments\"."
+  },
+  "routes": [
+    "POST /api/2026-07/sales"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "the second register is closed",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/registers/${vars.register_second_id}",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": {
+            "id": "${vars.register_second_id}",
+            "is_open": false
+          }
+        }
+      }
+    },
+    {
+      "name": "a payment taken at a closed register is refused in the declared shape",
+      "request": {
+        "method": "POST",
+        "path": "/api/2026-07/sales",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "state": "closed",
+          "source": {
+            "author_id": "${vars.user_id}",
+            "register_id": "${vars.register_second_id}"
+          },
+          "line_items": [
+            {
+              "product": {
+                "id": "${vars.product_socks_id}"
+              },
+              "quantity": 1,
+              "pricing": {
+                "price": 21.65
+              },
+              "tax": {
+                "id": "${vars.tax_id}",
+                "amount": 3.25
+              }
+            }
+          ],
+          "payments": [
+            {
+              "type": {
+                "config_id": "${vars.payment_type_card_id}"
+              },
+              "amount": 24.9
+            }
+          ]
+        }
+      },
+      "expect": {
+        "status": 409,
+        "body": {
+          "error": {
+            "code": "${re:[0-9]+}",
+            "message": "${re:.+}"
+          }
+        },
+        "absent": [
+          "/message"
+        ]
+      }
+    }
+  ]
+}

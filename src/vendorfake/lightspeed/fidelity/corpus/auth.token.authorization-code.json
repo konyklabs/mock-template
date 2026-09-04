@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "id": "auth.token.authorization-code",
+  "title": "The authorize redirect carries code and state, and POST /api/1.0/token exchanges the code for the seven documented fields",
+  "source": {
+    "url": "https://x-series-api.lightspeedhq.com/docs/authorization",
+    "fetched": "2026-09-04",
+    "provenance": "documented",
+    "note": "The page documents the authorize URL (response_type, client_id, redirect_uri, state, scope), the five exchange parameters (code, client_id, client_secret, grant_type, redirect_uri) sent form-encoded, and the response's fields: access_token, token_type Bearer, expires (a Unix timestamp), expires_in (seconds), refresh_token, domain_prefix, scope. The token endpoint is NOT in api-2026-07.yaml, which is why the declaration excuses it. The code value below is not documented -- it is the one this unit mints on a fresh unit, and it is stable because conformance C06 and C22 require the seeded scenario and its id streams to be deterministic across two units and two processes."
+  },
+  "routes": [
+    "GET /connect",
+    "POST /api/1.0/token"
+  ],
+  "profile": "oauth-only",
+  "steps": [
+    {
+      "name": "authorize",
+      "request": {
+        "method": "GET",
+        "path": "/connect",
+        "query": {
+          "response_type": "code",
+          "client_id": "${vars.client_id}",
+          "redirect_uri": "https://consumer.example/callback",
+          "state": "opaque-consumer-state",
+          "scope": "products:read"
+        }
+      },
+      "expect": {
+        "status": 302,
+        "headers": {
+          "location": "${re:https://consumer\\.example/callback\\?code=[A-Za-z0-9]+&state=opaque-consumer-state}"
+        }
+      }
+    },
+    {
+      "name": "exchange the code",
+      "request": {
+        "method": "POST",
+        "path": "/api/1.0/token",
+        "headers": {
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        "body": "grant_type=authorization_code&code=v6a3M8gVkAyYJtYMedyNgYwu3jGzty2q&client_id=${vars.client_id}&client_secret=${vars.client_secret}&redirect_uri=https%3A%2F%2Fconsumer.example%2Fcallback"
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "access_token": "${re:[A-Za-z0-9]+}",
+          "token_type": "Bearer",
+          "expires": "${re:[0-9]+}",
+          "expires_in": "${re:[0-9]+}",
+          "refresh_token": "${re:[A-Za-z0-9]+}",
+          "domain_prefix": "${vars.domain_prefix}",
+          "scope": "products:read"
+        }
+      }
+    }
+  ]
+}

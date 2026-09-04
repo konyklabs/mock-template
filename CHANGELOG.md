@@ -4,111 +4,81 @@
 
 ### Features
 
-* **lightspeed:** a fourth vendor -- Lightspeed Retail X-Series, API 2026-07
-  (konyklabs/roadmap#94). This is the foundation slice: the token endpoint
-  (`POST /api/1.0/token`) with both documented grants and the rotation that
-  retires the consumed refresh token *and* revokes the access token it was
-  returned with; a stand-in `GET /connect` issuing the single-use code; the
-  retailer, outlets, registers and payment types; the five documented webhook
-  operations with the 409 on a duplicate type-and-url pair; and delivery of
-  `register_closure.create` end to end. Products, inventory and customers are
-  in issue #94's scoped surface and arrive in a sibling slice.
+* **lightspeed:** a fourth vendor -- **Lightspeed Retail X-Series, API
+  2026-07** (konyklabs/roadmap#94). Thirty-seven routes on one retailer: the
+  token endpoint (`POST /api/1.0/token`) with both documented grants, a
+  stand-in `GET /connect`, the retailer, outlets, registers and payment types,
+  products with inline variants, inventory, customers, sales, and the five
+  documented webhook operations. `vendorfake vendors` now answers `clover,
+  lightspeed, square, toast`; six profiles, one seeded scenario, 427 unit
+  tests, and the conformance matrix green on every profile and both
+  transports.
 
-  Three cross-cutting mechanics come with it, all vendor-side because the core
-  has no seam for any of them:
+  **Rotation that revokes.** A refresh call retires the consumed refresh token
+  *and* revokes the access token that was returned with it, which is both
+  halves of what the authorization page documents. A consumer that keeps the
+  pre-refresh bearer fails here, which is the defect this endpoint exists to
+  catch.
 
-  - the **retailer-global version counter** -- one monotonically increasing
-    integer per retailer across every resource type, stamped on every entity
-    and bumped by every mutation -- and the list envelope built on it
-    (`{"data": [...], "version": {"max": …, "min": …}}`, ascending by version,
-    with `after`/`before`/`page_size`/`deleted`). The store's own `version` is
-    per-entity optimistic concurrency and its `paginate` is an opaque expiring
-    cursor; both are the right model for a different vendor.
-  - the **documented fixed-window rate limiter**: `300 × registers + 50` per
-    retailer per application over five minutes, `X-RateLimit-Limit` and
-    `X-RateLimit-Remaining` on every response, and a 429 whose `Retry-After`
-    is an RFC 1123 HTTP-date rather than delta-seconds. It is vendor
-    behaviour, not chaos, so no profile switches it off; the quota is a config
-    knob instead.
-  - **form-encoded webhook delivery**: `payload=<JSON>` plus `domain_prefix`
-    and `environment`, signed `X-Signature: signature=<hex>,algorithm=HMAC-SHA256`.
+  **Three cross-cutting mechanics, all vendor-side because the core has no
+  seam for any of them.** The retailer-global **version counter** -- one
+  monotonically increasing integer per retailer across every resource type --
+  and the list envelope built on it (`{"data": [...], "version": {"max": …,
+  "min": …}}`, ascending, with `after`/`before`/`page_size`/`deleted`). The
+  documented fixed-window **rate limiter**: `300 × registers + 50` per five
+  minutes, `X-RateLimit-Limit` and `X-RateLimit-Remaining` on every response,
+  and a 429 whose `Retry-After` is an RFC 1123 HTTP-date rather than
+  delta-seconds -- vendor behaviour, not chaos, so no profile switches it off.
+  And **form-encoded webhook delivery**: `payload=<JSON>` plus `domain_prefix`
+  and `environment`, signed `X-Signature:
+  signature=<hex>,algorithm=HMAC-SHA256`, retried on the documented
+  twenty-attempt ladder inside 48 hours.
 
-* **lightspeed:** products, inventory and customers -- the second slice of
-  konyklabs/roadmap#94, seventeen routes across three new capabilities. Every
-  write fires the documented webhook (`product.update`, `inventory.update`,
-  `customer.update`) through the journal, and both deletes are SOFT, which is
-  what makes the `deleted=true` list parameter mean anything and what lets a
-  delete carry its own tombstone to a subscriber.
+  **Sales carry their payments inline**, as the specification declares them:
+  there is no payment sub-resource anywhere in this API version. With them a
+  published `parked | pending | voided | closed` state machine (`closed` and
+  `voided` terminal), totals computed from the line items and never taken from
+  the request, a return action, a close that draws the outlet's stock, and
+  payment refusals in `PaymentErrorResponse` -- the only error schema the
+  specification names.
 
-  Three of this API's own inconsistencies are reproduced rather than smoothed
-  over, because a consumer will meet all three:
+  **Four of the vendor's own inconsistencies are reproduced rather than
+  smoothed over**, because a consumer will meet all four: money is a JSON
+  number on the catalogue and a JSON string on the register surface; the four
+  inventory reads answer a bare array rather than the envelope, two of them as
+  POSTs whose paging travels in the body; `POST /customers` is a 201 and its
+  delete a 204 while `POST /products` is a 200 answering an array of ids and
+  its delete an empty 200; and `GET /stock_adjustments` sits behind
+  `inventory:write`, a read gated on a write scope, which is the operation's
+  own annotation.
 
-  - **money is a JSON number here and a JSON string on the register surface.**
-    `Product.price_excluding_tax` is `type: number` and the examples print
-    `110`, `126.5` and `2.63158`; `RegisterClosePaymentType.total` is a string
-    and prints `"255.00"`. The store holds decimal text either way, so a price
-    survives a round trip exactly (`model/scalars.py`).
-  - **the four inventory reads answer a bare JSON array**, not the
-    `{"data": …, "version": …}` envelope the rest of the API uses -- and two of
-    the four are POSTs whose query travels in the request body under parameter
-    names of their own (`size`, `offset`). The adjustment list is the one that
-    does answer the envelope.
-  - **the status codes differ per tag.** `POST /customers` is a 201 and
-    `DELETE /customers/{id}` a 204; `POST /products` is a 200 answering an
-    ARRAY of ids (because inline `variants` create one child product each) and
-    `DELETE /products/{id}` an empty 200.
+  **Fidelity (D-006), and the first vendored extract.** `api-2026-07.yaml` is
+  published under Apache 2.0, so the scoped, prose-stripped `extract.json` is
+  committed beside the declaration and `pin.json` ties it to the upstream bytes
+  (sha256 `5660c174…`, 519 895 bytes, version `2026-07`). Both fidelity steps
+  therefore run offline -- there is no `fetch` to pay for, unlike Toast -- and
+  `tools/self-test.sh` runs them on `--quick` as well as on a full run. The
+  corpus is thirteen cases, every one `provenance: documented`. Every response
+  the unit's own test suite produces is now schema-validated too, through the
+  same validating client the Toast and Square suites use.
 
-  Also: the documented mutually-exclusive price pair on `POST /products`
-  (sending both is the one documented 422 on this surface, and the other is
-  derived at a `product_tax_rate` knob), the documented sign rules on
-  `StockAdjustmentReason`, an all-or-nothing 1-1000 adjustment batch, and
-  `GET /stock_adjustments` gated on `inventory:write` -- a read behind a write
-  scope, which is the vendor's own annotation.
+  **Documentation**: `docs/vendors/lightspeed.md` -- the first per-vendor page
+  -- with transcripts taken from a served unit, the inconsistencies above, the
+  full JUDGMENT list with the page that is silent about each, the capability
+  table, and the deferred surface (konyklabs/roadmap#107). Consumer examples
+  for both suites: `examples/pytest-consumer/test_lightspeed.py` and
+  `examples/vitest-consumer/tests/lightspeed.test.ts`, the latter with pinned
+  parity vectors for the form-encoded HMAC signer.
 
-  The scenario gains six products in four families (one of them a parent with
-  two variants and no stock of its own, one seeded inactive), ten inventory
-  rows, two custom adjustment reasons, two logged adjustments, a customer group
-  and three customers -- the catalogue the sales below are rung up against.
-
-* **lightspeed:** the Sales tag -- all five documented operations
-  (`GET /sales`, `POST /sales`, `GET /sales/{sale_id}`, `PUT /sales/{sale_id}`,
-  `POST /sales/{sale_id}/actions/return`), with line items and payments inline
-  on the sale as the specification declares them (there is no
-  `/sales/{sale_id}/payments` sub-resource in this API version). With it:
-
-  - the **sale lifecycle** as a declared state machine -- the schema's four
-    `state` values `parked | pending | voided | closed`, with `closed` and
-    `voided` terminal, so a `PUT` against a completed sale is a 409 and a
-    return is what corrects it. Published at `GET /__unit/machines`, enforced
-    by the core, and the reason conformance C13 now runs on this vendor.
-  - **totals computed from the line items**, never taken from the request:
-    `SaleTotals` is absent from `SaleRequestBase`, so a caller cannot declare
-    one. Sale money is a JSON **number** (`format: double`) while the register
-    close totals are decimal **strings** -- both the vendor's, and a consumer
-    that assumes one shape across the API fails on the other.
-  - **payment refusals in the vendor's own `PaymentErrorResponse` shape**,
-    `{"error": {"code": <int>, "message": <str>}}` -- the only error schema the
-    specification names. A payment on a register that is not open is refused;
-    the integer codes are this project's, since Lightspeed publishes none.
-  - `sale.update` on every create, update and return -- twice for a return,
-    which is one of the cases the webhooks page means by "may fire multiple
-    times" -- and `inventory.update` for each stock record a closing sale
-    moves.
-  - the **register payments summary now aggregates real sales**: a closure's
-    totals are the payments the register took while it was open, summed per
-    payment type, plus whatever the close request declared. The response
-    schema is unchanged.
-  - `POST /sales` carries this vendor's published `example_body`, moved off
-    the register close action. Closing an already-closed register is a 409, so
-    the example could not be driven twice and conformance C18 -- which drives
-    it three times with the webhooks capability on, off and on again -- failed
-    on every webhook-enabled profile. It passes now.
-  - the shipped scenario gains three sales (parked, closed with a card
-    payment, and a layby), rung up on the products and customers above at
-    those products' own prices; `LightspeedSeed` exposes each id. A product
-    that tracks inventory but has no record at the sale's outlet is skipped
-    silently on close: the record's absence is a fact about the scenario, not
-    an error the caller made.
+* **fidelity:** a declaration may now name **prose annotations** --
+  `{"name", "select", "item"}` rows whose regular expressions the cutter runs
+  over each modeled operation's `description` *before* it strips it, recording
+  what they found under `x-vendorfake.annotations` in the extract, where the
+  pin's sha256 covers it. For a vendor that states a required scope as a line
+  of prose rather than as an OAuth2 security scheme, that is the difference
+  between a scope table checked against the document and one checked against
+  nothing. A declaration that names no annotation gets a byte-identical cut,
+  so no existing extract or pin moves.
 
 * **core:** `vendorfake.core.webhooks.models.BodyEncodingSigner` -- an
   optional, structurally discovered protocol (the same shape as

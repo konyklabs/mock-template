@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "id": "webhooks.retry.schedule",
+  "title": "The delivery timeout is 5 seconds and the schedule allows twenty attempts, the documented bound, inside 48 hours",
+  "source": {
+    "url": "https://x-series-api.lightspeedhq.com/docs/webhooks",
+    "fetched": "2026-09-04",
+    "provenance": "documented",
+    "note": "The page gives four numbers and one exclusion: a subscriber has \"5 seconds to respond with a 2xx response\", delivery is attempted \"up to 20 times over 48h\", the backoff is \"exponential\" with no formula or intervals given, and \"3xx and 4xx will not trigger retries\". Nineteen intervals separate twenty attempts, which is what the length assertion below pins; the interval VALUES are JUDGMENT (a doubling ladder from 30 seconds, capped at four hours, summing to 44h15m -- lightspeed/retry.py, checked at import against the 48-hour bound) and are deliberately not asserted here. The 3xx/4xx exclusion is documented and NOT reproduced: the core dispatcher retries every non-2xx outcome and offers a vendor no hook to say otherwise (konyklabs/roadmap#40), which docs/vendors/lightspeed.md records as a known deviation."
+  },
+  "profile": "full",
+  "steps": [
+    {
+      "name": "the published retry contract",
+      "request": {
+        "method": "GET",
+        "path": "/__unit/info"
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "webhooks": {
+            "enabled": true,
+            "retry": {
+              "timeout_ms": 5000,
+              "schedule_ms": [
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}",
+                "${re:[0-9]+}"
+              ]
+            }
+          }
+        },
+        "absent": [
+          "/webhooks/retry/schedule_ms/19"
+        ]
+      }
+    }
+  ]
+}

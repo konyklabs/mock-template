@@ -56,3 +56,10 @@ def h() -> Iterator[Harness]:
 def virtual() -> Iterator[Harness]:
     """A unit on a virtual clock, so a test can advance time deliberately."""
     yield from harness(env={"VENDORFAKE_CLOCK": "virtual", "VENDORFAKE_CLOCK_START": CLOCK_START})
+
+
+def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: Any) -> None:
+    """One line: how many responses the Lightspeed suite validated against the spec."""
+    from tests.unit.lightspeed.harness import LEDGER
+
+    terminalreporter.write_line(f"lightspeed {LEDGER.summary()}")

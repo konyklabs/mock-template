@@ -9,7 +9,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from tests.unit.lightspeed.harness import Harness
+import pytest
+
+from tests.unit.lightspeed.harness import Harness, unvalidated
+from vendorfake.fidelity.validate import FidelityViolation
 from vendorfake.lightspeed.entities import COL
 from vendorfake.lightspeed.model.product import IMAGE_PLACEHOLDER_THUMB, IMAGE_PLACEHOLDER_URL
 from vendorfake.lightspeed.seed import constants as c
@@ -142,8 +145,35 @@ def test_include_images_false_drops_the_four_image_members(h: Harness) -> None:
     with_images = h.get(h.path(f"{PRODUCTS}/{c.SEED_PRODUCT_SOCKS_ID}")).json()["data"]
     assert with_images["image_url"] == IMAGE_PLACEHOLDER_URL
     assert with_images["image_thumbnail_url"] == IMAGE_PLACEHOLDER_THUMB
-    without = h.get(h.path(f"{PRODUCTS}/{c.SEED_PRODUCT_SOCKS_ID}"), query={"include_images": "false"}).json()["data"]
+    # The plain client, deliberately: see the next test, which is the reason.
+    answered = unvalidated(h).get(
+        h.path(f"{PRODUCTS}/{c.SEED_PRODUCT_SOCKS_ID}"), query={"include_images": "false"}, headers=h.auth
+    )
+    without = answered.json()["data"]
     assert not {"images", "skuImages", "image_url", "image_thumbnail_url"} & set(without)
+
+
+def test_include_images_false_answers_a_body_the_vendors_own_schema_rejects(h: Harness) -> None:
+    """A CONTRADICTION IN THE VENDOR'S OWN DOCUMENT, pinned rather than hidden.
+
+    ``include_images`` is documented ("Whether to include product image fields
+    in the response. Defaults to true.") and ``Product`` lists ``images`` and
+    ``skuImages`` among its twenty-one REQUIRED members. Both cannot hold. This
+    unit follows the parameter, because a parameter that changes nothing is a
+    worse fake than a body that fails a required list the real API must fail
+    too -- and this test is what says so out loud, so that a future change to
+    either side is a red test rather than a silent drift.
+
+    The declaration cannot carry this as a ``deviation``: a deviation matches
+    one keyword against one scalar instance, and a ``required`` failure's
+    instance is the whole object. So the record is here, in
+    ``docs/vendors/lightspeed.md``, and in the fact that every OTHER response
+    this suite makes goes through the validating client.
+    """
+    with pytest.raises(FidelityViolation) as raised:
+        h.get(h.path(f"{PRODUCTS}/{c.SEED_PRODUCT_SOCKS_ID}"), query={"include_images": "false"})
+    assert "'images' is a required property" in str(raised.value)
+    assert "'skuImages' is a required property" in str(raised.value)
 
 
 # -- one product -------------------------------------------------------------

@@ -118,6 +118,28 @@ export const clover = {
  * this suite's to know: the restaurant comes from `/__unit/auth`, the menu and
  * configuration ids from the menu and the configuration lists.
  */
+/**
+ * Lightspeed's ids ARE this suite's to know: they are the seeded scenario's,
+ * documented on the Lightspeed page and stable across units by the same
+ * determinism contract every other vendor's are. The one thing not listed is a
+ * bearer -- the tests read a full-scope credential off `/__unit/auth`, because
+ * a token is minted and a seeded id is not.
+ */
+export const lightspeed = {
+  clientId: "unit-lightspeed-client-id",
+  clientSecret: "unit-lightspeed-client-secret",
+  redirectUri: "https://consumer.example/callback",
+  domainPrefix: "unit-lightspeed",
+  cashierUserId: "1a000000-0000-1000-8000-000000000001",
+  taxId: "1a000000-0000-1000-8000-0000000000a1",
+  outletMainId: "1a000000-0000-1000-8000-000000000101",
+  registerMainId: "1a000000-0000-1000-8000-000000000201",
+  registerSecondId: "1a000000-0000-1000-8000-000000000202",
+  paymentTypeCashId: "1a000000-0000-1000-8000-000000000301",
+  productTrailMixId: "1a000000-0000-1000-8000-000000000701",
+  customerAdaId: "1a000000-0000-1000-8000-000000000911",
+};
+
 export const toast = {
   clientId: "unit-toast-client-id",
   clientSecret: "unit-toast-client-secret",

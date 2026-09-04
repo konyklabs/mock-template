@@ -324,6 +324,7 @@ def populate(
         fetched=fetched or _dt.date.today().isoformat(),
         extension_map=declaration.extension_map,
         error_schema=declaration.error_schema,
+        annotations=declaration.annotations,
     )
     drift: list[DriftRow] = []
     for row in document["x-vendorfake"]["sources"]:

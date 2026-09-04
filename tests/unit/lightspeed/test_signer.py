@@ -131,3 +131,42 @@ def test_describe_states_both_judgment_calls() -> None:
     assert "JUDGMENT" in described["payload_provenance"]
     assert "JUDGMENT" in described["encoding_provenance"]
     assert described["reference"].startswith("https://x-series-api.lightspeedhq.com/")
+
+
+# ---------------------------------------------------------------------------
+# Cross-language parity, pinned as literals.
+# ---------------------------------------------------------------------------
+
+PARITY_VECTORS = (
+    # (the exact bytes signed, the hex digest under SECRET)
+    (BODY, "ffd4b298008c45ecd13f69c0239aa15fe7612ab480d36fe158c5f9f882c15e02"),
+    ("", "aa81478116f860a004add86213a9c206e42009d4a11575f044a9c18f7715f737"),
+    ("payload=%7B%22n%22%3A%22caf%C3%A9%22%7D", "f76dfad7447259b5e6e70ad7d2241e1c2b6a6dd19588a78e36212bd4cdfde3e1"),
+    ('{"a":1}', "44e095ac177198ba199189fe729f31162cc59f85df33e1e09613980c98a200a6"),
+)
+"""Literal digests, not recomputed ones.
+
+`examples/vitest-consumer/tests/lightspeed.test.ts` pins the same four against
+its own `node:crypto` implementation. A test that recomputes the answer with
+the same library it is testing agrees with itself whatever either side does;
+these are the only assertion here that a second language can disagree with,
+which is the point of them -- the same guard the Toast signer grew after
+konyklabs/vendorfake#49. The third vector is percent-encoded UTF-8, so a
+client that decoded the body before hashing gets a different digest and finds
+out here.
+"""
+
+
+def test_the_pinned_parity_vectors_are_what_this_scheme_produces() -> None:
+    assert [lightspeed_signature(SECRET, body) for body, _ in PARITY_VECTORS] == [
+        digest for _, digest in PARITY_VECTORS
+    ]
+
+
+def test_the_last_parity_vector_is_the_other_readings_answer_for_the_first() -> None:
+    """The two readings of "the webhook request body" on one delivery, side by
+    side: over the raw form bytes (vector 1) and over the `payload` field's
+    JSON alone (vector 4). A consumer whose HMAC does not match should try the
+    second before assuming its own code is wrong."""
+    assert lightspeed_signature_over_payload(SECRET, BODY) == PARITY_VECTORS[3][1]
+    assert lightspeed_signature(SECRET, BODY) != lightspeed_signature_over_payload(SECRET, BODY)

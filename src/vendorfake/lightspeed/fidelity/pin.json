@@ -1,0 +1,13 @@
+{
+  "extract_sha256": "f909dea92f7300c43c099bb6b954ea6e3134918044a75fd14d5fe72b210f4041",
+  "schema": 1,
+  "sources": [
+    {
+      "bytes": 519895,
+      "fetched": "2026-09-04",
+      "sha256": "5660c17452a2f678beaa6b611167c3164469ad405ba63dc391c366e1f0d5b6af",
+      "url": "https://x-series-api.lightspeedhq.com/openapi/api-2026-07.yaml",
+      "version": "2026-07"
+    }
+  ]
+}

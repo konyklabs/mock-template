@@ -1,0 +1,93 @@
+{
+  "schema": 1,
+  "id": "registers.close.register-closure-event",
+  "title": "Closing a register fires register_closure.create, and the closure it synthesises is what the payments summary then reports",
+  "source": {
+    "url": "https://x-series-api.lightspeedhq.com/docs/webhooks",
+    "fetched": "2026-09-04",
+    "provenance": "documented",
+    "note": "The webhooks page lists register_closure.create as one of the seven event types and says it \"fires every register close\". There is NO register-closure resource anywhere in the 135 paths of api-2026-07.yaml, so the closure a subscriber is told about can only be read back through GET /registers/{register_id}/payments_summary, whose own RegisterPaymentsSummary schema names register_closure_id, register_closure_sequence_number and register_open_time. The drain step is this project's control plane, not the vendor's: delivery is asynchronous and a case has to wait for it."
+  },
+  "routes": [
+    "PUT /api/2026-07/registers/{register_id}/actions/close",
+    "GET /api/2026-07/registers/{register_id}/payments_summary"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "close the main register",
+      "request": {
+        "method": "PUT",
+        "path": "/api/2026-07/registers/${vars.register_main_id}/actions/close",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {}
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": {
+            "id": "${vars.register_main_id}",
+            "is_open": false
+          }
+        }
+      }
+    },
+    {
+      "name": "wait for the delivery",
+      "request": {
+        "method": "POST",
+        "path": "/__unit/webhooks/drain",
+        "body": {}
+      },
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "name": "one register_closure.create went to the subscriber",
+      "request": {
+        "method": "GET",
+        "path": "/__unit/webhooks/deliveries"
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "count": 1,
+          "deliveries": [
+            {
+              "event_type": "register_closure.create",
+              "url": "${vars.webhook_url}",
+              "subscription_id": "${vars.webhook_id}",
+              "status": "delivered"
+            }
+          ]
+        }
+      },
+      "capture": {
+        "closure_id": "/deliveries/0/entity_id"
+      }
+    },
+    {
+      "name": "the payments summary reports that same closure",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/registers/${vars.register_main_id}/payments_summary",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": {
+            "register_closure_id": "${cap.closure_id}",
+            "register_closure_sequence_number": 1,
+            "register_open_time": "${re:[0-9T:Z.-]+}"
+          }
+        }
+      }
+    }
+  ]
+}

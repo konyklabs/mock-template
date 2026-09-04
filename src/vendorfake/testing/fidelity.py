@@ -65,10 +65,9 @@ def lightspeed_target() -> FidelityTarget:
     under Apache 2.0, so a structural extract may be committed and no ``fetch``
     step is needed.
 
-    The declaration is a stub in this slice of konyklabs/roadmap#94 -- it names
-    the source and the licence and nothing else -- so ``pin --check`` and
-    ``report`` report the missing extract rather than a false pass until slice
-    L3 fills them in."""
+    Both fidelity steps therefore run offline for this vendor: there is no
+    ``fetch`` to pay for, and ``pin --check --offline`` compares a committed
+    ``extract.json`` against a committed ``pin.json``."""
     return FidelityTarget(
         name=_LIGHTSPEED,
         anchor=_LIGHTSPEED_ANCHOR,

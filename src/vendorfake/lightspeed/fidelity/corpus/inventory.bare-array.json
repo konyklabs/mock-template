@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "id": "inventory.bare-array",
+  "title": "The inventory reads answer a BARE array, not the data/version envelope, and two of them take their paging in a POST body",
+  "source": {
+    "url": "https://x-series-api.lightspeedhq.com/openapi/api-2026-07.yaml",
+    "fetched": "2026-09-04",
+    "provenance": "documented",
+    "note": "The vendor's own inconsistency, reproduced rather than smoothed over. ListInventoryRecords and ListInventoryLevels are POSTs whose 200 is declared as {\"type\": \"array\", \"items\": Inventory / InventoryLevel} -- no `data` wrapper and no `version` pair, unlike every other list on this API -- and their query travels in the request body under names of their own (`size`, `offset`) rather than as page_size/after query parameters. GET /stock_adjustments, on the same tag, DOES answer the envelope (StockAdjustmentCollection). A consumer that wrote one list walker for this API discovers that here."
+  },
+  "routes": [
+    "POST /api/2026-07/inventory",
+    "GET /api/2026-07/stock_adjustments"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "the inventory records are a bare array",
+      "request": {
+        "method": "POST",
+        "path": "/api/2026-07/inventory",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "size": 2
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": [
+          {
+            "product_id": "${vars.product_trail_mix_id}",
+            "outlet_id": "${vars.outlet_main_id}",
+            "current_inventory_level": "${re:-?[0-9.]+}"
+          },
+          "${any}"
+        ]
+      }
+    },
+    {
+      "name": "and the same tag's stock-adjustment log is the envelope",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/stock_adjustments",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": [
+            "${any}",
+            "${any}"
+          ],
+          "version": {
+            "max": "${re:[0-9]+}",
+            "min": "${re:[0-9]+}"
+          }
+        }
+      }
+    }
+  ]
+}

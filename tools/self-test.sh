@@ -77,15 +77,11 @@ TARGETS=(
 FIDELITY_TARGETS=(
   "square=vendorfake.testing.fidelity:square_target"
   "toast=vendorfake.testing.fidelity:toast_target"
-  # lightspeed's target exists (vendorfake.testing.fidelity:lightspeed_target)
-  # and its declaration names the source and the Apache-2.0 licence, but
-  # `extract.json`, `pin.json` and `corpus/` are filled by slice L3 of
-  # konyklabs/roadmap#94. Listing it here now would run `pin --check` and
-  # `report` against a package that has neither, which fails on every run --
-  # including `--quick`, since the skip above only covers fetch targets. The
-  # line is here, commented, rather than absent: L3 uncomments it in the same
-  # change that adds the files, and the diff says so.
-  # "lightspeed=vendorfake.testing.fidelity:lightspeed_target"
+  # lightspeed is deliberately NOT in FIDELITY_FETCH_TARGETS below: its extract
+  # is committed (`vendored: true` -- api-2026-07.yaml is published under
+  # Apache 2.0), so both steps run offline, on `--quick` as well as on a full
+  # run, and neither depends on the vendor's site answering.
+  "lightspeed=vendorfake.testing.fidelity:lightspeed_target"
 )
 FIDELITY_FETCH_TARGETS=(
   "toast=vendorfake.testing.fidelity:toast_target"

@@ -35,6 +35,7 @@ __all__ = [
     "EXTRACT_FILE",
     "PIN_FILE",
     "Alias",
+    "Annotation",
     "Classified",
     "Deviation",
     "Excuse",
@@ -237,6 +238,63 @@ def _pointer_matches(want: Sequence[str], have: Sequence[str]) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
+class Annotation:
+    """A machine-readable fact a vendor writes into operation *prose*.
+
+    Some vendors state a rule the OpenAPI document has no keyword for -- the
+    scope an operation requires, written as a line in its ``description``
+    rather than as a ``security`` entry. The cutter strips prose, so the fact
+    would be gone from the extract and the unit's own table would be the only
+    statement of it, checkable against nothing.
+
+    This row makes the fact survive the cut, **as data and without naming a
+    vendor**: ``select`` is a regular expression run over each modeled
+    operation's ``description`` (multiline), and ``item`` -- when given -- is
+    run repeatedly over ``select``'s first group to yield the individual
+    values. The result lands under ``x-vendorfake.annotations[name]`` keyed by
+    route, so it is covered by the extract's own sha256 and a vendor test can
+    compare its route table against it. A vendor that declares none gets a cut
+    that is byte-identical to the one it got before this existed.
+    """
+
+    name: str
+    select: str
+    item: str | None = None
+    reason: str = ""
+
+    @classmethod
+    def of(cls, row: Mapping[str, Any]) -> Annotation:
+        name = str(row["name"])
+        select, item = str(row["select"]), row.get("item")
+        for label, pattern in (("select", select), ("item", item)):
+            if pattern is None:
+                continue
+            try:
+                re.compile(str(pattern))
+            except re.error as exc:
+                raise ValueError(
+                    f"annotation {name!r}: {label} {pattern!r} is not a regular expression: {exc}"
+                ) from exc
+        if re.compile(select).groups < 1:
+            raise ValueError(f"annotation {name!r}: select must capture one group -- the text `item` is read from")
+        if item is not None and re.compile(str(item)).groups < 1:
+            raise ValueError(f"annotation {name!r}: item must capture one group -- the value recorded")
+        return cls(
+            name=name, select=select, item=None if item is None else str(item), reason=str(row.get("reason", ""))
+        )
+
+    def read(self, description: str) -> tuple[str, ...]:
+        """The values this annotation finds in one operation's prose, in order."""
+        found = re.search(self.select, description, re.MULTILINE)
+        if found is None:
+            return ()
+        text = found.group(1)
+        if self.item is None:
+            return (text,)
+        return tuple(re.findall(self.item, text))
+
+
+@dataclass(frozen=True, slots=True)
 class Override:
     """A route whose documented response shape is not the one its spec declares.
 
@@ -307,6 +365,10 @@ class FidelityDeclaration:
     #: Values a corpus case may interpolate as ``${vars.<name>}`` -- seeded ids
     #: the vendor's scenario fixes, so a case can name them without a lookup.
     variables: Mapping[str, str] = field(default_factory=dict)
+    #: Machine-readable facts to lift out of operation prose before it is
+    #: stripped (see :class:`Annotation`). Empty for every vendor that does
+    #: not declare one, and the cut is then exactly what it always was.
+    annotations: tuple[Annotation, ...] = ()
 
     @classmethod
     def of(cls, anchor: str, doc: Mapping[str, Any]) -> FidelityDeclaration:
@@ -336,6 +398,7 @@ class FidelityDeclaration:
             error_schema=None if doc.get("error_schema") is None else str(doc["error_schema"]),
             extension_map={str(k): str(v) for k, v in dict(doc.get("extension_map", {})).items()},
             variables={str(k): str(v) for k, v in dict(doc.get("variables", {})).items()},
+            annotations=tuple(Annotation.of(row) for row in doc.get("annotations", ())),
         )
 
     def alias_for(self, method: str, path: str) -> Alias | None:
@@ -430,6 +493,16 @@ class Extract:
         """The ``x-vendorfake`` block: upstream pins, stubbed refs, stripped keys."""
         meta = self.document.get("x-vendorfake", {})
         return meta if isinstance(meta, Mapping) else {}
+
+    def annotations(self, name: str) -> Mapping[str, tuple[str, ...]]:
+        """``{route key: values}`` for the annotation ``name`` the declaration
+        asked the cutter to keep (see :class:`Annotation`). Empty when the
+        extract carries none -- which is what a vendor declaring none has."""
+        block = self.metadata.get("annotations", {})
+        rows = block.get(name, {}) if isinstance(block, Mapping) else {}
+        if not isinstance(rows, Mapping):
+            return {}
+        return {str(key): tuple(str(value) for value in values) for key, values in rows.items()}
 
     @property
     def schemas(self) -> Mapping[str, Any]:

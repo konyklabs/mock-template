@@ -1,0 +1,139 @@
+{
+  "schema": 1,
+  "id": "webhooks.create.duplicate-409",
+  "title": "POST /webhooks registers a subscription and refuses a second one with the same type and url: 409, and a body of one member",
+  "source": {
+    "url": "https://x-series-api.lightspeedhq.com/openapi/api-2026-07.yaml",
+    "fetched": "2026-09-04",
+    "provenance": "documented",
+    "note": "post-webhooks declares a 201 whose body is {\"data\": Webhook} and a 409 whose inline schema is {\"error\": string} -- ONE member, no `message` -- with the description \"A webhook with this type and URL already exists.\", which is the sentence the unit answers. It is the only place in the whole document that declares an error body for an operation this unit serves, which is why the webhooks surface keeps this one-member shape instead of the two-member body every other refusal here uses. WebhookRequest requires active, type and url; url has minLength 3. PUT /webhooks/{webhookId} refuses the same pair -- the uniqueness rule belongs to the pair, not to the verb -- but put-webhooks-id declares no 409 at all, so that body is validated against error_schema and the declaration carries a second, route-scoped deviation for it."
+  },
+  "routes": [
+    "POST /api/2026-07/webhooks",
+    "GET /api/2026-07/webhooks",
+    "PUT /api/2026-07/webhooks/{webhookId}"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "register a subscription",
+      "request": {
+        "method": "POST",
+        "path": "/api/2026-07/webhooks",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "active": true,
+          "type": "sale.update",
+          "url": "https://consumer.example/hooks/sales"
+        }
+      },
+      "expect": {
+        "status": 201,
+        "body": {
+          "data": {
+            "id": "${re:[0-9a-f-]{36}}",
+            "type": "sale.update",
+            "url": "https://consumer.example/hooks/sales",
+            "active": true
+          }
+        }
+      }
+    },
+    {
+      "name": "the same type and url again is a conflict",
+      "request": {
+        "method": "POST",
+        "path": "/api/2026-07/webhooks",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "active": true,
+          "type": "sale.update",
+          "url": "https://consumer.example/hooks/sales"
+        }
+      },
+      "expect": {
+        "status": 409,
+        "body": {
+          "error": "A webhook with this type and URL already exists."
+        },
+        "absent": [
+          "/message"
+        ]
+      }
+    },
+    {
+      "name": "the same url under a different type is accepted",
+      "request": {
+        "method": "POST",
+        "path": "/api/2026-07/webhooks",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "active": true,
+          "type": "product.update",
+          "url": "https://consumer.example/hooks/sales"
+        }
+      },
+      "expect": {
+        "status": 201,
+        "body": {
+          "data": {
+            "type": "product.update"
+          }
+        }
+      },
+      "capture": {
+        "second_id": "/data/id"
+      }
+    },
+    {
+      "name": "and moving one onto the other's pair is the same conflict, on a route the document declares no 409 for",
+      "request": {
+        "method": "PUT",
+        "path": "/api/2026-07/webhooks/${cap.second_id}",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "active": true,
+          "type": "sale.update",
+          "url": "https://consumer.example/hooks/sales"
+        }
+      },
+      "expect": {
+        "status": 409,
+        "body": {
+          "error": "A webhook with this type and URL already exists."
+        },
+        "absent": [
+          "/message"
+        ]
+      }
+    },
+    {
+      "name": "all three subscriptions are listed",
+      "request": {
+        "method": "GET",
+        "path": "/api/2026-07/webhooks",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "data": [
+            "${any}",
+            "${any}",
+            "${any}"
+          ]
+        }
+      }
+    }
+  ]
+}
