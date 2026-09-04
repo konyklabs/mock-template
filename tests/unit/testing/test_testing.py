@@ -221,6 +221,26 @@ def test_served_refuses_a_seed_document_in_env_before_spawning_a_child(monkeypat
             pytest.fail(f"served() yielded {driver!r} with a seed document in env=")
 
 
+@pytest.mark.parametrize(
+    "name", ["VENDORFAKE_PROFILE", "VENDORFAKE_HOST", "VENDORFAKE_PORT", "VENDORFAKE_LOG_LEVEL", "VENDORFAKE_TRANSPORT"]
+)
+def test_served_refuses_an_env_entry_a_flag_would_beat_rather_than_ignoring_it(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """konyklabs/roadmap#105: ``_served`` passes profile, host, port and
+    log level to the child as flags, and ``serve`` only binds HTTP, so an
+    entry for any of the five would change nothing -- a silent no-op in a
+    library whose pitch is strictness. Refused before a child is spawned,
+    naming the parameter to use; the ambient variable of the same name is
+    still inherited untouched, because that is the shell's business."""
+    import vendorfake.testing as testing
+
+    monkeypatch.setattr(testing, "SERVE_COMMAND", (sys.executable, "-c", "raise SystemExit('spawned')"))
+    with pytest.raises(ValueError, match=name):  # noqa: SIM117 - the `with served(...)` is the subject
+        with served("square", "no-faults", env={name: "x"}) as driver:
+            pytest.fail(f"served() yielded {driver!r} with {name} in env=")
+
+
 def test_served_s_env_credential_override_reaches_the_child_and_the_seed_alike(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -105,3 +105,23 @@ def test_describe_names_the_header_the_payload_and_the_judgment(signer: ToastWeb
     assert "body.timestamp" in described["payload"]
     assert described["timestamp_provenance"].startswith("JUDGMENT")
     assert described["reference"].endswith("apiMessageSigning.html")
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (b'{"a":1}', "rTBExUaDzRnVkfhaD8Pz7qIYnG9jsWmuOSCbWXqiphQ="),
+        (b'{"timestamp":"2026-01-01T00:00:00.000+0000","a":1}', "Tsbjo/JYVqjaFU5+djDD34GtYFSkfRqNUe+sjrl+U6k="),
+        (b'{"timestamp":1700000000,"a":1}', "Y0z3ljb+/jq9KdNW7wOd/ecsnIdaWZpesqMaZEFZ4zU="),
+        (b"[1,2]", "4OGec3FSLo4jYVHtIb2SAZ4Mwdc7XMo0SaREpuPd7gQ="),
+    ],
+)
+def test_the_signature_vectors_the_vitest_example_pins_too(body: bytes, expected: str) -> None:
+    """konyklabs/roadmap#49: the Vitest example's helper appended the
+    timestamp unconditionally and threw on a body without one, while this
+    signer signs such a body alone. These four vectors -- no timestamp, a
+    string one, a numeric one, an array -- are pinned identically in
+    ``examples/vitest-consumer/tests/toast.test.ts``, so the two
+    implementations cannot drift apart again without one of the suites
+    going red. The secret is ``unit-toast-secret``."""
+    assert toast_signature("unit-toast-secret", body) == expected

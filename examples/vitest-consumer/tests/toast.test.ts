@@ -118,9 +118,37 @@ function order() {
  * before assuming its HMAC is wrong.
  */
 function toastSignature(secret: string, rawBody: Buffer): string {
-  const timestamp = JSON.parse(rawBody.toString()).timestamp as string;
-  return createHmac("sha256", secret).update(Buffer.concat([rawBody, Buffer.from(timestamp)])).digest("base64");
+  // Mirrors `toast/signer.py` exactly (konyklabs/roadmap#49): the timestamp is
+  // appended only when the body is a JSON object carrying one as a string;
+  // any other body -- no timestamp, a numeric one, an array, not JSON at all
+  // -- is signed alone. Every delivery the fake generates carries a string
+  // timestamp, so the shipped suite never reaches the other branches; the
+  // parity vectors below do, and are the same four `tests/unit/toast/test_signer.py` pins.
+  let timestamp = "";
+  try {
+    const parsed: unknown = JSON.parse(rawBody.toString("utf8"));
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const candidate = (parsed as { timestamp?: unknown }).timestamp;
+      if (typeof candidate === "string") timestamp = candidate;
+    }
+  } catch {
+    // not JSON: sign the raw body alone
+  }
+  return createHmac("sha256", secret).update(Buffer.concat([rawBody, Buffer.from(timestamp, "utf8")])).digest("base64");
 }
+
+describe("toast signature helper parity", () => {
+  // The same four vectors `tests/unit/toast/test_signer.py` pins against
+  // `vendorfake.toast.signer.toast_signature`, secret "unit-toast-secret".
+  test.each([
+    ['{"a":1}', "rTBExUaDzRnVkfhaD8Pz7qIYnG9jsWmuOSCbWXqiphQ="],
+    ['{"timestamp":"2026-01-01T00:00:00.000+0000","a":1}', "Tsbjo/JYVqjaFU5+djDD34GtYFSkfRqNUe+sjrl+U6k="],
+    ['{"timestamp":1700000000,"a":1}', "Y0z3ljb+/jq9KdNW7wOd/ecsnIdaWZpesqMaZEFZ4zU="],
+    ["[1,2]", "4OGec3FSLo4jYVHtIb2SAZ4Mwdc7XMo0SaREpuPd7gQ="],
+  ])("signs %s the way signer.py does", (body, expected) => {
+    expect(toastSignature("unit-toast-secret", Buffer.from(body, "utf8"))).toBe(expected);
+  });
+});
 
 describe("toast", () => {
   test("the machine client logs in and the JWT it mints is accepted", async () => {

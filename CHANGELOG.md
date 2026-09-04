@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
+2026-09-01 batch (konyklabs/roadmap#53: the conformance-coverage stack #15,
+#46, #42 and the fidelity legs #55, #56).
+
+### Bug fixes
+
+* **examples:** the Vitest example's Toast signature helper now mirrors
+  `toast/signer.py` exactly -- the timestamp is appended only when the body is
+  a JSON object carrying one as a string; anything else is signed alone. It
+  used to throw on a body without one. Four parity vectors are pinned in both
+  suites so the two cannot drift again (#49).
+* **testing:** `served(env=)` refuses, with a `ValueError` naming the
+  parameter to use, an entry for `VENDORFAKE_PROFILE`, `VENDORFAKE_HOST`,
+  `VENDORFAKE_PORT`, `VENDORFAKE_LOG_LEVEL` or `VENDORFAKE_TRANSPORT` -- the
+  child gets the first four as explicit flags and `serve` only binds HTTP, so
+  the entry changed nothing and was documented as silently beaten (#105).
+
+### Tooling
+
+* `tools/self-test.sh` runs `pip-audit` over the runtime dependencies and
+  `bandit -ll` over the package in its full mode (main and a laptop before a
+  push; not `--quick`). Bandit's one finding, the wildcard-bind comparison in
+  `webhook_receiver`, is annotated at the site (#105).
+* `uv.lock` carries the 0.3.0 version `pyproject.toml` already had;
+  release-please bumps only the latter, so every `uv run` since v0.3.0 had
+  been rewriting the lockfile in the working tree (#103).
+
+---
+
 Consumer feedback round 3 (konyklabs/roadmap#102, items 20–21, from an
 end-to-end spike that ran the fake as a real out-of-process child), round 2
 (konyklabs/roadmap#101, items 15–19) and the four non-blocking findings from

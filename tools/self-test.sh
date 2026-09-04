@@ -100,6 +100,26 @@ fi
 step "wheel data"        uv run python tools/check_wheel_data.py
 step "docs"              _docs_step
 
+# Security scanners, full run only (konyklabs/roadmap#105): pip-audit over the
+# runtime dependencies as the lockfile resolves them, bandit over the package
+# at medium severity and up. Both run from their published packages via uvx,
+# so neither is a dependency of vendorfake itself. A finding that is a
+# deliberate choice is annotated at the site with its reason, never silenced
+# by configuration.
+_pip_audit_step() {
+  local requirements
+  requirements="$(mktemp)"
+  uv export --frozen --no-dev --no-hashes --no-emit-project > "$requirements" || return 1
+  uvx pip-audit --strict -r "$requirements"
+  local code=$?
+  rm -f "$requirements"
+  return $code
+}
+if [ "$QUICK" -eq 0 ]; then
+  step "pip-audit"         _pip_audit_step
+  step "bandit"            uvx bandit -q -r src/vendorfake -ll
+fi
+
 # The conformance suite through its own entry points, which pytest does not
 # exercise: the framework-free CLI a container healthcheck calls, and the
 # pytest plugin an installed wheel exposes. `--strict` makes any skip that

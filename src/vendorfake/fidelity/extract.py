@@ -280,7 +280,7 @@ def _parse(source: SpecSource, data: bytes) -> Any:
     except (UnicodeDecodeError, ValueError):
         pass
     try:
-        return _jsonable(yaml.load(data, Loader=_StrictSafeLoader))
+        return _jsonable(yaml.load(data, Loader=_StrictSafeLoader))  # nosec B506 - a SafeLoader subclass
     except (yaml.YAMLError, ValueError) as exc:
         raise ValueError(f"{source.url}: not a JSON or YAML document: {exc}") from exc
 

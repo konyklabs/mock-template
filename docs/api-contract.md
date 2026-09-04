@@ -59,10 +59,11 @@ same name, `clock_start=` layers beneath it exactly as in `unit()`, and the
 parent-resolved `.seed` reads the same `VENDORFAKE_VENDOR_*` layer. Additive:
 a call without it behaves as before. Entries for what `served()` passes as a
 flag (`VENDORFAKE_PROFILE`, `VENDORFAKE_HOST`, `VENDORFAKE_PORT`,
-`VENDORFAKE_LOG_LEVEL`) and for `VENDORFAKE_TRANSPORT` are beaten by the
-flag, not honoured; a `VENDORFAKE_SEED` entry is refused with `ValueError`
-before the child is spawned, since `.seed` could not describe it. There is
-still no `capabilities=`.
+`VENDORFAKE_LOG_LEVEL`), for `VENDORFAKE_TRANSPORT`, and for
+`VENDORFAKE_SEED` are refused with `ValueError` before the child is spawned
+— the first five because the flag would beat them and the entry would change
+nothing, the last because `.seed` could not describe it. There is still no
+`capabilities=`.
 
 **`served()`'s startup failures are eager, in the parent process.** An
 unknown vendor, a nonexistent or malformed profile, and a vendor with no seed
