@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import json
 import re
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -583,6 +584,33 @@ def test_the_test_route_reports_a_subscriber_that_never_answers(virtual: Harness
     log = deliveries(virtual)
     assert len(log) == 12
     assert log[-1]["status"] == "exhausted"
+
+
+def test_the_test_route_answers_at_once_for_a_disabled_subscriber(h: Harness, sink: MemorySink) -> None:
+    """Nothing is queued for a disabled subscriber, so the route reports 0 without
+    holding the request lock for the delivery timeout."""
+    subscription = create_subscription(h, enabled=False)
+    started = time.monotonic()
+    response = h.api.post(f"/v2/webhooks/subscriptions/{subscription['id']}/test", {}, headers=h.auth)
+    assert time.monotonic() - started < 1.0
+    assert response.json()["subscription_test_result"]["status_code"] == 0
+    assert sink.received == []
+
+
+def test_the_test_route_does_not_wait_out_a_virtual_clock_delay(virtual: Harness, sink: MemorySink) -> None:
+    """A webhook.delay rule puts the first attempt on the virtual clock; the route
+    reports 0 at once rather than holding the unit until the wall-clock timeout,
+    and the attempt lands when the clock is drained."""
+    subscription = create_subscription(virtual)
+    virtual.api.post(
+        "/__unit/chaos/rules",
+        {"id": "slow", "scope": "webhook", "fault": "webhook.delay", "params": {"delay_ms": 60_000}},
+    )
+    started = time.monotonic()
+    response = virtual.api.post(f"/v2/webhooks/subscriptions/{subscription['id']}/test", {}, headers=virtual.auth)
+    assert time.monotonic() - started < 1.0
+    assert response.json()["subscription_test_result"]["status_code"] == 0
+    assert [record["status"] for record in deliveries(virtual)] == ["delivered"]
 
 
 def test_the_test_route_404s_for_an_unknown_subscriber(h: Harness) -> None:

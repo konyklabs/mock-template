@@ -48,6 +48,7 @@ jobs:
           path: vendorfake
       - run: docker build -t vendorfake ./vendorfake
       - run: docker run -d --rm -p 127.0.0.1:8080:8080 -e VENDORFAKE_VENDOR=square vendorfake
+      - run: for i in $(seq 1 30); do curl -sf http://127.0.0.1:8080/__unit/health && break; sleep 1; done
       - name: Test
         env:
           SQUARE_BASE_URL: http://127.0.0.1:8080

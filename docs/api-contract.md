@@ -239,7 +239,7 @@ upgrade may move them under you.
 - **`vendorfake.agent`** — the lookups behind `vendorfake explain`.
   `vendorfake.agent.__init__` declares
   `__all__ = []` and is reached only from `vendorfake.cli`'s subcommand
-  bodies. The command line those two subcommands are part of is pinned — see
+  bodies. The command line that subcommand is part of is pinned — see
   *The command line*, above — this package's internal shape is not; a test
   or an agent reaches this surface through the `vendorfake` command, never by
   importing `vendorfake.agent` directly.

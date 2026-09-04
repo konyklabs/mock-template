@@ -92,6 +92,7 @@ step "ruff format"       uv run ruff format --check .
 step "mypy --strict"     uv run mypy
 step "import-linter"     uv run lint-imports
 step "boundary check"    uv run python tools/boundary_check.py -v
+step "prose ratio"       uv run python tools/prose_ratio.py src --max-total 15 --top 0
 if [ "$QUICK" -eq 0 ]; then
   for entry in "${FIDELITY_FETCH_TARGETS[@]}"; do
     vendor="${entry%%=*}"

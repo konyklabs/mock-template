@@ -229,7 +229,7 @@ class WebhooksSurface:
         before = len(ctx.webhooks.deliveries())
         event_id = f"evt_test_{before + 1}"
         created_at = ctx.clock.iso_ms()
-        ctx.webhooks.enqueue_to(
+        queued = ctx.webhooks.enqueue_to(
             PreparedEvent(
                 type=event_type,
                 event_id=event_id,
@@ -245,8 +245,12 @@ class WebhooksSurface:
             ),
             subscription.id,
         )
-        attempt = ctx.webhooks.await_first_attempt(
-            event_id, subscription.id, timeout_ms=float(ctx.webhooks.retry_policy.timeout_ms)
+        attempt = (
+            ctx.webhooks.await_first_attempt(
+                event_id, subscription.id, timeout_ms=float(ctx.webhooks.retry_policy.timeout_ms)
+            )
+            if queued
+            else None
         )
         now = ctx.clock.iso_ms()
         return json_(

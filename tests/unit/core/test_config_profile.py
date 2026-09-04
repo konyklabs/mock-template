@@ -28,7 +28,9 @@ from vendorfake.core.config.models import (
     parse_profile_document,
 )
 from vendorfake.core.config.profile import (
+    ENV_TABLE,
     ENV_VENDOR_PREFIX,
+    env_names,
     load_profile,
     merge_documents,
     resolve_config,
@@ -196,6 +198,15 @@ def test_vendor_prefixed_variables_become_snake_case_keys() -> None:
         env={f"{ENV_VENDOR_PREFIX}APPLICATION_ID": "app-1", "VENDORFAKE_VENDOR": "ignored-selector"},
     )
     assert config.vendor_config == {"environment": "Sandbox", "application_id": "app-1"}
+
+
+def test_every_env_table_row_is_complete() -> None:
+    """The generated env reference is built from ENV_TABLE: every row carries a
+    VENDORFAKE_ name, what it applies to and a summary, and exactly one is a prefix."""
+    assert len(ENV_TABLE) == 19
+    assert all(name.startswith("VENDORFAKE_") for name in env_names())
+    assert sum(1 for var in ENV_TABLE if var.is_prefix) == 1
+    assert all(var.applies_to and var.summary for var in ENV_TABLE)
 
 
 def test_the_transport_block_is_environment_only() -> None:

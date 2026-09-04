@@ -144,16 +144,10 @@ PARITY_VECTORS = (
     ("payload=%7B%22n%22%3A%22caf%C3%A9%22%7D", "f76dfad7447259b5e6e70ad7d2241e1c2b6a6dd19588a78e36212bd4cdfde3e1"),
     ('{"a":1}', "44e095ac177198ba199189fe729f31162cc59f85df33e1e09613980c98a200a6"),
 )
-"""Literal digests, not recomputed ones.
-
-`examples/vitest-consumer/tests/lightspeed.test.ts` pins the same four against
-its own `node:crypto` implementation. A test that recomputes the answer with
-the same library it is testing agrees with itself whatever either side does;
-these are the only assertion here that a second language can disagree with,
-which is the point of them -- the same guard the Toast signer grew after
-konyklabs/vendorfake#49. The third vector is percent-encoded UTF-8, so a
-client that decoded the body before hashing gets a different digest and finds
-out here.
+"""Literal digests, not recomputed ones: a test that recomputes the answer with the
+library it is testing agrees with itself whatever the library does. The third
+vector is percent-encoded UTF-8, so a client that decoded the body before hashing
+gets a different digest and finds out here.
 """
 
 

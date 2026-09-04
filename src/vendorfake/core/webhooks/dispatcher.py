@@ -52,8 +52,10 @@ _DRAIN_PASSES = 500
 """Bound on :meth:`WebhookDispatcher.drain`'s loop, so a drain cannot become a hang."""
 
 _REAL_MODE_POLL_MS = 250.0
-_FIRST_ATTEMPT_POLL_S = 0.005
 """How long :meth:`WebhookDispatcher.drain` sleeps at most between passes, real clock."""
+
+_FIRST_ATTEMPT_POLL_S = 0.005
+"""How often :meth:`WebhookDispatcher.await_first_attempt` re-reads the delivery log."""
 
 _BODY_PREVIEW_LIMIT = 400
 
@@ -270,25 +272,26 @@ class WebhookDispatcher:
             for subscription in matching:
                 self._queue(event, subscription)
 
-    def enqueue_to(self, event: PreparedEvent, subscription_id: str) -> None:
+    def enqueue_to(self, event: PreparedEvent, subscription_id: str) -> bool:
         """Deliver one event to exactly one subscriber, for the routes that name their
         recipient. The event type is *not* matched against ``event_types``, the caller
-        having named this subscription; a disabled subscriber is still skipped.
-        ``self.enabled`` is checked here as well as in :meth:`enqueue`, which
-        ``POST /__unit/webhooks/emit`` reaches without passing the listener's guard."""
+        having named this subscription. Returns False, queueing nothing, when delivery
+        is disabled or the subscriber is unknown or disabled, so a caller knows there
+        is no attempt to wait for."""
         if not self.enabled:
-            return
+            return False
 
         # LOCK ORDER: the store lock is taken and released BEFORE ``_request_lock``, because
         # the journal path holds them the other way round -- ``Store.append_journal``
         # dispatches listeners under ``Store.lock``, whose listener takes ``_request_lock``.
         target = next((s for s in self.subscriptions() if s.id == subscription_id), None)
         if target is None or not target.enabled:
-            return
+            return False
 
         with self._request_lock:
             self._prepared.append(event)
             self._queue(event, target)
+        return True
 
     def _queue(self, event: PreparedEvent, subscription: Subscription) -> None:
         self._apply_chaos_and_schedule(
@@ -525,14 +528,20 @@ class WebhookDispatcher:
                 time.sleep(min(max(next_due + 1.0, 1.0), _REAL_MODE_POLL_MS) / 1000.0)
 
     def await_first_attempt(self, event_id: str, subscription_id: str, *, timeout_ms: float) -> DeliveryRecord | None:
-        """The first delivery record for ``event_id`` to ``subscription_id``, or ``None`` after
-        ``timeout_ms``. Never moves the clock, so a caller waits for one attempt at most."""
+        """The first delivery record for ``event_id`` to ``subscription_id``, or ``None``.
+
+        Never moves the clock, so a caller waits for one attempt at most: ``None`` comes
+        back after ``timeout_ms`` of wall-clock time, or at once on a virtual clock when
+        the worker is idle, because the attempt is then pending on a timer only
+        ``Clock.advance`` can fire.
+        """
         deadline = time.monotonic() + timeout_ms / 1000.0
         while True:
+            idle = self._worker.quiesce(0.0)
             for record in self.deliveries():
                 if record.event_id == event_id and record.subscription_id == subscription_id:
                     return record
-            if time.monotonic() >= deadline:
+            if time.monotonic() >= deadline or (idle and self._clock.mode == "virtual"):
                 return None
             time.sleep(_FIRST_ATTEMPT_POLL_S)
 
