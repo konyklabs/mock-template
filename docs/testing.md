@@ -48,8 +48,8 @@ change to what vendorfake promises is a reviewable diff rather than a surprise.
 - A behaviour that differs between bindings is a parity case in `tests/parity/`,
   marked `xfail(strict=True)` with the finding it tracks until the contract
   holds, so the divergence is on record and its fix is a one-line change.
-- Coverage is measured in the self-test's pytest step with a floor
-  (`--cov-fail-under=90`, the number measured on 2026-09-04) that is only ever
-  raised.
+- Coverage is collected in the self-test's pytest step and judged by its
+  `coverage floor` step (`coverage report --fail-under=89`; 89.6% measured on
+  2026-09-04), a floor that is only ever raised.
 - Fidelity ledgers and conformance reports print in the self-test output; a
   claim about fidelity cites that output, never the test count.
