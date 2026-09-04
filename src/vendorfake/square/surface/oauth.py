@@ -395,7 +395,11 @@ class OAuthSurface:
         # no way back, and the mirror image of the escalation this surface was
         # fixed for. Wrong in the other direction, and refused rather than
         # over-granted, which is why it reads as safe and is not.
-        approved = existing.authorized_scopes or existing.scopes
+        # `is None`, not truthiness: None is "not recorded" (a seeded token)
+        # and falls back; an empty RECORDED approval must intersect as empty
+        # and be refused, not silently re-grant the token's own scopes
+        # (konyklabs/roadmap#28).
+        approved = existing.scopes if existing.authorized_scopes is None else existing.authorized_scopes
         narrowed = _narrowed_scopes(grant.scopes, approved)
 
         now = ctx.clock.iso_ms()

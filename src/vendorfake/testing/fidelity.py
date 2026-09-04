@@ -4,7 +4,7 @@ FOR: a consumer who installed the wheel and wants to run the documented corpus
 and the per-route matrix without a checkout::
 
     python -m vendorfake.fidelity report --target vendorfake.testing.fidelity:square_target
-    pytest --pyargs vendorfake.fidelity --fidelity-target vendorfake.testing.fidelity:square_target
+    pytest --pyargs vendorfake.fidelity -p vendorfake.fidelity.plugin --fidelity-target vendorfake.testing.fidelity:square_target
 
 ``vendorfake.fidelity`` may not import a vendor or the registry, so the
 targets live here, one layer out, exactly as the conformance targets do in

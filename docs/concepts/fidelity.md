@@ -24,7 +24,7 @@ python -m vendorfake.fidelity report --target vendorfake.testing.fidelity:square
 python -m vendorfake.fidelity run --target vendorfake.testing.fidelity:square_target --case orders.create.minimal
 python -m vendorfake.fidelity run --base-url http://localhost:8080 --anchor vendorfake.square.fidelity
 python -m vendorfake.fidelity pin --check --offline --target vendorfake.testing.fidelity:square_target
-pytest --pyargs vendorfake.fidelity --fidelity-target vendorfake.testing.fidelity:square_target
+pytest --pyargs vendorfake.fidelity -p vendorfake.fidelity.plugin --fidelity-target vendorfake.testing.fidelity:square_target
 ```
 
 The report's tail, as run on 2026-09-02:

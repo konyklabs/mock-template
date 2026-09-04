@@ -86,7 +86,18 @@ def _pytest(tmp_path: Path, *extra: str) -> subprocess.CompletedProcess[str]:
     env.pop(TARGET_ENV_VAR, None)
     env["PYTHONPATH"] = str(tmp_path)
     return subprocess.run(
-        [sys.executable, "-m", "pytest", str(tmp_path / "test_generated.py"), "-q", "-p", "no:cacheprovider", *extra],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            str(tmp_path / "test_generated.py"),
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-p",
+            "vendorfake.fidelity.plugin",
+            *extra,
+        ],
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,

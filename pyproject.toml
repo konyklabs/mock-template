@@ -61,8 +61,6 @@ square = "vendorfake.square:VENDOR"
 toast = "vendorfake.toast:VENDOR"
 
 [project.entry-points.pytest11]
-vendorfake_conformance = "vendorfake.conformance.plugin"
-vendorfake_fidelity = "vendorfake.fidelity.plugin"
 # The consumer-facing fixtures. Registered as an entry point rather than left
 # for a consumer's `pytest_plugins` line, because "installed and the fixtures
 # are there" is the experience being offered; the module imports nothing

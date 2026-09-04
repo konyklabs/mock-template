@@ -2,7 +2,7 @@
 
 FOR: giving a vendor the behaviour leg for free inside its own test run::
 
-    pytest --fidelity-target my_pkg.testing:fidelity_target
+    pytest -p vendorfake.fidelity.plugin --fidelity-target my_pkg.testing:fidelity_target
 
 Any test function taking ``fidelity_case`` is parametrised with every case
 of the target's corpus, and a red run names ``test_case[orders.create.minimal]``

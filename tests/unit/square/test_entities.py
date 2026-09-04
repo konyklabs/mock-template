@@ -155,3 +155,31 @@ def test_a_superseded_or_revoked_token_is_not_active() -> None:
     assert base.active
     assert not TokenEntity.from_entity({**base.to_entity(), "superseded_at": "2026-01-02T00:00:00Z"}).active
     assert not TokenEntity.from_entity({**base.to_entity(), "revoked_at": "2026-01-02T00:00:00Z"}).active
+
+
+def test_an_empty_recorded_approval_survives_the_round_trip() -> None:
+    """konyklabs/roadmap#28: "not recorded" and "narrowed to nothing" are
+    different states, and the serialization boundary must not collapse them --
+    the reader's fallback is only correct for the first."""
+    base = dict(
+        id="tok_28",
+        access_token="EAAA28",
+        refresh_token="EQAA28",
+        client_id="app",
+        merchant_id="M1",
+        expires_at="2026-02-01T00:00:00Z",
+        scopes=("ORDERS_READ",),
+    )
+    unrecorded = TokenEntity(**base)
+    assert unrecorded.authorized_scopes is None
+    assert "authorized_scopes" not in unrecorded.to_entity()
+    assert TokenEntity.from_entity(unrecorded.to_entity()).authorized_scopes is None
+
+    empty = TokenEntity(**base, authorized_scopes=())
+    assert empty.to_entity()["authorized_scopes"] == []
+    assert TokenEntity.from_entity(empty.to_entity()).authorized_scopes == ()
+    assert TokenEntity.from_entity(empty.to_entity()) == empty
+
+    recorded = TokenEntity(**base, authorized_scopes=("ORDERS_READ", "ORDERS_WRITE"))
+    assert recorded.to_entity()["authorized_scopes"] == ["ORDERS_READ", "ORDERS_WRITE"]
+    assert TokenEntity.from_entity(recorded.to_entity()) == recorded

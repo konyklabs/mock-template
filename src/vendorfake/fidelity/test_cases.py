@@ -1,4 +1,4 @@
-"""What ``pytest --pyargs vendorfake.fidelity`` collects.
+"""What ``pytest --pyargs vendorfake.fidelity -p vendorfake.fidelity.plugin`` collects.
 
 One test, parametrised by :func:`vendorfake.fidelity.plugin.pytest_generate_tests`
 with every case of the corpus the ``--fidelity-target`` names. Shipped inside
