@@ -48,7 +48,15 @@ from vendorfake.clover.surface.common import (
     require_merchant,
 )
 from vendorfake.core.kernel.reply import json_
-from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitContext, UnitError, UnitErrorKind
+from vendorfake.core.kernel.types import (
+    HandlerArgs,
+    PaginationSpec,
+    ReplyInit,
+    Route,
+    UnitContext,
+    UnitError,
+    UnitErrorKind,
+)
 from vendorfake.core.state.store import Entity
 from vendorfake.core.util.json import compact
 
@@ -92,6 +100,7 @@ class CloverInventorySurface:
                 scopes=("INVENTORY_R",),
                 operation_id="GetItems",
                 summary="Inventory items, offset-paginated in the elements envelope; expand=modifierGroups,taxRates.",
+                pagination=PaginationSpec(style="offset", items_path="elements"),
             ),
             Route(
                 method="GET",

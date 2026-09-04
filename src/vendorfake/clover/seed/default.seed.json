@@ -183,6 +183,19 @@
           "country": "GB"
         }
       ]
+    },
+    {
+      "id": "GRACEHOPPER01",
+      "firstName": "Grace",
+      "lastName": "Hopper",
+      "customerSince": 1755786102000,
+      "addresses": [
+        {
+          "address1": "1 Compiler Court",
+          "city": "Arlington",
+          "country": "US"
+        }
+      ]
     }
   ],
   "orders": [
@@ -202,6 +215,33 @@
       "lineItems": [
         {
           "id": "SEEDLINE00001",
+          "item": {
+            "id": "CRAFTBEER0750"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SEEDORDER0002",
+      "total": 1250,
+      "state": "open",
+      "title": "Table 2",
+      "externalReferenceId": "seed-second-order",
+      "createdTime": 1755786702000,
+      "orderType": {
+        "id": "KFRPRVCZ73JHM"
+      },
+      "employee": {
+        "id": "EMPLBARISTA01"
+      },
+      "customers": [
+        {
+          "id": "GRACEHOPPER01"
+        }
+      ],
+      "lineItems": [
+        {
+          "id": "SEEDLINE00002",
           "item": {
             "id": "CRAFTBEER0750"
           }

@@ -24,6 +24,15 @@
     "C21": "webhooks: the declared retry schedule is the schedule actually followed",
     "C22": "state: the seed scenario is deterministic across two OPERATING-SYSTEM PROCESSES",
     "C23": "transport: a repeated query parameter reaches the handler whole",
+    "C24": "state: an idempotency key is scoped to its operation",
+    "C25": "state: a reused idempotency key with a different body answers as the route declares",
+    "C26": "state: a declared page walk repeats no row and loses none",
+    "C27": "chaos: a rule below the one that fired still counts its match",
+    "C28": "control plane: set, delta, enable and disable each change what the unit does",
+    "C29": "chaos: every delivery-scope fault the unit publishes has its effect at the sink",
+    "C30": "control plane: reading the control plane changes nothing a vendor answer can see",
+    "C31": "control plane: the error catalogue reads the same twice",
+    "C32": "control plane: the error catalogue does not move when the clock does",
     "C33": "control plane: an unmatched request is named and recorded",
     "C34": "discovery: every vendor maps all four capability roles to a declared capability",
     "C35": "discovery: the profile-name contract holds for the profile this unit was built on"
@@ -46,9 +55,6 @@
       "oauth-only",
       "orders-only"
     ],
-    "C17": [
-      "oauth-only"
-    ],
     "C18": [
       "oauth-only",
       "orders-only"
@@ -57,6 +63,31 @@
       "oauth-only"
     ],
     "C21": [
+      "full",
+      "no-chaos",
+      "no-faults",
+      "oauth-only",
+      "orders-only"
+    ],
+    "C24": [
+      "oauth-only"
+    ],
+    "C25": [
+      "oauth-only"
+    ],
+    "C26": [
+      "oauth-only"
+    ],
+    "C27": [
+      "no-faults"
+    ],
+    "C29": [
+      "no-chaos",
+      "no-faults",
+      "oauth-only",
+      "orders-only"
+    ],
+    "C32": [
       "full",
       "no-chaos",
       "no-faults",

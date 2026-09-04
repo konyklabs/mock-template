@@ -166,6 +166,7 @@ from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import (
     HandlerArgs,
     IdempotencySpec,
+    PaginationSpec,
     ReplyInit,
     Route,
     UnitContext,
@@ -212,7 +213,7 @@ from vendorfake.square.model.order import (
     project_order_entry,
     supplied,
 )
-from vendorfake.square.seed.constants import SEED_LOCATION_ID
+from vendorfake.square.seed.constants import SEED_KIOSK_LOCATION_ID, SEED_LOCATION_ID, SEED_OPEN_ORDER_ID
 from vendorfake.square.surface.common import SquareDeps, instant_ms
 
 __all__ = [
@@ -390,6 +391,10 @@ class OrdersSurface:
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="orders.create"),
                 operation_id="CreateOrderAtLocation",
                 summary="CreateOrder on its pre-2019 path; the location comes from the URL.",
+                # An empty order: the location is authoritative from the URL,
+                # which is the whole point of this path.
+                example_body={"order": {}},
+                example_params={"location_id": SEED_LOCATION_ID},
             ),
             Route(
                 method="POST",
@@ -400,6 +405,14 @@ class OrdersSurface:
                 scopes=("ORDERS_READ",),
                 operation_id="SearchOrders",
                 summary="Filtered, sorted, cursor-paginated order search.",
+                # The page parameters travel in the body, so the walk that
+                # proves pages never overlap needs a body that works: "Your
+                # request must include one or more location_ids", and BOTH
+                # seeded locations are named because the scenario splits its
+                # orders across the two -- an example reaching one location
+                # would publish a one-row listing no page walk can cross.
+                example_body={"location_ids": [SEED_LOCATION_ID, SEED_KIOSK_LOCATION_ID]},
+                pagination=PaginationSpec(style="cursor", where="body", items_path="orders"),
             ),
             Route(
                 method="POST",
@@ -435,6 +448,15 @@ class OrdersSurface:
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="orders.update", on_mismatch="replay"),
                 operation_id="UpdateOrder",
                 summary="Sparse update under optimistic concurrency.",
+                # The smallest update the route accepts: the version alone --
+                # "Your request must include the order.version property" --
+                # against the seeded open order, which hydrate leaves at
+                # version 1. Without an example this is the ONLY route
+                # declaring on_mismatch="replay", so the replay half of the
+                # idempotency contract was asserted by nothing (review of
+                # konyklabs/roadmap#15, item 6).
+                example_body={"order": {"version": 1}},
+                example_params={"order_id": SEED_OPEN_ORDER_ID},
             ),
             Route(
                 method="POST",
@@ -444,6 +466,11 @@ class OrdersSurface:
                 auth="bearer",
                 scopes=("ORDERS_WRITE", "PAYMENTS_WRITE"),
                 idempotency=IdempotencySpec(key_path="idempotency_key", scope="orders.pay", required=True),
+                # No example_body: a working PayOrder is pinned to the order's
+                # current version and total, which other checks move. The
+                # params still name the seeded order so a scope probe reaches
+                # the handler instead of a 404.
+                example_params={"order_id": SEED_OPEN_ORDER_ID},
                 operation_id="PayOrder",
                 summary="Pay an open order and move it to COMPLETED.",
             ),

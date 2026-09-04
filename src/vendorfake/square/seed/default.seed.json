@@ -41,7 +41,9 @@
         "country": "US"
       },
       "timezone": "America/Los_Angeles",
-      "capabilities": ["CREDIT_CARD_PROCESSING"],
+      "capabilities": [
+        "CREDIT_CARD_PROCESSING"
+      ],
       "status": "ACTIVE",
       "phone_number": "+1 650-354-7217",
       "type": "PHYSICAL",
@@ -58,7 +60,9 @@
         "country": "US"
       },
       "timezone": "America/Los_Angeles",
-      "capabilities": ["CREDIT_CARD_PROCESSING"],
+      "capabilities": [
+        "CREDIT_CARD_PROCESSING"
+      ],
       "status": "ACTIVE",
       "type": "MOBILE",
       "created_at": "2018-02-01T09:00:00.000Z"
@@ -73,8 +77,22 @@
         "updated_at": "2016-11-16T22:25:24.878Z",
         "catalog_version": 1479335124878,
         "variations": [
-          { "id": "2TZFAOHWGG7PAK2QEXWYPZSP", "name": "Mug", "price_money": { "amount": 150, "currency": "USD" } },
-          { "id": "QK5EVWFBUZTGXYVQJ4XLUIRZ", "name": "Pot", "price_money": { "amount": 400, "currency": "USD" } }
+          {
+            "id": "2TZFAOHWGG7PAK2QEXWYPZSP",
+            "name": "Mug",
+            "price_money": {
+              "amount": 150,
+              "currency": "USD"
+            }
+          },
+          {
+            "id": "QK5EVWFBUZTGXYVQJ4XLUIRZ",
+            "name": "Pot",
+            "price_money": {
+              "amount": 400,
+              "currency": "USD"
+            }
+          }
         ]
       },
       {
@@ -84,8 +102,22 @@
         "updated_at": "2019-03-04T21:54:45.000Z",
         "catalog_version": 1551736485000,
         "variations": [
-          { "id": "HURXQOOAIC4IZSI2BEXQRYFY", "name": "Small", "price_money": { "amount": 375, "currency": "USD" } },
-          { "id": "GXAQQ4EAXWLFRTLFRZLDWDBJ", "name": "Large", "price_money": { "amount": 525, "currency": "USD" } }
+          {
+            "id": "HURXQOOAIC4IZSI2BEXQRYFY",
+            "name": "Small",
+            "price_money": {
+              "amount": 375,
+              "currency": "USD"
+            }
+          },
+          {
+            "id": "GXAQQ4EAXWLFRTLFRZLDWDBJ",
+            "name": "Large",
+            "price_money": {
+              "amount": 525,
+              "currency": "USD"
+            }
+          }
         ]
       }
     ]
@@ -102,8 +134,16 @@
       "updated_at": "2026-08-01T10:15:00.000Z",
       "version": 1,
       "line_items": [
-        { "uid": "seed_li_tea_mug", "catalog_object_id": "2TZFAOHWGG7PAK2QEXWYPZSP", "quantity": "2" },
-        { "uid": "seed_li_coldbrew_lg", "catalog_object_id": "GXAQQ4EAXWLFRTLFRZLDWDBJ", "quantity": "1" }
+        {
+          "uid": "seed_li_tea_mug",
+          "catalog_object_id": "2TZFAOHWGG7PAK2QEXWYPZSP",
+          "quantity": "2"
+        },
+        {
+          "uid": "seed_li_coldbrew_lg",
+          "catalog_object_id": "GXAQQ4EAXWLFRTLFRZLDWDBJ",
+          "quantity": "1"
+        }
       ]
     },
     {
@@ -117,7 +157,11 @@
       "closed_at": "2026-07-15T08:05:00.000Z",
       "version": 3,
       "line_items": [
-        { "uid": "seed_li_coldbrew_sm", "catalog_object_id": "HURXQOOAIC4IZSI2BEXQRYFY", "quantity": "3" }
+        {
+          "uid": "seed_li_coldbrew_sm",
+          "catalog_object_id": "HURXQOOAIC4IZSI2BEXQRYFY",
+          "quantity": "3"
+        }
       ],
       "tenders": [
         {
@@ -125,7 +169,10 @@
           "payment_id": "EnZdNAlWCmfh6Mt5FMNST1o7taB",
           "type": "CARD",
           "created_at": "2026-07-15T08:05:00.000Z",
-          "amount_money": { "amount": 1125, "currency": "USD" }
+          "amount_money": {
+            "amount": 1125,
+            "currency": "USD"
+          }
         }
       ]
     }
@@ -136,11 +183,18 @@
     "terminology_one": "Point",
     "terminology_other": "Points",
     "accrual_points": 1,
-    "spend_amount": { "amount": 100, "currency": "USD" },
+    "spend_amount": {
+      "amount": 100,
+      "currency": "USD"
+    },
     "tax_mode": "BEFORE_TAX",
     "reward_tiers": [
-      { "id": "e1b39225-9da5-43d1-a5db-782cdd8ad94f", "points": 10, "name": "10% off entire sale",
-        "created_at": "2020-06-10T21:00:00.000Z" }
+      {
+        "id": "e1b39225-9da5-43d1-a5db-782cdd8ad94f",
+        "points": 10,
+        "name": "10% off entire sale",
+        "created_at": "2020-06-10T21:00:00.000Z"
+      }
     ],
     "created_at": "2020-06-10T21:00:00.000Z"
   },
@@ -151,29 +205,63 @@
       "customer_id": "QPTXM8PQNX3Q726ZYHPMNP46XC",
       "mapping_id": "66aaab3f-da99-49ed-8b19-b87f851c844f",
       "enrolled_at": "2026-08-01T10:00:00.000Z"
+    },
+    {
+      "id": "5f2b7c14-9a3e-4d68-8c01-7d54c2a90b31",
+      "phone_number": "+14155559876",
+      "customer_id": "8XWJMDAGQ6PWZDGT5YMPNP46XD",
+      "mapping_id": "0c9e3a77-51fd-4c26-9b8a-2f6d1e04c5a2",
+      "balance": 25,
+      "lifetime_points": 40,
+      "enrolled_at": "2026-08-05T09:30:00.000Z"
     }
   ],
   "inventory_counts": [
-    { "catalog_object_id": "2TZFAOHWGG7PAK2QEXWYPZSP", "location_id": "18YC4JDH91E1H", "quantity": "25",
-      "calculated_at": "2026-08-01T09:00:00.000Z" },
-    { "catalog_object_id": "HURXQOOAIC4IZSI2BEXQRYFY", "location_id": "18YC4JDH91E1H", "quantity": "8",
-      "calculated_at": "2026-08-01T09:00:00.000Z" }
+    {
+      "catalog_object_id": "2TZFAOHWGG7PAK2QEXWYPZSP",
+      "location_id": "18YC4JDH91E1H",
+      "quantity": "25",
+      "calculated_at": "2026-08-01T09:00:00.000Z"
+    },
+    {
+      "catalog_object_id": "HURXQOOAIC4IZSI2BEXQRYFY",
+      "location_id": "18YC4JDH91E1H",
+      "quantity": "8",
+      "calculated_at": "2026-08-01T09:00:00.000Z"
+    }
   ],
   "tokens": [
     {
       "id": "tok_seed_full",
       "access_token": "EAAAl-unit-seeded-access-token-full-scopes",
       "refresh_token": "EQAAl-unit-seeded-refresh-token-full-scopes",
-      "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ORDERS_WRITE", "ITEMS_READ", "ITEMS_WRITE",
-                 "PAYMENTS_READ", "PAYMENTS_WRITE", "LOYALTY_READ", "LOYALTY_WRITE", "INVENTORY_READ",
-                 "INVENTORY_WRITE", "DEVELOPER_APPLICATION_WEBHOOKS_WRITE"]
+      "scopes": [
+        "MERCHANT_PROFILE_READ",
+        "ORDERS_READ",
+        "ORDERS_WRITE",
+        "ITEMS_READ",
+        "ITEMS_WRITE",
+        "PAYMENTS_READ",
+        "PAYMENTS_WRITE",
+        "LOYALTY_READ",
+        "LOYALTY_WRITE",
+        "INVENTORY_READ",
+        "INVENTORY_WRITE",
+        "DEVELOPER_APPLICATION_WEBHOOKS_WRITE"
+      ]
     },
     {
       "id": "tok_seed_readonly",
       "access_token": "EAAAl-unit-seeded-access-token-read-only",
       "refresh_token": "EQAAl-unit-seeded-refresh-token-read-only",
-      "scopes": ["MERCHANT_PROFILE_READ", "ORDERS_READ", "ITEMS_READ", "PAYMENTS_READ", "LOYALTY_READ",
-                 "INVENTORY_READ"]
+      "scopes": [
+        "MERCHANT_PROFILE_READ",
+        "ORDERS_READ",
+        "ITEMS_READ",
+        "PAYMENTS_READ",
+        "LOYALTY_READ",
+        "INVENTORY_READ"
+      ]
     }
   ]
 }

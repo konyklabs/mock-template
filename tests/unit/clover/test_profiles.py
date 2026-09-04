@@ -87,7 +87,9 @@ def test_chaos_demo_ships_four_rules_on_a_virtual_clock_and_the_request_rules_fi
         assert h.get(f"/orders/{order['id']}").status == 200  # the stored token never changed
 
 
-SEED_DIGEST = "512b326c99fbee5b98fb8a08e39700b5cbde435ff7c308b231eca408c33fc091"
+# Re-pinned for konyklabs/roadmap#15: the scenario gained a second customer
+# and a second order so every list survives the conformance page walk.
+SEED_DIGEST = "6366ec024e4c1e0c5c5f94fa4f0a30cedf67426002374a2e6ca7ab1af6c15f5e"
 """The entity digest of the shipped scenario, pinned as a literal.
 
 Identical on every profile because seeded ids come from the document, never

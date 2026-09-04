@@ -1,4 +1,4 @@
-"""Thirty-four units, each broken in exactly one way, and the check each must trip.
+"""Fifty-six units, each broken in exactly one way, and the check each must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -34,10 +34,11 @@ the seams are real and the defects are not.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import os
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from tests.conformance.harness import PROFILES
@@ -45,9 +46,11 @@ from tests.conformance.mutants.model import Mutant, Provenance, register
 from tests.conformance.mutants.seams import (
     AuthAdapterOverlay,
     ClientOverlay,
+    DeafWebhookFaultSelector,
     ErrorShaperOverlay,
     ImpatientWebhookDispatcher,
     LeakyFaultSelector,
+    LoopBreakingFaultSelector,
     PermissiveStateMachine,
     SignerOverlay,
     UngatedWebhookDispatcher,
@@ -80,6 +83,8 @@ from vendorfake.core.kernel.types import (
     VendorDefinition,
 )
 from vendorfake.core.state.machine import MachineDef
+from vendorfake.core.util.json import dump_json
+from vendorfake.core.util.paths import dot_get
 from vendorfake.core.webhooks.dispatcher import WebhookDispatcher
 from vendorfake.core.webhooks.models import DeliveryMetadata
 from vendorfake.square.retry import RETRY_NUMBER_HEADER, RETRY_REASON_HEADER, RETRY_REASONS
@@ -121,12 +126,20 @@ register(
         defect="GET /__unit/info omits `clock`, so a consumer cannot reproduce the run's time base.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C01"}),
+        also_trips=frozenset({"C29"}),
+        cascade=(
+            "C29's delay observation needs the clock block: the timer webhook.delay schedules is "
+            "only visible in /__unit/info's pending_timers, so with the block gone C29 fails by "
+            "name -- 'this contract cannot be asked without it' -- before any delivery fault is "
+            "observed. (An earlier wording of this cascade blessed the KeyError the check used to "
+            "raise here; a crash asks nothing, and the meta-suite now refuses one as evidence.)"
+        ),
         control=replace_control_route(
             "GET",
             "/__unit/info",
-            # `clock` and not one of the other six deliberately: it is the only
-            # documented key no other check reads, so this mutant measures C01
-            # rather than measuring the checks that aim themselves with /info.
+            # `clock` and not one of the other six deliberately: it is the key
+            # the fewest checks read, so this mutant measures C01 rather than
+            # measuring the checks that aim themselves with /info.
             rewrite_document(lambda document: {k: v for k, v in document.items() if k != "clock"}),
         ),
     )
@@ -293,6 +306,12 @@ register(
         defect="hydrate() mints an id from the system entropy, so two units seeded alike hold different state.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C06"}),
+        also_trips=frozenset({"C30"}),
+        cascade=(
+            "C30 compares two same-profile units after identical probes; hydration drawing from "
+            "system entropy desynchronizes the pair before any control read happens, so its digest "
+            "comparison genuinely fails on the same defect C06 names."
+        ),
         vendor=lambda inner: VendorOverlay(inner, hydrate=_hydrate_with_a_random_entity),
     )
 )
@@ -366,6 +385,12 @@ register(
         defect="A handler's status depends on process-global state, so two units given identical traffic diverge.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C08"}),
+        also_trips=frozenset({"C30"}),
+        cascade=(
+            "C30's pair of units shares this interpreter, so the process-global counter genuinely "
+            "makes the two answer identical probes differently -- the same divergence C08 names, "
+            "witnessed by a different comparison."
+        ),
         vendor=lambda inner: VendorOverlay(inner, routes=_add_drifting_route),
     )
 )
@@ -531,6 +556,12 @@ register(
         defect="A capability the core gates on is neither declared nor excused, so its behaviour is silently off.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C11"}),
+        also_skips=frozenset({"C29"}),
+        skip_reason=(
+            "The document this mutant rewrites is the one C29's precondition reads: with "
+            "webhooks.chaos no longer listed, delivery-scope fault injection is honestly unaskable "
+            "and C29 skips. C11 is the contract that catches the omission itself."
+        ),
         control=replace_control_route("GET", "/__unit/capabilities", rewrite_document(_drop_a_gated_declaration)),
     )
 )
@@ -947,6 +978,13 @@ register(
         defect="GET /__unit/routes names an idempotency key_path the route does not deduplicate on.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C19"}),
+        also_trips=frozenset({"C24", "C25"}),
+        cascade=(
+            "C24 and C25 aim their keys at the published key_path exactly as C19 does, so a key sent "
+            "at the documented path is never stored: the second operation sees no replay (C24's "
+            "sanity replay on the first route fails) and a reused key with a different body executes "
+            "again instead of conflicting (C25). One lie in the route table, three contracts it breaks."
+        ),
         control=replace_control_route("GET", "/__unit/routes", rewrite_document(_lie_about_the_idempotency_key)),
     )
 )
@@ -1032,6 +1070,12 @@ register(
         defect="Retries are submitted immediately instead of being put on the clock, so every declared interval is 0.",
         provenance=Provenance.HYPOTHETICAL,
         trips=frozenset({"C21"}),
+        also_trips=frozenset({"C29"}),
+        cascade=(
+            "_schedule is the seam that carries webhook.delay as well as every retry, so a dispatcher "
+            "that submits instead of putting the attempt on the clock also delivers a delayed event "
+            "at once; C29 observes no pending timer and the delay fault has genuinely had no effect."
+        ),
         # The one profile that runs a virtual clock, which is what makes a
         # declared interval crossable rather than waitable. On any other
         # profile C21's precondition is unmet and this mutant would prove
@@ -1125,6 +1169,352 @@ Python startup assertion in front of it.
 
 
 # ---------------------------------------------------------------------------
+# konyklabs/roadmap#15 -- the coverage the third adversarial round found
+# missing. Each of M32 through M40 reproduces a mutation that was applied to
+# this codebase after the first remediation and left the whole conformance
+# matrix green (konyklabs/roadmap#10, findings N-3a..f, N-5, N-6, N-7).
+# ---------------------------------------------------------------------------
+
+_UNAUTHENTICATED_OPERATION = "ListLocations"
+"""The one route M32 stops authenticating. Chosen because it is NOT the route
+C17 used to probe: the finding was that C17 asked its question of one route
+out of sixteen, and a mutant on that one route would not have shown it."""
+
+
+def _skips_auth_on_one_route(inner: AuthAdapter, args: HandlerArgs, mode: str) -> AuthResult:
+    if args.route.operation_id == _UNAUTHENTICATED_OPERATION:
+        return AuthResult(principal_id="anyone", scopes=SQUARE_SCOPES, meta={"mode": mode})
+    return inner.resolve(args, mode)
+
+
+register(
+    Mutant(
+        id="M32",
+        name="auth-skipped-for-one-route",
+        defect="One route that declares auth resolves any caller, credential or none, to a principal holding every scope.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C17"}),
+        vendor=lambda inner: VendorOverlay(
+            inner, auth=AuthAdapterOverlay(inner.auth, resolve=_skips_auth_on_one_route)
+        ),
+    )
+)
+"""N-3a. C17 probed ``POST /v2/orders`` and only that; a unit that served every
+seeded location to an anonymous caller was certified conformant because the
+route it stopped authenticating was not the one asked. The fix is the C03
+treatment: every route that declares ``auth`` is asked all four questions."""
+
+
+def _first_scoped_route(routes: Sequence[Route]) -> str | None:
+    """The route the single-instance C17 chose: the first that declares scopes."""
+    return next((route.key for route in routes if route.auth is not None and route.scopes), None)
+
+
+def _scope_enforced_on_one_route_only(spared: str | None) -> Callable[[AuthAdapter, HandlerArgs, str], AuthResult]:
+    def resolve(inner: AuthAdapter, args: HandlerArgs, mode: str) -> AuthResult:
+        result = inner.resolve(args, mode)
+        if args.route.key == spared:
+            return result
+        # The kernel checks Route.scopes against what comes back, so an
+        # adapter that grants every scope to any authenticated caller has
+        # deleted scope enforcement without touching a route declaration.
+        return AuthResult(principal_id=result.principal_id, scopes=SQUARE_SCOPES, meta=result.meta)
+
+    return resolve
+
+
+register(
+    Mutant(
+        id="M33",
+        name="scope-enforced-on-one-route-only",
+        defect="Every authenticated caller is granted every scope, on every route but the first one that declares scopes.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C17"}),
+        vendor=lambda inner: VendorOverlay(
+            inner,
+            auth=AuthAdapterOverlay(
+                inner.auth, resolve=_scope_enforced_on_one_route_only(_first_scoped_route(inner.routes))
+            ),
+        ),
+    )
+)
+"""N-3b. The complement of M32, and the one that says why C17 has to iterate:
+scope enforcement removed from every route EXCEPT the one C17 probed left the
+matrix green, because a check that asks one route can be satisfied by a unit
+that is correct on exactly that route."""
+
+
+_SHARED_SCOPE = "conformance-shared"
+
+
+def _collapse_idempotency_scopes(routes: Sequence[Route]) -> Sequence[Route]:
+    return tuple(
+        route
+        if route.idempotency is None
+        else dataclasses.replace(route, idempotency=dataclasses.replace(route.idempotency, scope=_SHARED_SCOPE))
+        for route in routes
+    )
+
+
+def _publish_distinct_scopes(document: dict[str, Any]) -> dict[str, Any]:
+    """The route table keeps saying what the declarations used to say."""
+    rows: list[dict[str, Any]] = []
+    for row in document["routes"]:
+        spec = row.get("idempotency")
+        if spec is None:
+            rows.append(row)
+            continue
+        rows.append({**row, "idempotency": {**spec, "scope": f"{row['method']} {row['path']}"}})
+    return {**document, "routes": rows}
+
+
+register(
+    Mutant(
+        id="M34",
+        name="idempotency-scope-collapsed",
+        defect="Every idempotent route stores its answers under one scope, so a key replays across operations while the route table publishes a scope per operation.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C24"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_collapse_idempotency_scopes),
+        control=replace_control_route("GET", "/__unit/routes", rewrite_document(_publish_distinct_scopes)),
+    )
+)
+"""N-3c. ``f"{scope} {key}"`` -> ``key`` in the store's idempotency table: a
+PayOrder sent under a key a CreateOrder had used came back with the CreateOrder
+body and a 200. The matrix stayed green because C19 sends its key to one route
+and never to a second. The document is rewritten alongside because the defect
+is "the scope the table publishes is not the scope the unit keys on" -- a
+vendor that declared one scope everywhere would be caught by the declaration."""
+
+
+def _ignore_on_mismatch(routes: Sequence[Route]) -> Sequence[Route]:
+    return tuple(
+        route
+        if route.idempotency is None
+        else dataclasses.replace(route, idempotency=dataclasses.replace(route.idempotency, on_mismatch="replay"))
+        for route in routes
+    )
+
+
+def _publish_conflict(document: dict[str, Any]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for row in document["routes"]:
+        spec = row.get("idempotency")
+        rows.append(row if spec is None else {**row, "idempotency": {**spec, "on_mismatch": "conflict"}})
+    return {**document, "routes": rows}
+
+
+register(
+    Mutant(
+        id="M35",
+        name="on-mismatch-conflict-ignored",
+        defect="A reused key with a different body replays the stored answer on every route, while the route table still promises 'conflict'.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C25"}),
+        also_trips=frozenset({"C24"}),
+        cascade=(
+            "C24 verifies a shared scope's visibility in the DECLARED direction: the orders.create "
+            "alias pair publishes conflict and answers a replay, so the share is real but answers "
+            "the direction the table denies -- a genuine violation of both contracts."
+        ),
+        vendor=lambda inner: VendorOverlay(inner, routes=_ignore_on_mismatch),
+        control=replace_control_route("GET", "/__unit/routes", rewrite_document(_publish_conflict)),
+    )
+)
+"""N-3d. The ``on_mismatch == "conflict"`` branch in the kernel's ``_replay``
+deleted outright: a consumer who reuses a key with new data is handed the old
+answer and a 200, which is exactly the silent wrong answer the 409 exists to
+prevent. C19 sends the same body twice and cannot see it."""
+
+
+def _overlapping_pages(routes: Sequence[Route]) -> Sequence[Route]:
+    """Every paginated route repeats the previous page's last row as the first of the next."""
+
+    def wrap(handler: Handler, spec: Any) -> Handler:
+        # Closure state: the last row served. A real off-by-one keeps it in
+        # the cursor; this keeps it here, and from outside they are the same.
+        last: list[Any] = [None]
+        continued_param = spec.cursor_param if spec.style == "cursor" else spec.offset_param
+
+        def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+            reply = handler(args)
+            if not isinstance(reply, ReplyInit) or not isinstance(reply.json, Mapping):
+                return reply
+            document = dict(reply.json)
+            items = list(document.get(spec.items_path) or [])
+            if spec.where == "query":
+                raw = args.req.query.get(continued_param)
+            else:
+                body = args.body()
+                raw = body.get(continued_param) if isinstance(body, Mapping) else None
+            # `offset=0` IS page one: an offset walk names every page including
+            # the first, so only a non-zero offset marks a continued page. A
+            # cursor marks one by being present at all.
+            continued = raw not in (None, "", 0, "0") if spec.style == "offset" else bool(raw)
+            if continued and last[0] is not None and items:
+                items = [last[0], *items]
+            if items:
+                last[0] = items[-1]
+            document[spec.items_path] = items
+            return dataclasses.replace(reply, json=document)
+
+        return wrapped
+
+    return tuple(
+        route if route.pagination is None else dataclasses.replace(route, handler=wrap(route.handler, route.pagination))
+        for route in routes
+    )
+
+
+register(
+    Mutant(
+        id="M36",
+        name="pages-overlap-by-one-row",
+        defect="On every paginated route, the last row of each page is served again as the first row of the next.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C26"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_overlapping_pages),
+    )
+)
+"""N-3e. A consumer looping until the cursor is absent receives every row past
+the first page twice and no error anywhere. Five unit tests caught it; the
+conformance matrix did not, because C20 pages the store through the control
+plane and no contract walked a vendor's own list route."""
+
+
+def _loop_breaking_selector(engine: ChaosEngine, capabilities: CapabilityRegistry) -> FaultSelector:
+    return LoopBreakingFaultSelector(engine, capabilities)
+
+
+register(
+    Mutant(
+        id="M37",
+        name="chaos-loop-breaks-at-the-first-fire",
+        defect="Once a rule fires, the rules below it stop counting their matches, so a lower rule's nth silently re-numbers.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C27"}),
+        selector=_loop_breaking_selector,
+    )
+)
+"""N-3f. The engine's own docstring names this as the invariant "easiest to
+optimise into a bug", and it was pinned by a unit test only: C08 installs one
+rule and C12 one rule, so no contract had ever read the counter of a rule that
+did not fire."""
+
+
+def _enable_is_a_no_op(handler: Handler) -> Handler:
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        body = args.body()
+        if not isinstance(body, Mapping) or "enable" not in body:
+            return handler(args)
+        stripped = {name: value for name, value in body.items() if name != "enable"}
+        if not stripped:
+            return ReplyInit(json={"capabilities": [view.as_json() for view in args.ctx.capabilities.view()]})
+        # The other verbs still run; only `enable` is dropped on the floor.
+        request = dataclasses.replace(args.req, raw_body=dump_json(stripped))
+        return handler(HandlerArgs(req=request, params=args.params, ctx=args.ctx, route=args.route, auth=args.auth))
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M38",
+        name="capability-enable-verb-is-a-no-op",
+        defect="POST /__unit/capabilities accepts `enable` and does nothing with it; `set`, `delta` and `disable` still work.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C28"}),
+        control=replace_control_route("POST", "/__unit/capabilities", _enable_is_a_no_op),
+    )
+)
+"""N-5. The control plane takes four verbs and every contract restored
+capabilities with `set`, so three of the four could be stubbed out and a
+foreign implementation certified with them missing."""
+
+
+_REPLAY_MARKER = "x-unit-idempotent-replay"
+
+
+def _stamp_replay_marker(handler: Handler) -> Handler:
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        reply = handler(args)
+        headers = {**(reply.headers or {}), _REPLAY_MARKER: "true"}
+        return dataclasses.replace(reply, headers=headers)
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M39",
+        name="replay-marker-on-every-response",
+        defect="Every successful response claims to be an idempotent replay, the first execution included.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C19"}),
+        also_trips=frozenset({"C24"}),
+        cascade=(
+            "The marker is evidence both contracts read: C19's first-execution clause and C24's "
+            "partner clause each assert its absence on a response that replayed nothing, so a unit "
+            "stamping it unconditionally genuinely violates both."
+        ),
+        vendor=lambda inner: VendorOverlay(inner, routes=wrap_vendor_handlers(_stamp_replay_marker)),
+    )
+)
+"""N-6. C19 asserted the replay carries the marker and never that the first
+execution does not; a consumer routing on "was this deduplicated?" is misled
+on every call, and the suite stayed green."""
+
+
+def _deaf_webhook_selector(engine: ChaosEngine, capabilities: CapabilityRegistry) -> FaultSelector:
+    return DeafWebhookFaultSelector(engine, capabilities)
+
+
+register(
+    Mutant(
+        id="M40",
+        name="webhook-scope-rules-never-fire",
+        defect="A delivery-scope rule is accepted, published with its counters, and never consulted when an event goes out.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C29"}),
+        selector=_deaf_webhook_selector,
+    )
+)
+"""N-7. Killing ``webhook.duplicate``, ``webhook.delay``, ``webhook.drop_ack``
+and ``webhook.out_of_order`` at once left the matrix green: C14 covers the
+request-scope gate and C18 the delivery gate, and nothing observed a delivery
+fault at the sink -- the same shape as original finding 7, one level down."""
+
+
+register(
+    Mutant(
+        id="M41",
+        name="idempotency-scopes-collapse-honestly",
+        defect="Every idempotent route both stores AND declares one shared scope, so keys cross operations by declaration.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C24"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_collapse_idempotency_scopes),
+    )
+)
+"""The disarm the first C24 permitted (review of konyklabs/roadmap#15).
+
+M34 lies -- collapsed store, per-route document -- and the isolation
+assertions catch it. This mutant tells the truth about the same collapse, and
+the first C24's precondition ("a second DECLARED scope exists") then found
+nothing to compare and reported a SKIP: the check was switched off by the
+defect it hunts. The precondition now asks only for two idempotent routes,
+and declarations that have all collapsed to one string are the finding.
+"""
+
+
+def _under_declare_webhook_faults(document: dict[str, Any]) -> dict[str, Any]:
+    chaos = dict(document["chaos"])
+    faults = [dict(fault) for fault in chaos["faults"]]
+    webhook = [fault["name"] for fault in faults if fault["scope"] == "webhook"]
+    keep = set(webhook[:1])
+    chaos["faults"] = [fault for fault in faults if fault["scope"] != "webhook" or fault["name"] in keep]
+    return {**document, "chaos": chaos}
+
+
 # C33 -- an unmatched request is named and recorded.
 # ---------------------------------------------------------------------------
 
@@ -1152,6 +1542,379 @@ def _near_miss_stripping_binding(transport: str, client: ConformanceClient) -> C
 def _point_the_auth_role_at_an_undeclared_capability(inner: VendorDefinition) -> VendorDefinition:
     broken = {**dict(inner.roles), "auth": "not-a-declared-capability"}
     return VendorOverlay(inner, roles=broken)
+
+
+register(
+    Mutant(
+        id="M42",
+        name="webhook-fault-list-under-declares",
+        defect="GET /__unit/info publishes one webhook-scope fault where the core catalogue declares five.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C29"}),
+        control=replace_control_route("GET", "/__unit/info", rewrite_document(_under_declare_webhook_faults)),
+    )
+)
+"""The list C29 walks, shortened at the source (review of konyklabs/roadmap#15).
+
+C29 reads its fault list from the unit under test, so a unit that published
+one fault and implemented one fault produced "1 delivery faults observed" and
+a pass. The list is now cross-checked against BUILTIN_FAULTS -- the same
+shape as C11's core_gates comparison -- so under-declaring is a failure.
+"""
+
+
+def _refuse_every_mismatch(routes: Sequence[Route]) -> Sequence[Route]:
+    return tuple(
+        route
+        if route.idempotency is None
+        else dataclasses.replace(route, idempotency=dataclasses.replace(route.idempotency, on_mismatch="conflict"))
+        for route in routes
+    )
+
+
+def _publish_replay(document: dict[str, Any]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for row in document["routes"]:
+        spec = row.get("idempotency")
+        rows.append(row if spec is None else {**row, "idempotency": {**spec, "on_mismatch": "replay"}})
+    return {**document, "routes": rows}
+
+
+register(
+    Mutant(
+        id="M43",
+        name="on-mismatch-replay-refused",
+        defect="A reused key with a different body is refused on every route, while the route table promises 'replay'.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C25"}),
+        also_trips=frozenset({"C24"}),
+        cascade=(
+            "The mirror of M35's cascade: the alias pair publishes replay and answers a conflict, "
+            "so C24's declared-direction visibility clause is violated alongside C25."
+        ),
+        vendor=lambda inner: VendorOverlay(inner, routes=_refuse_every_mismatch),
+        control=replace_control_route("GET", "/__unit/routes", rewrite_document(_publish_replay)),
+    )
+)
+"""M35's mirror, for the branch M35 cannot reach (review of konyklabs/roadmap#15, item 6).
+
+M35 replays where the table promises conflict; this refuses where the table
+promises replay -- Square's documented UpdateOrder behaviour, "you get a 200
+response but the returned order doesn't reflect any of your updates", replaced
+with a 409 the document does not admit to. Until UpdateOrder published an
+example (example_body plus example_params), no registered mutant exercised the
+replay branch at all.
+"""
+
+
+_LIED_ABOUT_OPERATION = "AccumulateLoyaltyPoints"
+"""The route M44 and M46 break. Chosen because it had no example until the
+review of konyklabs/roadmap#15 forced one: a defect confined to it was exactly
+the defect the example-bearing sample could not see."""
+
+
+def _store_scope_in_anothers_bucket(routes: Sequence[Route]) -> Sequence[Route]:
+    return tuple(
+        route
+        if route.operation_id != _LIED_ABOUT_OPERATION or route.idempotency is None
+        else dataclasses.replace(route, idempotency=dataclasses.replace(route.idempotency, scope="orders.create"))
+        for route in routes
+    )
+
+
+def _publish_the_original_scope(document: dict[str, Any]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for row in document["routes"]:
+        if row.get("operation_id") == _LIED_ABOUT_OPERATION and row.get("idempotency") is not None:
+            rows.append({**row, "idempotency": {**row["idempotency"], "scope": "loyalty.accumulate"}})
+        else:
+            rows.append(row)
+    return {**document, "routes": rows}
+
+
+register(
+    Mutant(
+        id="M44",
+        name="one-route-stores-in-anothers-scope",
+        defect="One route keys its idempotency records in another operation's scope while the table declares its own.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C24"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_store_scope_in_anothers_bucket),
+        control=replace_control_route("GET", "/__unit/routes", rewrite_document(_publish_the_original_scope)),
+    )
+)
+"""The single-route leak the paired C24 could not see (review round 2 of
+konyklabs/roadmap#15). AccumulateLoyaltyPoints stores under orders.create, so
+a key a CreateOrder spent answers a loyalty request with an
+idempotency_conflict -- affirmative proof the record was found in a scope the
+table says it is not in. Only a sweep that probes every declared scope against
+every spent key meets it."""
+
+
+_SPARED_BY_THE_PAIRED_CHECK = frozenset({"orders.create", "orders.update"})
+
+
+def _collapse_all_but_the_pair(routes: Sequence[Route]) -> Sequence[Route]:
+    return tuple(
+        route
+        if route.idempotency is None or route.idempotency.scope in _SPARED_BY_THE_PAIRED_CHECK
+        else dataclasses.replace(route, idempotency=dataclasses.replace(route.idempotency, scope="everything-else"))
+        for route in routes
+    )
+
+
+register(
+    Mutant(
+        id="M45",
+        name="idempotency-scopes-collapsed-except-the-pair",
+        defect="Every idempotent scope except the two the paired check selected collapses, store and declaration together, into one bucket spanning six capabilities.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C24"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_collapse_all_but_the_pair),
+    )
+)
+"""The reviewer's probe, verbatim (review round 2 of konyklabs/roadmap#15).
+
+Under the paired C24 this stayed green: the two spared scopes were the two it
+asked about. It is caught by declaration now -- a shared scope spanning
+capabilities means switching one capability off half-disables another's replay
+namespace -- because with every collapsed route honestly declaring the shared
+scope, the share itself is what is wrong, not its implementation."""
+
+
+def _flip_one_routes_mismatch(routes: Sequence[Route]) -> Sequence[Route]:
+    return tuple(
+        route
+        if route.operation_id != _LIED_ABOUT_OPERATION or route.idempotency is None
+        else dataclasses.replace(route, idempotency=dataclasses.replace(route.idempotency, on_mismatch="replay"))
+        for route in routes
+    )
+
+
+def _publish_the_original_mismatch(document: dict[str, Any]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for row in document["routes"]:
+        if row.get("operation_id") == _LIED_ABOUT_OPERATION and row.get("idempotency") is not None:
+            rows.append({**row, "idempotency": {**row["idempotency"], "on_mismatch": "conflict"}})
+        else:
+            rows.append(row)
+    return {**document, "routes": rows}
+
+
+register(
+    Mutant(
+        id="M46",
+        name="on-mismatch-ignored-on-one-route",
+        defect="Exactly one route replays a reused key with a different body while the table promises conflict; every other route honours its declaration.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C25"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_flip_one_routes_mismatch),
+        control=replace_control_route("GET", "/__unit/routes", rewrite_document(_publish_the_original_mismatch)),
+    )
+)
+"""M35 confined to one route (review round 2 of konyklabs/roadmap#15). M35 and
+M43 collapse every route at once, so a C25 that sampled the example-bearing
+subset still tripped on them; a unit honouring on_mismatch exactly where the
+sample looked was green. C25 now iterates every example-bearing idempotent
+route, and this mutant is the proof it discriminates per route."""
+
+
+def _ignore_the_page_size(routes: Sequence[Route]) -> Sequence[Route]:
+    """Every walkable paginated route serves everything on one page."""
+
+    def wrap(handler: Handler, spec: Any) -> Handler:
+        def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+            req = args.req
+            drop = (spec.limit_param, spec.cursor_param, spec.offset_param)
+            if spec.where == "query":
+                query = {name: value for name, value in req.query.items() if name not in drop}
+                query_all = {name: value for name, value in req.query_all.items() if name not in drop}
+                req = dataclasses.replace(req, query=query, query_all=query_all)
+            else:
+                body = args.body()
+                if isinstance(body, Mapping):
+                    stripped = {name: value for name, value in body.items() if name not in drop}
+                    req = dataclasses.replace(req, raw_body=dump_json(stripped))
+            reply = handler(HandlerArgs(req=req, params=args.params, ctx=args.ctx, route=args.route, auth=args.auth))
+            if isinstance(reply, ReplyInit) and isinstance(reply.json, Mapping):
+                document = dict(reply.json)
+                document.pop(spec.next_cursor_path, None)
+                return dataclasses.replace(reply, json=document)
+            return reply
+
+        return wrapped
+
+    return tuple(
+        route
+        if route.pagination is None or not route.pagination.walkable
+        else dataclasses.replace(route, handler=wrap(route.handler, route.pagination))
+        for route in routes
+    )
+
+
+register(
+    Mutant(
+        id="M47",
+        name="pagination-ignores-the-page-size",
+        defect="Every walkable paginated route ignores limit/cursor/offset and serves every row on one page, emitting no cursor.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C26"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_ignore_the_page_size),
+    )
+)
+"""The reviewer's second probe, verbatim (review round 2 of konyklabs/roadmap#15).
+
+The one escape from C26's other clauses: one page, no repeat, no loss, nothing
+about pagination ever asked -- the walk's own detail line printed '1 pages' and
+passed. The page-boundary clause (pages >= 2 whenever the listing holds two
+rows at a one-row page size) is what this mutant holds down; a unit that
+honours limit but ignores the cursor is caught instead by the walk budget and
+the partition clauses, which the reviewer confirmed terminate.
+"""
+
+
+_ENABLE_DEAF_TO = "merchant-directory"
+"""The one name M48's registry refuses to enable. Deliberately NOT the first
+eligible capability: the sampled C28 asked only that one, so a defect confined
+to any other name was exactly what it could not see."""
+
+
+def _enable_ignores_one_name(handler: Handler) -> Handler:
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        body = args.body()
+        if not isinstance(body, Mapping) or "enable" not in body:
+            return handler(args)
+        enable = body["enable"]
+        kept = [name for name in enable if name != _ENABLE_DEAF_TO] if isinstance(enable, list) else enable
+        request = dataclasses.replace(args.req, raw_body=dump_json({**body, "enable": kept}))
+        return handler(HandlerArgs(req=request, params=args.params, ctx=args.ctx, route=args.route, auth=args.auth))
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M48",
+        name="enable-verb-deaf-to-one-name",
+        defect="POST /__unit/capabilities honours every verb for every capability, except that `enable` silently drops one name.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C28"}),
+        control=replace_control_route("POST", "/__unit/capabilities", _enable_ignores_one_name),
+    )
+)
+"""M38 confined to one capability (review round 3 of konyklabs/roadmap#15).
+
+M38 makes `enable` a no-op wholesale, so a C28 that asked one capability still
+tripped on it; a registry special-casing any OTHER name was green, because
+`requires` and dotted children are per-capability data and the check sampled
+the first. C28 now exercises every singly-toggleable capability, and this
+mutant is the proof it discriminates per name.
+"""
+
+
+def _crash_on_a_foreign_scopes_key(routes: Sequence[Route]) -> Sequence[Route]:
+    scopes = tuple(sorted({route.idempotency.scope for route in routes if route.idempotency is not None}))
+
+    def wrap(route: Route) -> Route:
+        spec = route.idempotency
+        if spec is None:
+            return route
+        inner = route.handler
+
+        def handler(args: HandlerArgs) -> ReplyInit | UnitResponse:
+            raw = dot_get(args.body(), spec.key_path)
+            if isinstance(raw, str) and raw:
+                for scope in scopes:
+                    if scope != spec.scope and args.ctx.store.get_idempotent(scope, raw) is not None:
+                        raise RuntimeError(f"audit hook: key {raw!r} already belongs to scope {scope!r}")
+            return inner(args)
+
+        return dataclasses.replace(route, handler=handler)
+
+    return tuple(wrap(route) for route in routes)
+
+
+register(
+    Mutant(
+        id="M49",
+        name="handler-crashes-on-a-foreign-scopes-key",
+        defect="Every idempotent handler consults the store across scopes and crashes on another operation's key, answering the vendor's 500.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C24"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_crash_on_a_foreign_scopes_key),
+    )
+)
+"""The 5xx that satisfied C24 vacuously (konyklabs/roadmap#46).
+
+A cross-scope probe answered by this unit carries no marker, no conflict and
+none of the stored bytes, and ``internal`` sat outside the ten-kind
+refuse-list, so every isolation probe passed on a request whose handler never
+finished -- evidence of nothing. The refusal test is an allow-list of
+post-lookup kinds now, and a 5xx defaults to "not proof". Only the handlers
+of idempotent routes are wrapped because the defect is a property of the
+idempotency machinery, and the crash fires only when the key is found under a
+FOREIGN scope: the unit is otherwise healthy, which is what kept the old C24
+green everywhere else."""
+
+
+def _journal_refused_requests(routes: Sequence[Route]) -> Sequence[Route]:
+    # Per-application counter, not module-global: two units in one interpreter
+    # must not mint different audit ids, or this mutant smuggles in the
+    # process-global-state defect M11 models on top of the one it declares.
+    audit_ids = itertools.count(1)
+
+    def wrap(route: Route) -> Route:
+        if route.idempotency is None:
+            return route
+        inner = route.handler
+
+        def handler(args: HandlerArgs) -> ReplyInit | UnitResponse:
+            try:
+                return inner(args)
+            except UnitError:
+                args.ctx.store.append_journal(
+                    collection="audit_refusals",
+                    entity_id=f"refusal-{next(audit_ids)}",
+                    op="insert",
+                    from_version=None,
+                    to_version=1,
+                    changed=("reason",),
+                )
+                raise
+
+        return dataclasses.replace(route, handler=handler)
+
+    return tuple(wrap(route) for route in routes)
+
+
+register(
+    Mutant(
+        id="M50",
+        name="refusals-journalled-on-idempotent-routes",
+        defect="Every idempotent handler journals the attempt when it refuses a request, so a rejected mutation leaves a committed trace.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C24"}),
+        vendor=lambda inner: VendorOverlay(inner, routes=_journal_refused_requests),
+    )
+)
+"""The refusal that journalled, which nothing asserted against (konyklabs/roadmap#46).
+
+C24 accepted a post-lookup refusal as proof the lookup missed -- correctly --
+and never asked whether the refusal committed anything. On this unit a
+cross-scope probe refused with version_conflict or missing_field also appends
+an audit entry, so 'the route answered for itself' and 'the handler did not
+run' were both claimed while the journal quietly moved. C24 now reads the
+journal seq around every probe: fresh executions must move it, refusals and
+declared-direction answers must not. Confined to idempotent routes' handlers
+for the same reason as M49."""
+
+
+def _draw_an_order_id_per_read(handler: Handler) -> Handler:
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        args.ctx.vendor.ids.order()  # type: ignore[attr-defined]
+        return handler(args)
+
+    return wrapped
 
 
 register(
@@ -1218,6 +1981,103 @@ def _report_chaos_disabled(document: dict[str, Any]) -> dict[str, Any]:
 
 register(
     Mutant(
+        id="M51",
+        name="catalogue-read-draws-an-order-id",
+        defect="GET /__unit/errors draws one order id from the vendor's deterministic stream on every read.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C30"}),
+        also_trips=frozenset({"C10"}),
+        cascade=(
+            "C10 GETs the catalogue on both bindings and then byte-compares a vendor probe; on a "
+            "both-transports target the two units' draw counts can differ by discovery order, so "
+            "the same consumed stream genuinely desynchronizes C10's comparison. Unreachable on "
+            "this harness (inprocess only) -- declared so a wider matrix does not read it as "
+            "undeclared collateral."
+        ),
+        control=replace_control_route("GET", "/__unit/errors", _draw_an_order_id_per_read),
+    )
+)
+"""Toast's shipped catalogue defect, transplanted to the vendor the harness
+builds (konyklabs/roadmap#42). The real bug drew twenty request ids per
+catalogue GET; Square's refusals embed no drawn value, so this draws from the
+stream Square's answers DO consume -- the id stream that mints order ids. The
+catalogue body is untouched (C31 and C32 stay green, and no byte of any one
+answer is wrong); the whole defect is that a read moved a stream, which only
+a two-unit comparison can see: the read-first unit's next CreateOrder mints a
+different id than an untouched unit's, and the state digests diverge."""
+
+
+def _render_from_the_live_clock(handler: Handler) -> Handler:
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        reply = handler(args)
+        if isinstance(reply, ReplyInit) and isinstance(reply.json, Mapping):
+            stamped = {**reply.json, "rate_limit_reset_epoch": int(args.ctx.clock.now() // 1000)}
+            return dataclasses.replace(reply, json=stamped)
+        return reply
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M52",
+        name="catalogue-renders-the-clock",
+        defect="GET /__unit/errors stamps a rate-limit reset epoch computed from the unit's clock into the document.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C32"}),
+        also_trips=frozenset({"C31"}),
+        cascade=(
+            "C31 is allowed red as armour, not because it can trip here: chaos-demo's virtual "
+            "clock is frozen between two adjacent reads, so the stamped epoch cannot move and C31 "
+            "stays green on this profile every time. The allowance covers the same defect on a "
+            "REAL-clock profile, where two reads straddling a second boundary genuinely differ -- "
+            "the original CI failure's mechanism."
+        ),
+        profiles=("chaos-demo",),
+        control=replace_control_route("GET", "/__unit/errors", _render_from_the_live_clock),
+    )
+)
+"""The half of konyklabs/roadmap#42 that actually failed in CI: toast's 429
+row computed ``floor(now/1000) + retry_after`` from the live clock, so two
+renderings a second apart disagreed and C10 went red on a loaded runner only
+-- "3.13 red, 3.11 green" was timing luck wearing a version number. Judged on
+``chaos-demo`` because that is the one profile with a virtual clock, and C32
+needs to MOVE the clock to make the defect fire deterministically rather than
+once a second."""
+
+
+def _stamp_a_render_counter(handler: Handler) -> Handler:
+    renders = itertools.count(1)
+
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        reply = handler(args)
+        if isinstance(reply, ReplyInit) and isinstance(reply.json, Mapping):
+            return dataclasses.replace(reply, json={**reply.json, "render_count": next(renders)})
+        return reply
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M53",
+        name="catalogue-counts-its-renders",
+        defect="GET /__unit/errors stamps a per-unit render counter into the document, so no two reads agree.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C31"}),
+        control=replace_control_route("GET", "/__unit/errors", _stamp_a_render_counter),
+    )
+)
+"""The smaller lie C30 cannot see (konyklabs/roadmap#42). Nothing vendor-side
+is consumed -- an untouched unit answers every refusal and mutation
+identically -- and the counter is per-unit, so C10's one-read-per-binding
+comparison agrees too. Only reading the catalogue TWICE ON ONE UNIT notices,
+which is C31's whole job, and is the original issue's repro verbatim: two
+identical GETs of /__unit/errors answering different bytes."""
+
+
+register(
+    Mutant(
         id="M56",
         name="no-chaos-profile-reports-its-chaos-role-disabled",
         defect=(
@@ -1239,11 +2099,13 @@ register(
             "Measured, not assumed: this is the exact failure the mutant run against this fixture showed "
             "before this line was added."
         ),
-        # C08 and C12 both declare Requires(chaos=True); their precondition check
-        # (conformance/env.py::unmet_precondition) reads the same lying document,
-        # so both correctly report the capability as off and SKIP rather than run
-        # -- an accurate consequence of the lie, not a second undiscovered defect.
-        skips_everywhere=frozenset({"C08", "C12"}),
+        # C08, C12 and C27 all declare Requires(chaos=True); their precondition
+        # check (conformance/env.py::unmet_precondition) reads the same lying
+        # document, so all three correctly report the capability as off and SKIP
+        # rather than run -- an accurate consequence of the lie, not a second
+        # undiscovered defect. (C27 joined when the konyklabs/roadmap#15 stack
+        # landed beside this mutant.)
+        skips_everywhere=frozenset({"C08", "C12", "C27"}),
         control=replace_control_route("GET", "/__unit/capabilities", rewrite_document(_report_chaos_disabled)),
         profiles=("no-chaos",),
     )

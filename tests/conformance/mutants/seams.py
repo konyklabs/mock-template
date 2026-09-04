@@ -53,7 +53,7 @@ from typing import Any
 from vendorfake.conformance.client import MISSING, ConformanceClient, ConformanceResponse, FormPairs, QueryPairs
 from vendorfake.core.capability.gates import CoreCapability
 from vendorfake.core.capability.registry import CapabilityRegistry
-from vendorfake.core.chaos.engine import ChaosEngine, ChaosSubject
+from vendorfake.core.chaos.engine import ChaosDecision, ChaosEngine, ChaosSubject
 from vendorfake.core.chaos.selector import FaultSelection, FaultSelector
 from vendorfake.core.config.models import ProfileDocument
 from vendorfake.core.kernel.magic import MagicExtraction
@@ -89,9 +89,11 @@ from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION, DeliveryMet
 __all__ = [
     "AuthAdapterOverlay",
     "ClientOverlay",
+    "DeafWebhookFaultSelector",
     "ErrorShaperOverlay",
     "ImpatientWebhookDispatcher",
     "LeakyFaultSelector",
+    "LoopBreakingFaultSelector",
     "PermissiveStateMachine",
     "SignerOverlay",
     "UngatedWebhookDispatcher",
@@ -563,6 +565,64 @@ class LeakyFaultSelector(FaultSelector):
             # what makes the leak invisible without C12's counter comparison.
             self._engine.evaluate(subject)
         return super().select_request(subject, in_band)
+
+
+class LoopBreakingFaultSelector(FaultSelector):
+    """A selector under which the engine's rule loop stops at the first fire.
+
+    The defect ``core/chaos/engine.py`` calls "the single easiest line in this
+    file to optimise into a bug": ``break`` once a decision is taken, so the
+    rules below the one that fired never count their match, and ``when.nth:
+    [2]`` on a lower rule silently means "the second request no earlier rule
+    claimed". The engine has no seam of its own -- the kernel constructs it
+    -- so the substitution rides in through the selector, which is the only
+    caller of ``evaluate`` and the object the kernel does let a caller
+    replace. After the real loop has run, the matches it counted for every
+    rule *below* the firing one are taken back; from ``/__unit/chaos``, and
+    from every later request, that is indistinguishable from the loop having
+    broken.
+
+    PROVENANCE: hypothetical. Recorded in the third adversarial round
+    (konyklabs/roadmap#10, N-3f) as a mutation the whole matrix stayed green
+    under, because no contract read the counters of a rule that did not fire.
+    """
+
+    def select_request(
+        self,
+        subject: ChaosSubject,
+        in_band: Callable[[], MagicExtraction] | None = None,
+    ) -> FaultSelection:
+        selection = super().select_request(subject, in_band)
+        decision = selection.decision
+        if decision is None or selection.source != "rule":
+            return selection
+        engine = self._engine
+        with engine._lock:
+            below = False
+            for rule in engine._rules:
+                if below and rule.scope == subject.scope and engine._matches(rule, subject):
+                    engine._state[rule.id].matches -= 1
+                if rule.id == decision.rule_id:
+                    below = True
+        return selection
+
+
+class DeafWebhookFaultSelector(FaultSelector):
+    """A selector whose delivery-scope path never consults the engine.
+
+    ``select_request`` is the production one, so every request-scope contract
+    is untouched; ``select_webhook`` answers "nothing armed" for every event.
+    A rule with ``scope: webhook`` is accepted by ``POST /__unit/chaos/rules``
+    -- the capability gate there is real -- and then never fires, which is
+    the defect the third adversarial round (konyklabs/roadmap#10, N-7)
+    applied to all four delivery faults at once and found the suite green
+    under: C14 covers the gate, and nothing covered the effect.
+    """
+
+    def select_webhook(self, subject: ChaosSubject) -> ChaosDecision | None:
+        if subject.scope != "webhook":
+            raise ValueError(f"select_webhook needs a webhook-scope subject, got {subject.scope!r}")
+        return None
 
 
 class PermissiveStateMachine(StateMachine):

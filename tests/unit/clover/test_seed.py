@@ -30,7 +30,7 @@ def h() -> Iterator[Harness]:
 def test_the_shipped_scenario_parses(document: dict[str, Any]) -> None:
     doc = parse_seed_document(document)
     assert doc.merchant.id == c.SEED_MERCHANT_ID
-    assert len(doc.items) == 3 and len(doc.tokens) == 2 and len(doc.orders) == 1
+    assert len(doc.items) == 3 and len(doc.tokens) == 2 and len(doc.orders) == 2
 
 
 def test_every_constant_names_something_the_document_contains(document: dict[str, Any]) -> None:
@@ -57,8 +57,8 @@ def test_every_constant_names_something_the_document_contains(document: dict[str
     assert {c.ITEM_BEER_ID, c.ITEM_ESPRESSO_ID, c.ITEM_CROISSANT_ID} == ids["items"]
     assert {c.MODIFIER_GROUP_MILK_ID} == ids["modifier_groups"]
     assert {c.MODIFIER_OAT_ID, c.MODIFIER_SOY_ID} == ids["modifiers"]
-    assert {c.CUSTOMER_ADA_ID} == ids["customers"]
-    assert {c.SEED_OPEN_ORDER_ID} == ids["orders"]
+    assert {c.CUSTOMER_ADA_ID, c.CUSTOMER_GRACE_ID} == ids["customers"]
+    assert {c.SEED_OPEN_ORDER_ID, c.SEED_SECOND_ORDER_ID} == ids["orders"]
     rates = {t["id"]: t["rate"] for t in document["tax_rates"]}
     assert rates == {c.TAX_DEFAULT_ID: c.TAX_DEFAULT_RATE, c.TAX_BEVERAGE_ID: c.TAX_BEVERAGE_RATE}
     order = document["orders"][0]
@@ -119,8 +119,8 @@ def test_the_store_holds_what_the_document_describes(h: Harness) -> None:
     assert store.collection(COL.modifier_groups).size == 1
     assert store.collection(COL.modifiers).size == 2
     assert store.collection(COL.service_charges).size == 1
-    assert store.collection(COL.customers).size == 1
-    assert store.collection(COL.orders).size == 1
+    assert store.collection(COL.customers).size == 2
+    assert store.collection(COL.orders).size == 2
     assert store.collection(COL.tokens).size == 2
 
 

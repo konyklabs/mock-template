@@ -204,7 +204,9 @@ def test_no_profile_writes_a_colon_path_template() -> None:
         assert not re.search(r'"route": "[A-Z]+ [^"]*:', text), name
 
 
-SEED_DIGEST = "3fafd03a5ffa1120d23b520f7b47fbe58b6f8da1842179ba4f49d7e7f2b12869"
+# Re-pinned for konyklabs/roadmap#15: the scenario gained a second loyalty
+# account so the loyalty search survives the conformance page walk.
+SEED_DIGEST = "3273fb7a6a83045f8cf99d775da94906c1508f888d57aed3a146384d6ca9af73"
 """The entity digest of the shipped scenario, pinned as a literal.
 
 Identical on every profile because all six share ``seed/default.seed.json``,

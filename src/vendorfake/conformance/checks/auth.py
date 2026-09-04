@@ -1,4 +1,4 @@
-"""C17 -- the unit actually authenticates somebody.
+"""C17 -- the unit actually authenticates somebody, on every route that says so.
 
 The contract this file exists for was, until it was written, the largest hole
 in the suite: replacing the whole authentication step in
@@ -8,8 +8,18 @@ green. ``unauthorized`` and ``forbidden_scope`` appeared in the suite only as
 the behaviour -- so a unit that authenticated nobody, and served every seeded
 order to any anonymous caller, was certified conformant.
 
-Three observations and not one, because the three failures are different
-failures and a consumer routes on which one they got:
+Then it was a check of one route. The third adversarial round
+(konyklabs/roadmap#10, findings N-3a and N-3b; tracked as konyklabs/roadmap#15)
+skipped authentication for ``ListLocations`` alone, and separately removed
+scope enforcement from every route *except* the one this check probed, and the
+matrix stayed green both times. A check that asks one route out of sixteen can
+be satisfied by a unit that is correct on exactly that route. So this is now a
+class check in the same sense C03 is: every enabled route that declares
+``auth`` is asked every question that can be asked of it, and a failure names
+the route.
+
+Three observations per route and not one, because the three failures are
+different failures and a consumer routes on which one they got:
 
 * **no credential** must be refused. Otherwise the route is public.
 * **a valid credential** must be accepted -- that is, must not be refused *for
@@ -34,7 +44,7 @@ from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv, Credential, Rou
 from vendorfake.conformance.registry import check
 from vendorfake.conformance.types import ConformanceSkip, Requires, require
 
-__all__ = ["an_auth_required_route_authenticates"]
+__all__ = ["every_auth_route_authenticates"]
 
 _UNAUTHORIZED = "unauthorized"
 _FORBIDDEN_SCOPE = "forbidden_scope"
@@ -55,6 +65,23 @@ def _bad(credential: Credential) -> dict[str, str]:
     return {name: _GARBAGE for name in credential.headers}
 
 
+def _same_mode(env: CheckEnv, route: RouteRow) -> Credential | None:
+    """Any published credential of this route's mode, covering or not."""
+    return next((credential for credential in env.credentials() if credential.mode == route.auth), None)
+
+
+def _covering(env: CheckEnv, route: RouteRow) -> Credential | None:
+    """A published credential of the right mode carrying every scope this route wants."""
+    return next(
+        (
+            credential
+            for credential in env.credentials()
+            if credential.mode == route.auth and credential.covers(route.scopes)
+        ),
+        None,
+    )
+
+
 def _under_scoped(env: CheckEnv, route: RouteRow) -> Credential | None:
     """A published credential of the right mode that lacks a scope this route wants."""
     if not route.scopes:
@@ -69,98 +96,124 @@ def _under_scoped(env: CheckEnv, route: RouteRow) -> Credential | None:
     id="C17",
     name="auth: a credential is required, honoured, and checked for scope",
     asserts=(
-        "On a route declaring auth: no credential is unauthorized, an invented one is "
-        "unauthorized, a published one is accepted, and one missing a declared scope is "
-        "forbidden_scope -- never the same answer as a missing credential."
+        "On EVERY route declaring auth: no credential is unauthorized, an invented one is "
+        "unauthorized, a published one is accepted, and -- on every route declaring scopes -- one "
+        "missing a declared scope is forbidden_scope, never the same answer as a missing credential."
     ),
     requires=Requires(auth_route=True, credentials=True),
 )
-def an_auth_required_route_authenticates(env: CheckEnv) -> str:
+def every_auth_route_authenticates(env: CheckEnv) -> str:
     routes = env.auth_routes()
-    scoped = [route for route in routes if route.scopes]
-    # A route that declares scopes where the vendor has one, because the scope
-    # clause is the half that cannot be asked otherwise; any auth route
-    # otherwise, so a vendor with no scope vocabulary still gets the other two.
-    route = next((row for row in scoped if _under_scoped(env, row) is not None), None) or (scoped or routes)[0]
-    good = env.credential_for(route)
 
-    # A profile may preload a rule on exactly this route -- chaos-demo
-    # rate-limits every third POST /v2/orders, deterministically the accepted
-    # probe below -- and pre-auth faults run before AuthAdapter.resolve, so an
-    # intercepted probe answers with a fault kind instead of an auth kind and
-    # the acceptance clause observes nothing. Same reason C12, C14 and C18
-    # reset first.
+    # A profile may preload a rule on a route probed here -- chaos-demo
+    # rate-limits every third POST /v2/orders -- and pre-auth faults run
+    # before AuthAdapter.resolve, so an intercepted probe answers with a fault
+    # kind instead of an auth kind and the acceptance clause observes nothing.
+    # Same reason C12, C14 and C18 reset first.
     env.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
 
-    anonymous = env.client.call(route.method, route.probe_path, json_body={})
-    require(
-        anonymous.error_kind == _UNAUTHORIZED,
-        f"{route.key} declares auth={route.auth!r} and answered {anonymous.status} with "
-        f"x-unit-error={anonymous.error_kind!r} to a request carrying no credential at all, "
-        f"expected {_UNAUTHORIZED!r}. Step 5 of core/kernel/unit.py::_run_pipeline is what calls "
-        f"the vendor's AuthAdapter.resolve; a route that answers anything else is a route the "
-        f"whole authentication layer could be deleted from without anyone noticing.",
-    )
+    problems: list[str] = []
+    accepted_on: list[str] = []
+    scoped_on: list[str] = []
+    unaskable_scope: list[str] = []
 
-    invented = env.client.call(route.method, route.probe_path, json_body={}, headers=_bad(good))
-    require(
-        invented.error_kind == _UNAUTHORIZED,
-        f"{route.key} answered {invented.status} with x-unit-error={invented.error_kind!r} to an "
-        f"invented credential in the right header, expected {_UNAUTHORIZED!r}. Presence of the "
-        f"header is not authentication: the adapter must resolve the value against real state, "
-        f"and a unit that accepts any non-empty string teaches a consumer's tests to pass with a "
-        f"credential their production system would reject.",
-    )
+    for route in routes:
+        anonymous = env.client.call(route.method, route.probe_path, json_body={})
+        if anonymous.error_kind != _UNAUTHORIZED:
+            problems.append(
+                f"{route.key} declares auth={route.auth!r} and answered {anonymous.status} with "
+                f"x-unit-error={anonymous.error_kind!r} to a request carrying no credential at all, "
+                f"expected {_UNAUTHORIZED!r}. Step 5 of core/kernel/unit.py::_run_pipeline is what calls "
+                f"the vendor's AuthAdapter.resolve on EVERY route declaring auth; a route that answers "
+                f"anything else is a route the whole authentication layer could be deleted from without "
+                f"anyone noticing -- and it was, for one route, while the suite stayed green."
+            )
 
-    accepted = env.client.call(route.method, route.probe_path, json_body={}, headers=dict(good.headers))
-    require(
-        accepted.error_kind not in _CREDENTIAL_KINDS,
-        f"{route.key} answered {accepted.status} with x-unit-error={accepted.error_kind!r} to "
-        f"credential {good.label!r}, which GET /__unit/auth publishes as valid and as carrying "
-        f"{sorted(good.scopes)} against this route's {sorted(route.scopes)}. A fake that refuses "
-        f"its own published credential cannot be driven at all. Either the credential is stale -- "
-        f"AuthAdapter.credentials() must be computed from the store, not copied from the seed -- "
-        f"or resolve() and credentials() disagree about the same token.",
-    )
+        shaped = _same_mode(env, route)
+        if shaped is None:
+            problems.append(
+                f"{route.key} declares auth={route.auth!r} and GET /__unit/auth publishes no credential "
+                f"of that mode, so nothing can ever be accepted there: the route is describable and "
+                f"undrivable. AuthAdapter.credentials() must publish one credential per mode a route uses."
+            )
+            continue
 
-    weak = _under_scoped(env, route)
-    if weak is None:
-        # A skip, not a soft pass: three of four clauses held, but a contract
-        # that reports PASS while a clause went unasked is gated out with no
-        # red and no manifest entry -- undeclared_skips and never_ran both
-        # inspect SKIP outcomes only. Raising makes the gap visible to
-        # --strict and forces the profile to declare it in expected_skips.
+        invented = env.client.call(route.method, route.probe_path, json_body={}, headers=_bad(shaped))
+        if invented.error_kind != _UNAUTHORIZED:
+            problems.append(
+                f"{route.key} answered {invented.status} with x-unit-error={invented.error_kind!r} to an "
+                f"invented credential in the right header, expected {_UNAUTHORIZED!r}. Presence of the "
+                f"header is not authentication: the adapter must resolve the value against real state, "
+                f"and a unit that accepts any non-empty string teaches a consumer's tests to pass with a "
+                f"credential their production system would reject."
+            )
+
+        good = _covering(env, route)
+        if good is None:
+            problems.append(
+                f"{route.key} wants scopes {sorted(route.scopes)} and no credential published at "
+                f"/__unit/auth carries all of them, so the route can never be driven. Either publish a "
+                f"covering credential from AuthAdapter.credentials() or narrow Route.scopes."
+            )
+        else:
+            accepted = env.client.call(route.method, route.probe_path, json_body={}, headers=dict(good.headers))
+            if accepted.error_kind in _CREDENTIAL_KINDS:
+                problems.append(
+                    f"{route.key} answered {accepted.status} with x-unit-error={accepted.error_kind!r} to "
+                    f"credential {good.label!r}, which GET /__unit/auth publishes as valid and as carrying "
+                    f"{sorted(good.scopes)} against this route's {sorted(route.scopes)}. A fake that refuses "
+                    f"its own published credential cannot be driven at all. Either the credential is stale "
+                    f"-- AuthAdapter.credentials() must be computed from the store, not copied from the seed "
+                    f"-- or resolve() and credentials() disagree about the same token."
+                )
+            else:
+                accepted_on.append(route.key)
+
+        if not route.scopes:
+            continue
+        weak = _under_scoped(env, route)
+        if weak is None:
+            unaskable_scope.append(route.key)
+            continue
+        refused = env.client.call(route.method, route.probe_path, json_body={}, headers=dict(weak.headers))
+        if refused.error_kind != _FORBIDDEN_SCOPE:
+            problems.append(
+                f"{route.key} declares scopes {sorted(route.scopes)} and answered {refused.status} with "
+                f"x-unit-error={refused.error_kind!r} to credential {weak.label!r}, which carries only "
+                f"{sorted(weak.scopes)}. Expected {_FORBIDDEN_SCOPE!r}. The kernel checks Route.scopes "
+                f"against the AuthResult at step 5 of core/kernel/unit.py::_run_pipeline, on every route "
+                f"and not on a chosen one: enforcement removed everywhere but one route left the suite "
+                f"green while it asked only that route. Answering {_UNAUTHORIZED!r} instead would send a "
+                f"consumer to re-issue a token that is already valid."
+            )
+        elif refused.error_kind == anonymous.error_kind:
+            problems.append(
+                f"{route.key}: an under-scoped credential and no credential at all both answered "
+                f"{refused.error_kind!r}. They are different failures with different fixes -- get a "
+                f"credential, versus get a broader grant -- and a consumer cannot act on a unit that "
+                f"cannot tell them apart."
+            )
+        else:
+            scoped_on.append(route.key)
+
+    require(not problems, "\n".join(problems))
+
+    scoped = [route for route in routes if route.scopes]
+    if scoped and not scoped_on:
+        # A skip, not a soft pass: the other clauses held on every route, but a
+        # contract that reports PASS while a clause went unasked everywhere is
+        # gated out with no red and no manifest entry -- undeclared_skips and
+        # never_ran both inspect SKIP outcomes only. Raising makes the gap
+        # visible to --strict and forces the profile to declare it.
         raise ConformanceSkip(
-            f"{route.key} (auth={route.auth!r}, scopes {sorted(route.scopes)}): no published "
-            f"credential is under-scoped for any auth route, so the forbidden_scope clause "
-            f"cannot be asked -- add a narrower credential to AuthAdapter.credentials() to "
-            f"close it. The other three clauses held: anonymous -> "
-            f"{anonymous.status}:{anonymous.error_kind}; invented -> {invented.status}:"
-            f"{invented.error_kind}; {good.label!r} -> {accepted.status}:{accepted.error_kind or '-'}."
+            f"{len(scoped)} route(s) declare scopes ({', '.join(unaskable_scope)}) and no published "
+            f"credential is under-scoped for any of them, so the forbidden_scope clause cannot be asked "
+            f"-- add a narrower credential to AuthAdapter.credentials() to close it. The other clauses "
+            f"held on all {len(routes)} auth routes; {len(accepted_on)} accepted their published credential."
         )
-
-    refused = env.client.call(route.method, route.probe_path, json_body={}, headers=dict(weak.headers))
-    require(
-        refused.error_kind == _FORBIDDEN_SCOPE,
-        f"{route.key} declares scopes {sorted(route.scopes)} and answered {refused.status} with "
-        f"x-unit-error={refused.error_kind!r} to credential {weak.label!r}, which carries only "
-        f"{sorted(weak.scopes)}. Expected {_FORBIDDEN_SCOPE!r}. The kernel checks Route.scopes "
-        f"against the AuthResult at step 5 of core/kernel/unit.py::_run_pipeline, and it is checked "
-        f"there rather than in the vendor because a second place to check is a second place to "
-        f"forget. Answering {_UNAUTHORIZED!r} instead would send a consumer to re-issue a token "
-        f"that is already valid.",
-    )
-    require(
-        refused.error_kind != anonymous.error_kind,
-        f"an under-scoped credential and no credential at all both answered "
-        f"{refused.error_kind!r}. They are different failures with different fixes -- get a "
-        f"credential, versus get a broader grant -- and a consumer cannot act on a unit that "
-        f"cannot tell them apart.",
-    )
+    tail = f"; scope clause unaskable on {sorted(unaskable_scope)}" if unaskable_scope else ""
     return (
-        f"{route.key} (auth={route.auth!r}, scopes {sorted(route.scopes)}): anonymous -> "
-        f"{anonymous.status}:{anonymous.error_kind}; invented -> {invented.status}:"
-        f"{invented.error_kind}; {good.label!r} ({len(good.scopes)} scopes) -> {accepted.status}:"
-        f"{accepted.error_kind or '-'}; {weak.label!r} ({sorted(weak.scopes)}) -> {refused.status}:"
-        f"{refused.error_kind}"
+        f"{len(routes)} routes declare auth: every one refused no credential and an invented one as "
+        f"{_UNAUTHORIZED}; {len(accepted_on)} accepted a published credential; {len(scoped_on)} of "
+        f"{len(scoped)} scoped routes refused an under-scoped credential as {_FORBIDDEN_SCOPE}{tail}"
     )

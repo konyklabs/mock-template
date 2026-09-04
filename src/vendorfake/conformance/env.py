@@ -107,7 +107,9 @@ class RouteRow:
     auth: str | None = None
     scopes: tuple[str, ...] = ()
     idempotency: Mapping[str, Any] | None = None
+    pagination: Mapping[str, Any] | None = None
     example_body: Mapping[str, Any] | None = None
+    example_params: Mapping[str, str] | None = None
     operation_id: str | None = None
     #: The target's tenant parameters; see ``ConformanceTarget.path_params``.
     path_params: Mapping[str, str] = field(default_factory=dict)
@@ -123,7 +125,11 @@ class RouteRow:
             auth=None if row.get("auth") is None else str(row["auth"]),
             scopes=tuple(str(name) for name in row.get("scopes", ())),
             idempotency=None if row.get("idempotency") is None else dict(row["idempotency"]),
+            pagination=None if row.get("pagination") is None else dict(row["pagination"]),
             example_body=None if row.get("example_body") is None else dict(row["example_body"]),
+            example_params=None
+            if row.get("example_params") is None
+            else {str(name): str(value) for name, value in dict(row["example_params"]).items()},
             operation_id=None if row.get("operation_id") is None else str(row["operation_id"]),
         )
 
@@ -134,6 +140,15 @@ class RouteRow:
     @property
     def probe_path(self) -> str:
         return concrete_path(self.path, self.path_params)
+
+    @property
+    def example_path(self) -> str:
+        """The path the published example applies to: the route's declared
+        example_params first, the target's tenant parameters over them (the
+        tenant is authoritative about who the credential belongs to), and the
+        probe segment for anything neither names. Equal to :attr:`probe_path`
+        for a route that declares no example_params."""
+        return concrete_path(self.path, {**(self.example_params or {}), **self.path_params})
 
 
 @dataclass(frozen=True, slots=True)
@@ -403,6 +418,34 @@ class CheckEnv:
             )
         return rows[0]
 
+    def idempotent_routes(self) -> tuple[RouteRow, ...]:
+        """Enabled vendor routes that declare an idempotency spec, example or not."""
+        return tuple(row for row in self.vendor_routes() if row.idempotency is not None)
+
+    def partner_idempotent_route(self, route: RouteRow) -> RouteRow | None:
+        """Another enabled idempotent route to send ``route``'s key to.
+
+        A DIFFERENT declared scope first -- that is the pair the isolation
+        contract wants -- and within each tier the one with an example body,
+        because a key replayed into a request that then *succeeds* is stronger
+        evidence than one refused by validation. A same-scope partner is still
+        returned when no other scope exists: the check treats fully collapsed
+        declarations as its own finding, so the selection must not hide them.
+        """
+        scope = None if route.idempotency is None else route.idempotency.get("scope")
+        others = [row for row in self.idempotent_routes() if row.key != route.key]
+        tiers = (
+            [row for row in others if (row.idempotency or {}).get("scope") != scope and row.example_body is not None],
+            [row for row in others if (row.idempotency or {}).get("scope") != scope],
+            [row for row in others if row.example_body is not None],
+            others,
+        )
+        return next((tier[0] for tier in tiers if tier), None)
+
+    def paginated_routes(self) -> tuple[RouteRow, ...]:
+        """Enabled vendor routes that declare how they page."""
+        return tuple(row for row in self.vendor_routes() if row.pagination is not None)
+
     def credential_for(self, route: RouteRow) -> Credential:
         """A published credential that satisfies ``route``'s mode and scopes."""
         for credential in self.credentials():
@@ -511,6 +554,17 @@ def unmet_precondition(requires: Requires, env: CheckEnv) -> str | None:
             f"profile {env.profile!r} enables no idempotent POST/PUT route publishing an "
             f"example_body, so no request can be sent twice under one key"
         )
+    if requires.two_idempotent_routes:
+        examples = env.example_routes(methods=_MUTATING_METHODS, idempotent=True)
+        if not any(env.partner_idempotent_route(row) is not None for row in examples):
+            return (
+                f"profile {env.profile!r} enables no second idempotent route alongside an "
+                f"example-bearing one, so no key can be sent to two operations"
+            )
+    if requires.paginated_route and not env.paginated_routes():
+        return f"profile {env.profile!r} enables no vendor route declaring a pagination spec"
+    if requires.webhooks_chaos and not env.capability_enabled(CoreCapability.WEBHOOKS_CHAOS.value):
+        return f"the {CoreCapability.WEBHOOKS_CHAOS.value!r} capability is off in profile {env.profile!r}"
     if requires.virtual_clock:
         # ``.get`` and not ``[...]``: a unit that publishes no clock block at
         # all has not met the precondition either, and an unmet precondition is

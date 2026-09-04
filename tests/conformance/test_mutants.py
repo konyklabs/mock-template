@@ -115,11 +115,12 @@ def _outcomes(report: ConformanceReport, outcome: Outcome) -> frozenset[str]:
 def _tolerated_skips(mutant: Mutant) -> frozenset[str]:
     """Skips a mutant is allowed to produce, derived rather than listed.
 
-    Four sources, all of them data: the contracts that need a second binding
+    Five sources, all of them data: the contracts that need a second binding
     (none of these runs offers one), the contracts that need a second OS
     process (which only the mutant whose defect is per-process pays for), the
     committed expected-skip matrix restricted to the profiles this mutant
-    covers, and whatever the mutant itself declares it will silence.
+    covers, the skips the mutant declares with a reason (``also_skips``), and
+    whatever the mutant itself declares it will silence.
     """
     both_transports = frozenset(spec.id for spec in CHECKS if spec.requires.both_transports)
     out_of_process = (
@@ -130,7 +131,7 @@ def _tolerated_skips(mutant: Mutant) -> frozenset[str]:
         for check_id, profiles in expected_skips().items()
         if any(profile in profiles for profile in mutant.profiles)
     )
-    return both_transports | out_of_process | declared | mutant.skips_everywhere
+    return both_transports | out_of_process | declared | mutant.also_skips | mutant.skips_everywhere
 
 
 @pytest.mark.conformance
@@ -157,6 +158,19 @@ def test_a_mutant_trips_the_checks_it_names_and_no_others(mutant: Mutant) -> Non
     # longer reproduces the defect, the mutant in tests/conformance/mutants/.
     assert not missed, f"{mutant.label} did not trip {missed} (defect: {mutant.defect})\n{format_report(report)}"
 
+    crashed = sorted(
+        result.check_id
+        for result in report.results
+        if result.outcome is Outcome.FAIL and result.detail.startswith("the check raised ")
+    )
+    # A crash is not a finding: a check that raised never asked its question,
+    # so it is evidence of nothing -- for or against this mutant. M01 taught
+    # this the hard way: its cascade blessed a KeyError as an observation.
+    assert not crashed, (
+        f"{mutant.label} made {crashed} CRASH rather than fail. A crashed check named no contract "
+        f"and asked no question; fix the check to fail by name on the state this mutant produces."
+        f"\n{format_report(report)}"
+    )
     collateral = sorted(red - mutant.expected_red)
     # Narrow the mutation, or declare genuine collateral in `also_trips` with a
     # written `cascade` reason.
@@ -222,7 +236,9 @@ def test_every_registered_check_has_a_mutant() -> None:
 def test_no_mutant_names_a_check_that_does_not_exist() -> None:
     """A mutant aimed at a deleted contract would silently stop proving anything."""
     named = frozenset(
-        check_id for mutant in MUTANTS for check_id in (mutant.trips | mutant.also_trips | mutant.skips_everywhere)
+        check_id
+        for mutant in MUTANTS
+        for check_id in (mutant.trips | mutant.also_trips | mutant.also_skips | mutant.skips_everywhere)
     )
     stale = sorted(named - _CHECK_IDS)
     assert not stale, f"mutants name {stale}, which no check registers. Registered: {sorted(_CHECK_IDS)}."
@@ -267,6 +283,8 @@ def test_the_mutant_registry_is_internally_consistent() -> None:
     assert not silent, f"{silent} do not say what is broken about them"
     unjustified = [mutant.id for mutant in MUTANTS if mutant.also_trips and not mutant.cascade.strip()]
     assert not unjustified, f"{unjustified} tolerate collateral with no written reason"
+    unexplained = [mutant.id for mutant in MUTANTS if mutant.also_skips and not mutant.skip_reason.strip()]
+    assert not unexplained, f"{unexplained} tolerate a skip with no written reason"
 
 
 @pytest.mark.conformance
@@ -288,6 +306,17 @@ def test_tolerated_collateral_must_be_justified() -> None:
                 provenance=Provenance.HYPOTHETICAL,
                 trips=frozenset({"C01"}),
                 also_trips=frozenset({"C02"}),
+            )
+        )
+    with pytest.raises(RuntimeError, match="written down"):
+        register(
+            Mutant(
+                id="M99",
+                name="unexplained-skip",
+                defect="Declares a tolerated skip without saying why the contract became unaskable.",
+                provenance=Provenance.HYPOTHETICAL,
+                trips=frozenset({"C01"}),
+                also_skips=frozenset({"C02"}),
             )
         )
     # A refused mutant must not reach the registry.
