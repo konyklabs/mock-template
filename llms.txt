@@ -1,6 +1,6 @@
 # vendorfake
 
-> High-fidelity fakes of third-party vendor APIs for testing an integration
+> Fakes of third-party vendor APIs for testing an integration
 > without a vendor sandbox: real state, webhooks signed and retried the way
 > the vendor does it, and deterministic fault injection.
 

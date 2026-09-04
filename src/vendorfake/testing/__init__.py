@@ -919,6 +919,7 @@ def served(
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    validate: bool = ...,
     seed_overlay: SquareSeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[SquareSeed]]: ...
 
@@ -936,6 +937,7 @@ def served(
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    validate: bool = ...,
     seed_overlay: CloverSeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[CloverSeed]]: ...
 
@@ -953,6 +955,7 @@ def served(
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    validate: bool = ...,
     seed_overlay: ToastSeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[ToastSeed]]: ...
 
@@ -970,6 +973,7 @@ def served(
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    validate: bool = ...,
     seed_overlay: LightspeedSeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[LightspeedSeed]]: ...
 
@@ -987,6 +991,7 @@ def served(
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    validate: bool = ...,
     seed_overlay: SeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[Seed]]: ...
 
@@ -1003,6 +1008,7 @@ def served(
     timeout_s: float = STARTUP_TIMEOUT_S,
     env: Mapping[str, str] | None = None,
     clock_start: datetime | str | None = None,
+    validate: bool = False,
     seed_overlay: SeedOverlay | str | os.PathLike[str] | None = None,
 ) -> AbstractContextManager[ServedUnit[Any]]:
     """``vendorfake serve`` in a child process, with its URL.
@@ -1013,6 +1019,10 @@ def served(
     precedence and the names the mapping may not carry. ``seed_overlay`` reaches
     the child as ``VENDORFAKE_SEED_OVERLAY``. A session-scoped ``served()``
     against a vendor with rotating state needs :meth:`Driver.reset` between tests.
+
+    ``validate=True`` passes ``--validate`` to the child: every answer is checked
+    against the vendor's published schema and a violation comes back as a 500
+    naming it. It needs a vendor with a fidelity leg and costs a check per call.
     """
     return _served(
         vendor,
@@ -1025,6 +1035,7 @@ def served(
         timeout_s=timeout_s,
         env=env,
         clock_start=clock_start,
+        validate=validate,
         seed_overlay=seed_overlay,
     )
 
@@ -1042,6 +1053,7 @@ def _served(
     timeout_s: float = STARTUP_TIMEOUT_S,
     env: Mapping[str, str] | None = None,
     clock_start: datetime | str | None = None,
+    validate: bool = False,
     seed_overlay: SeedOverlay | str | os.PathLike[str] | None = None,
 ) -> Iterator[ServedUnit[Seed]]:
     """The body of :func:`served`. See that function for the contract.
@@ -1103,6 +1115,16 @@ def _served(
             "Use the parameter instead."
         )
     checked_unmatched(unmatched)  # refused here, on the caller's line, not after the child is spawned
+    if validate:
+        # The same refusal the child would make, made where the caller can see it: without this the child
+        # exits before announcing a port, and the caller gets a startup timeout instead of the reason.
+        from vendorfake.testing.fidelity import target_for
+
+        if target_for(resolved_name) is None:
+            raise ValueError(
+                f"served({vendor!r}, validate=True): {resolved_name} has no fidelity leg, so there is no "
+                "published schema to check its answers against."
+            )
     resolved_profile, capability_layer = registry.resolve_capabilities(definition, profile, capabilities)
     layer.update(capability_layer)
     child_view = {**os.environ, **layer}
@@ -1146,6 +1168,8 @@ def _served(
         "--log-level",
         log_level,
     ]
+    if validate:
+        argv.append("--validate")
     # The second documented exception to `cli.py`'s `os.environ` invariant:
     # `Popen`'s `env=` replaces rather than layers, so adding one variable to the
     # environment it would otherwise inherit has no path that avoids this read.

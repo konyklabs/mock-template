@@ -1,4 +1,4 @@
-"""``vendorfake-fidelity {pin,fetch,run,report}`` -- the fidelity tools, with no test runner in the picture.
+"""``vendorfake-fidelity {pin,fetch,run,report,webhooks}`` -- the fidelity tools, with no test runner in the picture.
 
 FOR: an exit code. ``pin --check`` is what CI runs to know the extract still
 matches the upstream document it was cut from; ``fetch`` populates the local
@@ -6,7 +6,8 @@ cache for a vendor whose extract is never committed (konyklabs/roadmap#56), so
 the first thing to hit the network is a named step and not a unit test;
 ``run`` is the corpus as a list of pass/fail lines; ``report`` is the one
 matrix that joins the contract leg to the behaviour leg, and it is the page a
-vendor's fidelity claim is made on.
+vendor's fidelity claim is made on; ``webhooks`` is the leg the corpus cannot
+reach, a captured delivery compared against the vendor's own signer.
 
 WHY THE TARGET IS NAMED AND NEVER GUESSED: the layer rule of
 ``tools/boundary_check.py``. This package may not import a vendor or the
@@ -14,9 +15,10 @@ registry, so every subcommand takes ``--target module:attribute`` (or reads
 ``VENDORFAKE_FIDELITY_TARGET``) and a missing one is an error that says so.
 
 EXIT CODES. ``0`` clean; ``1`` a finding -- a changed pin under ``--check``, a
-failed case, an UNDECLARED route; ``2`` a usage error -- no target, an
-unresolvable one, an unknown case id, an unreachable base URL, a ``fetch``
-with no pin or no network and no cache. A moved upstream under ``fetch`` is
+failed case, an UNDECLARED route, a golden the signer did not reproduce; ``2``
+a usage error -- no target, an unresolvable one, an unknown case id, an
+unreachable base URL, a manifest that is not one, a target with no signer, a
+``fetch`` with no pin or no network and no cache. A moved upstream under ``fetch`` is
 ``0`` with an ``UPSTREAM MOVED`` line on stderr: a vendor release never fails
 a test run, and ``pin --check`` is what fails on it.
 """
@@ -31,7 +33,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-from vendorfake.fidelity.cache import populate
+from vendorfake.fidelity.cache import EXTRACT_FILE, Unavailable, cache_path, populate
 from vendorfake.fidelity.corpus import Case, load_corpus
 from vendorfake.fidelity.pin import Fetcher
 from vendorfake.fidelity.report import format_cases, format_matrix
@@ -39,6 +41,8 @@ from vendorfake.fidelity.runner import (
     TARGET_ENV_VAR,
     ClientFactory,
     FidelityTarget,
+    ManifestWorld,
+    World,
     modeled_routes,
     resolve_target,
     run_corpus,
@@ -46,6 +50,7 @@ from vendorfake.fidelity.runner import (
     target_from_env,
 )
 from vendorfake.fidelity.types import FidelityDeclaration, Surface, load_declaration, load_extract
+from vendorfake.fidelity.webhooks import GoldenError, format_goldens, run_goldens
 
 __all__ = ["RefreshFn", "main"]
 
@@ -84,6 +89,12 @@ def _parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="run the corpus, one fresh unit per case")
     with_target(run)
     run.add_argument("--base-url", dest="base_url", metavar="URL", help="run against a unit already listening there")
+    run.add_argument(
+        "--manifest",
+        metavar="PATH",
+        help="a vendorfake.manifest/1 document supplying the profile and credentials instead of the control plane; "
+        "its base_url is used when --base-url is omitted",
+    )
     run.add_argument("--anchor", metavar="PACKAGE", help="with --base-url: the package holding the corpus")
     run.add_argument("--profile", help="run every case on this profile instead of the case's own")
     run.add_argument("--case", action="append", dest="case_ids", metavar="ID", help="repeatable; default is every case")
@@ -94,6 +105,16 @@ def _parser() -> argparse.ArgumentParser:
     report = sub.add_parser("report", help="run the corpus with validation and print the route matrix")
     with_target(report)
     report.add_argument("--profile", help="run every case on this profile instead of the case's own")
+
+    webhooks = sub.add_parser("webhooks", help="verify recorded webhook deliveries against the target's own signer")
+    with_target(webhooks)
+    webhooks.add_argument(
+        "--golden",
+        required=True,
+        metavar="DIR",
+        help="a directory of vendorfake.webhook-golden/1 documents; every *.json in it is verified",
+    )
+    webhooks.add_argument("--allow-empty", action="store_true", help="exit 0 on a directory with no goldens")
     return parser
 
 
@@ -106,8 +127,29 @@ def main(
 ) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    if args.command == "run" and args.base_url:
+    if args.command == "run" and (args.base_url or args.manifest):
         return _run_remote(parser, args)
+    try:
+        return _dispatch(parser, args, refresh=refresh, client_factory=client_factory, fetcher=fetcher)
+    except Unavailable as exc:
+        # A named skip (T1, konyklabs/roadmap#116) on every subcommand that needs
+        # the extract: tools/self-test.sh's skippable steps report SKIP on exit 3.
+        # No vendor slug here (tools/boundary.toml scans this module); the target names it.
+        print(
+            f"fidelity {args.command}: {args.target} UNAVAILABLE -- {exc}; its fidelity leg is skipped in this run",
+            file=sys.stderr,
+        )
+        return 3
+
+
+def _dispatch(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    *,
+    refresh: RefreshFn | None,
+    client_factory: ClientFactory | None,
+    fetcher: Fetcher | None,
+) -> int:
 
     if not args.target:
         parser.error(f"--target is required (or set {TARGET_ENV_VAR}); this package never guesses a vendor")
@@ -122,6 +164,8 @@ def main(
         return _pin(target, check=bool(args.check), refresh=refresh)
     if args.command == "fetch":
         return _fetch(target, fetcher=fetcher)
+    if args.command == "webhooks":
+        return _webhooks(target, args.golden, allow_empty=bool(args.allow_empty))
     try:
         cases = _select(load_corpus(target.anchor), args.case_ids if args.command == "run" else None)
     except (LookupError, ValueError) as exc:
@@ -149,14 +193,55 @@ def _run_remote(parser: argparse.ArgumentParser, args: argparse.Namespace) -> in
         except (LookupError, ImportError, AttributeError) as exc:
             return _fail(f"cannot resolve --target {args.target}: {exc}")
     if args.profile:
-        parser.error("--profile cannot be combined with --base-url: the running unit reports its own profile")
+        parser.error(
+            "--profile cannot be combined with --base-url or --manifest: the running unit, or the manifest, reports the profile"
+        )
     try:
+        world, base_url = _world(args)
         cases = _select(load_corpus(anchor), args.case_ids)
-        report = run_corpus_remote(args.base_url, anchor, cases)
+        report = run_corpus_remote(base_url, anchor, cases, world=world)
     except (LookupError, ValueError) as exc:
         return _fail(str(exc))
     print(format_cases(report))
     return 0 if report.ok else 1
+
+
+def _world(args: argparse.Namespace) -> tuple[World | None, str]:
+    """``None`` for the control plane at ``--base-url``, which is the default.
+
+    ``--manifest`` names the other world: the profile and the credentials come
+    from a document, so the run needs no control plane and can address a vendor
+    sandbox. The manifest's own ``base_url`` fills in for an omitted
+    ``--base-url``, and never overrides a given one -- a manifest outlives the
+    port it was written at.
+    """
+    if not args.manifest:
+        return None, str(args.base_url)
+    world = ManifestWorld(args.manifest)
+    base_url = args.base_url or world.base_url
+    if not base_url:
+        raise LookupError(f"{args.manifest} carries no base_url; pass --base-url to say where to send the cases")
+    return world, str(base_url)
+
+
+def _webhooks(target: FidelityTarget, directory: str, *, allow_empty: bool = False) -> int:
+    """Every golden in ``directory`` against the target's own signer."""
+    if target.signer is None:
+        return _fail(
+            f"--target {target.name} publishes no signer, so there is nothing to compare a golden against; "
+            f"set FidelityTarget.signer to the vendor's Signer.sign"
+        )
+    try:
+        results = run_goldens(directory, target.signer, vendor=target.name)
+    except (GoldenError, OSError) as exc:
+        return _fail(f"webhooks: {exc}")
+    if not results:
+        if allow_empty:
+            print(f"webhooks: no goldens in {directory}")
+            return 0
+        return _fail(f"webhooks: no goldens in {directory} (pass --allow-empty if that is expected)")
+    print(format_goldens(results))
+    return 0 if all(result.ok for result in results) else 1
 
 
 def _select(cases: Sequence[Case], ids: Sequence[str] | None) -> tuple[Case, ...]:
@@ -201,6 +286,8 @@ def _pin_offline(target: FidelityTarget) -> int:
     from vendorfake.fidelity.pin import verify
 
     declaration: FidelityDeclaration = load_declaration(target.anchor)
+    if not declaration.vendored and not (cache_path(target.anchor) / EXTRACT_FILE).is_file():
+        raise Unavailable(f"{target.anchor}: no cached extract to verify the pin against offline; run fetch first")
     result = verify(Path(str(resources.files(target.anchor))), declaration)
     print(result.diff_summary)
     print(
@@ -218,6 +305,8 @@ def _fetch(target: FidelityTarget, *, fetcher: Fetcher | None) -> int:
         return 0
     try:
         result = populate(target.anchor, declaration, fetcher=fetcher)
+    except Unavailable:
+        raise  # handled in main(): exit 3, the named skip
     except (LookupError, ValueError) as exc:
         return _fail(f"fetch: {exc}")
     print(result.summary)

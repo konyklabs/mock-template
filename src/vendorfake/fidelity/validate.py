@@ -4,7 +4,9 @@ The wrapper observes; it never interprets. ``call()`` returns the very :class:`I
 
 Three things are deliberately not validated, and each is counted rather than dropped: a route the declaration excuses, a control-plane route, and a request nothing routed. A route that is none of those and not in the extract is undeclared, and undeclared raises.
 
-Validation is ``openapi_schema_validator``'s OAS 3.0 dialect with a ``referencing`` registry that holds the extract document under one URI, so every ``#/components/schemas/...`` reference resolves against the extract and nothing else. Validators are built once per operation and status and reused for the life of the client.
+The classification itself lives in :class:`ResponseValidator`, which reads a ``UnitRequest`` and the ``UnitResponse`` the unit gave for it and nothing else, so the same check runs behind the in-process client (:class:`ValidatingClient`) and behind a socket (``vendorfake serve --validate`` hands it to the ASGI binding as a ``ResponseObserver``).
+
+Validation is ``openapi_schema_validator``'s OAS 3.0 dialect with a ``referencing`` registry that holds the extract document under one URI, so every ``#/components/schemas/...`` reference resolves against the extract and nothing else. Validators are built once per operation and status and reused for the life of the validator. Request bodies use the same machinery through the ``Write`` reader of that dialect, which is what OAS 3.0 means by a body being sent rather than received.
 """
 
 from __future__ import annotations
@@ -16,13 +18,15 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from jsonschema.exceptions import best_match
-from openapi_schema_validator import OAS30ReadValidator, oas30_format_checker
+from openapi_schema_validator import OAS30ReadValidator, OAS30WriteValidator, oas30_format_checker
 from referencing import Registry
 from referencing.jsonschema import DRAFT4
 
+from vendorfake.core.kernel.reply import decode_body
 from vendorfake.core.kernel.router import Match, Router
+from vendorfake.core.kernel.types import UnitRequest, UnitResponse
 from vendorfake.core.kernel.unit import Unit
-from vendorfake.core.transport.inprocess import TRANSPORT, InProcessClient, InProcessResponse
+from vendorfake.core.transport.inprocess import InProcessClient, InProcessResponse
 from vendorfake.fidelity.types import Operation, Surface, route_key
 
 __all__ = [
@@ -32,6 +36,7 @@ __all__ = [
     "FidelityViolation",
     "Ledger",
     "LedgerRow",
+    "ResponseValidator",
     "UndeclaredRoute",
     "ValidatingClient",
 ]
@@ -43,7 +48,16 @@ BODY_EXCERPT_CHARS = 400
 """How much of an offending body a violation quotes -- enough to see the shape, not enough to drown the pointer list."""
 
 Counter = Literal[
-    "validated", "deviated", "excused", "internal", "undeclared", "undeclared_status", "unmatched", "skipped_non_json"
+    "validated",
+    "deviated",
+    "excused",
+    "internal",
+    "undeclared",
+    "undeclared_status",
+    "unmatched",
+    "skipped_non_json",
+    "request_validated",
+    "request_deviated",
 ]
 COUNTERS: tuple[Counter, ...] = (
     "validated",
@@ -54,12 +68,18 @@ COUNTERS: tuple[Counter, ...] = (
     "undeclared_status",
     "unmatched",
     "skipped_non_json",
+    "request_validated",
+    "request_deviated",
 )
-"""Every outcome one call can have, in the order the report prints them. ``skipped_non_json`` is an operation route whose body had no JSON to check; ``unmatched`` is a request the router answered with its own 404 or 405, so there is no route to classify."""
+"""Every outcome one call can have, in the order the report prints them. ``skipped_non_json`` is an operation route whose body had no JSON to check; ``unmatched`` is a request the router answered with its own 404 or 405, so there is no route to classify. The last two are about the *request* and so are counted alongside a call's outcome rather than instead of it."""
+
+
+Subject = Literal["response body", "request body"]
+"""Which half of the exchange a violation is about. Carried in the message, never in a deviation: a deviation names a pointer and a keyword, and those are already unambiguous."""
 
 
 class FidelityViolation(AssertionError):
-    """A response that does not match the vendor's schema for it. An ``AssertionError`` so pytest renders it as a failed assertion of the test that made the call, rather than an error in fixture code."""
+    """A response -- or, under ``validate_requests``, an accepted request -- that does not match the vendor's schema for it. An ``AssertionError`` so pytest renders it as a failed assertion of the test that made the call, rather than an error in fixture code."""
 
     def __init__(
         self,
@@ -69,23 +89,29 @@ class FidelityViolation(AssertionError):
         status: int,
         errors: Sequence[str],
         body_excerpt: str = "",
+        subject: Subject = "response body",
     ) -> None:
         self.route_key = route_key
         self.operation_key = operation_key
         self.status = status
         self.errors: tuple[str, ...] = tuple(errors)
         self.body_excerpt = body_excerpt
+        self.subject: Subject = subject
         super().__init__(self._render())
 
     def _headline(self) -> str:
         against = f" against {self.operation_key}" if self.operation_key else ""
         noun = "error" if len(self.errors) == 1 else "errors"
-        return f"{self.route_key} answered {self.status} with a body that fails{against} ({len(self.errors)} {noun}):"
+        count = f"({len(self.errors)} {noun}):"
+        if self.subject == "request body":
+            # The unit accepted it; the vendor's own schema would not have.
+            return f"{self.route_key} accepted a request body that fails{against} and answered {self.status} {count}"
+        return f"{self.route_key} answered {self.status} with a body that fails{against} {count}"
 
     def _render(self) -> str:
         lines = [self._headline(), *(f"  {line}" for line in self.errors)]
         if self.body_excerpt:
-            lines.append(f"  body: {self.body_excerpt}")
+            lines.append(f"  {self.subject}: {self.body_excerpt}")
         return "\n".join(lines)
 
 
@@ -122,6 +148,10 @@ class LedgerRow:
     undeclared_status: int = 0
     unmatched: int = 0
     skipped_non_json: int = 0
+    #: Request bodies checked against the operation's ``requestBody`` schema, under ``validate_requests``.
+    request_validated: int = 0
+    #: Request-body schema errors a declared deviation absorbed.
+    request_deviated: int = 0
 
     @property
     def calls(self) -> int:
@@ -169,17 +199,22 @@ class Ledger:
         return f"fidelity: {parts} over {len(self._rows)} {noun}"
 
 
-class ValidatingClient(InProcessClient):
-    """The in-process client, with every answer checked against the surface. ``strict_undeclared`` is the switch between the two uses: a vendor's own test suite wants an undeclared route to fail the build, and the fidelity report wants to count it instead."""
+class ResponseValidator:
+    """The check itself, over one ``UnitRequest`` and the ``UnitResponse`` the unit gave for it -- nothing else, so the same instance serves the in-process client and a socket binding that hands it over as a :data:`~vendorfake.core.kernel.types.ResponseObserver`.
+
+    ``strict_undeclared`` is the switch between the two uses: a vendor's own test suite wants an undeclared route to fail the build, and the fidelity report wants to count it instead. ``validate_requests`` adds the second half: a request the unit *accepted* whose body the vendor's own schema rejects.
+    """
 
     __slots__ = (
         "_built",
         "_ledger",
         "_registry",
+        "_request_validators",
         "_router",
         "_strict_undeclared",
         "_surface",
         "_undeclared_status",
+        "_validate_requests",
         "_validators",
         "_via_envelope",
     )
@@ -191,11 +226,12 @@ class ValidatingClient(InProcessClient):
         ledger: Ledger | None = None,
         *,
         strict_undeclared: bool = True,
+        validate_requests: bool = False,
     ) -> None:
-        super().__init__(unit)
         self._surface = surface
         self._ledger = ledger if ledger is not None else Ledger()
         self._strict_undeclared = strict_undeclared
+        self._validate_requests = validate_requests
         # The unit's own table, control plane included, so a call is matched exactly as the unit matched it.
         self._router = Router(unit.routes)
         # Draft-04 is the dialect OAS 3.0 schemas are written in and OAS30ReadValidator resolves under.
@@ -207,6 +243,8 @@ class ValidatingClient(InProcessClient):
         self._via_envelope: dict[tuple[str, int], bool] = {}
         #: (route, status) pairs the document never declares, answered through ``error_schema``.
         self._undeclared_status: set[tuple[str, int]] = set()
+        #: One per unit route: a ``requestBody`` schema does not vary with the status.
+        self._request_validators: dict[str, Any] = {}
         self._built = 0
 
     @property
@@ -219,39 +257,16 @@ class ValidatingClient(InProcessClient):
 
     @property
     def built(self) -> int:
-        """Validators constructed so far. The cache test reads this; so may a report."""
+        """Response validators constructed so far. The cache test reads this; so may a report."""
         return self._built
-
-    def call(
-        self,
-        *,
-        method: str,
-        path: str,
-        query: Mapping[str, str] | None = None,
-        headers: Mapping[str, str] | None = None,
-        body: object = None,
-        raw_body: bytes | str | None = None,
-        transport: str = TRANSPORT,
-        request_id: str | None = None,
-    ) -> InProcessResponse:
-        response = super().call(
-            method=method,
-            path=path,
-            query=query,
-            headers=headers,
-            body=body,
-            raw_body=raw_body,
-            transport=transport,
-            request_id=request_id,
-        )
-        self._check(method, path, response)
-        return response
 
     # -- classification -----------------------------------------------------
 
-    def _check(self, method: str, path: str, response: InProcessResponse) -> None:
-        # The kernel splits a query string off the path before routing; match what it matched.
-        bare = path.partition("?")[0]
+    def observe(self, request: UnitRequest, response: UnitResponse) -> None:
+        """Classify and check one answered exchange. Read-only: the unit has already answered, so the sole effect this can have is to raise."""
+        method = request.method
+        # A binding splits the query string off before routing; a hand-built request may not have.
+        bare = request.path.partition("?")[0]
         outcome = self._router.match(method, bare)
         if not isinstance(outcome, Match):
             if 200 <= response.status < 300:
@@ -269,39 +284,63 @@ class ValidatingClient(InProcessClient):
             self._ledger.record(key, "excused")
         elif classified.kind == "undeclared":
             if self._strict_undeclared:
-                raise UndeclaredRoute(key, status=response.status, body_excerpt=_excerpt(response))
+                raise UndeclaredRoute(key, status=response.status, body_excerpt=_excerpt(decode_body(response)))
             self._ledger.record(key, "undeclared")
         elif classified.operation is None:
             # Reaching here means the shared types changed under this module.
             raise RuntimeError(f"{key} classified as an operation without one")
         else:
+            # The request first: it is causally prior, and it is checked even where the answer carries no JSON body.
+            if self._validate_requests:
+                self._validate_request(key, classified.operation, request, response)
             self._validate(key, classified.operation, response)
 
     # -- validation ---------------------------------------------------------
 
-    def _validate(self, key: str, operation: Operation, response: InProcessResponse) -> None:
-        if not response.body or not _is_json(response.headers):
-            self._ledger.record(key, "skipped_non_json")
+    def _validate_request(self, key: str, operation: Operation, request: UnitRequest, response: UnitResponse) -> None:
+        """The body the unit *accepted*, against the vendor's ``requestBody`` schema. Only a 2xx: a refused request
+        is not a fidelity question, while an accepted one the vendor's schema rejects is a fake more permissive than
+        the API it stands in for. An absent body has nothing to check, and another media type is another schema."""
+        if not (200 <= response.status < 300) or not request.raw_body:
             return
+        schema = operation.request_schema()
+        if schema is None:
+            return
+        content_type = _header(request.headers, "content-type")
+        if content_type is None or not _is_json_media(content_type):
+            return  # only a body the vendor's application/json schema governs is checked
+        text = request.raw_body.decode("utf-8", errors="replace")
         try:
-            instance = json.loads(response.text)
+            instance = json.loads(text)
         except ValueError as exc:
             raise FidelityViolation(
                 key,
                 operation_key=operation.key,
                 status=response.status,
                 errors=(f"(root): body is not JSON ({exc})",),
-                body_excerpt=_excerpt(response),
+                body_excerpt=_excerpt(text),
+                subject="request body",
             ) from None
-        validator = self._validator_for(key, operation, response.status)
+        validator = self._request_validator_for(key, operation, schema)
         if validator is None:
+            raise RuntimeError(f"{operation.key}: the request schema is not in the extract document")
+        errors, absorbed = self._collect(validator, instance, key)
+        if errors:
             raise FidelityViolation(
                 key,
                 operation_key=operation.key,
                 status=response.status,
-                errors=(f"no schema for status {response.status}",),
-                body_excerpt=_excerpt(response),
+                errors=errors,
+                body_excerpt=_excerpt(text),
+                subject="request body",
             )
+        self._ledger.record(key, "request_validated")
+        for label in absorbed:
+            self._ledger.record(key, "request_deviated")
+            self._ledger.absorb(label)
+
+    def _collect(self, validator: Any, instance: Any, key: str) -> tuple[list[str], list[str]]:
+        """The schema errors, split into the ones a declared deviation absorbs and the ones that remain."""
         errors: list[str] = []
         absorbed: list[str] = []
         declaration = self._surface.declaration
@@ -323,6 +362,34 @@ class ValidatingClient(InProcessClient):
                 absorbed.append(excused_by.label)
                 continue
             errors.append(f"{pointer}: {error.message}")
+        return errors, absorbed
+
+    def _validate(self, key: str, operation: Operation, response: UnitResponse) -> None:
+        if not response.body or not _is_json(response.headers):
+            self._ledger.record(key, "skipped_non_json")
+            return
+        text = decode_body(response)
+        try:
+            instance = json.loads(text)
+        except ValueError as exc:
+            raise FidelityViolation(
+                key,
+                operation_key=operation.key,
+                status=response.status,
+                errors=(f"(root): body is not JSON ({exc})",),
+                body_excerpt=_excerpt(text),
+            ) from None
+        validator = self._validator_for(key, operation, response.status)
+        if validator is None:
+            raise FidelityViolation(
+                key,
+                operation_key=operation.key,
+                status=response.status,
+                errors=(f"no schema for status {response.status}",),
+                body_excerpt=_excerpt(text),
+            )
+        errors, absorbed = self._collect(validator, instance, key)
+        declaration = self._surface.declaration
         if response.status >= 400 and self._via_envelope.get((key, response.status)):
             member = declaration.error_member
             carried = instance.get(member) if isinstance(instance, Mapping) and member else None
@@ -338,7 +405,7 @@ class ValidatingClient(InProcessClient):
                 operation_key=operation.key,
                 status=response.status,
                 errors=errors,
-                body_excerpt=_excerpt(response),
+                body_excerpt=_excerpt(text),
             )
         self._ledger.record(key, "validated")
         if (key, response.status) in self._undeclared_status:
@@ -391,19 +458,90 @@ class ValidatingClient(InProcessClient):
         self._validators[cache_key] = validator
         return validator
 
+    def _request_validator_for(self, key: str, operation: Operation, schema: Mapping[str, Any]) -> Any:
+        """The validator for one route's ``requestBody``, built once. ``OAS30WriteValidator`` and not the read one,
+        because OAS 3.0 reads ``readOnly`` and ``writeOnly`` oppositely in the two directions; everything else --
+        registry, format checker, ``$ref`` into the registered extract -- is what :meth:`_validator_for` uses."""
+        if key in self._request_validators:
+            return self._request_validators[key]
+        pointer = _request_schema_pointer(self._surface.extract.document, operation, schema)
+        validator: Any = None
+        if pointer is not None:
+            validator = OAS30WriteValidator(
+                {"$ref": f"{EXTRACT_URI}#{pointer}"}, registry=self._registry, format_checker=oas30_format_checker
+            )
+        self._request_validators[key] = validator
+        return validator
+
+
+class ValidatingClient(InProcessClient):
+    """The in-process client, with every answer checked against the surface by a :class:`ResponseValidator` it owns. The client is the transport half and nothing more: what counts as a violation is decided in one place, whether the call arrived through this object or over a socket."""
+
+    __slots__ = ("_validator",)
+
+    def __init__(
+        self,
+        unit: Unit,
+        surface: Surface,
+        ledger: Ledger | None = None,
+        *,
+        strict_undeclared: bool = True,
+        validate_requests: bool = False,
+    ) -> None:
+        super().__init__(unit)
+        self._validator = ResponseValidator(
+            unit,
+            surface,
+            ledger,
+            strict_undeclared=strict_undeclared,
+            validate_requests=validate_requests,
+        )
+
+    @property
+    def validator(self) -> ResponseValidator:
+        return self._validator
+
+    @property
+    def ledger(self) -> Ledger:
+        return self._validator.ledger
+
+    @property
+    def surface(self) -> Surface:
+        return self._validator.surface
+
+    @property
+    def built(self) -> int:
+        """Response validators constructed so far. The cache test reads this; so may a report."""
+        return self._validator.built
+
+    def dispatch(self, request: UnitRequest) -> InProcessResponse:
+        """The base client's seam: the observer is given the very request the unit answered."""
+        response = super().dispatch(request)
+        self._validator.observe(request, response.raw)
+        return response
+
 
 # -- helpers ------------------------------------------------------------------
 
 
+def _is_json_media(value: str) -> bool:
+    return value.split(";")[0].strip().lower() == "application/json"
+
+
+def _header(headers: Mapping[str, str], name: str) -> str | None:
+    """One header, case-insensitively. Bindings lower-case before the kernel sees them; a hand-built request may not."""
+    for key, value in headers.items():
+        if key.lower() == name:
+            return value
+    return None
+
+
 def _is_json(headers: Mapping[str, str]) -> bool:
-    for name, value in headers.items():
-        if name.lower() == "content-type":
-            return value.split(";")[0].strip().lower() == "application/json"
-    return False
+    value = _header(headers, "content-type")
+    return value is not None and _is_json_media(value)
 
 
-def _excerpt(response: InProcessResponse) -> str:
-    text = response.text
+def _excerpt(text: str) -> str:
     return text if len(text) <= BODY_EXCERPT_CHARS else text[:BODY_EXCERPT_CHARS] + "..."
 
 
@@ -446,4 +584,24 @@ def _schema_pointer(document: Mapping[str, Any], operation: Operation, schema: M
                         "schema",
                     )
                     return "/" + "/".join(quote(_escape(str(segment)), safe="~") for segment in segments)
+    return None
+
+
+def _request_schema_pointer(document: Mapping[str, Any], operation: Operation, schema: Mapping[str, Any]) -> str | None:
+    """The same lookup as :func:`_schema_pointer`, one level along: where the ``requestBody`` schema sits, found by identity so it cannot disagree with :meth:`Operation.request_schema`."""
+    paths = document.get("paths")
+    item = paths.get(operation.spec_path) if isinstance(paths, Mapping) else None
+    if not isinstance(item, Mapping):
+        return None
+    for method_key, raw in item.items():
+        if raw is not operation.raw or not isinstance(raw, Mapping):
+            continue
+        body = raw.get("requestBody")
+        content = body.get("content") if isinstance(body, Mapping) else None
+        if not isinstance(content, Mapping):
+            return None
+        for media, spec in content.items():
+            if isinstance(spec, Mapping) and spec.get("schema") is schema:
+                segments = ("paths", operation.spec_path, method_key, "requestBody", "content", media, "schema")
+                return "/" + "/".join(quote(_escape(str(segment)), safe="~") for segment in segments)
     return None

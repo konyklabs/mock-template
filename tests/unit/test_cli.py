@@ -653,3 +653,48 @@ def test_manifest_refuses_an_unknown_vendor_rather_than_printing_an_empty_docume
     with pytest.raises(SystemExit) as raised:
         run("manifest", "--vendor", "nope")
     assert str(raised.value).startswith("vendorfake: ")
+
+
+def test_serve_validate_refuses_a_vendor_with_no_fidelity_leg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--validate`` on a vendor with no declaration would start a server that
+    checks nothing, with the flag reading as satisfied. It refuses instead, and
+    says which vendor and why.
+
+    ``run_server`` is intercepted the way the precedence test does it: what is
+    under test is the refusal, and it happens before a socket would be bound.
+    """
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    bound: list[object] = []
+    monkeypatch.setattr(asgi_module, "run_server", lambda app, **kwargs: bound.append(kwargs))
+
+    parser = cli_module._build_parser()
+    args = parser.parse_args(["serve", "--vendor", "clover", "--validate"])
+    with pytest.raises(SystemExit) as caught:
+        cli_module._serve(args, {}, sys.stdout)
+    message = str(caught.value)
+    assert "clover" in message and "fidelity leg" in message
+    assert bound == []
+
+
+def test_serve_validate_builds_the_observer_for_a_vendor_that_has_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The flag reaches ``create_app`` as an observer; without it there is none."""
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    seen: list[object] = []
+    real_create_app = asgi_module.create_app
+
+    def spy_create_app(unit: object, **kwargs: object) -> object:
+        seen.append(kwargs.get("observer"))
+        return real_create_app(unit, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(asgi_module, "create_app", spy_create_app)
+    monkeypatch.setattr(asgi_module, "run_server", lambda app, **kwargs: None)
+
+    parser = cli_module._build_parser()
+    for argv in (["--validate"], []):
+        args = parser.parse_args(["serve", "--vendor", "square", *argv])
+        assert cli_module._serve(args, {}, sys.stdout) == 0
+    assert [observer is not None for observer in seen] == [True, False]

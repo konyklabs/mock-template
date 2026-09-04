@@ -72,6 +72,11 @@ fixture reads it instead of asking the control plane. That variable belongs to
 the example's own test suite, not to vendorfake: nothing in the distribution
 reads it.
 
+The fidelity corpus reads this document too: `vendorfake.fidelity run
+--manifest square.json` takes the profile, the credentials and the address
+from it instead of the control plane, which is what lets the same cases run
+against a sandbox account — see [fidelity](../concepts/fidelity.md).
+
 A script that needs chaos, a virtual clock or a state digest is a *unit* test
 of your error handling, and belongs in the control plane's world. Keep the two
 suites apart rather than making one script conditional.

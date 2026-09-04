@@ -6,8 +6,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from tests.unit.toast.harness import LEDGER, SURFACE, Harness, Silent, harness
-from vendorfake.fidelity.validate import ValidatingClient
+from tests.unit.toast.harness import Harness, Silent, harness, validating_client
 from vendorfake.toast.seed import constants as c
 from vendorfake.toast.surface.webhooks import STAND_IN
 
@@ -54,7 +53,7 @@ def test_https_is_required_unless_the_switch_lifts_it() -> None:
     )
     try:
         assert (
-            ValidatingClient(unit, SURFACE, LEDGER)
+            validating_client(unit)
             .post("/__toast/webhooks/subscriptions", {"url": "http://localhost:19999/hooks"})
             .status
             == 201

@@ -2,7 +2,7 @@
 
 FOR: asserting what a vendor's documentation says a request answers, without
 a line of vendor code in this package. A case is a JSON file naming the page
-it was read from, whether the fact is ``documented`` or a ``judgment``, the
+it was read from, whether the fact is ``documented``, a ``judgment`` or ``recorded`` from a real account, the
 unit routes it exercises, and an ordered list of steps -- request, expected
 subset of the response, captures for later steps. This module reads those
 files, checks them against the shipped schema, and provides the three
@@ -42,6 +42,7 @@ __all__ = [
     "AUTH_HEADER_KEY",
     "CORPUS_DIR",
     "MISSING",
+    "PROVENANCES",
     "RE_PREFIX",
     "SCHEMA_FILE",
     "Case",
@@ -74,7 +75,11 @@ that mode published at ``GET /__unit/auth``."""
 ANY_TOKEN = "${any}"
 RE_PREFIX = "${re:"
 
-Provenance = Literal["documented", "judgment"]
+Provenance = Literal["documented", "judgment", "recorded"]
+"""``recorded`` is the third answer: not what a page says nor what this project chose, but what a real account
+answered -- a fact only if the recording names the account, the version, the day, the script and the redaction."""
+
+PROVENANCES: tuple[Provenance, ...] = ("documented", "judgment", "recorded")
 
 _REFERENCE = re.compile(r"\$\{(vars|cap)\.([A-Za-z0-9_.-]+)\}|\$\{uuid\}")
 
@@ -111,24 +116,40 @@ MISSING = _Missing()
 
 @dataclass(frozen=True, slots=True)
 class Source:
-    """Where a case's fact came from."""
+    """Where a case's fact came from. The last five fields are the recording's own provenance, empty unless
+    ``provenance`` is ``recorded``, where the schema requires every one: a recording nobody can place or reproduce is an
+    anecdote."""
 
     url: str
     fetched: str
     provenance: Provenance
     note: str = ""
+    #: sandbox or production: which account answered.
+    environment: str = ""
+    #: The API version the exchange was made under.
+    api_version: str = ""
+    #: The day of the exchange, ``YYYY-MM-DD``; not :attr:`fetched`.
+    recorded: str = ""
+    #: What produced the recording, and what it replaced with ``${any}``, ``${re:...}`` or ``${vars.*}``.
+    script: str = ""
+    redaction: str = ""
 
     @classmethod
     def of(cls, row: Mapping[str, Any]) -> Source:
-        provenance: Provenance
-        if row["provenance"] == "documented":
-            provenance = "documented"
-        elif row["provenance"] == "judgment":
-            provenance = "judgment"
-        else:
-            raise CorpusError(f"provenance must be documented or judgment, got {row['provenance']!r}")
+        raw = row["provenance"]
+        if raw not in PROVENANCES:
+            raise CorpusError(f"provenance must be one of {', '.join(PROVENANCES)}, got {raw!r}")
+        provenance: Provenance = raw
         return cls(
-            url=str(row["url"]), fetched=str(row["fetched"]), provenance=provenance, note=str(row.get("note", ""))
+            url=str(row["url"]),
+            fetched=str(row["fetched"]),
+            provenance=provenance,
+            note=str(row.get("note", "")),
+            environment=str(row.get("environment", "")),
+            api_version=str(row.get("api_version", "")),
+            recorded=str(row.get("recorded", "")),
+            script=str(row.get("script", "")),
+            redaction=str(row.get("redaction", "")),
         )
 
 

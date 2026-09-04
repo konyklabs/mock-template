@@ -21,20 +21,41 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from vendorfake.core.kernel.types import Route
+from vendorfake.fidelity.corpus import PROVENANCES
 from vendorfake.fidelity.types import Surface, route_key
 
 __all__ = [
+    "KINDS",
     "CaseResult",
     "CorpusReport",
+    "DivergenceKind",
     "LedgerLike",
     "LedgerRow",
     "StepFailure",
     "format_cases",
     "format_matrix",
 ]
+
+DivergenceKind = Literal["status", "value", "missing", "unexpected", "schema", "header", "capture", "request"]
+"""How a case diverged, not merely that it did. ``status`` and ``header`` are the envelope; ``value`` a field that
+answered something else, ``missing`` one the vendor promises and the unit did not send, ``unexpected`` one the case said
+would be absent; ``schema`` the contract leg refusing the body; ``capture`` a later step's input that never arrived;
+``request`` a case this run could not ask at all."""
+
+KINDS: tuple[DivergenceKind, ...] = (
+    "status",
+    "value",
+    "missing",
+    "unexpected",
+    "schema",
+    "header",
+    "capture",
+    "request",
+)
+"""Tally order: envelope, then body, then the run's own failures."""
 
 
 class LedgerRow(Protocol):
@@ -72,6 +93,8 @@ class StepFailure:
     actual: Any
     #: Evidence beyond the two values -- a body excerpt on a status mismatch.
     detail: str = ""
+    #: Which class of divergence this is. ``value`` by default: what a caller building a failure by hand usually means.
+    kind: DivergenceKind = "value"
 
     def lines(self) -> tuple[str, ...]:
         out = [f"step {self.step!r} at {self.pointer or '/'}: expected {self.expected!r}, got {self.actual!r}"]
@@ -124,14 +147,23 @@ class CorpusReport:
         return tuple(result for result in self.results if not result.passed)
 
     def by_provenance(self) -> dict[str, tuple[int, int]]:
-        """provenance -> (passed, total)."""
-        out: dict[str, list[int]] = {"documented": [0, 0], "judgment": [0, 0]}
+        """provenance -> (passed, total). Every known provenance is a key even with nothing behind it: ``recorded
+        0/0`` says nothing was recorded, where an absent column would read as the question never asked."""
+        out: dict[str, list[int]] = {name: [0, 0] for name in PROVENANCES}
         for result in self.results:
             row = out.setdefault(result.provenance, [0, 0])
             row[1] += 1
             if result.passed:
                 row[0] += 1
         return {name: (row[0], row[1]) for name, row in out.items()}
+
+    def by_kind(self) -> dict[str, int]:
+        """divergence kind -> how many failing cases diverged that way, in :data:`KINDS` order, zeros included."""
+        out: dict[str, int] = dict.fromkeys(KINDS, 0)
+        for result in self.failures:
+            kind = result.failure.kind if result.failure is not None else "value"
+            out[kind] = out.get(kind, 0) + 1
+        return out
 
     @property
     def ok(self) -> bool:
@@ -146,19 +178,24 @@ def format_cases(report: CorpusReport) -> str:
     if report.caveats:
         lines.append("")
     for result in report.results:
-        mark = "PASS" if result.passed else "FAIL"
+        mark = "PASS" if result.passed else f"FAIL {result.failure.kind if result.failure is not None else 'value'}"
         lines.append(f"[{mark}] {result.id} ({result.provenance}, {result.profile}) {result.title}")
         if result.failure is not None:
             lines.extend(f"        {line}" for line in result.failure.lines())
-    counts = report.by_provenance()
-    documented, judgment = counts.get("documented", (0, 0)), counts.get("judgment", (0, 0))
     lines.append(
-        f"{report.passed} passed, {report.failed} failed "
-        f"(documented {documented[0]}/{documented[1]}, judgment {judgment[0]}/{judgment[1]})"
+        f"{report.passed} passed, {report.failed} failed ({_provenance_counts(report)})"
         f"{'' if report.validated else '; responses NOT validated against the schema'}"
     )
+    if report.failed:
+        lines.append("divergence: " + ", ".join(f"{kind} {n}" for kind, n in report.by_kind().items()))
     lines.append("OK" if report.ok else "NOT OK")
     return "\n".join(lines)
+
+
+def _provenance_counts(report: CorpusReport) -> str:
+    """``documented 5/5, judgment 1/1, recorded 0/0`` -- one column per provenance."""
+    counts = report.by_provenance()
+    return ", ".join(f"{name} {counts[name][0]}/{counts[name][1]}" for name in sorted(counts))
 
 
 def format_matrix(
@@ -170,8 +207,8 @@ def format_matrix(
     """One row per vendor route joining the contract leg and the behaviour leg.
 
     ``METHOD path | spec: operation <opId> / EXCUSED (reason) / UNDECLARED |
-    validated: n | documented: n | judgment: n``, then totals, then the pin
-    line from the extract's ``x-vendorfake`` block.
+    validated: n | documented: n | judgment: n | recorded: n``, then totals,
+    then the pin line from the extract's ``x-vendorfake`` block.
     """
     validated: Mapping[str, int] = {row.key: row.validated for row in ledger.rows()} if ledger is not None else {}
     covered: dict[str, dict[str, list[CaseResult]]] = {}
@@ -180,7 +217,7 @@ def format_matrix(
             covered.setdefault(key, {}).setdefault(result.provenance, []).append(result)
 
     classified = [c for c in surface.classify_all(routes) if c.kind != "internal"]
-    rows: list[tuple[str, str, str, str, str]] = []
+    rows: list[tuple[str, str, str, tuple[str, ...]]] = []
     undeclared: list[str] = []
     counts = {"operation": 0, "excused": 0, "undeclared": 0}
     for item in classified:
@@ -201,15 +238,15 @@ def format_matrix(
                 key,
                 spec,
                 str(validated.get(key, 0)) if ledger is not None else "-",
-                _count(per_route.get("documented", [])),
-                _count(per_route.get("judgment", [])),
+                tuple(_count(per_route.get(name, [])) for name in PROVENANCES),
             )
         )
 
     width = max((len(row[0]) for row in rows), default=0)
     lines = [
-        f"{key.ljust(width)} | spec: {spec} | validated: {v} | documented: {d} | judgment: {j}"
-        for key, spec, v, d, j in rows
+        f"{key.ljust(width)} | spec: {spec} | validated: {v} | "
+        + " | ".join(f"{name}: {count}" for name, count in zip(PROVENANCES, per_provenance, strict=True))
+        for key, spec, v, per_provenance in rows
     ]
     lines.append("")
     lines.append(
@@ -218,12 +255,11 @@ def format_matrix(
     )
     for key in undeclared:
         lines.append(f"UNDECLARED {key}: neither an operation of the extract nor excused in the declaration")
-    provenance = corpus_report.by_provenance()
-    documented, judgment = provenance.get("documented", (0, 0)), provenance.get("judgment", (0, 0))
     lines.append(
-        f"cases: {corpus_report.passed} passed, {corpus_report.failed} failed "
-        f"(documented {documented[0]}/{documented[1]}, judgment {judgment[0]}/{judgment[1]})"
+        f"cases: {corpus_report.passed} passed, {corpus_report.failed} failed ({_provenance_counts(corpus_report)})"
     )
+    if corpus_report.failed:
+        lines.append("divergence: " + ", ".join(f"{kind} {n}" for kind, n in corpus_report.by_kind().items()))
     for result in corpus_report.failures:
         lines.append(f"FAILED {result.id} ({result.provenance}): {result.title}")
         if result.failure is not None:

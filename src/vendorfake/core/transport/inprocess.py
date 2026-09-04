@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from vendorfake.core.kernel.reply import decode_body
-from vendorfake.core.kernel.types import UnitResponse
+from vendorfake.core.kernel.types import UnitRequest, UnitResponse
 from vendorfake.core.kernel.unit import Unit, make_request
 
 __all__ = ["InProcessClient", "InProcessResponse", "in_process"]
@@ -72,18 +72,21 @@ class InProcessClient:
         request_id: str | None = None,
     ) -> InProcessResponse:
         """Build a request, hand it to the unit, and wrap the response; ``raw_body`` wins over ``body``."""
-        res = self._unit.handle(
-            make_request(
-                method=method,
-                path=path,
-                query=query,
-                headers=headers,
-                body=body,
-                raw_body=raw_body,
-                transport=transport,
-                request_id=request_id,
-            )
+        request = make_request(
+            method=method,
+            path=path,
+            query=query,
+            headers=headers,
+            body=body,
+            raw_body=raw_body,
+            transport=transport,
+            request_id=request_id,
         )
+        return self.dispatch(request)
+
+    def dispatch(self, request: UnitRequest) -> InProcessResponse:
+        """Hand one built request to the unit; the seam a subclass observes both sides of."""
+        res = self._unit.handle(request)
         return InProcessResponse(status=res.status, headers=dict(res.headers), raw=res)
 
     def get(self, path: str, **kwargs: Any) -> InProcessResponse:

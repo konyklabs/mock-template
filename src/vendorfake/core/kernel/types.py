@@ -56,6 +56,7 @@ __all__ = [
     "PreparedEvent",
     "ReplyInit",
     "RequestRecord",
+    "ResponseObserver",
     "Route",
     "SeedingVendor",
     "ShapedError",
@@ -226,6 +227,10 @@ class ReplyInit:
     json: Any = None
     text: str | None = None
     raw: bytes | None = None
+
+
+ResponseObserver = Callable[[UnitRequest, UnitResponse], None]
+"""Called by a binding after the unit answered; may raise to turn the answer into a 500 naming the violation."""
 
 
 # What the unit observed about a request. Distinct from the journal, which records committed *mutations* only.

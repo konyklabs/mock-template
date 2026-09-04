@@ -1158,3 +1158,30 @@ def _create_square_order(square: Driver) -> dict[str, object]:
     assert created.status_code == 200, created.text
     order: dict[str, object] = created.json()["order"]
     return order
+
+
+def test_served_validate_checks_the_child_s_answers_against_the_vendor_s_schema() -> None:
+    """The served side of the fidelity check: the child validates every answer it
+    gives and reports what it checked when it stops.
+
+    A seeded call is the assertion that ``--validate`` did not change what the
+    unit answers -- the observer reads after the fact and can only raise -- and
+    the ledger line on the way out is the assertion that it actually ran.
+    """
+    with served("square", "no-faults", validate=True) as child:
+        locations = child.client.get("/v2/locations", headers=child.seed.auth)
+        assert locations.status_code == 200
+        assert child.seed.location_id in [row["id"] for row in locations.json()["locations"]]
+    tail = child.logs()
+    summary = next((line for line in tail if "fidelity:" in line), None)
+    assert summary is not None, tail
+    assert "validated" in summary
+    assert '"level": "info"' in summary or '"level":"info"' in summary
+
+
+def test_served_validate_refuses_a_vendor_with_no_fidelity_leg() -> None:
+    """Refused on the caller's line: the child would exit before announcing a
+    port, and a startup timeout says nothing about why."""
+    with pytest.raises(ValueError, match="fidelity leg"):  # noqa: SIM117 - the `with served(...)` is the subject
+        with served("clover", validate=True) as driver:
+            pytest.fail(f"served() yielded {driver!r} for a vendor with no fidelity leg")

@@ -1,7 +1,7 @@
 [project]
 name = "vendorfake"
 version = "0.5.0"
-description = "High-fidelity fakes of third-party vendor APIs: stateful flows, signed webhooks, deterministic fault injection."
+description = "Fakes of third-party vendor APIs, checked against the vendors' published schemas: stateful flows, signed webhooks, deterministic fault injection."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"

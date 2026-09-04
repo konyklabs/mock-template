@@ -1,4 +1,4 @@
-"""vendorfake -- high-fidelity fakes of third-party vendor APIs. Unofficial, and
+"""vendorfake -- fakes of third-party vendor APIs, checked against their published schemas. Unofficial, and
 not affiliated with, endorsed by or connected to any vendor whose public API a
 module here imitates. ``core`` and ``asgi`` are internal, and
 ``docs/api-contract.md`` says what is public; most consumers want
