@@ -37,6 +37,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
+from vendorfake.core.control.plane import MANIFEST_SCHEMA
 from vendorfake.core.kernel.router import Match, Router
 from vendorfake.core.kernel.types import Route, SignInput
 from vendorfake.core.kernel.unit import Unit
@@ -85,7 +86,6 @@ TARGET_ENV_VAR = "VENDORFAKE_FIDELITY_TARGET"
 
 CONTROL_PREFIX = "/__unit/"
 
-MANIFEST_SCHEMA = "vendorfake.manifest/1"
 """The document :class:`ManifestWorld` reads. See ``docs/reference/manifest.md``."""
 
 REMOTE_CAVEAT = (

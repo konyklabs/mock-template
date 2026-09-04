@@ -193,7 +193,9 @@ def _run_remote(parser: argparse.ArgumentParser, args: argparse.Namespace) -> in
         except (LookupError, ImportError, AttributeError) as exc:
             return _fail(f"cannot resolve --target {args.target}: {exc}")
     if args.profile:
-        parser.error("--profile cannot be combined with --base-url: the running unit reports its own profile")
+        parser.error(
+            "--profile cannot be combined with --base-url or --manifest: the running unit, or the manifest, reports the profile"
+        )
     try:
         world, base_url = _world(args)
         cases = _select(load_corpus(anchor), args.case_ids)

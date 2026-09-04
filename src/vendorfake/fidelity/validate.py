@@ -307,8 +307,8 @@ class ResponseValidator:
         if schema is None:
             return
         content_type = _header(request.headers, "content-type")
-        if content_type is not None and not _is_json_media(content_type):
-            return
+        if content_type is None or not _is_json_media(content_type):
+            return  # only a body the vendor's application/json schema governs is checked
         text = request.raw_body.decode("utf-8", errors="replace")
         try:
             instance = json.loads(text)
