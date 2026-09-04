@@ -33,17 +33,26 @@ exercise the ``VENDORFAKE_SEED`` layer under an overlay -- a hand-written
 stand-in would lack the tokens the unit authenticates with, and would fail for
 a reason that has nothing to do with the overlay."""
 
-OVERLAY = {"merchant": {"business_name": "Overlaid Roasters"}}
-"""One collection, one field: the shape a real overlay has. ``business_name``
-because it is on the response body of a route the ``full`` profile serves, so
-the assertion is on what the unit *answers*, not on what it loaded."""
+OVERLAY = {"loyalty_program": {"terminology_one": "Overlaid Point"}}
+"""One collection, one field: the shape a real overlay has.
+
+``loyalty_program`` because it is a collection an overlay may actually name --
+``merchant`` and ``tokens`` are the two ``.seed`` is built from and are refused
+-- and ``terminology_one`` because it reaches the response body of a route the
+``full`` profile serves, so the assertion is on what the unit *answers*, not on
+what it loaded. The shipped value is ``"Point"``.
+"""
 
 
-def _merchant(started: object) -> dict[str, object]:
+def _terminology(started: object) -> str:
+    """The loyalty program's singular term, as the unit answers it."""
     driver = started
-    body = driver.client.get(f"/v2/merchants/{driver.seed.merchant_id}", headers=driver.seed.auth).json()  # type: ignore[attr-defined]
-    merchant: dict[str, object] = body["merchant"]
-    return merchant
+    body = driver.client.get(  # type: ignore[attr-defined]
+        f"/v2/loyalty/programs/{driver.seed.loyalty_program_id}",  # type: ignore[attr-defined]
+        headers=driver.seed.auth,  # type: ignore[attr-defined]
+    ).json()
+    term: str = body["program"]["terminology"]["one"]
+    return term
 
 
 # ---------------------------------------------------------------------------
@@ -55,26 +64,26 @@ def test_an_inline_overlay_is_answered_from_the_first_request() -> None:
     """Not "after a reset", not "on the second call": the merge happens while
     the unit is built, so the very first read already sees it."""
     with unit("square", seed_overlay=OVERLAY) as square:
-        assert _merchant(square)["business_name"] == "Overlaid Roasters"
+        assert _terminology(square) == "Overlaid Point"
 
 
 def test_a_unit_with_no_overlay_still_answers_the_shipped_scenario() -> None:
     with unit("square") as square:
-        assert _merchant(square)["business_name"] == "Jet Fuel Coffee"
+        assert _terminology(square) == "Point"
 
 
 def test_an_overlay_from_a_file_means_the_same_as_one_inline(tmp_path: Path) -> None:
     document = tmp_path / "overlay.json"
     document.write_text(json.dumps(OVERLAY), encoding="utf-8")
     with unit("square", seed_overlay=document) as from_file, unit("square", seed_overlay=OVERLAY) as inline:
-        assert _merchant(from_file) == _merchant(inline)
+        assert _terminology(from_file) == _terminology(inline) == "Overlaid Point"
 
 
 def test_a_path_given_as_a_string_is_read_as_a_path_and_not_as_json(tmp_path: Path) -> None:
     document = tmp_path / "overlay.json"
     document.write_text(json.dumps(OVERLAY), encoding="utf-8")
     with unit("square", seed_overlay=str(document)) as square:
-        assert _merchant(square)["business_name"] == "Overlaid Roasters"
+        assert _terminology(square) == "Overlaid Point"
 
 
 def test_a_missing_overlay_file_is_refused_naming_the_path(tmp_path: Path) -> None:
@@ -94,7 +103,7 @@ def test_an_unknown_collection_is_refused_when_the_unit_is_built() -> None:
 
 def test_the_overlay_leaves_the_collections_it_never_names_alone() -> None:
     """The merge is a delta, not a replacement: a consumer overriding the
-    merchant must not lose the catalog the scenario is useful for."""
+    loyalty program must not lose the catalog the scenario is useful for."""
     with unit("square", seed_overlay=OVERLAY) as overlaid, unit("square") as plain:
         assert (
             overlaid.client.get("/__unit/state").json()["entities"]
@@ -113,6 +122,139 @@ def test_two_units_on_the_same_overlay_still_agree_entity_for_entity() -> None:
 
 
 # ---------------------------------------------------------------------------
+# The collections `.seed` is built from are refused.
+#
+# Review measured the hole these close: `served("square", seed_overlay={"tokens":
+# [...]})` spawned a child that hydrated the overlaid token while the parent's
+# `.seed.access_token` still carried the shipped one, so every
+# `child.client.get(path, headers=child.seed.auth)` answered 401 with nothing
+# anywhere naming the overlay. `unit()` had the identical hole. The fix is a
+# refusal rather than a seed that follows the document, and these pin it on
+# every vendor and every binding.
+# ---------------------------------------------------------------------------
+
+SEED_BOUND: tuple[tuple[str, str, object], ...] = (
+    ("square", "tokens", []),
+    ("square", "merchant", {}),
+    ("clover", "tokens", []),
+    ("clover", "merchant", {}),
+    ("toast", "tokens", []),
+    ("toast", "restaurant", {}),
+)
+"""Every (vendor, collection) pair ``.seed`` is built from, and a value of the
+shape that collection has.
+
+Written out rather than read from ``seed_collections_for``: a test that asked
+the implementation what it refuses would pass whatever the implementation said,
+including nothing. This is the list changing it has to disagree with.
+
+The value is shaped correctly on purpose. The refusal is raised once the
+profile has loaded, which is after the vendor has hydrated the merged document,
+so an overlay that is *also* the wrong shape is refused first and by hydration
+-- a correct refusal with a different message. What a consumer actually writes
+is well-shaped (``{"tokens": [<a token>]}``, ``{"merchant": {"id": ...}}``),
+and that is the case this pins.
+"""
+
+
+@pytest.mark.parametrize(("vendor", "collection", "value"), SEED_BOUND)
+def test_an_overlay_on_a_seed_bound_collection_is_refused(vendor: str, collection: str, value: object) -> None:
+    with pytest.raises(UnitError) as refused, unit(vendor, seed_overlay={collection: value}):
+        pytest.fail(f"unit({vendor!r}) started on an overlay of {collection!r}, which .seed is built from")
+    message = str(refused.value)
+    assert repr(collection) in message
+    assert ".seed" in message
+
+
+def test_the_refusal_says_what_seed_describes_and_what_to_do_instead() -> None:
+    """The message is the whole value of the refusal: a consumer who reads it
+    must learn why ``.seed`` cannot follow the document and what to reach for
+    instead, without going to the source."""
+    with pytest.raises(UnitError) as refused, unit("square", seed_overlay={"tokens": []}):
+        pass
+    message = str(refused.value)
+    assert "SHIPPED credentials and identity" in message
+    assert "VENDORFAKE_SEED" in message
+
+
+def test_a_seed_bound_collection_is_refused_through_the_env_variable_too() -> None:
+    """The check is on the overlay that actually loaded, not on the parameter,
+    so the variable route is closed by the same code."""
+    with (
+        pytest.raises(UnitError) as refused,
+        unit("square", env={"VENDORFAKE_SEED_OVERLAY": json.dumps({"tokens": []})}),
+    ):
+        pass
+    assert "'tokens'" in str(refused.value)
+
+
+def test_an_overlay_naming_one_seed_bound_collection_among_others_is_refused() -> None:
+    """The refusal is on the intersection, and names only the offending half:
+    an overlay is a document, and a consumer editing it needs to know which key
+    to take out."""
+    with (
+        pytest.raises(UnitError) as refused,
+        unit("square", seed_overlay={"orders": [], "tokens": []}),
+    ):
+        pass
+    message = str(refused.value)
+    assert "'tokens'" in message
+    assert "'orders'" not in message
+
+
+def test_served_refuses_a_seed_bound_collection_in_the_parent_process() -> None:
+    """Before ``Popen``: the child would start perfectly and every request made
+    with ``child.seed.auth`` would 401."""
+    with pytest.raises(UnitError) as refused, served("square", seed_overlay={"tokens": []}) as child:
+        pytest.fail(f"served() spawned a child at {child.base_url} for an overlay it must refuse")
+    assert "'tokens'" in str(refused.value)
+
+
+def test_a_collection_seed_does_not_speak_for_is_still_overlayable() -> None:
+    """The refusal is two collections wide, not a ban on overlays: the ids
+    ``.seed`` also carries diverge visibly (a 404 on the entity you replaced)
+    rather than silently, so they are left alone."""
+    with unit("square", seed_overlay={"orders": []}) as square:
+        assert square.client.get("/__unit/state").json()["entities"].get("orders", 0) == 0
+        assert (
+            square.client.get("/v2/merchants/" + square.seed.merchant_id, headers=square.seed.auth).status_code == 200
+        )
+
+
+# ---------------------------------------------------------------------------
+# `null` deletes, and hydration still validates what is left.
+# ---------------------------------------------------------------------------
+
+
+def test_a_null_deletion_reaches_hydration_and_the_unit_starts_without_it() -> None:
+    """``docs/concepts/seed.md`` documents ``null`` as deletion and this is the
+    end-to-end half of it: the pure function's rule is pinned next door, and
+    what a consumer needs to know is that the unit *starts* with the collection
+    gone."""
+    with unit("square", seed_overlay={"orders": None}) as square:
+        entities = square.client.get("/__unit/state").json()["entities"]
+    assert "orders" not in entities or entities["orders"] == 0
+
+
+def test_deleting_a_collection_another_one_references_is_refused_by_hydration() -> None:
+    """The merge rule says what comes out; the vendor still decides whether it
+    loads. Review found the page recommending exactly this deletion as its
+    motivating example, so the page now says so and this pins it."""
+    with pytest.raises(UnitError) as refused, unit("square", seed_overlay={"loyalty_program": None}):
+        pass
+    assert "loyalty_accounts" in str(refused.value)
+
+
+def test_deleting_the_referrer_alongside_it_starts_the_unit() -> None:
+    """...and the fix the page gives: remove what pointed at it, in the same
+    overlay."""
+    with unit("square", seed_overlay={"loyalty_program": None, "loyalty_accounts": None}) as square:
+        entities = square.client.get("/__unit/state").json()["entities"]
+    assert entities.get("loyalty_programs", 0) == 0
+    assert entities.get("loyalty_accounts", 0) == 0
+
+
+# ---------------------------------------------------------------------------
 # The layer, and its precedence.
 # ---------------------------------------------------------------------------
 
@@ -124,14 +266,14 @@ def test_the_parameter_becomes_the_env_layer_and_an_explicit_entry_beats_it() ->
     with unit(
         "square",
         seed_overlay=OVERLAY,
-        env={"VENDORFAKE_SEED_OVERLAY": json.dumps({"merchant": {"business_name": "From env"}})},
+        env={"VENDORFAKE_SEED_OVERLAY": json.dumps({"loyalty_program": {"terminology_one": "From env"}})},
     ) as square:
-        assert _merchant(square)["business_name"] == "From env"
+        assert _terminology(square) == "From env"
 
 
 def test_the_env_variable_alone_works_with_no_parameter() -> None:
     with unit("square", env={"VENDORFAKE_SEED_OVERLAY": json.dumps(OVERLAY)}) as square:
-        assert _merchant(square)["business_name"] == "Overlaid Roasters"
+        assert _terminology(square) == "Overlaid Point"
 
 
 def test_the_overlay_merges_over_the_document_vendorfake_seed_names(tmp_path: Path) -> None:
@@ -141,21 +283,23 @@ def test_the_overlay_merges_over_the_document_vendorfake_seed_names(tmp_path: Pa
     overlay names wins.
     """
     document = json.loads(_SHIPPED_SEED.read_text(encoding="utf-8"))
-    document["merchant"]["business_name"] = "Alternate"
-    document["merchant"]["language_code"] = "fr-CA"
+    document["loyalty_program"]["terminology_one"] = "Alternate"
+    document["loyalty_program"]["terminology_other"] = "Alternates"
     alternate = tmp_path / "alt.seed.json"
     alternate.write_text(json.dumps(document), encoding="utf-8")
     with unit(
         "square",
-        seed_overlay={"merchant": {"business_name": "Overlaid Roasters"}},
+        seed_overlay=OVERLAY,
         env={"VENDORFAKE_SEED": str(alternate)},
     ) as square:
-        merchant = _merchant(square)
+        terminology = square.client.get(
+            f"/v2/loyalty/programs/{square.seed.loyalty_program_id}", headers=square.seed.auth
+        ).json()["program"]["terminology"]
     # The overlay won on the field it named; the alternate document still won
     # on the field only it changed, which is what "seed first, overlay on top"
     # means.
-    assert merchant["business_name"] == "Overlaid Roasters"
-    assert merchant["language_code"] == "fr-CA"
+    assert terminology["one"] == "Overlaid Point"
+    assert terminology["other"] == "Alternates"
 
 
 def test_the_overlay_is_checked_against_the_document_vendorfake_seed_names(tmp_path: Path) -> None:
@@ -176,7 +320,7 @@ def test_an_env_value_starting_with_a_brace_is_read_as_inline_json() -> None:
     """The discriminator is the character, so a path and a document can never
     be confused -- and leading whitespace does not change the answer."""
     with unit("square", env={"VENDORFAKE_SEED_OVERLAY": "  \n" + json.dumps(OVERLAY)}) as square:
-        assert _merchant(square)["business_name"] == "Overlaid Roasters"
+        assert _terminology(square) == "Overlaid Point"
 
 
 def test_malformed_inline_json_is_refused_saying_it_was_read_as_json() -> None:
@@ -224,15 +368,19 @@ def test_info_never_publishes_the_overlay_contents() -> None:
     document rather than over the one block, because a leak would be a value
     that appeared somewhere else."""
     secret = "sk-not-a-real-credential-9f2b"
-    with unit("square", seed_overlay={"merchant": {"business_name": secret}}) as square:
+    with unit("square", seed_overlay={"loyalty_program": {"terminology_one": secret}}) as square:
         body = square.client.get("/__unit/info").text
     assert secret not in body
     assert "seed_overlay" in body
 
 
 def test_the_digest_is_the_same_however_the_overlay_was_spelled() -> None:
-    reordered = {"merchant": {"business_name": "Overlaid Roasters"}}
-    with unit("square", seed_overlay=OVERLAY) as first, unit("square", seed_overlay=reordered) as second:
+    spelled_one_way = {"loyalty_program": {"terminology_one": "One", "terminology_other": "Many"}}
+    reordered = {"loyalty_program": {"terminology_other": "Many", "terminology_one": "One"}}
+    with (
+        unit("square", seed_overlay=spelled_one_way) as first,
+        unit("square", seed_overlay=reordered) as second,
+    ):
         assert (
             first.client.get("/__unit/info").json()["seed_overlay"]["digest"]
             == second.client.get("/__unit/info").json()["seed_overlay"]["digest"]
@@ -247,8 +395,21 @@ def test_the_digest_is_the_same_however_the_overlay_was_spelled() -> None:
 @pytest.mark.asyncio
 async def test_async_unit_carries_the_overlay_through() -> None:
     async with async_unit("square", seed_overlay=OVERLAY) as square:
-        response = await square.async_client.get(f"/v2/merchants/{square.seed.merchant_id}", headers=square.seed.auth)
-    assert response.json()["merchant"]["business_name"] == "Overlaid Roasters"
+        response = await square.async_client.get(
+            f"/v2/loyalty/programs/{square.seed.loyalty_program_id}", headers=square.seed.auth
+        )
+    assert response.json()["program"]["terminology"]["one"] == "Overlaid Point"
+
+
+@pytest.mark.asyncio
+async def test_async_unit_refuses_a_seed_bound_collection_too() -> None:
+    """The third binding, asserted rather than inferred from the shared
+    generator: its docstring makes the same promise, so it carries the same
+    test."""
+    with pytest.raises(UnitError) as refused:
+        async with async_unit("square", seed_overlay={"tokens": []}) as started:
+            pytest.fail(f"async_unit() started on an overlay of 'tokens', with seed {started.seed!r}")
+    assert "'tokens'" in str(refused.value)
 
 
 def test_served_refuses_the_variable_and_names_the_parameter() -> None:
@@ -274,7 +435,7 @@ def test_served_refuses_an_unknown_collection_in_the_parent_process() -> None:
 @pytest.mark.integration
 def test_served_hands_the_overlay_to_the_child() -> None:
     with served("square", seed_overlay=OVERLAY) as child:
-        body = child.client.get(f"/v2/merchants/{child.seed.merchant_id}", headers=child.seed.auth).json()
+        body = child.client.get(f"/v2/loyalty/programs/{child.seed.loyalty_program_id}", headers=child.seed.auth).json()
         reported = child.client.get("/__unit/info").json()["seed_overlay"]
-    assert body["merchant"]["business_name"] == "Overlaid Roasters"
+    assert body["program"]["terminology"]["one"] == "Overlaid Point"
     assert reported == {"active": True, "digest": seed_overlay_digest(OVERLAY)}

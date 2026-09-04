@@ -83,7 +83,10 @@ from another document, and `VENDORFAKE_SEED_OVERLAY` because
 [`seed_overlay=`](../concepts/seed.md#seed-overlays) is the parameter for it —
 the parameter takes the document as a mapping, encodes it for the child, and
 refuses an unknown collection here, where the caller can see it, rather than
-as a child that exited before announcing a port.
+as a child that exited before announcing a port. It refuses one more thing
+here: an overlay naming `tokens` or the vendor's identity collection, which
+`.seed` is built from and cannot follow — see
+[the credentials and the identity](../concepts/seed.md#the-credentials-and-the-identity-cannot-be-overlaid).
 
 A served child shared across tests needs `reset()` between them when the
 vendor keeps single-use state — see

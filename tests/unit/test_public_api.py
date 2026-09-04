@@ -101,6 +101,7 @@ PUBLIC_API: Mapping[str, tuple[str, ...]] = {
         "webhook_receiver",
     ),
     "vendorfake.testing.seeds": (
+        "SEED_COLLECTIONS_ATTR",
         "CloverSeed",
         "CloverSeedOverlay",
         "Credentials",
@@ -111,6 +112,7 @@ PUBLIC_API: Mapping[str, tuple[str, ...]] = {
         "ToastSeed",
         "ToastSeedOverlay",
         "Token",
+        "seed_collections_for",
         "seed_for",
     ),
     "vendorfake.pytest": (

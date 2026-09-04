@@ -35,9 +35,9 @@ from pathlib import Path
 import pytest
 
 from tests.fakes import FakeVendor
-from vendorfake.core.kernel.types import SeedingVendor
+from vendorfake.core.kernel.types import SeedingVendor, UnitError
 from vendorfake.testing import NO_SEED_HINT, Seed, served, unit
-from vendorfake.testing.seeds import CloverSeed, SquareSeed, ToastSeed, seed_for
+from vendorfake.testing.seeds import CloverSeed, SquareSeed, ToastSeed, seed_collections_for, seed_for
 
 VENDOR_BLOCK = {"app_id": "acme-app", "app_secret": "acme-secret"}
 """The profile's own ``vendor`` block, so the hook can be shown reading it."""
@@ -401,3 +401,123 @@ def test_a_published_seed_satisfies_the_protocol_a_consumer_reads_through() -> N
         return seed.credentials.grant
 
     assert grant_of(AcmeSeed(app_id="a", app_secret="b")) == "client_credentials"
+
+
+# ---------------------------------------------------------------------------
+# Declaring which seed collections the hook's seed is built from.
+#
+# `.seed` is a fixture built from constants, not from the seed document that
+# loaded, so an overlay naming the collection those constants are the values
+# of makes it describe a different unit -- silently, as a 401 on every request.
+# `vendorfake.testing` refuses that for the three shipped vendors from its own
+# table; a third-party vendor buys the same refusal by declaring the set.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class DeclaringVendor(SeedingFakeVendor):
+    """A vendor that says which seed collections its own seed speaks for."""
+
+    seed_collections: frozenset[str] = frozenset({"tokens"})
+
+
+@dataclass
+class StringDeclaringVendor(SeedingFakeVendor):
+    """A vendor that declares a bare string instead of a collection of names."""
+
+    seed_collections: object = "tokens"
+
+
+def _install_seeded(definition: FakeVendor, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeVendor:
+    """:func:`_install`, plus a profile that actually names a seed document.
+
+    An overlay is checked against a base, and the profile :func:`_install`
+    writes names no seed at all -- so *every* overlay key is unknown there and
+    the refusal under test is never reached.
+    """
+    (tmp_path / "acme.seed.json").write_text(
+        json.dumps({"tokens": [{"id": "acme-token"}], "orders": []}), encoding="utf-8"
+    )
+    (tmp_path / "acme-seeded.json").write_text(
+        json.dumps(
+            {
+                "name": "acme-seeded",
+                "capabilities": ["orders", "chaos"],
+                "vendor": VENDOR_BLOCK,
+                "seed": "acme.seed.json",
+            }
+        ),
+        encoding="utf-8",
+    )
+    definition.profile_dir = tmp_path
+    definition.base_dir = tmp_path
+    monkeypatch.setattr("vendorfake.registry.resolve_vendor", lambda name: definition)
+    return definition
+
+
+def test_a_declared_collection_is_refused_for_a_third_party_vendor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_seeded(DeclaringVendor(), tmp_path, monkeypatch)
+
+    with (
+        pytest.raises(UnitError) as refused,
+        unit("acme", "acme-seeded", seed_overlay={"tokens": []}) as started,
+    ):
+        pytest.fail(f"unit() started on an overlay this vendor declared, with seed {started.seed!r}")
+    assert "'tokens'" in str(refused.value)
+
+
+def test_a_collection_the_vendor_did_not_declare_is_still_overlayable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The declaration is a list of what cannot follow an overlay, not a ban
+    on overlays for a vendor that makes one."""
+    _install_seeded(DeclaringVendor(), tmp_path, monkeypatch)
+
+    with unit("acme", "acme-seeded", seed_overlay={"orders": []}) as started:
+        assert isinstance(started.seed, AcmeSeed)
+
+
+def test_a_vendor_that_declares_nothing_refuses_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Silence means "this vendor has not said". Making it mean "refuse
+    everything" would break every hook written before the attribute existed,
+    and making it mean the shipped vendors' names would be this package
+    guessing about a document it has never seen."""
+    _install_seeded(SeedingFakeVendor(), tmp_path, monkeypatch)
+
+    with unit("acme", "acme-seeded", seed_overlay={"tokens": []}) as started:
+        assert isinstance(started.seed, AcmeSeed)
+
+
+def test_a_bare_string_declaration_is_not_decomposed_into_letters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``str`` is iterable, so the obvious reading of the attribute would
+    turn ``"tokens"`` into six one-letter collection names that match nothing.
+    It is treated as undeclared instead -- the same answer, arrived at on
+    purpose rather than by accident."""
+    _install_seeded(StringDeclaringVendor(), tmp_path, monkeypatch)
+
+    assert seed_collections_for("acme", definition=StringDeclaringVendor()) == frozenset()
+    with unit("acme", "acme-seeded", seed_overlay={"tokens": []}) as started:
+        assert isinstance(started.seed, AcmeSeed)
+
+
+@pytest.mark.parametrize(
+    ("vendor", "expected"),
+    [
+        ("square", frozenset({"tokens", "merchant"})),
+        ("clover", frozenset({"tokens", "merchant"})),
+        ("toast", frozenset({"tokens", "restaurant"})),
+        ("nosuchvendor", frozenset()),
+    ],
+)
+def test_the_shipped_vendors_declare_their_credential_and_identity_collections(
+    vendor: str, expected: frozenset[str]
+) -> None:
+    """Pinned here rather than derived, so widening or narrowing the set is a
+    diff a reviewer sees. A vendor with no seed at all declares nothing, which
+    is what makes ``seed_collections_for`` safe to call before it is known
+    whether the vendor has a seed."""
+    assert seed_collections_for(vendor) == expected

@@ -612,7 +612,12 @@ def load_profile(
     if config.seed_overlay is not None:
         overlay = _read_overlay(config.seed_overlay)
         seed = apply_seed_overlay(seed, overlay, profile=config.profile)
-        config = config.model_copy(update={"seed_overlay_digest": seed_overlay_digest(overlay)})
+        config = config.model_copy(
+            update={
+                "seed_overlay_digest": seed_overlay_digest(overlay),
+                "seed_overlay_collections": tuple(sorted(overlay)),
+            }
+        )
 
     return LoadedProfile(config=config, seed=seed, document=merged, source_path=source_path)
 

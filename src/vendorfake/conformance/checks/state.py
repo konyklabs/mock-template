@@ -1222,12 +1222,13 @@ def declared_pages_never_overlap_and_lose_nothing(env: CheckEnv) -> str:
 
 @check(
     id="C36",
-    name="state: a seed overlay may not invent a collection",
+    name="state: a seed overlay is applied, and may not invent a collection",
     asserts=(
-        "A unit accepts a seed overlay -- reporting it at GET /__unit/info as active, with a digest, "
-        "and reporting no overlay when none was given -- and REFUSES one whose top-level key is not a "
-        "collection of the seed document, while the unit is being built and before any request, with a "
-        "message naming the offending key and listing the collections that do exist."
+        "A unit APPLIES a seed overlay -- a non-empty overlay emptying a collection the profile seeds "
+        "leaves that collection's entities gone from GET /__unit/state -- reports it at GET /__unit/info "
+        "as active with a digest, reports no overlay when none was given, and REFUSES one whose top-level "
+        "key is not a collection of the seed document, while the unit is being built and before any "
+        "request, with a message naming the offending key and listing the collections that do exist."
     ),
     requires=Requires(seed=True, seed_overlay=True),
 )
@@ -1243,10 +1244,29 @@ def a_seed_overlay_cannot_invent_a_collection(env: CheckEnv) -> str:
     refusal is a *contract*, not an implementation detail, and it is asserted
     at the moment it has to happen: while the unit is built.
 
-    Three claims, in order, and the first two are what make the third
-    attributable. Without them a unit that refused *every* overlay -- or that
-    could not be built at all on this profile -- would satisfy the refusal
-    just as well as one that read the key.
+    Four claims. The refusal comes SECOND rather than last, because the
+    positive control is built from what the refusal's own message reports:
+    the collections this vendor's seed carries. That is the only
+    vendor-independent way for a clause in this package to name one, and
+    naming one is what the last claim needs.
+
+    THE POSITIVE CONTROL IS NON-EMPTY AND OBSERVABLE, and review is why. It
+    used to be ``{}``, which asserted only that an overlay *arrived*:
+    ``active`` and a digest are computed from the document the unit was
+    handed, not from anything it did with it. An implementation that reported
+    both faithfully and then dropped the overlay on the floor passed this
+    clause, which is the one failure the whole feature exists to prevent --
+    measured, by replacing the merge with ``return document`` and watching
+    every profile still pass. So the overlay now empties a collection the
+    profile actually seeds and the check reads ``GET /__unit/state`` back:
+    the count has to move, and a merge that no-ops fails.
+
+    The collection is chosen, never named: the candidates are the names the
+    refusal listed that also appear in this profile's own entity counts, and
+    the first that hydrates is used. ``[]`` rather than an added entity
+    because "replace the array whole" is the merge rule an empty array
+    exercises with no knowledge of what an entity of that collection looks
+    like -- which is knowledge no vendor-independent clause can have.
 
     The refusal message is parsed for its ``Valid collections:`` listing
     rather than merely searched for the offending key, because "names the
@@ -1255,29 +1275,7 @@ def a_seed_overlay_cannot_invent_a_collection(env: CheckEnv) -> str:
     document, which is exactly the trip the message exists to save. The
     phrase is part of the contract and ``core/config/overlay.py`` writes it.
     """
-    with env.seed_overlay_unit({}) as overlaid:
-        info = overlaid.info()
-        reported = info.get("seed_overlay")
-        require(
-            isinstance(reported, Mapping),
-            f"GET /__unit/info published seed_overlay={reported!r} on a unit built with an overlay. "
-            f"It must be an object with 'active' and 'digest'; add it in core/control/plane.py::info.",
-        )
-        overlay_block: Mapping[str, Any] = reported if isinstance(reported, Mapping) else {}
-        require(
-            overlay_block.get("active") is True,
-            f"a unit built with a seed overlay reports seed_overlay.active="
-            f"{overlay_block.get('active')!r} at GET /__unit/info. A consumer reading a report cannot "
-            f"otherwise tell a run on the shipped scenario from a run on an overridden one.",
-        )
-        digest = overlay_block.get("digest")
-        require(
-            isinstance(digest, str) and digest.startswith(_DIGEST_PREFIX),
-            f"seed_overlay.digest is {digest!r}; it must be {_DIGEST_PREFIX!r} followed by the hex "
-            f"SHA-256 of the overlay's canonical JSON, so that two runs can be compared without the "
-            f"overlay's contents ever being published.",
-        )
-
+    baseline = env.state()["entities"]
     plain = env.info().get("seed_overlay")
     plain_block: Mapping[str, Any] = plain if isinstance(plain, Mapping) else {}
     require(
@@ -1328,8 +1326,78 @@ def a_seed_overlay_cannot_invent_a_collection(env: CheckEnv) -> str:
         f"the refusal lists {_ABSENT_COLLECTION!r} among the valid collections: {message!r}. The key it "
         f"refused cannot also be one it accepts.",
     )
+
+    # The positive control, built from the listing the refusal just gave: a
+    # collection this vendor's seed carries AND whose entities this profile
+    # counts, so that emptying it is visible without knowing which vendor
+    # this is or what one of its entities looks like.
+    candidates = tuple(name for name in named if isinstance(baseline.get(name), int) and baseline[name] > 0)
+    require(
+        candidates,
+        f"none of the {len(named)} collection(s) the refusal listed ({', '.join(named)}) appears in this "
+        f"profile's own entity counts ({sorted(baseline)}), so no overlay can be shown to have been "
+        f"APPLIED rather than merely accepted. A seed collection that hydrates entities must be counted "
+        f"at GET /__unit/state under its own name for that to be checkable.",
+    )
+    refused_to_build: list[str] = []
+    applied: tuple[str, Mapping[str, Any], Mapping[str, Any]] | None = None
+    for candidate in candidates:
+        try:
+            with env.seed_overlay_unit({candidate: []}) as emptied:
+                entities = emptied.state()["entities"]
+                overlaid_info = emptied.info()
+        except ConformanceSkip:
+            raise
+        except Exception as refusal:
+            refused_to_build.append(f"{candidate} ({type(refusal).__name__}: {refusal})")
+            continue
+        applied = (candidate, entities, overlaid_info)
+        break
+    if applied is None:
+        # Not a failure: a seed whose every countable collection is referred
+        # to by another cannot have one emptied without breaking the
+        # document's own integrity, and hydration refusing that is correct
+        # behaviour rather than a broken merge. Under --strict the skip is
+        # then held against the target's matrix, so it cannot go unnoticed.
+        raise ConformanceSkip(
+            "no seeded collection could be emptied by an overlay without the seed failing to hydrate, so "
+            "there is no vendor-independent way to observe the merge here: " + "; ".join(refused_to_build)
+        )
+    emptied_name, emptied_entities, emptied_info = applied
+
+    reported = emptied_info.get("seed_overlay")
+    require(
+        isinstance(reported, Mapping),
+        f"GET /__unit/info published seed_overlay={reported!r} on a unit built with an overlay. "
+        f"It must be an object with 'active' and 'digest'; add it in core/control/plane.py::info.",
+    )
+    overlay_block: Mapping[str, Any] = reported if isinstance(reported, Mapping) else {}
+    require(
+        overlay_block.get("active") is True,
+        f"a unit built with a seed overlay reports seed_overlay.active={overlay_block.get('active')!r} at "
+        f"GET /__unit/info. A consumer reading a report cannot otherwise tell a run on the shipped "
+        f"scenario from a run on an overridden one.",
+    )
+    digest = overlay_block.get("digest")
+    require(
+        isinstance(digest, str) and digest.startswith(_DIGEST_PREFIX),
+        f"seed_overlay.digest is {digest!r}; it must be {_DIGEST_PREFIX!r} followed by the hex "
+        f"SHA-256 of the overlay's canonical JSON, so that two runs can be compared without the "
+        f"overlay's contents ever being published.",
+    )
+    require(
+        emptied_entities.get(emptied_name, 0) == 0,
+        f"an overlay of {{{emptied_name!r}: []}} was accepted -- reported active with a digest -- and the "
+        f"unit still hydrated {emptied_entities.get(emptied_name)!r} {emptied_name} (it had "
+        f"{baseline[emptied_name]!r} without the overlay). The overlay was reported and not APPLIED, "
+        f"which is the failure the whole feature exists to prevent: a consumer's scenario is accepted, "
+        f"fingerprinted in every report, and ignored. Merge it into the seed document before the store is "
+        f"hydrated -- core/config/overlay.py::merge_seed, called from load_profile.",
+    )
+
     return (
-        f"an empty overlay is accepted and reported active with a {_DIGEST_PREFIX} digest, a unit with "
-        f"none reports active=false, and {_ABSENT_COLLECTION!r} is refused before the unit starts, "
+        f"an overlay emptying {emptied_name!r} left 0 of the {baseline[emptied_name]} the profile seeds, "
+        f"reported active with a {_DIGEST_PREFIX} digest, a unit with none reports active=false, and "
+        f"{_ABSENT_COLLECTION!r} is refused before the unit starts, "
         f"naming {len(named)} valid collection(s): {', '.join(named)}"
     )

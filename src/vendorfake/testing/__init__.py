@@ -60,10 +60,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 import httpx
 
 from vendorfake import registry
-from vendorfake.core.config.models import UnmatchedPolicy
+from vendorfake.core.config.models import ResolvedConfig, UnmatchedPolicy
 from vendorfake.core.config.profile import ENV_VENDOR_PREFIX, load_profile
 from vendorfake.core.control.plane import DEFAULT_REQUEST_LIMIT
-from vendorfake.core.kernel.types import Logger
+from vendorfake.core.kernel.types import Logger, UnitError, UnitErrorKind, VendorDefinition
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.logging import JsonLogger
 from vendorfake.core.util.json import canonical_json
@@ -82,6 +82,7 @@ from vendorfake.testing.seeds import (
     ToastSeed,
     ToastSeedOverlay,
     Token,
+    seed_collections_for,
     seed_for,
 )
 from vendorfake.testing.transport import UnitTransport, UnmatchedRequest, checked_unmatched
@@ -700,6 +701,70 @@ def _require_seed(vendor: str, profile: str, found: Seed | None) -> Seed:
     return found
 
 
+def _refuse_a_seed_bound_overlay(
+    vendor: str,
+    profile: str,
+    config: ResolvedConfig,
+    definition: VendorDefinition | None,
+) -> None:
+    """Refuse an overlay that would make ``.seed`` describe a different unit.
+
+    THE HOLE THIS CLOSES, and why it is a refusal rather than a fix. The seed
+    handed back on :class:`StartedUnit` and :class:`ServedUnit` is built by
+    :func:`~vendorfake.testing.seeds.seed_for` out of the vendor's own module
+    constants and the profile's ``vendor`` block -- never out of the seed
+    document that was loaded. That is fine while the document *is* the
+    shipped one. An overlay naming the collection those constants are the
+    values of breaks it: the store hydrates the overlaid credentials and
+    ``.seed.auth`` still carries the shipped bearer, so every request made
+    the documented way answers 401, and nothing in the response, the log or
+    the traceback mentions the overlay. Review measured exactly that, on
+    ``served()`` and on ``unit()`` alike.
+
+    ``served(env={"VENDORFAKE_SEED": ...})`` is refused three screens down
+    for the identical reason and in the identical family of message; this is
+    that refusal for the overlay, extended to ``unit()``, which has the same
+    hole and no such guard.
+
+    Making ``.seed`` *follow* the merged document instead would be the better
+    answer and is a larger change than an overlay: every vendor's seed would
+    have to be read out of its own document rather than named as a constant,
+    and the document's shape would become part of what a fixture promises.
+    Until that happens the honest answer is a refusal that names what cannot
+    be done and what to do instead, rather than a fixture that quietly lies.
+
+    Checked against the OVERLAY's own keys (``seed_overlay_collections``,
+    laid on by the profile loader) rather than by comparing seeds, so it
+    holds however the overlay arrived -- the ``seed_overlay=`` parameter, a
+    ``VENDORFAKE_SEED_OVERLAY`` entry in ``env=``, or a path either of them
+    named.
+    """
+    named = config.seed_overlay_collections
+    if not named:
+        return
+    bound = seed_collections_for(vendor, definition=definition)
+    offending = sorted(set(named) & bound)
+    if not offending:
+        return
+    raise UnitError(
+        UnitErrorKind.INVALID_VALUE,
+        detail=(
+            f"seed overlay names {', '.join(repr(name) for name in offending)}, which is what "
+            f"{vendor}'s .seed is built from. The seed handed back by unit(), async_unit() and served() "
+            f"describes the SHIPPED credentials and identity -- its bearer tokens and its tenant id come "
+            f"from this distribution's own constants, not from the seed document that was loaded -- so it "
+            f"cannot follow an overlay. A unit built on this one would hydrate the overlaid scenario while "
+            f".seed.auth still carried the shipped bearer, and every request made with it would answer 401 "
+            f"with nothing anywhere to say why. Overlay any other collection the seed document carries. To "
+            f"change the credentials or the identity themselves, run the unit on a profile whose own seed "
+            f"document carries the ones you want (its `seed` key, or VENDORFAKE_SEED) and read them from "
+            f"that document rather than from .seed."
+        ),
+        field="seed_overlay",
+        info={"seed_bound": offending, "named": list(named), "vendor": vendor, "profile": profile},
+    )
+
+
 @overload
 def unit(
     vendor: Literal["square"],
@@ -815,8 +880,10 @@ def unit(
     before the store is built -- an inline mapping, or a path to a JSON file.
     On a vendor named as a literal it is typed: ``unit("square",
     seed_overlay={"orders": [...]})`` type-checks and a key that is not one
-    of Square's seed collections does not. See :func:`_unit` for the layering
-    and ``docs/concepts/seed.md`` for the merge rule.
+    of Square's seed collections does not. ``tokens`` and the vendor's
+    identity collection are refused at start: ``.seed`` carries the shipped
+    credentials and tenant id and cannot follow an overlay. See :func:`_unit`
+    for the layering and ``docs/concepts/seed.md`` for the merge rule.
     """
     return _unit(
         vendor,
@@ -890,6 +957,15 @@ def _unit(
     key and the collections that exist; on a vendor named as a literal the
     per-vendor ``TypedDict`` (``SquareSeedOverlay`` and its siblings) makes a
     type checker say so first.
+
+    Two collections are refused as well, though they are real: ``tokens`` and
+    the vendor's identity collection (``merchant``, ``restaurant``). ``seed``
+    below carries the shipped credentials and tenant id from this
+    distribution's own constants rather than from the document that loaded, so
+    an overlay of those two would hydrate one scenario while ``.seed``
+    described another and every request made with ``.seed.auth`` answered 401.
+    To run on other credentials, point the profile at a whole seed document of
+    your own instead.
 
     **A request no route matches raises**
     :class:`~vendorfake.testing.transport.UnmatchedRequest` here, which is a
@@ -969,6 +1045,17 @@ def _unit(
         # leaving it unfixed there was the more consequential half of the
         # gap. `built.context.vendor` costs nothing extra: it is a `Unit`
         # attribute, not a registry call.
+        #
+        # Before the seed is built, because the refusal is *about* the seed
+        # that would otherwise be built: an overlay naming the collection
+        # `.seed` carries the shipped values of makes the seed below describe
+        # a unit other than this one. The unit is already constructed by the
+        # time this runs -- the overlay's keys are known only once the profile
+        # loader has read it -- but nothing has been requested of it, and the
+        # `finally` above stops it, so no caller ever sees the unit at all.
+        _refuse_a_seed_bound_overlay(
+            built.name, built.context.config.profile, built.context.config, built.context.vendor
+        )
         resolved_seed = _require_seed(
             built.name,
             built.context.config.profile,
@@ -1288,7 +1375,11 @@ def served(
     child relative to the working directory both processes share. Narrowed on
     the vendor literal the same way. An ``env=`` entry naming that variable is
     refused: this is the parameter for it, and only the parameter's path
-    checks the overlay in *this* process, where the refusal is visible.
+    checks the overlay in *this* process, where the refusal is visible. An
+    overlay naming ``tokens`` or the vendor's identity collection is refused
+    here too, before the child is spawned -- ``.seed`` is built in this
+    process from the vendor's constants, so a child hydrated from an overlaid
+    credential would answer 401 to every request made with ``.seed.auth``.
 
     **Sharing one child across tests:** a session-scoped ``served()`` against
     a vendor with single-use or rotating state (Clover's refresh rotation)
@@ -1543,6 +1634,12 @@ def _served(
         env=vendor_env,
         defaults=definition.retry_defaults,
     )
+    # Before `Popen`, like every other refusal `served()` makes: the child
+    # would hydrate the overlaid credentials while the `resolved_seed` built
+    # here still carried the shipped ones, and the caller would meet that as a
+    # 401 from a child that started perfectly. Same helper as `_unit`'s, on
+    # the config this process loaded with the child's own overlay in it.
+    _refuse_a_seed_bound_overlay(resolved_name, profile, loaded.config, definition)
     resolved_seed = _require_seed(
         resolved_name, profile, seed_for(resolved_name, loaded.config.vendor_config, definition=definition)
     )

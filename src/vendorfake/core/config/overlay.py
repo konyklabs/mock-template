@@ -80,8 +80,15 @@ def merge_seed(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str,
     which is the *profile* document's merge and has no notion of deletion: a
     profile layer never removes a key, because the layer beneath it is a set
     of defaults rather than a scenario. A seed overlay does remove keys --
-    "this scenario, but with no loyalty program" is a thing a consumer needs
-    to say and cannot say by assigning a value.
+    "this scenario, but with no orders yet" is a thing a consumer needs to say
+    and cannot say by assigning a value.
+
+    Deletion is a merge rule and not a promise that the result loads. What
+    comes out is still a whole seed document and the vendor still hydrates it,
+    so removing a collection that another one references is refused there,
+    with hydration's own message: a reader following this rule has to remove
+    what pointed at it too. Review caught the earlier wording here recommending
+    exactly such a deletion.
     """
     merged = dict(base)
     for key, value in overlay.items():

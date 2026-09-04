@@ -61,14 +61,14 @@ across vendors:
 
 ## Seed overlays
 
-A scenario that is *almost* right is the common case: the shipped catalog and
-orders, but this merchant's name, or one extra order, or no loyalty program.
-`seed_overlay=` takes a **partial** seed document and merges it over the
-profile's before the store is hydrated, so the unit answers from the merged
-scenario on its very first request:
+A scenario that is *almost* right is the common case: the shipped merchant and
+catalog, but one extra order, or a loyalty program on different terms, or no
+orders at all. `seed_overlay=` takes a **partial** seed document and merges it
+over the profile's before the store is hydrated, so the unit answers from the
+merged scenario on its very first request:
 
 ```python
-with unit("square", seed_overlay={"merchant": {"business_name": "Overlaid"}}) as square:
+with unit("square", seed_overlay={"loyalty_program": {"terminology_one": "Star"}}) as square:
     ...  # every other collection is exactly what the profile ships
 ```
 
@@ -93,11 +93,30 @@ Stated here and nowhere else; implemented once, in
 | An array | Replaces the base array whole — never concatenated, never merged by index or id |
 | Anything else | Replaces |
 
-`null` deletes because a seed carrying `"loyalty_program": null` and a seed
-carrying no `loyalty_program` are different documents, and "remove it" has to
-produce the second — the same *absent means absent* rule the state store
-follows. An array replaces because a seed's `orders` is a list a reader can
-see: an overlay that lists two orders means two.
+`null` deletes because a seed carrying `"orders": null` and a seed carrying no
+`orders` are different documents, and "remove it" has to produce the second —
+the same *absent means absent* rule the state store follows. An array replaces
+because a seed's `orders` is a list a reader can see: an overlay that lists two
+orders means two.
+
+**The merged document is still a whole seed document, and hydration still
+validates it.** The merge rule above says what comes out; whether that
+document *loads* is the vendor's own question, asked exactly as it is for a
+seed with no overlay. So a deletion that leaves a dangling reference is
+refused with hydration's message, not the overlay's:
+
+```python
+# Starts: nothing in the seed points at an order.
+unit("square", seed_overlay={"orders": None})
+
+# UnitError: Seed loyalty_accounts need a loyalty_program to belong to.
+unit("square", seed_overlay={"loyalty_program": None})
+
+# Starts: the accounts that pointed at the program are gone in the same overlay.
+unit("square", seed_overlay={"loyalty_program": None, "loyalty_accounts": None})
+```
+
+Removing a collection means removing what references it, in the same overlay.
 
 ### A collection you invent is refused when the unit starts
 
@@ -124,6 +143,36 @@ with untyped values. A vendor passed as a plain `str` gets
 `vendorfake.testing.SeedOverlay` (`Mapping[str, Any]`), the honest answer when
 the call site does not know which vendor's collections apply; the unit still
 refuses an unknown collection at start.
+
+### The credentials and the identity cannot be overlaid
+
+Two collections are refused when the unit starts, on every binding: `tokens`,
+and the vendor's identity collection — `merchant` on Square and Clover,
+`restaurant` on Toast.
+
+```text
+seed overlay names 'tokens', which is what square's .seed is built from. The seed
+handed back by unit(), async_unit() and served() describes the SHIPPED credentials
+and identity … so it cannot follow an overlay.
+```
+
+`.seed` is built from this distribution's own constants and the profile's
+`vendor` block, not from the seed document that was loaded. An overlay of
+those two would change what the unit authenticates against and which tenant it
+answers for while `.seed.access_token` and `.seed.merchant_id` still reported
+the shipped values — so `.seed.auth`, the documented way to call the unit,
+would answer 401 against a unit that started perfectly, with nothing anywhere
+naming the overlay. `served()` refuses it in the calling process, before the
+child is spawned.
+
+Every other collection may be overlaid, `.seed`'s catalog, order and location
+ids included: those diverge visibly, as a 404 on the entity you replaced,
+rather than as an authentication failure on everything.
+
+To run a unit on different credentials or a different tenant, point the
+profile at a whole seed document of your own — its `seed` key, or
+`VENDORFAKE_SEED` — and read the values from that document rather than from
+`.seed`.
 
 ### What is published, and what is not
 

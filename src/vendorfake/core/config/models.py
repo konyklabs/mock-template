@@ -331,6 +331,19 @@ class ResolvedConfig(BaseModel):
     #: by the registry: it is a fact about what happened during loading and
     #: not a value the environment layer can name.
     seed_overlay_digest: str | None = None
+    #: The overlay's top-level keys, sorted -- the collections it actually
+    #: named -- or empty when there was none. Laid on beside
+    #: :attr:`seed_overlay_digest`, by the same loader and for the same
+    #: reason: it is a fact about what the overlay *was*, and the document is
+    #: gone by the time anything downstream could ask.
+    #:
+    #: The KEYS, never the values. A caller that has to decide whether an
+    #: overlay touched a particular collection -- ``vendorfake.testing``
+    #: refuses one that would make ``started.seed`` describe a different unit
+    #: -- needs the names and nothing else, and the values are the half that
+    #: may carry a consumer's own credentials. Not published: ``GET
+    #: /__unit/info`` still reports the digest alone.
+    seed_overlay_collections: tuple[str, ...] = ()
     vendor_config: dict[str, Any] = Field(default_factory=dict)
     webhooks: ResolvedWebhooks
     chaos: ResolvedChaos

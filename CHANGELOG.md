@@ -26,9 +26,21 @@ Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
   make a checker say so first (a non-literal vendor gets the untyped
   `SeedOverlay`). `GET /__unit/info` and `vendorfake info` gain
   `seed_overlay: {"active": bool, "digest": "sha256:<hex>" | null}` -- the
-  digest of the overlay's canonical JSON, never its contents (#85).
-* **conformance:** **C36**, "a seed overlay may not invent a collection": a
-  unit accepts an overlay and reports it at `GET /__unit/info`, and refuses
+  digest of the overlay's canonical JSON, never its contents. An overlay may
+  not name the two collections `.seed` is built from -- `tokens`, and the
+  vendor's identity collection (`merchant`, `restaurant`) -- because the seed
+  handed back carries the shipped credentials and tenant id from this
+  distribution's constants rather than from the loaded document, so such an
+  overlay would make `.seed.auth` answer 401 against a unit that started
+  perfectly; it is refused at start on all three bindings, and before
+  `served()` spawns its child. A vendor from the entry-point group declares
+  the same set with a `seed_collections` attribute beside its
+  `SeedingVendor.seed` hook; `vendorfake.testing.seeds.seed_collections_for`
+  is the reader (#85).
+* **conformance:** **C36**, "a seed overlay is applied, and may not invent a
+  collection": a unit APPLIES an overlay -- one emptying a collection the
+  profile seeds leaves that collection's entities gone from
+  `GET /__unit/state` -- reports it at `GET /__unit/info`, and refuses
   one naming a collection the seed document does not have while the unit is
   being built, with a message naming the offending key and listing the valid
   ones. Asked of every vendor through a new

@@ -53,7 +53,10 @@ the `SeedT` type variable; and the tuning constants `CLIENT_TIMEOUT_S`, `DRAIN_T
 `DEFAULT_REQUEST_LIMIT`, `LOG_LINES`, `SERVE_COMMAND` and `NO_SEED_HINT`.
 
 `vendorfake.testing.seeds` publishes the same seed types and `seed_for`
-directly, for a caller who wants a seed without building a unit.
+directly, for a caller who wants a seed without building a unit, plus
+`seed_collections_for` and the `SEED_COLLECTIONS_ATTR` name it reads — which
+seed collections a vendor's `.seed` is built from, and how a third-party
+vendor declares its own.
 
 **`served()` takes `env=`.** A `VENDORFAKE_*` mapping layered onto the
 child's inherited `os.environ` — an entry beats the ambient variable of the
@@ -81,6 +84,18 @@ a call without it behaves as before. The merge rule and the refusal for a
 collection the seed does not have are in
 [Seed](concepts/seed.md#seed-overlays); `GET /__unit/info` publishes
 `seed_overlay: {active, digest}` and never the contents.
+
+**An overlay may not name the collections `.seed` is built from.** `tokens`,
+and the vendor's identity collection (`merchant` on Square and Clover,
+`restaurant` on Toast), are refused with `UnitError` when the unit starts —
+on all three bindings, and in the parent process before `served()` spawns a
+child. `.seed` carries the shipped credentials and tenant id from this
+distribution's constants rather than from the loaded document, so an overlay
+of those two would make `.seed.auth` 401 against a unit that started
+perfectly. A vendor from the entry-point group declares the same set with a
+`seed_collections` attribute on its `VendorDefinition`, beside its
+`SeedingVendor.seed` hook; declaring nothing refuses nothing. See
+[Seed](concepts/seed.md#seed-overlays).
 
 **`served()`'s startup failures are eager, in the parent process.** An
 unknown vendor, a nonexistent or malformed profile, and a vendor with no seed
