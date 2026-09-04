@@ -1246,17 +1246,18 @@ def _served(
     ``VENDORFAKE_CLOCK=virtual``, ``VENDORFAKE_CAPABILITIES`` (an absolute
     list or a delta on the profile's), a ``VENDORFAKE_VENDOR_*`` credential
     override, the webhook and request-log variables: all reach the child
-    through here. Five do not, and an entry for them is silently beaten
-    rather than refused. ``VENDORFAKE_PROFILE``, ``VENDORFAKE_HOST``,
-    ``VENDORFAKE_PORT`` and ``VENDORFAKE_LOG_LEVEL`` are the four things this
-    function passes to the child as explicit flags (``profile=``, ``host=``,
-    ``port=``, ``log_level=``), and the CLI prefers a flag to the variable;
-    use the parameter. ``VENDORFAKE_TRANSPORT`` is ignored by ``serve``,
-    which only ever binds HTTP. ``VENDORFAKE_SEED`` is the one entry that is
-    refused (``ValueError``), because the seed handed back on ``.seed`` is
-    derived from the vendor's module constants, not read from a document, and
-    could not follow an alternate one -- the child would answer with tokens
-    the seed does not carry. There is still no ``capabilities=`` parameter;
+    through here. Seven are refused with ``ValueError`` before the child is
+    spawned, rather than silently beaten. ``VENDORFAKE_PROFILE``,
+    ``VENDORFAKE_HOST``, ``VENDORFAKE_PORT`` and ``VENDORFAKE_LOG_LEVEL`` are
+    the four things this function passes to the child as explicit flags
+    (``profile=``, ``host=``, ``port=``, ``log_level=``), and the CLI prefers
+    a flag to the variable, so the entry would change nothing -- use the
+    parameter. ``VENDORFAKE_TRANSPORT`` and ``VENDORFAKE_TRANSPORT_DIR`` are
+    ignored by ``serve``, which only ever binds HTTP. ``VENDORFAKE_SEED`` is refused because the seed handed
+    back on ``.seed`` is derived from the vendor's module constants, not read
+    from a document, and could not follow an alternate one -- the child would
+    answer with tokens the seed does not carry. There is still no
+    ``capabilities=`` parameter;
     resolve a capability request to a profile name by hand (or via
     :func:`unit`) before passing it as ``profile=``.
 
@@ -1383,6 +1384,25 @@ def _served(
             "constants, not from a seed document, and would not describe the child. Use a profile whose "
             "document points at the seed you want, and pass it as profile=."
         )
+    # The same shape of refusal for the variables an explicit flag below would
+    # silently beat (konyklabs/roadmap#105): a mapping entry that changes
+    # nothing is worse than one that is refused, because the caller reads
+    # "env reaches the child" and then debugs a child still logging at
+    # `error`, still on a random port, still on loopback.
+    transport_keys = sorted({"VENDORFAKE_TRANSPORT", "VENDORFAKE_TRANSPORT_DIR"} & set(layer))
+    if transport_keys:
+        raise ValueError(
+            f"served(env=...) cannot carry {', '.join(transport_keys)}: `vendorfake serve` only ever binds HTTP, "
+            "so the entry would change nothing, and there is no parameter to use instead -- a served unit is an "
+            "HTTP unit by definition. Build a unit in-process for any other binding."
+        )
+    beaten = sorted(_FLAG_BEATEN_ENV & set(layer))
+    if beaten:
+        raise ValueError(
+            f"served(env=...) cannot carry {', '.join(beaten)}: served() passes {_FLAG_BEATEN_HINT} to the child "
+            "as explicit flags, and the CLI prefers a flag to the variable, so the entry would change nothing. "
+            "Use the parameter instead."
+        )
     vendor_env = {key: value for key, value in {**os.environ, **layer}.items() if key.startswith(ENV_VENDOR_PREFIX)}
     loaded = load_profile(
         profile_dir=definition.profile_dir,
@@ -1448,6 +1468,18 @@ def _served(
         _stop(process)
         output.join()
 
+
+_FLAG_BEATEN_ENV: frozenset[str] = frozenset(
+    {"VENDORFAKE_PROFILE", "VENDORFAKE_HOST", "VENDORFAKE_PORT", "VENDORFAKE_LOG_LEVEL"}
+)
+"""The ``VENDORFAKE_*`` names an ``env=`` entry to :func:`served` is refused
+for because the child gets each as a flag (``--profile``, ``--host``,
+``--port``, ``--log-level``) that beats the variable; the refusal names the
+parameter to use. ``VENDORFAKE_TRANSPORT``, ``VENDORFAKE_TRANSPORT_DIR`` and
+``VENDORFAKE_SEED`` are refused too, each with its own reason and no substitute
+parameter. See :func:`_served`."""
+
+_FLAG_BEATEN_HINT = "profile=, host=, port= and log_level="
 
 SERVE_COMMAND: tuple[str, ...] = (sys.executable, "-m", "vendorfake", "serve")
 """What :func:`served` runs, before the flags. A module attribute so a test

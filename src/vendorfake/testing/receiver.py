@@ -70,7 +70,7 @@ class WebhookReceiver:
         """The receiver as this machine reaches it. For a wildcard bind the
         routable name depends on who is asking (see the class docstring), so
         build that URL from :attr:`port` yourself."""
-        host = "127.0.0.1" if self.host == "0.0.0.0" else self.host
+        host = "127.0.0.1" if self.host == "0.0.0.0" else self.host  # nosec B104  # a comparison, not a bind
         return f"http://{host}:{self.port}{self.path}"
 
     def start(self) -> None:

@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
+2026-09-01 batch (konyklabs/roadmap#53: the conformance-coverage stack #15,
+#46, #42 and the fidelity legs #55, #56).
+
+### Bug fixes
+
+* **examples:** the Vitest example's Toast signature helper now mirrors
+  `toast/signer.py` exactly -- the timestamp is appended only when the body is
+  a JSON object carrying one as a string; anything else is signed alone. It
+  used to throw on a body without one. Four parity vectors are pinned in both
+  suites, and the full self-test now runs the Vitest example as well as the
+  pytest one, so the two cannot drift again without a step going red (#49).
+* **testing:** `served(env=)` refuses an entry for `VENDORFAKE_PROFILE`,
+  `VENDORFAKE_HOST`, `VENDORFAKE_PORT` or `VENDORFAKE_LOG_LEVEL` with a
+  `ValueError` naming the parameter to use -- the child gets each as an
+  explicit flag, so the entry changed nothing and was documented as silently
+  beaten -- and a `VENDORFAKE_TRANSPORT` or `VENDORFAKE_TRANSPORT_DIR` entry
+  with its own message: `serve` only ever binds HTTP, and there is no
+  parameter to use instead (#105).
+
+* **examples:** both consumer examples now assert the documented status a
+  Toast check lands in after an OTHER payment covering its total: `CLOSED`,
+  as the payment walkthrough's own result shows (`PAID` is a card charge
+  whose tip is still unadjusted). The fidelity corpus corrected the unit in
+  0.3.x (#56); the examples had asserted the old answer and nothing ran them
+  (#105).
+
+### Tooling
+
+* `tools/self-test.sh` runs the pytest consumer example as its own uv project
+  against the checkout, in full mode -- the step that would have caught the
+  example regression above (#105).
+* `tools/self-test.sh --quick` skips the fidelity pin and report of a vendor
+  whose extract is fetched rather than committed (Toast), and says so: the
+  fetch step does not run under `--quick`, and a pull request's check must
+  not depend on a vendor's documentation site answering. The first quick run
+  after the fidelity legs landed failed exactly there (#105).
+* `tools/self-test.sh` runs `pip-audit` over the runtime dependencies and
+  `bandit -ll` over the package in its full mode (main and a laptop before a
+  push; not `--quick`). Bandit's two findings -- the wildcard-bind comparison
+  in `webhook_receiver` and a `yaml.load` on a `SafeLoader` subclass in the
+  fidelity extractor -- are annotated at the site with their reasons, and a
+  unit test pins that the loader refuses a python-object tag (#105).
+* `uv.lock` carries the 0.3.0 version `pyproject.toml` already had, aligned
+  by hand on vendorfake#43: release-please bumps only the latter, so every
+  `uv run` since v0.3.0 had been rewriting the lockfile in the working tree.
+  The root-cause fix -- the lockfile in the release config's extra-files --
+  is still pending, as #105's item 2 (it needs a workflow change).
+
+---
+
 Consumer feedback round 3 (konyklabs/roadmap#102, items 20–21, from an
 end-to-end spike that ran the fake as a real out-of-process child), round 2
 (konyklabs/roadmap#101, items 15–19) and the four non-blocking findings from

@@ -100,6 +100,55 @@ fi
 step "wheel data"        uv run python tools/check_wheel_data.py
 step "docs"              _docs_step
 
+# Security scanners, full run only (konyklabs/roadmap#105): pip-audit over the
+# runtime dependencies as the lockfile resolves them, bandit over the package
+# at medium severity and up. Both run from their published packages via uvx,
+# so neither is a dependency of vendorfake itself, and both are pinned so a
+# tool release cannot turn main red with an empty diff -- pip-audit's advisory
+# database stays live, which is the point; the tool that reads it does not
+# move on its own. A finding that is a deliberate choice is annotated at the
+# site with its reason, never silenced by configuration.
+BANDIT_VERSION="1.9.4"
+PIP_AUDIT_VERSION="2.10.1"
+_pip_audit_step() {
+  local requirements
+  requirements="$(mktemp)"
+  if ! uv export --frozen --no-dev --no-hashes --no-emit-project > "$requirements"; then
+    rm -f "$requirements"
+    return 1
+  fi
+  uvx "pip-audit==$PIP_AUDIT_VERSION" --strict -r "$requirements"
+  local code=$?
+  rm -f "$requirements"
+  return $code
+}
+if [ "$QUICK" -eq 0 ]; then
+  step "pip-audit"         _pip_audit_step
+  step "bandit"            uvx "bandit==$BANDIT_VERSION" -q -r src/vendorfake -ll
+fi
+
+# The pytest consumer example, run as its own uv project against THIS
+# checkout (konyklabs/roadmap#105). It is what a consumer copies, and until
+# this step existed a documented behaviour change (a paid Toast check answers
+# CLOSED, not PAID) broke both examples on main with every other step green.
+# `--reinstall-package vendorfake` because the example pins vendorfake as a
+# non-editable path dependency, which uv would otherwise serve from its cache.
+_example_step() {
+  (cd examples/pytest-consumer && uv sync -q --reinstall-package vendorfake && uv run pytest -q -p no:randomly)
+}
+# The Vitest example too: it is the side the #49 signer divergence lived on,
+# and its parity vectors guard nothing unless something runs them. Needs npm;
+# a machine without it fails the step rather than skipping it, because a
+# skipped step reads as a pass in the table.
+_vitest_example_step() {
+  command -v npm >/dev/null 2>&1 || { echo "npm is not on PATH; the Vitest example cannot run" >&2; return 1; }
+  (cd examples/vitest-consumer && npm ci --no-audit --no-fund --silent && npm test --silent)
+}
+if [ "$QUICK" -eq 0 ]; then
+  step "example (pytest)"  _example_step
+  step "example (vitest)"  _vitest_example_step
+fi
+
 # The conformance suite through its own entry points, which pytest does not
 # exercise: the framework-free CLI a container healthcheck calls, and the
 # pytest plugin an installed wheel exposes. `--strict` makes any skip that
@@ -134,6 +183,14 @@ done
 for entry in "${FIDELITY_TARGETS[@]}"; do
   vendor="${entry%%=*}"
   TARGET="${entry#*=}"
+  # A vendor whose extract is fetched rather than committed has nothing to
+  # check under --quick, where the fetch step above did not run: a pull
+  # request's check must not depend on a vendor's documentation site
+  # answering. The full run (main, a laptop) fetches first and checks both.
+  if [ "$QUICK" -eq 1 ] && printf '%s\n' "${FIDELITY_FETCH_TARGETS[@]}" | grep -qx "$entry"; then
+    printf '\n\033[1m== fidelity (%s) ==\033[0m\nskipped under --quick: the extract is fetched, never committed\n' "$vendor"
+    continue
+  fi
   step "fidelity pin ($vendor)" \
     uv run python -m vendorfake.fidelity pin --check --offline --target "$TARGET"
   step "fidelity report ($vendor)" \
