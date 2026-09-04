@@ -14,10 +14,17 @@ vendorfake serve --vendor square
 The `serve` extra pulls in the ASGI stack (`fastapi`, `uvicorn`) that `vendorfake
 serve` and the served/container bindings need; the in-process bindings
 (`unit()`, `async_unit()`) never import it, so a plain `pip install vendorfake`
-is enough for a test suite that only uses those. Drop the <!-- x-release-please-start-version -->`@v0.5.0`<!-- x-release-please-end --> to track
+is enough for a test suite that only uses those. The extra exists from 0.6.0;
+at an earlier tag the ASGI stack installs unconditionally and pip warns that
+the extra does not exist, which is harmless. Drop the `@v0.5.0` <!-- x-release-please-version --> to track
 `main`. From a checkout of this repository: `uv sync && uv run vendorfake
 serve --vendor square` (`uv sync`'s `dev` group carries the extra's packages
 too, so nothing extra to ask for there).
+
+The pin lines above carry a release-please marker (`x-release-please-version`)
+and `release-please-config.json` lists the three pages as extra files, so a
+release bumps them; `tests/unit/test_docs_pins.py` asserts every pin equals
+`vendorfake.__version__`.
 
 ## Pinning a commit instead of a tag
 

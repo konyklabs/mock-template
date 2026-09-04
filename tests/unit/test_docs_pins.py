@@ -4,7 +4,7 @@ FOR: catching the drift a release leaves behind if a doc is missed.
 README.md, docs/index.md and docs/start/install.md each tell a consumer to
 install a tagged commit (``pip install ... @vX.Y.Z``) and each carries a
 release-please ``x-release-please-version`` marker (see
-``docs/api-contract.md`` and ``release-please-config.json``'s
+``docs/start/install.md`` and ``release-please-config.json``'s
 ``extra-files``) so a release bumps the pin automatically. That is exactly
 the kind of mechanism that fails silently: a marker release-please's regex
 stops matching, a pin added by hand after the fact, or a new doc that copies
@@ -25,7 +25,7 @@ import vendorfake
 
 ROOT = Path(__file__).resolve().parents[2]
 
-PIN_RE = re.compile(r"@v(\d+\.\d+\.\d+)")
+PIN_RE = re.compile(r"konyklabs/vendorfake@v(\d+\.\d+\.\d+)")
 
 
 def _pins_in(path: Path) -> list[tuple[Path, int, str]]:

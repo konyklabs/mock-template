@@ -43,7 +43,7 @@ decided, the wire says so — see
 ## Sixty seconds to a first request
 
 ```sh
-pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.5.0"   # [serve] for `vendorfake serve`; in-process tests need no extra  # x-release-please-version
+pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.5.0"   # [serve] for `vendorfake serve`; in-process tests need no extra; x-release-please-version  # x-release-please-version
 vendorfake vendors                       # -> clover, lightspeed, square, toast
 vendorfake serve --vendor square         # http://127.0.0.1:8080
 ```
@@ -80,8 +80,8 @@ under [Start here](start/install.md).
 - **[Changelog](changelog.md)**.
 
 Writing tests against an installed vendorfake with a coding agent?
-`vendorfake agent-setup` writes a rules file into the consumer repository,
-and `vendorfake explain <kind> <name>` answers one question at a time.
+`vendorfake explain <kind> <name>` answers one question at a time, and
+`llms.txt` at the repository root lists the pages worth loading.
 
 ## Why this exists
 

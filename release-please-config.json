@@ -6,9 +6,10 @@
       "extra-files": [
         "README.md",
         "docs/index.md",
-        "docs/start/install.md",
-        "src/vendorfake/__init__.py"
+        "docs/start/install.md"
       ]
     }
-  }
+  },
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false
 }

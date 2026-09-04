@@ -35,8 +35,7 @@ context-manager sugar:
 ```python
 from vendorfake.registry import create_unit
 
-unit = create_unit(vendor="square", profile="full")
-unit.start()  # hydrates the store from the seed document
+unit = create_unit(vendor="square", profile="full")  # built AND started: the store is hydrated
 ...
 unit.stop()
 ```

@@ -286,17 +286,22 @@ entries are written that way, and they are the model.
 ## Compatibility policy for 0.x
 
 While the major version is 0, a minor release may change or remove public
-behaviour, every such change is listed under "Breaking changes" in the
-release notes with the removal and the replacement, the deprecation policy
-above applies within a minor series (0.6.x), and the public surface is the
+behaviour, and every such change is listed under "Breaking changes" in the
+release notes with the removal and its replacement. A change that is not
+listed there follows the deprecation policy above. The public surface is the
 `__all__` of the modules this page names, pinned by
 `tests/unit/test_public_api.py`; a consumer pins a tag and reads the
 breaking-changes section before each bump.
 
-0.6.0 is the release this round cuts, and its breaking changes are the
-removals of konyklabs/vendorfake#49 and #51: `agent-setup`, the file-drop
-transport, `VENDORFAKE_TRANSPORT`/`VENDORFAKE_TRANSPORT_DIR`,
-`VENDORFAKE_UNMATCHED`, `FrameworkTripwire`/`framework_answered`,
-`MutableResponse`, the `Unit` constructor seams, `served()` raising on
-unmatched by default, the `serve` extra, and the body limit and collection
-caps.
+This round's release is 0.6.0, a breaking minor under this policy. Its removals (konyklabs/vendorfake#49
+and #51): `agent-setup`, the file-drop transport and `FileSink`,
+`VENDORFAKE_TRANSPORT`/`VENDORFAKE_TRANSPORT_DIR`, `VENDORFAKE_UNMATCHED` and
+the profile's `unmatched` section, `FrameworkTripwire` and the
+`framework_answered` health field, `MutableResponse`, the `Unit` constructor
+seams. Its behaviour changes: `unit()` and `served()` honour exported
+`VENDORFAKE_*` variables; `served()` and `serve_in_thread()` drivers raise on
+an unmatched path by default; `WebhookReceiver.url` refuses a wildcard bind;
+`vendorfake serve`, `served()` and the container need the `serve` extra
+(`pip install "vendorfake[serve]"`); request bodies over 8 MiB are refused and
+six collections are bounded at 10,000 entries; the Square test-webhook route
+runs serialized and reports the first attempt only.

@@ -58,7 +58,7 @@ curl -s http://127.0.0.1:8080/__unit/health
 
 Every command names a vendor (`--vendor square|clover|toast|lightspeed`, or
 `VENDORFAKE_VENDOR`); with none installed it refuses and lists what it found.
-Drop the <!-- x-release-please-start-version -->`@v0.5.0`<!-- x-release-please-end --> to track `main` instead of a release tag. A container image
+Drop the `@v0.5.0` to track `main` instead of a release tag. <!-- x-release-please-version --> A container image
 is also available (one image, every vendor, chosen at run time) — see
 [Install → As a container](docs/start/install.md#as-a-container).
 
@@ -97,9 +97,10 @@ uv run mkdocs serve   # -> http://127.0.0.1:8000
 
 ## Status
 
-v0.1.0 is tagged and built in the open. Not yet on PyPI or a container
-registry: install from the tag as shown above, and treat interfaces as
-subject to change before v1. Why this project exists, and the two ADRs its
+Built in the open and released by tag (see the changelog). Not yet on PyPI or
+a container registry: install from the tag as shown above, and read the
+[compatibility policy](docs/api-contract.md#compatibility-policy-for-0x)
+before each bump. Why this project exists, and the two ADRs its
 architecture turns on, are on [the docs site](docs/index.md#why-this-exists).
 
 ## Licence
