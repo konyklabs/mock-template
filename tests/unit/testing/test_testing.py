@@ -222,7 +222,15 @@ def test_served_refuses_a_seed_document_in_env_before_spawning_a_child(monkeypat
 
 
 @pytest.mark.parametrize(
-    "name", ["VENDORFAKE_PROFILE", "VENDORFAKE_HOST", "VENDORFAKE_PORT", "VENDORFAKE_LOG_LEVEL", "VENDORFAKE_TRANSPORT"]
+    "name",
+    [
+        "VENDORFAKE_PROFILE",
+        "VENDORFAKE_HOST",
+        "VENDORFAKE_PORT",
+        "VENDORFAKE_LOG_LEVEL",
+        "VENDORFAKE_TRANSPORT",
+        "VENDORFAKE_TRANSPORT_DIR",
+    ],
 )
 def test_served_refuses_an_env_entry_a_flag_would_beat_rather_than_ignoring_it(
     name: str, monkeypatch: pytest.MonkeyPatch
@@ -239,7 +247,7 @@ def test_served_refuses_an_env_entry_a_flag_would_beat_rather_than_ignoring_it(
     # The explanation, not just the name: the transport has no parameter to
     # point at, and a message that said "use the parameter" for it sent the
     # reader looking for one (review of konyklabs/roadmap#105).
-    explanation = "only ever binds HTTP" if name == "VENDORFAKE_TRANSPORT" else "Use the parameter instead"
+    explanation = "only ever binds HTTP" if name.startswith("VENDORFAKE_TRANSPORT") else "Use the parameter instead"
     with pytest.raises(ValueError, match=name) as refused:  # noqa: SIM117 - the `with served(...)` is the subject
         with served("square", "no-faults", env={name: "x"}) as driver:
             pytest.fail(f"served() yielded {driver!r} with {name} in env=")

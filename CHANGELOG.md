@@ -18,8 +18,9 @@ Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
   `VENDORFAKE_HOST`, `VENDORFAKE_PORT` or `VENDORFAKE_LOG_LEVEL` with a
   `ValueError` naming the parameter to use -- the child gets each as an
   explicit flag, so the entry changed nothing and was documented as silently
-  beaten -- and a `VENDORFAKE_TRANSPORT` entry with its own message: `serve`
-  only ever binds HTTP, and there is no parameter to use instead (#105).
+  beaten -- and a `VENDORFAKE_TRANSPORT` or `VENDORFAKE_TRANSPORT_DIR` entry
+  with its own message: `serve` only ever binds HTTP, and there is no
+  parameter to use instead (#105).
 
 * **examples:** both consumer examples now assert the documented status a
   Toast check lands in after an OTHER payment covering its total: `CLOSED`,
@@ -35,8 +36,10 @@ Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
   example regression above (#105).
 * `tools/self-test.sh` runs `pip-audit` over the runtime dependencies and
   `bandit -ll` over the package in its full mode (main and a laptop before a
-  push; not `--quick`). Bandit's one finding, the wildcard-bind comparison in
-  `webhook_receiver`, is annotated at the site (#105).
+  push; not `--quick`). Bandit's two findings -- the wildcard-bind comparison
+  in `webhook_receiver` and a `yaml.load` on a `SafeLoader` subclass in the
+  fidelity extractor -- are annotated at the site with their reasons, and a
+  unit test pins that the loader refuses a python-object tag (#105).
 * `uv.lock` carries the 0.3.0 version `pyproject.toml` already had, aligned
   by hand on vendorfake#43: release-please bumps only the latter, so every
   `uv run` since v0.3.0 had been rewriting the lockfile in the working tree.

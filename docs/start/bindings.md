@@ -75,8 +75,8 @@ differently-seeded children can run in one process with nothing written to
 Entries for what `served()` passes as a flag — `VENDORFAKE_PROFILE`,
 `VENDORFAKE_HOST`, `VENDORFAKE_PORT`, `VENDORFAKE_LOG_LEVEL` — are refused
 with a `ValueError` naming the parameter to use, rather than silently
-beaten by the flag. `VENDORFAKE_TRANSPORT` is refused because a served unit
-is an HTTP unit by definition (there is no parameter to use; build a unit
+beaten by the flag. `VENDORFAKE_TRANSPORT` and `VENDORFAKE_TRANSPORT_DIR`
+are refused because a served unit is an HTTP unit by definition (there is no parameter to use; build a unit
 in-process for another binding), and `VENDORFAKE_SEED` because `.seed` is
 derived from the vendor's constants and could not describe a child hydrated
 from another document.

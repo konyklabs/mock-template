@@ -113,7 +113,10 @@ PIP_AUDIT_VERSION="2.10.1"
 _pip_audit_step() {
   local requirements
   requirements="$(mktemp)"
-  uv export --frozen --no-dev --no-hashes --no-emit-project > "$requirements" || return 1
+  if ! uv export --frozen --no-dev --no-hashes --no-emit-project > "$requirements"; then
+    rm -f "$requirements"
+    return 1
+  fi
   uvx "pip-audit==$PIP_AUDIT_VERSION" --strict -r "$requirements"
   local code=$?
   rm -f "$requirements"
