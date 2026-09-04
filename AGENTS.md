@@ -106,9 +106,10 @@ committing it.
 `src/vendorfake/conformance/checks/` matches their subsystem (`auth`,
 `capabilities`, `chaos`, `control_plane`, `discovery`, `errors`, `state`,
 `transport`, `webhooks`); a new check takes the next free id. C01–C35 are
-all allocated (C24–C32 by the conformance-coverage stack of roadmap #15,
-#46 and #42; C33 by stream S and C34–C35 by stream C of the 0.2 batch).
-**Next free id: C36.** `checks/__init__.py`
+all allocated, and C36 with them (C24–C32 by the conformance-coverage stack of roadmap #15,
+#46 and #42; C33 by stream S and C34–C35 by stream C of the 0.2 batch, C36
+by the seed-overlay stream of konyklabs/roadmap#85).
+**Next free id: C37.** `checks/__init__.py`
 imports every module and sorts the registry into id order, so report order
 never depends on import order. `manifest.json` is the committed
 id-to-name-and-expected-skips record; `tests/conformance/test_manifest.py`

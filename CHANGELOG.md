@@ -6,6 +6,59 @@ Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
 2026-09-01 batch (konyklabs/roadmap#53: the conformance-coverage stack #15,
 #46, #42 and the fidelity legs #55, #56).
 
+### Added
+
+* **testing:** `unit()`, `async_unit()` and `served()` take `seed_overlay=` --
+  a **partial** seed document merged over the profile's before the store is
+  hydrated, so the unit answers from the merged scenario on its first request.
+  An inline mapping or a `str`/`os.PathLike` naming a JSON file, and the
+  `VENDORFAKE_SEED_OVERLAY` layer either way: a value starting with `{` is
+  read as inline JSON, anything else as a path, and an explicit entry in
+  `env=` beats the parameter exactly as it does for `seed=` and `clock_start=`.
+  `served(env=)` refuses the variable and names the parameter, because only
+  the parameter's path checks the overlay in the calling process. The merge
+  rule -- objects merge recursively, `null` deletes a key, arrays and scalars
+  replace -- is stated once in `docs/concepts/seed.md` and implemented once in
+  `vendorfake.core.config.overlay.merge_seed`. A top-level key that is not one
+  of the seed document's collections fails the unit at construction, naming
+  the key and the collections that exist; on a vendor named as a literal the
+  new `SquareSeedOverlay`, `CloverSeedOverlay` and `ToastSeedOverlay` types
+  make a checker say so first (a non-literal vendor gets the untyped
+  `SeedOverlay`). `GET /__unit/info` and `vendorfake info` gain
+  `seed_overlay: {"active": bool, "digest": "sha256:<hex>" | null}` -- the
+  digest of the overlay's canonical JSON, never its contents. An overlay may
+  not name the two collections `.seed` is built from -- `tokens`, and the
+  vendor's identity collection (`merchant`, `restaurant`) -- because the seed
+  handed back carries the shipped credentials and tenant id from this
+  distribution's constants rather than from the loaded document, so such an
+  overlay would make `.seed.auth` answer 401 against a unit that started
+  perfectly; it is refused at start on all three bindings, and before
+  `served()` spawns its child. A vendor from the entry-point group declares
+  the same set with a `seed_collections` attribute beside its
+  `SeedingVendor.seed` hook; `vendorfake.testing.seeds.seed_collections_for`
+  is the reader (#85).
+* **conformance:** **C36**, "a seed overlay is applied, and may not invent a
+  collection": a unit APPLIES an overlay -- one emptying a collection the
+  profile seeds leaves that collection's entities gone from
+  `GET /__unit/state` -- reports it at `GET /__unit/info`, and refuses
+  one naming a collection the seed document does not have while the unit is
+  being built, with a message naming the offending key and listing the valid
+  ones. Asked of every vendor through a new
+  `ConformanceTarget.open_with_seed_overlay`, which a target that cannot build
+  units (a remote `--base-url` one) leaves unset to skip rather than pass
+  unmeasured. Mutant **M57** swallows the refusal, so the clause is
+  falsifiable (#85).
+* **conformance:** **C01 now requires the `seed_overlay` key** at
+  `GET /__unit/info`, alongside the seven it already required. This widens an
+  existing contract: a target that implements it -- a third-party fake run
+  through `--base-url`, say -- must publish
+  `seed_overlay: {"active": bool, "digest": "sha256:<hex>" | null}` on that
+  document, reporting `{"active": false, "digest": null}` when the unit was
+  built with no overlay. A fake that was green on C01 before this release and
+  has not added the key fails it with `GET /__unit/info omits
+  ['seed_overlay']`; the fix is the key, not a change to the fake's
+  behaviour (#85).
+
 ### Bug fixes
 
 * **examples:** the Vitest example's Toast signature helper now mirrors

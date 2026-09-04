@@ -494,6 +494,30 @@ class CheckEnv:
         with self.target.open_client(self.profile, wanted) as client:
             yield CheckEnv(target=self.target, profile=self.profile, transport=wanted, client=client)
 
+    @contextmanager
+    def seed_overlay_unit(self, overlay: Mapping[str, Any]) -> Iterator[CheckEnv]:
+        """A unit on the same profile with ``overlay`` laid over its seed.
+
+        Raises whatever the target's construction raises, unwrapped -- which
+        is the point: the seed-overlay contract is about a refusal that must
+        happen while the unit is *built*, and a helper that turned it into a
+        skip or an error would be answering the question on the check's
+        behalf. A check calling this catches the exception itself.
+
+        :class:`ConformanceSkip` if the target publishes no such opener,
+        which the ``seed_overlay`` precondition also reports; the guard is
+        repeated here so a check that reaches for this without declaring the
+        precondition skips rather than raising ``AttributeError`` on ``None``.
+        """
+        opener = self.target.open_with_seed_overlay
+        if opener is None:
+            raise ConformanceSkip(
+                "the target publishes no open_with_seed_overlay, so a unit carrying a seed overlay "
+                "cannot be built to ask this of"
+            )
+        with opener(self.profile, overlay) as client:
+            yield CheckEnv(target=self.target, profile=self.profile, transport=self.transport, client=client)
+
 
 @contextmanager
 def check_env(target: ConformanceTarget, profile: str, transport: str) -> Iterator[CheckEnv]:
@@ -524,6 +548,11 @@ def unmet_precondition(requires: Requires, env: CheckEnv) -> str | None:
         return "the vendor declares no state machines"
     if requires.seed and not any(int(count) for count in env.state()["entities"].values()):
         return f"profile {env.profile!r} loads no seed entities"
+    if requires.seed_overlay and env.target.open_with_seed_overlay is None:
+        return (
+            "the target publishes no open_with_seed_overlay, so no unit carrying a seed overlay "
+            "can be built to ask this of (ConformanceTarget.open_with_seed_overlay)"
+        )
     if requires.chaos and not env.capability_enabled(CoreCapability.CHAOS.value):
         return f"the {CoreCapability.CHAOS.value!r} capability is off in profile {env.profile!r}"
     if requires.webhooks:

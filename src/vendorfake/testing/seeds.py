@@ -23,9 +23,9 @@ names are a second view of the same strings.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     # Guarded because the runtime import belongs inside the two functions that
@@ -34,7 +34,21 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     # registry and the whole kernel in behind it for every such session.
     from vendorfake.core.kernel.types import VendorDefinition
 
-__all__ = ["CloverSeed", "Credentials", "Seed", "SquareSeed", "ToastSeed", "Token", "seed_for"]
+__all__ = [
+    "SEED_COLLECTIONS_ATTR",
+    "CloverSeed",
+    "CloverSeedOverlay",
+    "Credentials",
+    "Seed",
+    "SeedOverlay",
+    "SquareSeed",
+    "SquareSeedOverlay",
+    "ToastSeed",
+    "ToastSeedOverlay",
+    "Token",
+    "seed_collections_for",
+    "seed_for",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -340,6 +354,97 @@ class ToastSeed:
         return {"Authorization": f"Bearer {self.access_token}"}
 
 
+# ---------------------------------------------------------------------------
+# Seed overlays: the typed shape of ``unit(seed_overlay=...)``.
+#
+# One ``TypedDict(total=False)`` per vendor, whose keys are exactly that
+# vendor's top-level seed collections. ``total=False`` because an overlay is a
+# PARTIAL document by definition -- naming one collection is the ordinary case
+# -- and the point of the type is the *other* direction: a checker rejects a
+# key that is not a collection at all, which is the mistake an overlay has no
+# other symptom for. A misspelled collection merges cleanly, hydrates nothing
+# and looks like the fake ignoring the scenario; the unit refuses it at start
+# (``core/config/overlay.py``) and these types move the same refusal to the
+# editor.
+#
+# The VALUES are ``object``, not a per-collection model. A seed document's
+# entities are the vendor's own shapes, they differ per collection, and typing
+# them here would mean a second description of every vendor entity that could
+# drift from the document. The key is the half a consumer gets wrong.
+#
+# ``_comment`` is deliberately absent from all three, though the unit accepts
+# it: it is the document's own annotation, not a collection, and offering it as
+# something to override would be a worse answer than not typing it.
+# ---------------------------------------------------------------------------
+
+
+class SquareSeedOverlay(TypedDict, total=False):
+    """The collections ``vendorfake/square/seed/default.seed.json`` carries."""
+
+    merchant: object
+    locations: object
+    catalog: object
+    orders: object
+    loyalty_program: object
+    loyalty_accounts: object
+    inventory_counts: object
+    tokens: object
+
+
+class CloverSeedOverlay(TypedDict, total=False):
+    """The collections ``vendorfake/clover/seed/default.seed.json`` carries."""
+
+    merchant: object
+    tax_rates: object
+    modifier_groups: object
+    modifiers: object
+    items: object
+    employees: object
+    tenders: object
+    order_types: object
+    service_charges: object
+    customers: object
+    orders: object
+    tokens: object
+    webhook_subscriptions: object
+
+
+class ToastSeedOverlay(TypedDict, total=False):
+    """The collections ``vendorfake/toast/seed/default.seed.json`` carries."""
+
+    restaurant: object
+    partner: object
+    tokens: object
+    config_modified_ms: object
+    dining_options: object
+    alternate_payment_types: object
+    tax_rates: object
+    revenue_centers: object
+    service_areas: object
+    tables: object
+    restaurant_services: object
+    discounts: object
+    service_charges: object
+    void_reasons: object
+    menu_v3: object
+    orders: object
+    credit_authorizations: object
+    stock: object
+    webhook_subscriptions: object
+
+
+SeedOverlay = Mapping[str, Any]
+"""What a vendor passed as a plain ``str`` accepts: any JSON object.
+
+The honest answer for a vendor whose name is not a literal -- a parametrized
+test, or one discovered through the entry-point group -- exactly as
+:class:`Seed` is the honest answer for its ``.seed``. The collections are a
+property of the vendor, and this call site does not know which vendor it has.
+The unit still refuses an unknown collection at start; what is absent is the
+checker's ability to say so first.
+"""
+
+
 def _square(vendor_config: Mapping[str, object]) -> SquareSeed:
     from vendorfake.square.config import SquareConfig
     from vendorfake.square.events import SQUARE_EVENT_TYPES
@@ -444,6 +549,80 @@ def _toast(vendor_config: Mapping[str, object]) -> ToastSeed:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _BuiltInSeed:
+    """One shipped vendor's seed, as the two facts this module has about it.
+
+    ONE ENTRY PER VENDOR, both halves together, because they are the same
+    fact stated twice if they are apart: :attr:`build` reads a set of module
+    constants, and :attr:`collections` is which of the seed document's
+    top-level collections those constants are the shipped values *of*. A
+    vendor whose builder starts reading another collection and whose entry is
+    not updated silently reopens the divergence
+    :func:`~vendorfake.testing.seed_collections_for`'s callers exist to
+    refuse, so the table below is the one place either half is written.
+    """
+
+    build: Callable[[Mapping[str, object]], Seed]
+    collections: frozenset[str]
+    """The seed collections this vendor's seed object speaks for.
+
+    Its *credentials* (the bearer tokens a consumer authenticates with) and
+    its *identity* (the merchant or restaurant every scoped path is built
+    from) -- the two the seed publishes as concrete strings, from this
+    distribution's constants rather than from the document that was loaded.
+    An overlay naming one of these would change what the unit hydrates
+    without changing what ``.seed`` reports, which is a 401 or a 404 with
+    nothing anywhere to explain it; ``vendorfake.testing`` refuses such an
+    overlay when the unit starts.
+
+    NOT every collection a constant is drawn from. ``.seed`` also carries
+    catalog, order and location ids, and an overlay may still name those:
+    the divergence is then a stale id in one field of a fixture, which the
+    consumer sees as a 404 on the entity they themselves replaced. The
+    credential and the identity are the two whose divergence is *silent* --
+    every request fails, and none of them fails at the thing that was
+    overridden.
+    """
+
+
+_BUILT_IN_SEEDS: Mapping[str, _BuiltInSeed] = {
+    "square": _BuiltInSeed(build=_square, collections=frozenset({"tokens", "merchant"})),
+    "clover": _BuiltInSeed(build=_clover, collections=frozenset({"tokens", "merchant"})),
+    "toast": _BuiltInSeed(build=_toast, collections=frozenset({"tokens", "restaurant"})),
+}
+"""The three vendors this distribution ships, as data rather than a branch.
+
+This module may name them: it is under ``testing/``, not ``core/`` or
+``conformance/``, and its whole job is to know what the three shipped
+scenarios contain (``tools/boundary.toml`` draws the line in the same place).
+A vendor from the entry-point group is not here -- it publishes its own seed
+through the ``SeedingVendor`` hook and declares its own collections through
+:data:`SEED_COLLECTIONS_ATTR`.
+"""
+
+SEED_COLLECTIONS_ATTR = "seed_collections"
+"""The optional attribute a :class:`~vendorfake.core.kernel.types.SeedingVendor`
+declares its seed's collections in.
+
+A vendor that publishes a seed through the hook knows, and this module cannot
+know, which of *its* seed document's collections that seed is built from.
+Declaring them -- ``seed_collections = frozenset({"tokens", "tenant"})`` on the
+``VendorDefinition`` -- buys the same start-time refusal the shipped vendors
+get. Left undeclared, an overlay is not refused: silence has to mean "this
+vendor has not said", because making it mean "refuse everything" would break
+every existing hook implementation, and making it mean "refuse the names the
+shipped vendors use" would be this module guessing about a document it has
+never seen.
+
+Read with :func:`getattr` rather than added to the ``SeedingVendor``
+protocol: the protocol is ``runtime_checkable`` and ``seed_for`` discovers it
+with ``isinstance``, so a new required member would make every vendor that
+implements only ``seed`` stop being a ``SeedingVendor`` at all -- it would
+silently lose its seed rather than gain a refusal.
+"""
+
+
 _SEED_MEMBERS = ("credentials", "token", "auth", "read_only_auth", "event_types")
 """The five names :class:`Seed` requires, as data, for the hook's shape check.
 
@@ -512,9 +691,9 @@ def seed_for(
 
     Resolution order, and why it is this way round. A vendor that implements
     the :class:`~vendorfake.core.kernel.types.SeedingVendor` hook is asked
-    first, because that is the vendor's own statement about itself; the
-    three-way branch below is only *this module's* knowledge of the three
-    vendors shipped here. None of the three implements the hook, so the
+    first, because that is the vendor's own statement about itself;
+    :data:`_BUILT_IN_SEEDS` below is only *this module's* knowledge of the
+    three vendors shipped here. None of the three implements the hook, so the
     ordering changes nothing for them -- a test pins that -- and it means a
     third-party vendor is never shadowed by a name collision with a built-in.
 
@@ -531,13 +710,48 @@ def seed_for(
         published = _from_hook(definition, vendor, vendor_config)
         if published is not None:
             return published
-    if vendor == "square":
-        return _square(vendor_config)
-    if vendor == "clover":
-        return _clover(vendor_config)
-    if vendor == "toast":
-        return _toast(vendor_config)
-    return None
+    built_in = _BUILT_IN_SEEDS.get(vendor)
+    return None if built_in is None else built_in.build(vendor_config)
+
+
+def seed_collections_for(
+    vendor: str,
+    *,
+    definition: VendorDefinition | None = None,
+) -> frozenset[str]:
+    """Which seed collections ``vendor``'s seed object is built from.
+
+    The companion of :func:`seed_for`, resolved by the same rule and in the
+    same order -- the vendor's own hook first, the shipped table second -- so
+    that the two can never answer about different seeds. Empty when the
+    vendor publishes no seed, and empty for a hook that declares nothing;
+    see :data:`SEED_COLLECTIONS_ATTR` for why silence is not a refusal.
+
+    FOR: ``vendorfake.testing``'s start-time refusal of a seed overlay that
+    would make ``started.seed`` describe a unit other than the one it is
+    handed back with. It is separate from :func:`seed_for` rather than a
+    field on the seed object because the answer is needed *before* the
+    question "is this unit worth building" is settled, and because a seed is
+    a consumer's fixture -- a set of collection names on it would be one more
+    thing on a public object that nothing a consumer writes ever reads.
+    """
+    if definition is None:
+        definition = _resolve_quietly(vendor)
+    if definition is not None:
+        from vendorfake.core.kernel.types import SeedingVendor
+
+        if isinstance(definition, SeedingVendor):
+            declared = getattr(definition, SEED_COLLECTIONS_ATTR, None)
+            if declared is None or isinstance(declared, str) or not isinstance(declared, Iterable):
+                # A `str` is iterable and would decompose into characters, so
+                # it is rejected with the undeclared case rather than turned
+                # into a set of letters that matches nothing and refuses
+                # nothing -- silently, which is the failure mode this whole
+                # function exists to remove.
+                return frozenset()
+            return frozenset(str(name) for name in declared)
+    built_in = _BUILT_IN_SEEDS.get(vendor)
+    return frozenset() if built_in is None else built_in.collections
 
 
 def _resolve_quietly(vendor: str) -> VendorDefinition | None:

@@ -53,9 +53,14 @@ has no ``vendorfake.core`` to import it from, and a contract that asserted the
 header the core happens to define would pass by construction for the Python
 one and be unaskable for anyone else."""
 
-#: The keys ``/__unit/info`` is documented to carry, all seven of them. Listed
+#: The keys ``/__unit/info`` is documented to carry, all eight of them. Listed
 #: literally rather than derived from the answer, because "every key it sends
 #: is present" is not an assertion.
+#:
+#: ``seed_overlay`` joined with konyklabs/roadmap#85. Its *shape* -- an object
+#: with ``active`` and ``digest`` -- is asserted by C36, which is the check
+#: that can build a unit both with an overlay and without; here it is only
+#: required to be present, exactly as every other key is.
 INFO_KEYS: tuple[str, ...] = (
     "vendor",
     "profile",
@@ -63,6 +68,7 @@ INFO_KEYS: tuple[str, ...] = (
     "chaos",
     "webhooks",
     "clock",
+    "seed_overlay",
     "state",
 )
 

@@ -316,6 +316,34 @@ class ResolvedConfig(BaseModel):
     profile: str
     capabilities: tuple[str, ...] = ()
     seed_path: str | None = None
+    #: ``VENDORFAKE_SEED_OVERLAY`` as it was given: a path to a JSON document,
+    #: or the document itself inline. Resolved and applied by
+    #: :func:`~vendorfake.core.config.profile.load_profile`, which is the only
+    #: reader -- an overlay is a *document*, and this field is the locator for
+    #: it exactly as ``seed_path`` is the locator for the seed. Never
+    #: published: ``GET /__unit/info`` reports :attr:`seed_overlay_digest` and
+    #: nothing else, because an inline overlay may carry a consumer's own
+    #: credentials.
+    seed_overlay: str | None = None
+    #: ``"sha256:<hex>"`` over the canonical JSON of the overlay that was
+    #: applied, or ``None`` when none was. Laid on by ``load_profile`` after
+    #: the document is resolved, the way ``requested_capabilities`` is laid on
+    #: by the registry: it is a fact about what happened during loading and
+    #: not a value the environment layer can name.
+    seed_overlay_digest: str | None = None
+    #: The overlay's top-level keys, sorted -- the collections it actually
+    #: named -- or empty when there was none. Laid on beside
+    #: :attr:`seed_overlay_digest`, by the same loader and for the same
+    #: reason: it is a fact about what the overlay *was*, and the document is
+    #: gone by the time anything downstream could ask.
+    #:
+    #: The KEYS, never the values. A caller that has to decide whether an
+    #: overlay touched a particular collection -- ``vendorfake.testing``
+    #: refuses one that would make ``started.seed`` describe a different unit
+    #: -- needs the names and nothing else, and the values are the half that
+    #: may carry a consumer's own credentials. Not published: ``GET
+    #: /__unit/info`` still reports the digest alone.
+    seed_overlay_collections: tuple[str, ...] = ()
     vendor_config: dict[str, Any] = Field(default_factory=dict)
     webhooks: ResolvedWebhooks
     chaos: ResolvedChaos
