@@ -3,16 +3,21 @@
 Python 3.11 or newer. Not on PyPI yet — install from the tag:
 
 ```sh
-pip install "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.2.0"
+pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.2.0"
 # or, in a uv project:
-uv add "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.2.0"
+uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.2.0"
 
 vendorfake vendors            # -> clover, square, toast
 vendorfake serve --vendor square
 ```
 
-Drop the `@v0.2.0` to track `main`. From a checkout of this repository:
-`uv sync && uv run vendorfake serve --vendor square`.
+The `serve` extra pulls in the ASGI stack (`fastapi`, `uvicorn`) that `vendorfake
+serve` and the served/container bindings need; the in-process bindings
+(`unit()`, `async_unit()`) never import it, so a plain `pip install vendorfake`
+is enough for a test suite that only uses those. Drop the `@v0.2.0` to track
+`main`. From a checkout of this repository: `uv sync && uv run vendorfake
+serve --vendor square` (`uv sync`'s `dev` group carries the extra's packages
+too, so nothing extra to ask for there).
 
 ## Pinning a commit instead of a tag
 
@@ -41,7 +46,7 @@ docker run --rm -p 127.0.0.1:8081:8080 -e VENDORFAKE_VENDOR=clover -e VENDORFAKE
 docker run --rm -p 127.0.0.1:8080:8080 vendorfake serve --vendor square
 
 curl -s http://localhost:8080/__unit/health
-# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221}
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.5.0"}
 ```
 
 Publish the port on loopback (`-p 127.0.0.1:...`), as above: the control

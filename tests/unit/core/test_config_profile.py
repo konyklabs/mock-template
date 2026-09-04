@@ -401,6 +401,22 @@ def test_a_missing_required_subscriber_field_reports_missing_field() -> None:
     assert err.field == "webhooks.subscribers.0.event_types"
 
 
+def test_a_profile_subscriber_on_a_link_local_target_is_refused_like_a_control_plane_one() -> None:
+    """The same target rule at both seams: a profile cannot name the instance
+    metadata address any more than POST /__unit/webhooks/subscriptions can."""
+    subscriber = {
+        "notification_url": "http://169.254.169.254/latest",
+        "event_types": ["order.created"],
+        "signature_key": "k",
+    }
+    with pytest.raises(UnitError) as caught:
+        parse_profile_document({"webhooks": {"subscribers": [subscriber]}})
+    assert caught.value.kind is UnitErrorKind.INVALID_VALUE
+    assert "link-local" in (caught.value.detail or "")
+    loopback = {**subscriber, "notification_url": "http://127.0.0.1:9/hook"}
+    assert parse_profile_document({"webhooks": {"subscribers": [loopback]}}).webhooks.subscribers[0].enabled
+
+
 def test_chaos_rules_stay_opaque_documents_here() -> None:
     """The rule grammar belongs with the engine that evaluates it and with the
     control-plane body that also carries it; parsing it here would make this a

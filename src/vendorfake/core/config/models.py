@@ -13,9 +13,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
+from vendorfake.core.webhooks.models import check_notification_url
 
 __all__ = [
     "UNMATCHED_POLICIES",
@@ -76,6 +77,11 @@ class SubscriberConfig(BaseModel):
     event_types: tuple[str, ...]
     signature_key: str
     enabled: bool = True
+
+    @field_validator("notification_url")
+    @classmethod
+    def _target_the_unit_will_post_to(cls, value: str) -> str:
+        return check_notification_url(value)
 
 
 class WebhooksSection(BaseModel):

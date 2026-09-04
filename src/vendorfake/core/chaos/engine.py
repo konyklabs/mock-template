@@ -12,6 +12,7 @@ without touching a counter (``provenance: judgment``).
 from __future__ import annotations
 
 import threading
+from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -20,6 +21,7 @@ from vendorfake.core.chaos.rules import ChaosRule, ChaosScope, FaultName, glob_m
 from vendorfake.core.rand.rng import Rng
 
 __all__ = [
+    "CHAOS_HISTORY_CAPACITY",
     "OVERLAY_RULE_ID",
     "ChaosDecision",
     "ChaosEngine",
@@ -30,6 +32,9 @@ __all__ = [
 
 OVERLAY_RULE_ID = "magic"
 """The rule id recorded for an in-band fire. Not a real rule: no counters, not listable."""
+
+CHAOS_HISTORY_CAPACITY = 10_000
+"""Fires kept in the history, oldest evicted; the per-rule counters stay exact and unbounded."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +153,7 @@ class ChaosEngine:
         self._lock = threading.RLock()
         self._rules: list[ChaosRule] = []
         self._state: dict[str, _RuleState] = {}
-        self._history: list[ChaosEvent] = []
+        self._history: deque[ChaosEvent] = deque(maxlen=CHAOS_HISTORY_CAPACITY)
         self._enabled = True
         self.replace(rules)
 
@@ -214,7 +219,7 @@ class ChaosEngine:
         with self._lock:
             self._rules = []
             self._state.clear()
-            self._history = []
+            self._history = deque(maxlen=CHAOS_HISTORY_CAPACITY)
             self._rng.reset()
             self._enabled = True
 
@@ -225,7 +230,7 @@ class ChaosEngine:
             for state in self._state.values():
                 state.matches = 0
                 state.fires = 0
-            self._history = []
+            self._history = deque(maxlen=CHAOS_HISTORY_CAPACITY)
             self._rng.reset()
 
     # -- the history --------------------------------------------------------

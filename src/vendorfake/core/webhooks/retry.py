@@ -1,9 +1,11 @@
 """The retry *shape*, with no schedule in it. **The core's schedule is empty and stays
 empty**, a schedule being one vendor's documented property: the vendor supplies its own
 through ``VendorDefinition.retry_defaults``, and ``Unit`` refuses to start when the merge
-left it empty. Two types, because the frozen Pydantic policy that parses a profile cannot
-be patched and ``POST /__unit/webhooks/retry-policy`` patches the live one at runtime.
-``time_scale`` scales every interval, rounding through :func:`js_round`.
+left it empty. Two types, because the Pydantic policy that parses a profile is not the
+one ``POST /__unit/webhooks/retry-policy`` patches at runtime.
+``time_scale`` scales every interval, rounding through :func:`js_round`. **The live policy
+is patched by replacement**: frozen, so an attempt that reads it once holds a schedule
+that cannot shorten under it mid-flight.
 """
 
 from __future__ import annotations
@@ -38,15 +40,17 @@ class RetryPolicy(Protocol):
     def timeout_ms(self) -> int: ...
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class MutableRetryPolicy:
+    """The runtime policy: a patch changes it by producing a new one to swap in."""
+
     schedule_ms: tuple[int, ...] = ()
     time_scale: float = 1.0
     timeout_ms: int = DEFAULT_TIMEOUT_MS
 
     @classmethod
     def of(cls, policy: RetryPolicy) -> MutableRetryPolicy:
-        """Copy a parsed policy into a mutable one, so a patch does not rewrite what the unit
+        """Copy a parsed policy into a runtime one, so a patch does not rewrite what the unit
         started with."""
         return cls(
             schedule_ms=tuple(policy.schedule_ms),
@@ -54,17 +58,18 @@ class MutableRetryPolicy:
             timeout_ms=int(policy.timeout_ms),
         )
 
-    def apply(self, patch: Mapping[str, Any]) -> MutableRetryPolicy:
-        """Patch in place and return self; the three known keys are coerced, others ignored."""
-        if "schedule_ms" in patch:
-            raw = patch["schedule_ms"]
-            if isinstance(raw, Sequence) and not isinstance(raw, str | bytes):
-                self.schedule_ms = tuple(as_int(item, 0) for item in raw)
-        if "time_scale" in patch:
-            self.time_scale = as_float(patch["time_scale"], self.time_scale)
-        if "timeout_ms" in patch:
-            self.timeout_ms = as_int(patch["timeout_ms"], self.timeout_ms)
-        return self
+    def patched(self, patch: Mapping[str, Any]) -> MutableRetryPolicy:
+        """A new policy with the patch laid over this one; the three known keys are coerced,
+        others ignored."""
+        schedule = self.schedule_ms
+        raw = patch.get("schedule_ms")
+        if raw is not None and isinstance(raw, Sequence) and not isinstance(raw, str | bytes):
+            schedule = tuple(as_int(item, 0) for item in raw)
+        return MutableRetryPolicy(
+            schedule_ms=schedule,
+            time_scale=as_float(patch["time_scale"], self.time_scale) if "time_scale" in patch else self.time_scale,
+            timeout_ms=as_int(patch["timeout_ms"], self.timeout_ms) if "timeout_ms" in patch else self.timeout_ms,
+        )
 
     def as_json(self) -> dict[str, Any]:
         return {

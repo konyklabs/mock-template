@@ -1,4 +1,4 @@
-"""The ``/__unit/*`` control plane: the same thirty-three routes for every vendor, reachable over
+"""The ``/__unit/*`` control plane: the same thirty-four routes for every vendor, reachable over
 the same channel as the vendor's own API, with no second port or client library. Anything a
 conformance check needs to observe is observable here: a check drives a unit through a URL and
 asserts on what comes back.
@@ -13,9 +13,9 @@ another request must feed. ``clock_advance`` also passes ``ctx.webhooks.settle``
 ``Clock.advance``, since a worker-thread delivery could otherwise under-report a retry cascade;
 ``{"drain": false}`` is the only way to observe that a retry did not happen before its interval.
 
-Twelve routes have no counterpart in a real vendor API -- ``errors``, the two ``machines`` routes,
-``echo``, the two ``webhooks`` emit/sink routes, ``auth``, the two ``state`` write routes, and the
-request log -- each documented at its own handler below.
+Thirteen routes have no counterpart in a real vendor API -- ``errors``, the two ``machines``
+routes, ``echo``, the two ``webhooks`` emit/sink routes, ``auth``, ``manifest``, the two ``state``
+write routes, and the request log -- each documented at its own handler below.
 
 Every response key is snake_case, including five this build could have spelled in camelCase.
 JUDGMENT.
@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping, Sequence
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as distribution_version
 from typing import Any
 
 from vendorfake.core.capability.gates import CORE_GATED_CAPABILITIES
@@ -59,6 +61,7 @@ from vendorfake.core.kernel.types import (
     UnitContext,
     UnitError,
     UnitErrorKind,
+    UnitRequest,
 )
 from vendorfake.core.kernel.unit import ControlBinding
 from vendorfake.core.state.machine import MachineDef, StateMachine
@@ -67,7 +70,7 @@ from vendorfake.core.util.json import compact, sha256_hex
 from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION, Subscription
 from vendorfake.core.webhooks.sink import MemorySink
 
-__all__ = ["CONTROL_PREFIX", "DEFAULT_REQUEST_LIMIT", "control_plane_routes"]
+__all__ = ["CONTROL_PREFIX", "DEFAULT_REQUEST_LIMIT", "MANIFEST_SCHEMA", "control_plane_routes", "manifest_document"]
 
 CONTROL_PREFIX = "/__unit/"
 """Every path below begins with this. Restated from ``kernel/router.py`` for a
@@ -121,6 +124,7 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
                 "vendor": ctx.vendor.name,
                 "profile": ctx.config.profile,
                 "uptime_ms": round((time.monotonic() - started) * 1000),
+                "version": _distribution_version(),
             }
         )
 
@@ -386,9 +390,21 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
                 "describe": dict(ctx.vendor.auth.describe()),
                 "modes": sorted({credential.mode for credential in offered}),
                 "count": len(offered),
-                "credentials": [credential.as_json() for credential in offered],
+                "credentials": _credentials_as_json(ctx),
             }
         )
+
+    def manifest(args: HandlerArgs) -> ReplyInit:
+        """Everything an end-to-end script needs to address this unit, in one
+        document: the credentials ``auth`` publishes, the webhook signing keys
+        the seed carries, and every entity id, by collection.
+
+        The point is a script that runs unchanged against a deployed sandbox.
+        Such a script reads a manifest and the vendor's own API and never the
+        control plane -- so in the deployed world a setup script writes this
+        same shape from the sandbox account, and nothing else has to change.
+        """
+        return json_(manifest_document(args.ctx, base_url=_request_base_url(args.req)))
 
     def state_update(args: HandlerArgs) -> ReplyInit:
         """One committed mutation of one entity, under optimistic concurrency:
@@ -852,6 +868,13 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
         ),
         c(
             "GET",
+            "/__unit/manifest",
+            "Credentials, webhook keys and entity ids: what an end-to-end script needs to address this unit.",
+            manifest,
+            operation_id="UnitManifest",
+        ),
+        c(
+            "GET",
             "/__unit/webhooks/subscriptions",
             "Subscribers the dispatcher knows about.",
             subscriptions_get,
@@ -958,6 +981,97 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
             operation_id="UnitNearMisses",
         ),
     )
+
+
+MANIFEST_SCHEMA = "vendorfake.manifest/1"
+"""The ``schema`` field of the manifest document. Versioned rather than dated: a
+consumer's end-to-end script branches on it, and the deployed-world setup script
+that writes the same shape by hand has to declare which shape it wrote."""
+
+_WEBHOOK_COLLECTION_MARKERS = ("subscri", "webhook")
+"""A collection whose name contains either holds subscribers, whatever the vendor
+calls them -- ``subscriptions``, ``webhooks``, ``webhook_subscriptions``. Matched
+rather than listed because a vendor names its own collections."""
+
+_SECRET_FIELDS = ("signature_key", "secret", "webhook_secret")
+"""The three spellings a seeded subscriber's signing key travels under here."""
+
+
+def manifest_document(ctx: UnitContext, *, base_url: str | None) -> dict[str, Any]:
+    """The world-neutral manifest: what a script needs to drive this unit
+    *through the vendor's own API*, with nothing in it that only a fake could
+    answer.
+
+    Module level, and taking a :class:`UnitContext` rather than a
+    ``ControlBinding``, so ``vendorfake manifest`` produces the same bytes
+    without a server -- the two cannot drift, because there is one function.
+    """
+    collections = snapshot_as_json(ctx.store.snapshot())["collections"]
+    return {
+        "schema": MANIFEST_SCHEMA,
+        "vendorfake": _distribution_version(),
+        "vendor": ctx.vendor.name,
+        "profile": ctx.config.profile,
+        "base_url": base_url,
+        "credentials": _credentials_as_json(ctx),
+        "webhooks": {"signature_keys": _signature_keys(collections)},
+        "ids": {name: list(entities) for name, entities in collections.items()},
+    }
+
+
+def _credentials_as_json(ctx: UnitContext) -> list[dict[str, Any]]:
+    """The ``credentials`` array of ``GET /__unit/auth``, so the manifest cannot
+    publish a credential the auth route would not."""
+    return [credential.as_json() for credential in ctx.vendor.auth.credentials(ctx)]
+
+
+def _signature_keys(collections: Mapping[str, Mapping[str, Any]]) -> list[str]:
+    """Every distinct webhook signing key the seed carries, in seed order.
+
+    Deduplicated because a vendor may seed one key across several subscribers,
+    and a script verifying a delivery wants the set of keys that could have
+    signed it, not one row per subscriber.
+    """
+    found: list[str] = []
+    for name, entities in collections.items():
+        lowered = name.lower()
+        if not any(marker in lowered for marker in _WEBHOOK_COLLECTION_MARKERS):
+            continue
+        for entity in entities.values():
+            for field in _SECRET_FIELDS:
+                value = entity.get(field)
+                if isinstance(value, str) and value and value not in found:
+                    found.append(value)
+    return found
+
+
+def _distribution_version() -> str:
+    """The installed distribution's version, or ``"unknown"``.
+
+    ``importlib.metadata`` rather than ``vendorfake.__version__``: the manifest
+    describes the *installation* a consumer would pin, and ``core`` may not
+    import the package root anyway (``tools/boundary.toml``).
+    """
+    try:
+        return distribution_version("vendorfake")
+    except PackageNotFoundError:  # pragma: no cover - only in a tree with no metadata
+        return "unknown"
+
+
+def _request_base_url(req: UnitRequest) -> str | None:
+    """``scheme://host`` from the request that asked, or ``None``.
+
+    A unit does not know its own address -- it may be behind a container port
+    mapping or a compose network alias -- so the only honest answer is the one
+    the caller reached it at. ``x-forwarded-proto`` wins where a proxy set it,
+    since the caller's scheme is the one a webhook URL has to carry.
+    """
+    host = req.headers.get("host")
+    if not host:
+        return None
+    forwarded = req.headers.get("x-forwarded-proto", "")
+    scheme = forwarded.split(",")[0].strip().lower() or "http"
+    return f"{scheme}://{host}"
 
 
 # Helpers. Module level so a test can reach them without building a unit.

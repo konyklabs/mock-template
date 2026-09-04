@@ -7,7 +7,9 @@ unscheduled. ``Clock.advance(ms, settle=worker.quiesce)`` is the other half, cal
 before each re-scan. Deliveries are strictly ordered because there is exactly **one**
 worker thread and one FIFO queue, which is what gives the delivery log one writer. A job
 runs with this module's condition **released**, so the only lock nesting is worker
-condition then clock; one that raises is captured, not fatal.
+condition then clock; one that raises is captured, not fatal. **The queue is bounded**: at
+:data:`QUEUE_CAPACITY` jobs :meth:`DeliveryWorker.submit` drops the new job, keeping what
+is queued, and records the drop in :meth:`DeliveryWorker.failures`.
 """
 
 from __future__ import annotations
@@ -17,13 +19,19 @@ import time
 from collections import deque
 from collections.abc import Callable
 
-__all__ = ["DeliveryWorker"]
+__all__ = ["FAILURE_CAPACITY", "QUEUE_CAPACITY", "DeliveryWorker"]
 
 Job = Callable[[], None]
 
 _JOIN_TIMEOUT_SECONDS = 5.0
 """How long :meth:`DeliveryWorker.stop` waits, so shutdown is not hostage to a
 subscriber; the thread is a daemon."""
+
+QUEUE_CAPACITY = 10_000
+"""Jobs the queue holds; past it :meth:`DeliveryWorker.submit` drops the newest."""
+
+FAILURE_CAPACITY = 10_000
+"""Captured failures kept, oldest evicted, so a wedged subscriber cannot fill memory."""
 
 
 class DeliveryWorker:
@@ -38,21 +46,27 @@ class DeliveryWorker:
         self._busy = False
         self._stopped = False
         self._generation = 0
-        self._failures: list[str] = []
+        self._failures: deque[str] = deque(maxlen=FAILURE_CAPACITY)
         self._name = name
         self._thread: threading.Thread | None = None
 
-    def submit(self, job: Job) -> None:
-        """Append a job; the thread starts lazily, so a unit that never delivers spawns none."""
+    def submit(self, job: Job, *, label: str = "job") -> bool:
+        """Append a job; the thread starts lazily, so a unit that never delivers spawns none.
+        ``False`` when the queue is full -- the queued attempts are the ones a caller is
+        already waiting on -- and ``queue full: <label>`` records that it was dropped."""
         with self._cond:
             if self._stopped:
                 raise RuntimeError("the delivery worker has been stopped and cannot accept new work")
+            if len(self._queue) >= QUEUE_CAPACITY:
+                self._failures.append(f"queue full: {label}")
+                return False
             self._queue.append(job)
             self._generation += 1
             if self._thread is None:
                 self._thread = threading.Thread(target=self._run, name=self._name, daemon=True)
                 self._thread.start()
             self._cond.notify_all()
+            return True
 
     @property
     def generation(self) -> int:

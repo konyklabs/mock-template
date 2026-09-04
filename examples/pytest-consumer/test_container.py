@@ -4,13 +4,23 @@ under test lives in another language or another process.
 Needs Docker and an image: ``VENDORFAKE_IMAGE=vendorfake:verify uv run
 --extra container pytest test_container.py``. Skipped otherwise, so the
 in-process suite stays runnable on a laptop without Docker.
+
+Nothing below is hard-coded. Every token, header, merchant path and guid comes
+out of the manifest -- ``GET /__unit/manifest`` here, or a JSON file named by
+``VENDORFAKE_MANIFEST_<VENDOR>`` when the same tests run against a real vendor
+sandbox, where a setup script writes that file from the sandbox account. That
+is the whole point of the document: below the fixture, these are the requests
+your service makes, against whichever world it was pointed at.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -20,6 +30,11 @@ DockerContainer = testcontainers.DockerContainer
 
 IMAGE = os.environ.get("VENDORFAKE_IMAGE")
 pytestmark = pytest.mark.skipif(not IMAGE, reason="set VENDORFAKE_IMAGE to the image tag to run the container tests")
+
+MANIFEST_ENV_PREFIX = "VENDORFAKE_MANIFEST_"
+"""``VENDORFAKE_MANIFEST_SQUARE=/path/to/square.json`` and friends. Set one and
+the fixture reads the file instead of asking the control plane -- the deployed
+world, where there is no control plane to ask."""
 
 
 def _vendor_container(vendor: str, profile: str = "full") -> Iterator[httpx.Client]:
@@ -59,29 +74,73 @@ def toast_http() -> Iterator[httpx.Client]:
     yield from _vendor_container("toast")
 
 
-SQUARE_AUTH = {"Authorization": "Bearer EAAAl-unit-seeded-access-token-full-scopes"}
-CLOVER_AUTH = {"Authorization": "Bearer unit-seeded-clover-access-token-full-permissions"}
-CLOVER_MERCHANT = "/v3/merchants/HRVSTRYE12345"
-# Toast names the restaurant in a header, so its auth is two entries, not one.
-TOAST_AUTH = {
-    "Authorization": "Bearer unit-seeded-toast-access-token-full-scopes",
-    "Toast-Restaurant-External-ID": "e6a4a8d2-0000-4000-8000-000000000001",
-}
-TOAST_SOUP = "3c9a1f00-0000-4000-8000-00000000c201"
-TOAST_DINE_IN = "5d0e2b11-0000-4000-8000-00000000d001"
-TOAST_EXTERNAL_PAYMENT = "5d0e2b11-0000-4000-8000-00000000d101"
+@pytest.fixture(scope="module")
+def manifest(request: pytest.FixtureRequest) -> Callable[[str], dict[str, Any]]:
+    """``manifest("square")`` -- the document describing whichever world this
+    run is pointed at.
+
+    ``VENDORFAKE_MANIFEST_<VENDOR>`` names a JSON file and wins; otherwise the
+    vendor's container is asked. A file and a container are meant to describe
+    the same deployment, so point the client at the world the file describes.
+    Read once per vendor per module: the document does not change under a run.
+    """
+    cache: dict[str, dict[str, Any]] = {}
+
+    def load(vendor: str) -> dict[str, Any]:
+        if vendor not in cache:
+            path = os.environ.get(f"{MANIFEST_ENV_PREFIX}{vendor.upper()}")
+            if path:
+                cache[vendor] = json.loads(Path(path).read_text(encoding="utf-8"))
+            else:
+                client: httpx.Client = request.getfixturevalue(f"{vendor}_http")
+                answered = client.get("/__unit/manifest")
+                assert answered.status_code == 200, answered.text
+                cache[vendor] = answered.json()
+        return cache[vendor]
+
+    return load
 
 
-def test_square_in_a_container_creates_and_pays_an_order(square_http: httpx.Client) -> None:
+def auth_headers(document: dict[str, Any]) -> dict[str, str]:
+    """The manifest's most capable caller credential, as headers to send.
+
+    Most scopes wins; a tie goes to the most complete instruction, which is how
+    a vendor that names its tenant in a second header (Toast) is picked over
+    the same token without it. An application secret is skipped: it
+    authenticates the app to the vendor, not a call on a merchant's behalf.
+    """
+    offered = [row for row in document["credentials"] if "secret" not in row["mode"]]
+    assert offered, f"the {document['vendor']} manifest offers no caller credential"
+    offered.sort(key=lambda row: (len(row["scopes"]), len(row["headers"])))
+    return dict(offered[-1]["headers"])
+
+
+def first_id(document: dict[str, Any], collection: str) -> str:
+    """One id out of the manifest, with a failure that names what was missing
+    rather than an ``IndexError`` twenty lines into a request body."""
+    ids = document["ids"].get(collection, [])
+    assert ids, f"the {document['vendor']} manifest has no {collection!r} to address"
+    return str(ids[0])
+
+
+def test_square_in_a_container_creates_and_pays_an_order(
+    square_http: httpx.Client, manifest: Callable[[str], dict[str, Any]]
+) -> None:
+    document = manifest("square")
     assert square_http.get("/__unit/health").json()["vendor"] == "square"
+    headers = auth_headers(document)
     created = square_http.post(
         "/v2/orders",
-        headers=SQUARE_AUTH,
+        headers=headers,
         json={
             "idempotency_key": "container-1",
             "order": {
-                "location_id": "18YC4JDH91E1H",
-                "line_items": [{"catalog_object_id": "2TZFAOHWGG7PAK2QEXWYPZSP", "quantity": "1"}],
+                "location_id": first_id(document, "locations"),
+                # An ad-hoc line item, priced in the body: the manifest carries
+                # ids, not which catalogue object happens to be orderable.
+                "line_items": [
+                    {"name": "Soup", "quantity": "1", "base_price_money": {"amount": 955, "currency": "USD"}}
+                ],
             },
         },
     )
@@ -89,44 +148,67 @@ def test_square_in_a_container_creates_and_pays_an_order(square_http: httpx.Clie
     order = created.json()["order"]
     paid = square_http.post(
         f"/v2/orders/{order['id']}/pay",
-        headers=SQUARE_AUTH,
+        headers=headers,
         json={"idempotency_key": "container-1-pay", "order_version": order["version"]},
     )
     assert paid.status_code == 200, paid.text
     assert paid.json()["order"]["state"] == "COMPLETED"
 
 
-def test_clover_in_a_container_pays_an_atomic_order(clover_http: httpx.Client) -> None:
+def test_clover_in_a_container_pays_an_atomic_order(
+    clover_http: httpx.Client, manifest: Callable[[str], dict[str, Any]]
+) -> None:
+    document = manifest("clover")
     assert clover_http.get("/__unit/health").json()["vendor"] == "clover"
+    headers = auth_headers(document)
+    merchant = f"/v3/merchants/{first_id(document, 'merchants')}"
     created = clover_http.post(
-        f"{CLOVER_MERCHANT}/atomic_order/orders",
-        headers=CLOVER_AUTH,
-        json={"orderCart": {"orderType": {"id": "KFRPRVCZ73JHM"}, "lineItems": [{"item": {"id": "CRAFTBEER0750"}}]}},
+        f"{merchant}/atomic_order/orders",
+        headers=headers,
+        json={
+            "orderCart": {
+                "orderType": {"id": first_id(document, "order_types")},
+                "lineItems": [{"item": {"id": first_id(document, "items")}}],
+            }
+        },
     )
     assert created.status_code == 200, created.text
     order = created.json()
     paid = clover_http.post(
-        f"{CLOVER_MERCHANT}/orders/{order['id']}/payments",
-        headers=CLOVER_AUTH,
-        json={"tender": {"id": "TENDEREXTRN01"}, "employee": {"id": "EMPLBARISTA01"}, "amount": order["total"]},
+        f"{merchant}/orders/{order['id']}/payments",
+        headers=headers,
+        json={
+            "tender": {"id": first_id(document, "tenders")},
+            "employee": {"id": first_id(document, "employees")},
+            "amount": order["total"],
+        },
     )
     assert paid.status_code == 200, paid.text
-    fetched = clover_http.get(f"{CLOVER_MERCHANT}/orders/{order['id']}", headers=CLOVER_AUTH).json()
+    fetched = clover_http.get(f"{merchant}/orders/{order['id']}", headers=headers).json()
     assert (fetched["state"], fetched["paymentState"]) == ("locked", "PAID")
 
 
-def test_toast_in_a_container_pays_a_check_in_dollars(toast_http: httpx.Client) -> None:
+def test_toast_in_a_container_pays_a_check_in_dollars(
+    toast_http: httpx.Client, manifest: Callable[[str], dict[str, Any]]
+) -> None:
+    document = manifest("toast")
     assert toast_http.get("/__unit/health").json()["vendor"] == "toast"
+    headers = auth_headers(document)
     created = toast_http.post(
         "/orders/v2/orders",
-        headers=TOAST_AUTH,
+        headers=headers,
         json={
             "entityType": "Order",
-            "diningOption": {"guid": TOAST_DINE_IN, "entityType": "DiningOption"},
+            "diningOption": {"guid": first_id(document, "dining_options"), "entityType": "DiningOption"},
             "checks": [
                 {
                     "entityType": "Check",
-                    "selections": [{"item": {"guid": TOAST_SOUP, "entityType": "MenuItem"}, "quantity": 1}],
+                    "selections": [
+                        {
+                            "item": {"guid": first_id(document, "menu_items"), "entityType": "MenuItem"},
+                            "quantity": 1,
+                        }
+                    ],
                 }
             ],
         },
@@ -134,19 +216,25 @@ def test_toast_in_a_container_pays_a_check_in_dollars(toast_http: httpx.Client) 
     assert created.status_code == 200, created.text
     order = created.json()
     check = order["checks"][0]
-    assert check["totalAmount"] == 9.55  # dollars over the socket too, not 955
+    # Dollars over the socket too: one menu item billed in cents would be a
+    # three-figure integer here, not a sum a diner would recognise.
+    assert 0 < check["totalAmount"] < 100, check["totalAmount"]
     paid = toast_http.post(
         f"/orders/v2/orders/{order['guid']}/checks/{check['guid']}/payments",
-        headers=TOAST_AUTH,
+        headers=headers,
         json=[
             {
                 "type": "OTHER",
                 "amount": check["totalAmount"],
                 "tipAmount": 0,
-                "otherPayment": {"guid": TOAST_EXTERNAL_PAYMENT},
+                "otherPayment": {"guid": first_id(document, "alternate_payment_types")},
             }
         ],
     )
     assert paid.status_code == 200, paid.text
-    fetched = toast_http.get(f"/orders/v2/orders/{order['guid']}", headers=TOAST_AUTH).json()
-    assert fetched["checks"][0]["paymentStatus"] == "PAID"
+    fetched = toast_http.get(f"/orders/v2/orders/{order['guid']}", headers=headers).json()
+    # An OTHER payment covering the balance closes the check outright, as in
+    # `test_toast.py`. This file asserted `PAID` until the manifest rewrite --
+    # wrongly, and nothing caught it, because the container tests are skipped
+    # unless Docker and an image are both present.
+    assert fetched["checks"][0]["paymentStatus"] == "CLOSED"

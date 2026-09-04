@@ -16,6 +16,8 @@ positional arguments:
     serve        Serve a unit over HTTP.
     info         Print what a unit would be, as JSON, without serving it.
     openapi      Print the OpenAPI 3.1 document for a unit's route table.
+    manifest     Print the world-neutral manifest: credentials, webhook keys
+                 and entity ids.
     vendors      List the vendors that would resolve here.
     profiles     List the profiles a vendor ships.
     routes       List a vendor's route table.
@@ -92,6 +94,26 @@ options:
                      then to the vendor's default profile.
   --no-internal      Omit the /__unit/* control plane, describing only the
                      vendor surface.
+```
+
+## `vendorfake manifest`
+
+```text
+usage: vendorfake manifest [-h] [--json] [--vendor VENDOR] [--profile PROFILE]
+                           [--base-url BASE_URL]
+
+options:
+  -h, --help           show this help message and exit
+  --json               Machine output: one JSON document on stdout, nothing
+                       else on stdout.
+  --vendor VENDOR      Vendor to serve (see `vendorfake vendors`). Defaults to
+                       $VENDORFAKE_VENDOR; with exactly one vendor installed
+                       that one is used, otherwise the command refuses and
+                       lists them.
+  --profile PROFILE    Profile name or path. Defaults to $VENDORFAKE_PROFILE,
+                       then to the vendor's default profile.
+  --base-url BASE_URL  The address the unit will be reached at, recorded in
+                       the document. Omitted, base_url is null.
 ```
 
 ## `vendorfake vendors`

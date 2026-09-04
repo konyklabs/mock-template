@@ -20,9 +20,12 @@ ENV UV_LINK_MODE=copy \
 WORKDIR /build
 COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src/ src/
+# `[serve]`: the wheel's own runtime dependency list no longer carries fastapi
+# and uvicorn (konyklabs/roadmap#116) -- only the served binding this image
+# runs needs them, so the extra is named explicitly at install time.
 RUN uv build --wheel --out-dir /dist \
  && uv venv /opt/venv \
- && uv pip install --python /opt/venv/bin/python --no-cache /dist/*.whl
+ && uv pip install --python /opt/venv/bin/python --no-cache "$(ls /dist/*.whl)[serve]"
 
 FROM python:3.13-slim-bookworm AS runtime
 

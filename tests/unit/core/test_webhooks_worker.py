@@ -10,10 +10,12 @@ is what gives the delivery log one writer and stable ``dlv_NNNNN`` ids.
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
-from vendorfake.core.webhooks.worker import DeliveryWorker
+from vendorfake.core.webhooks import worker as worker_module
+from vendorfake.core.webhooks.worker import DeliveryWorker, Job
 
 
 def test_no_thread_exists_until_the_first_submission() -> None:
@@ -231,3 +233,48 @@ def test_the_generation_counter_moves_on_submission_and_on_completion() -> None:
     worker.quiesce(timeout=5)
     worker.stop()
     assert worker.generation == start + 2
+
+
+def test_a_full_queue_drops_the_new_job_and_records_which_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unreachable subscriber with a long retry schedule can enqueue faster than
+    the single thread drains, and an unbounded queue turns that into a leak.
+
+    The drop is of the NEWEST job, because the ones already queued are the attempts
+    a caller is waiting on, and it is recorded rather than silent: a delivery that
+    vanished with no trace is the failure mode a fake must never reproduce.
+    """
+    monkeypatch.setattr(worker_module, "QUEUE_CAPACITY", 2)
+    worker = DeliveryWorker()
+    released = threading.Event()
+    seen: list[str] = []
+    worker.submit(lambda: released.wait(5))
+    while not worker.busy:  # the blocker is off the queue, so the queue itself is empty
+        time.sleep(0.001)
+    assert worker.submit(lambda: seen.append("first"), label="evt_1->sub_1") is True
+    assert worker.submit(lambda: seen.append("second"), label="evt_2->sub_1") is True
+    assert worker.submit(lambda: seen.append("third"), label="evt_3->sub_1") is False
+
+    released.set()
+    worker.quiesce(timeout=5)
+    worker.stop()
+    assert seen == ["first", "second"]
+    assert worker.failures() == ("queue full: evt_3->sub_1",)
+
+
+def test_captured_failures_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The failure list is the other collection a wedged unit writes to without
+    bound: one entry per raising job, or one per dropped job once the queue is full."""
+    monkeypatch.setattr(worker_module, "FAILURE_CAPACITY", 3)
+    worker = DeliveryWorker()
+    for n in range(5):
+        worker.submit(_raiser(n))
+    worker.quiesce(timeout=5)
+    worker.stop()
+    assert worker.failures() == ("RuntimeError: 2", "RuntimeError: 3", "RuntimeError: 4")
+
+
+def _raiser(n: int) -> Job:
+    def job() -> None:
+        raise RuntimeError(str(n))
+
+    return job

@@ -124,6 +124,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Omit the /__unit/* control plane, describing only the vendor surface.",
     )
 
+    manifest = subcommands.add_parser(
+        "manifest",
+        help="Print the world-neutral manifest: credentials, webhook keys and entity ids.",
+        parents=[_json_flag_parent()],
+    )
+    _add_unit_flags(manifest)
+    manifest.add_argument(
+        "--base-url",
+        default=None,
+        help="The address the unit will be reached at, recorded in the document. Omitted, base_url is null.",
+    )
+
     subcommands.add_parser("vendors", help="List the vendors that would resolve here.", parents=[_json_flag_parent()])
 
     profiles = subcommands.add_parser(
@@ -337,6 +349,26 @@ def _info(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
         response = in_process(unit).get("/__unit/info")
         print(response.text, file=out)
         return 0 if response.status == 200 else 1
+    finally:
+        unit.stop()
+
+
+def _manifest(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
+    """Print the document ``GET /__unit/manifest`` serves, without a server.
+
+    The same function builds both, so the two cannot drift. ``--json`` is
+    implicit -- the output *is* the document, and nothing else goes to stdout --
+    and ``--base-url`` is the one thing a process with no request cannot infer:
+    a unit reached over a container port mapping does not know its own address.
+    """
+    from vendorfake.core.control.plane import manifest_document
+    from vendorfake.core.util.json import dump_json
+
+    unit = _make_unit(args, env)
+    try:
+        document = manifest_document(unit.context, base_url=args.base_url)
+        print(dump_json(document).decode("utf-8"), file=out)
+        return 0
     finally:
         unit.stop()
 
@@ -584,6 +616,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _serve(args, env, out)
     if args.command == "info":
         return _info(args, env, out)
+    if args.command == "manifest":
+        return _manifest(args, env, out)
     if args.command == "openapi":
         return _openapi(args, env, out)
     if args.command == "vendors":

@@ -27,8 +27,6 @@ classifiers = [
 # and no gate would notice. Without it, that mistake fails loudly the first time
 # it runs. `uv pip show python-multipart` returning non-zero is the check.
 dependencies = [
-  "fastapi>=0.115",
-  "uvicorn>=0.30",
   "pydantic>=2.7",
   "httpx>=0.27",
   "jsonschema>=4.18",
@@ -44,6 +42,17 @@ dependencies = [
   # named here rather than inherited, so a future httpx that drops it fails
   # resolution instead of failing at a consumer's first async request.
   "anyio>=4.0",
+]
+
+# The served binding only: the ASGI layer (`vendorfake.asgi`) and `vendorfake
+# serve` need these; the in-process bindings (`unit()`, `async_unit()`) never
+# import `vendorfake.asgi` and so never need them (konyklabs/roadmap#116).
+# `vendorfake.asgi.app` wraps its own import of these with a message naming
+# this extra, for the consumer who reaches it without installing it.
+[project.optional-dependencies]
+serve = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
 ]
 
 [project.urls]
@@ -80,6 +89,12 @@ dev = [
   "import-linter>=2.0",
   "types-jsonschema>=4.18",
   "types-PyYAML>=6",
+  # The `serve` extra's own two packages (konyklabs/roadmap#116): the ASGI and
+  # integration test tiers exercise the served binding, so a plain `uv sync`
+  # on a checkout of this repository needs them even though a consumer
+  # installing the published package only gets them via `vendorfake[serve]`.
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
   # Not used by a single test in this repository directly. It is installed so
   # that tests/unit/test_pytest_plugin_async.py can run a *consumer's* suite
   # under it, in both strict and auto mode, and prove the claim the README

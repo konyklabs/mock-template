@@ -24,8 +24,8 @@ inconsistencies it reproduces and every judgment call it makes:
 Python 3.11 or newer. Not on PyPI yet — install from the tag:
 
 ```sh
-pip install "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
-# or, in a uv project: uv add "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
+pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
+# or, in a uv project: uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
 # or, from a checkout of this repository: uv sync
 
 vendorfake vendors                       # -> clover, lightspeed, square, toast
@@ -33,9 +33,15 @@ vendorfake serve --vendor square         # http://127.0.0.1:8080
 vendorfake serve --vendor lightspeed     # or any other installed vendor
 ```
 
+`vendorfake serve` and the container binding need the `serve` extra
+(`fastapi`, `uvicorn`); a test suite using only the in-process bindings
+(`unit()`, `async_unit()`) never imports that stack, so plain `pip install
+vendorfake` is enough there — see [Install → Which binding to
+use](docs/start/bindings.md).
+
 ```sh
 curl -s http://127.0.0.1:8080/__unit/health
-# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221}
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.5.0"}
 ```
 
 Every command names a vendor (`--vendor square|clover|toast|lightspeed`, or

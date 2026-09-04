@@ -1714,18 +1714,23 @@ version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
-    { name = "fastapi" },
     { name = "httpx" },
     { name = "jsonschema" },
     { name = "openapi-schema-validator" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "referencing" },
+]
+
+[package.optional-dependencies]
+serve = [
+    { name = "fastapi" },
     { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "fastapi" },
     { name = "import-linter" },
     { name = "mypy" },
     { name = "pytest" },
@@ -1734,6 +1739,7 @@ dev = [
     { name = "ruff" },
     { name = "types-jsonschema" },
     { name = "types-pyyaml" },
+    { name = "uvicorn" },
 ]
 docs = [
     { name = "mkdocs" },
@@ -1743,18 +1749,20 @@ docs = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.0" },
-    { name = "fastapi", specifier = ">=0.115" },
+    { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jsonschema", specifier = ">=4.18" },
     { name = "openapi-schema-validator", specifier = ">=0.6" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "referencing", specifier = ">=0.30" },
-    { name = "uvicorn", specifier = ">=0.30" },
+    { name = "uvicorn", marker = "extra == 'serve'", specifier = ">=0.30" },
 ]
+provides-extras = ["serve"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "fastapi", specifier = ">=0.115" },
     { name = "import-linter", specifier = ">=2.0" },
     { name = "mypy", specifier = ">=1.11" },
     { name = "pytest", specifier = ">=8.2" },
@@ -1763,6 +1771,7 @@ dev = [
     { name = "ruff", specifier = ">=0.6" },
     { name = "types-jsonschema", specifier = ">=4.18" },
     { name = "types-pyyaml", specifier = ">=6" },
+    { name = "uvicorn", specifier = ">=0.30" },
 ]
 docs = [
     { name = "mkdocs", specifier = ">=1.6" },

@@ -10,11 +10,13 @@ strings lives in the vendor package.
 from __future__ import annotations
 
 import copy
+import ipaddress
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
+from urllib.parse import urlsplit
 
 from vendorfake.core.kernel.types import PreparedEvent
 
@@ -27,6 +29,7 @@ __all__ = [
     "DeliveryRecord",
     "DeliveryStatus",
     "Subscription",
+    "check_notification_url",
     "matches_event_type",
 ]
 
@@ -229,3 +232,30 @@ def matches_event_type(patterns: Sequence[str], event_type: str) -> bool:
         if re.fullmatch(escaped.replace("*", ".*"), event_type) is not None:
             return True
     return False
+
+
+_WEBHOOK_URL_SCHEMES = frozenset({"http", "https"})
+
+
+def check_notification_url(url: str) -> str:
+    """A webhook target the unit is willing to post to, or ``ValueError``. The rule is narrow
+    because a test's receiver lives on 127.0.0.1: an ``http``/``https`` scheme, a host, and no
+    link-local literal, where a cloud instance's metadata service answers. DNS is never
+    resolved -- that would make a body's validity depend on the network."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+    except ValueError as exc:
+        raise ValueError(f"{url!r} is not a parseable URL") from exc
+    if parts.scheme.lower() not in _WEBHOOK_URL_SCHEMES:
+        raise ValueError(f"scheme must be http or https, got {parts.scheme or '(none)'!r}")
+    if not host:
+        raise ValueError("the URL must name a host")
+    try:
+        address = ipaddress.ip_address(host.partition("%")[0])
+    except ValueError:
+        return url  # A name, not a literal; not resolved.
+    mapped = getattr(address, "ipv4_mapped", None)
+    if address.is_link_local or (mapped is not None and mapped.is_link_local):
+        raise ValueError(f"{host} is link-local; the instance metadata service lives there")
+    return url

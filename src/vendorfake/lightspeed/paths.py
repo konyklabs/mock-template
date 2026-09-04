@@ -64,7 +64,6 @@ def _api(suffix: str) -> str:
 
 CLOSE_REGISTER = _api("/registers/{register_id}/actions/close")
 CONNECT = "/connect"
-"""Stand-in; the real authorize redirect is on a different host. See ``surface/auth.py``."""
 CREATE_CUSTOMER = _api("/customers")
 CREATE_PRODUCT = _api("/products")
 CREATE_SALE = _api("/sales")
