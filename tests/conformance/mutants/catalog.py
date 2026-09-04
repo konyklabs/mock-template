@@ -1,4 +1,4 @@
-"""One mutant per contract, each broken in exactly one way, and the check it must trip.
+"""One mutant per contract branch, each broken in exactly one way, and the check it must trip.
 
 FOR: proving the conformance suite discriminates. Every contract in
 ``conformance/manifest.json`` is answered here by at least one unit that
@@ -38,7 +38,7 @@ import dataclasses
 import itertools
 import os
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from tests.conformance.harness import PROFILES
@@ -1505,3 +1505,96 @@ cleanly, hydrates nothing, and reads an hour later as "the fake ignored my
 scenario". So the refusal is the contract, and this mutant is what makes
 "C36 can fail" a measured statement rather than an assumed one.
 """
+
+
+# ---------------------------------------------------------------------------
+# C17, C19 -- one route out of many. Measured regressions (konyklabs/roadmap#10,
+# findings N-3a, N-3b, N-6): a contract that stops iterating after the first
+# route is satisfied by every whole-surface mutant above.
+# ---------------------------------------------------------------------------
+
+
+_UNAUTHENTICATED_OPERATION = "ListLocations"
+_REPLAY_MARKER = "x-unit-idempotent-replay"
+
+
+def _skips_auth_on_one_route(inner: AuthAdapter, args: HandlerArgs, mode: str) -> AuthResult:
+    if args.route.operation_id == _UNAUTHENTICATED_OPERATION:
+        return AuthResult(principal_id="anyone", scopes=SQUARE_SCOPES, meta={"mode": mode})
+    return inner.resolve(args, mode)
+
+
+register(
+    Mutant(
+        id="M32",
+        name="auth-skipped-for-one-route",
+        defect="One route that declares auth resolves any caller, credential or none, to a principal holding every scope.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C17"}),
+        vendor=lambda inner: VendorOverlay(
+            inner, auth=AuthAdapterOverlay(inner.auth, resolve=_skips_auth_on_one_route)
+        ),
+    )
+)
+
+
+def _first_scoped_route(routes: Sequence[Route]) -> str | None:
+    """The route the single-instance C17 chose: the first that declares scopes."""
+    return next((route.key for route in routes if route.auth is not None and route.scopes), None)
+
+
+def _scope_enforced_on_one_route_only(spared: str | None) -> Callable[[AuthAdapter, HandlerArgs, str], AuthResult]:
+    def resolve(inner: AuthAdapter, args: HandlerArgs, mode: str) -> AuthResult:
+        result = inner.resolve(args, mode)
+        if args.route.key == spared:
+            return result
+        # The kernel checks Route.scopes against what comes back, so an
+        # adapter that grants every scope to any authenticated caller has
+        # deleted scope enforcement without touching a route declaration.
+        return AuthResult(principal_id=result.principal_id, scopes=SQUARE_SCOPES, meta=result.meta)
+
+    return resolve
+
+
+register(
+    Mutant(
+        id="M33",
+        name="scope-enforced-on-one-route-only",
+        defect="Every authenticated caller is granted every scope, on every route but the first one that declares scopes.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C17"}),
+        vendor=lambda inner: VendorOverlay(
+            inner,
+            auth=AuthAdapterOverlay(
+                inner.auth, resolve=_scope_enforced_on_one_route_only(_first_scoped_route(inner.routes))
+            ),
+        ),
+    )
+)
+
+
+def _stamp_replay_marker(handler: Handler) -> Handler:
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        reply = handler(args)
+        headers = {**(reply.headers or {}), _REPLAY_MARKER: "true"}
+        return dataclasses.replace(reply, headers=headers)
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M39",
+        name="replay-marker-on-every-response",
+        defect="Every successful response claims to be an idempotent replay, the first execution included.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C19"}),
+        also_trips=frozenset({"C24"}),
+        cascade=(
+            "The marker is evidence both contracts read: C19's first-execution clause and C24's "
+            "partner clause each assert its absence on a response that replayed nothing, so a unit "
+            "stamping it unconditionally genuinely violates both."
+        ),
+        vendor=lambda inner: VendorOverlay(inner, routes=wrap_vendor_handlers(_stamp_replay_marker)),
+    )
+)

@@ -119,9 +119,6 @@ def a_child_process_narrows_too() -> None:
 # The positives only. That an overlay naming a collection the vendor does NOT
 # have is *rejected* is a negative, and a negative cannot be asserted by a
 # type check that passes -- it is asserted by running mypy on
-# `tests/typing/negative/square_overlay_unknown_collection.py` from
-# `tests/unit/testing/test_seed_typing.py`.
-# ---------------------------------------------------------------------------
 
 
 def a_square_overlay_takes_squares_own_collections() -> None:

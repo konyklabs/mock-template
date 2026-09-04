@@ -21,6 +21,7 @@ import pytest
 from vendorfake.testing import (
     SERVE_COMMAND,
     _ChildOutput,
+    _stop,
     _wait_for_announcement,
     served,
     unit,
@@ -44,35 +45,35 @@ Opener = Callable[[Mapping[str, str], float | None], Iterator[Bound]]
 
 
 @contextmanager
-def _in_process(ambient: Mapping[str, str], read_timeout_s: float | None) -> Iterator[Bound]:
-    # unit() reads no environment: its unmatched policy is a parameter, mapped here from the variable's value.
-    policy = ambient.get("VENDORFAKE_UNMATCHED")
-    with unit(VENDOR, unmatched=policy) as started:  # type: ignore[arg-type]
+def _in_process(explicit: Mapping[str, str], read_timeout_s: float | None) -> Iterator[Bound]:
+    with unit(VENDOR, env=explicit) as started:
         if read_timeout_s is not None:
             started.client.timeout = httpx.Timeout(read_timeout_s)
         yield Bound("unit", started.client)
 
 
 @contextmanager
-def _served(ambient: Mapping[str, str], read_timeout_s: float | None) -> Iterator[Bound]:
-    with served(VENDOR) as child:
+def _served(explicit: Mapping[str, str], read_timeout_s: float | None) -> Iterator[Bound]:
+    with served(VENDOR, env=explicit) as child:
         if read_timeout_s is not None:
             child.client.timeout = httpx.Timeout(read_timeout_s)
         yield Bound("served", child.client)
 
 
 @contextmanager
-def _cli(ambient: Mapping[str, str], read_timeout_s: float | None) -> Iterator[Bound]:
+def _cli(explicit: Mapping[str, str], read_timeout_s: float | None) -> Iterator[Bound]:
     argv = [*SERVE_COMMAND, "--vendor", VENDOR, "--host", "127.0.0.1", "--port", "0"]
-    process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=dict(os.environ))
+    process = subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env={**os.environ, **explicit}
+    )
     output = _ChildOutput(process)
     try:
         base_url = _wait_for_announcement(process, output, 30.0)
         with httpx.Client(base_url=base_url, timeout=httpx.Timeout(read_timeout_s or 10.0)) as client:
             yield Bound("cli", client)
     finally:
-        process.terminate()
-        process.wait(timeout=10)
+        _stop(process)
+        output.join()
 
 
 OPENERS: dict[str, Callable[..., Iterator[Bound]]] = {"unit": _in_process, "served": _served, "cli": _cli}
@@ -97,15 +98,21 @@ ALL = over()
 
 @pytest.fixture
 def open_unit(binding: str, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Iterator[Bound]]:
-    """``open_unit(ambient={...}, read_timeout_s=None)``: a context manager over a
-    unit on this binding, with ``ambient`` exported to the process environment
-    the way a CI job exports it."""
+    """``open_unit(ambient=, explicit=, read_timeout_s=)``: a context manager over a
+    unit on this binding. ``ambient`` is exported to the process environment the
+    way a CI job exports it and nothing else is done with it; ``explicit`` goes
+    through each binding's documented configuration path (``unit(env=)``,
+    ``served(env=)``, the CLI child's environment)."""
 
     @contextmanager
-    def opener(ambient: Mapping[str, str] | None = None, read_timeout_s: float | None = None) -> Iterator[Bound]:
+    def opener(
+        ambient: Mapping[str, str] | None = None,
+        explicit: Mapping[str, str] | None = None,
+        read_timeout_s: float | None = None,
+    ) -> Iterator[Bound]:
         for key, value in (ambient or {}).items():
             monkeypatch.setenv(key, value)
-        with OPENERS[binding](ambient or {}, read_timeout_s) as bound:
+        with OPENERS[binding](explicit or {}, read_timeout_s) as bound:
             yield bound
 
     return opener
@@ -147,7 +154,7 @@ def test_an_ambient_clock_variable_is_honoured(binding: str, open_unit: Callable
 def test_an_unmatched_path_answers_404_with_the_near_miss_header_under_vendor_404(
     binding: str, open_unit: Callable[..., Iterator[Bound]]
 ) -> None:
-    with open_unit(ambient={"VENDORFAKE_UNMATCHED": "vendor-404"}) as bound:
+    with open_unit(explicit={"VENDORFAKE_UNMATCHED": "vendor-404"}) as bound:
         response = bound.client.get("/v2/locationz", headers=_auth(bound))
         assert response.status_code == 404
         assert "ListLocations" in response.headers[NEAR_MISS_HEADER]

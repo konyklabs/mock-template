@@ -9,10 +9,10 @@ until the list below is edited in the same commit, and that edit is the review
 trigger. A symbol that reaches a consumer because somebody added an import is
 exactly the surface nobody can ever change.
 
-The three assertions here are deliberately about *shape*, not behaviour. What
-each public function does is asserted everywhere else in this suite; what is
-asserted here is that it is still called what it was called, that it explains
-itself, and that it did not drag an internal module out with it.
+The assertions here are deliberately about *shape*, not behaviour. What each
+public function does is asserted everywhere else in this suite; what is
+asserted here is that it is still called what it was called and that it did
+not drag an internal module out with it.
 
 WHY ``__all__`` AND NOT ``dir()``. ``dir()`` reports imports, re-exports and
 every name a module happened to bind, which would make this test fail on a
@@ -27,7 +27,6 @@ import ast
 import importlib
 import inspect
 from collections.abc import Iterator, Mapping
-from functools import cache
 from pathlib import Path
 
 import pytest
@@ -274,26 +273,6 @@ belongs in a list somebody edits.
 # ---------------------------------------------------------------------------
 
 
-def _attribute_docstrings(tree: ast.Module) -> Iterator[str]:
-    """Names assigned at module level with a string literal directly under them."""
-    body = tree.body
-    for index, node in enumerate(body[:-1]):
-        following = body[index + 1]
-        documented = (
-            isinstance(following, ast.Expr)
-            and isinstance(following.value, ast.Constant)
-            and isinstance(following.value.value, str)
-        )
-        if not documented:
-            continue
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            yield node.target.id
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    yield target.id
-
-
 def _import_statements_paid_on_import(tree: ast.Module) -> Iterator[ast.Import | ast.ImportFrom]:
     """The imports a consumer pays for by importing the module at all.
 
@@ -327,27 +306,8 @@ def _is_type_checking_guard(test: ast.expr) -> bool:
     return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
 
 
-@cache
-def _documented_constants() -> frozenset[str]:
-    """Every module-level name in the package carrying an attribute docstring.
-
-    Indexed by name across the whole package rather than per module, because a
-    public constant is frequently re-exported from the module that defines it
-    -- ``vendorfake.testing.CLIENT_TIMEOUT_S`` and
-    ``vendorfake.testing.seeds.Seed`` are both read through a module other
-    than their own -- and a plain ``str`` carries no ``__module__`` to follow
-    home. Two modules defining the same name and only one documenting it would
-    pass falsely; that is the accepted cost, and it is small against the
-    alternative of not checking constants at all.
-    """
-    found: set[str] = set()
-    for path in sorted(SRC.rglob("*.py")):
-        found.update(_attribute_docstrings(ast.parse(path.read_text(encoding="utf-8"))))
-    return frozenset(found)
-
-
 # ---------------------------------------------------------------------------
-# The three assertions.
+# The assertions.
 # ---------------------------------------------------------------------------
 
 
