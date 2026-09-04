@@ -629,6 +629,15 @@ def _unit(
         environ["VENDORFAKE_CLOCK_START"] = _clock_start_env_value(clock_start)
     if seed_overlay is not None:
         environ["VENDORFAKE_SEED_OVERLAY"] = _seed_overlay_env_value(seed_overlay)
+    # An exported seed document is refused rather than silently hydrating a store
+    # the returned `.seed` does not describe; passed in env= it is a deliberate
+    # choice the seed-overlay tests rely on.
+    if "VENDORFAKE_SEED" in environ and "VENDORFAKE_SEED" not in (env or {}):
+        raise ValueError(
+            "unit() will not take VENDORFAKE_SEED from the exported environment: the .seed handed back is derived "
+            "from the vendor's constants and would not describe a unit hydrated from another document. Pass "
+            'env={"VENDORFAKE_SEED": ...} to mean it, or a profile whose document points at the seed you want.'
+        )
     environ.update(env or {})
     built = create_unit(
         vendor=vendor,
@@ -706,6 +715,10 @@ def _async_hooks(client: httpx.Client) -> dict[str, list[Any]]:
     return {"response": [_raise_on_near_miss_async]} if client.event_hooks.get("response") else {}
 
 
+_CLOSING: set[asyncio.Task[None]] = set()
+"""Close tasks in flight on a running loop, held so they are not collected early."""
+
+
 def _release_async_client(started: Driver[Any]) -> None:
     """Close a lazily built :attr:`Driver.async_client` from sync code. With no
     loop running ``asyncio.run`` closes it; with one running nothing is done."""
@@ -713,12 +726,17 @@ def _release_async_client(started: Driver[Any]) -> None:
     if client is None:
         return
     try:
-        asyncio.get_running_loop()
+        loop = asyncio.get_running_loop()
     except RuntimeError:
         # No loop running: close on a fresh one. A client whose own loop has already
         # closed cannot be closed again and is left to the garbage collector.
         with contextlib.suppress(RuntimeError):
             asyncio.run(client.aclose())
+    else:
+        # Torn down from inside a running loop (an async test): close on that loop.
+        task = loop.create_task(client.aclose())
+        _CLOSING.add(task)
+        task.add_done_callback(_CLOSING.discard)
 
 
 @overload
@@ -1084,6 +1102,7 @@ def _served(
             "as explicit flags, and the CLI prefers a flag to the variable, so the entry would change nothing. "
             "Use the parameter instead."
         )
+    checked_unmatched(unmatched)  # refused here, on the caller's line, not after the child is spawned
     resolved_profile, capability_layer = registry.resolve_capabilities(definition, profile, capabilities)
     layer.update(capability_layer)
     child_view = {**os.environ, **layer}
@@ -1137,7 +1156,7 @@ def _served(
         base_url = _wait_for_announcement(process, output, timeout_s)
         with _http_client(base_url, unmatched) as client:
             health = client.get("/__unit/health").json()
-            yield ServedUnit(
+            child = ServedUnit(
                 vendor=str(health["vendor"]),
                 profile=str(health["profile"]),
                 base_url=base_url,
@@ -1149,6 +1168,10 @@ def _served(
                 process=process,
                 _output=output,
             )
+            try:
+                yield child
+            finally:
+                _release_async_client(child)
     finally:
         _stop(process)
         output.join()

@@ -110,6 +110,34 @@ if [ "$QUICK" -eq 0 ]; then
   step "coverage floor"  uv run coverage report --skip-covered --fail-under=89
 fi
 step "wheel data"        uv run python tools/check_wheel_data.py
+# The in-process path must work from a wheel installed WITHOUT the `serve`
+# extra, and importing the ASGI package must then name the extra to install.
+_serve_extra_step() {
+  local scratch
+  scratch="$(mktemp -d)"
+  uv build --wheel --out-dir "$scratch/dist" -q || return 1
+  uv venv -q "$scratch/venv" || return 1
+  uv pip install -q --python "$scratch/venv/bin/python" "$scratch"/dist/*.whl || return 1
+  "$scratch/venv/bin/python" - <<'PY' || return 1
+import sys
+from vendorfake.testing import unit
+with unit("square") as started:
+    assert started.health()["status"] == "ok"
+for name in ("fastapi", "uvicorn", "starlette"):
+    assert name not in sys.modules, f"{name} was imported by the in-process path"
+try:
+    import vendorfake.asgi
+except ImportError as exc:
+    assert "vendorfake[serve]" in str(exc), exc
+else:
+    raise SystemExit("importing vendorfake.asgi without the extra did not raise")
+print("wheel without the serve extra: unit() works, vendorfake.asgi names the extra")
+PY
+  rm -rf "$scratch"
+}
+if [ "$QUICK" -eq 0 ]; then
+  step "serve extra"       _serve_extra_step
+fi
 step "docs"              _docs_step
 
 # Security scanners, full run only (konyklabs/roadmap#105): pip-audit over the

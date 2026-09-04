@@ -12,6 +12,7 @@ profile has, needs no credential, and is the first thing a consumer types.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -98,8 +99,16 @@ def test_an_http_driver_raises_by_default_like_the_in_process_one(vendor: str) -
     """The Python driver over a socket applies the same default policy: the
     response hook turns the near-miss header into ``UnmatchedRequest``."""
     path, operation = MISSPELLED_AUTH[vendor]
-    with unit(vendor) as started, serve_in_thread(started) as driver, pytest.raises(UnmatchedRequest, match=operation):
-        driver.client.post(path, json={})
+    with unit(vendor) as started, serve_in_thread(started) as driver:
+        with pytest.raises(UnmatchedRequest, match=operation):
+            driver.client.post(path, json={})
+
+        async def over_async() -> None:
+            await driver.async_client.post(path, json={})
+            await driver.aclose()
+
+        with pytest.raises(UnmatchedRequest, match=operation):
+            asyncio.run(over_async())
 
 
 def test_a_real_404_from_a_real_route_is_not_a_failure() -> None:

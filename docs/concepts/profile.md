@@ -32,8 +32,10 @@ a profile can override a vendor default and an operator can override both
 through `VENDORFAKE_*` variables — see
 [the generated environment-variable reference](../reference/env.md). Every
 binding resolves them the same way: the exported process environment first,
-then the `env=` mapping a test passes, then explicit arguments, each layer
-beating the one before. `create_unit()` itself takes `env` as a parameter
+then the keyword arguments that spell a variable (`seed=`, `clock_start=`,
+`seed_overlay=`), then the `env=` mapping a test passes, each layer beating
+the one before; `profile=` and `capabilities=` are resolved ahead of that
+layer and beat `VENDORFAKE_PROFILE`. `create_unit()` itself takes `env` as a parameter
 defaulting to `{}`; `unit()`, `served()` and the CLI hand it the ambient
 `VENDORFAKE_*` variables through one function, `registry.ambient_env()`.
 

@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 
 from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitContext, UnitError, UnitErrorKind
-from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION
+from vendorfake.core.webhooks.models import SUBSCRIPTION_COLLECTION, require_postable_target
 from vendorfake.lightspeed.config import SCOPE_WEBHOOKS
 from vendorfake.lightspeed.errors import ONE_MEMBER_BODY_INFO_KEY, WEBHOOK_DUPLICATE_MESSAGE
 from vendorfake.lightspeed.events import LIGHTSPEED_EVENT_TYPES
@@ -192,6 +192,7 @@ class LightspeedWebhooksSurface:
                 ),
                 field="url",
             )
+        require_postable_target(request.url, field="url")
         return request
 
     def _refuse_duplicate(self, ctx: UnitContext, request: WebhookRequest, *, exclude: str | None) -> None:

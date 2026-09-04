@@ -18,7 +18,7 @@ from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
-from vendorfake.core.kernel.types import PreparedEvent
+from vendorfake.core.kernel.types import PreparedEvent, UnitError, UnitErrorKind
 
 __all__ = [
     "SUBSCRIPTION_COLLECTION",
@@ -31,6 +31,7 @@ __all__ = [
     "Subscription",
     "check_notification_url",
     "matches_event_type",
+    "require_postable_target",
 ]
 
 _REGEX_METACHARACTERS = frozenset(".+?^${}()|[]\\")
@@ -259,3 +260,15 @@ def check_notification_url(url: str) -> str:
     if address.is_link_local or (mapped is not None and mapped.is_link_local):
         raise ValueError(f"{host} is link-local; the instance metadata service lives there")
     return url
+
+
+def require_postable_target(url: str, *, field: str) -> str:
+    """:func:`check_notification_url`, turned into the unit's own refusal. The control plane's
+    subscription route and a profile's ``SubscriberConfig`` validate through this same check as a
+    pydantic field validator; a vendor route that creates or updates a subscription from a request
+    body has no pydantic model to hang that on, so it calls this directly, before anything is
+    stored, and gets back the vendor's own ``invalid_value`` shape instead of a raw ``ValueError``."""
+    try:
+        return check_notification_url(url)
+    except ValueError as exc:
+        raise UnitError(UnitErrorKind.INVALID_VALUE, detail=str(exc), field=field) from exc

@@ -349,6 +349,17 @@ def test_a_receiver_bound_to_all_interfaces_refuses_to_guess_its_url() -> None:
         assert len(receiver.received) == 1
 
 
+def test_unit_refuses_an_exported_seed_document_rather_than_mismatching_its_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An exported VENDORFAKE_SEED would hydrate a store the returned ``.seed``
+    does not describe, so it is refused; the same variable in ``env=`` is the
+    deliberate form the seed-overlay tests use."""
+    monkeypatch.setenv("VENDORFAKE_SEED", "/tmp/other.seed.json")
+    with pytest.raises(ValueError, match="exported environment"):
+        unit("square").__enter__()
+
+
 def test_served_takes_capabilities_the_way_unit_does() -> None:
     with served("square", capabilities=["orders"]) as child:
         assert child.profile == "orders-only"
@@ -362,6 +373,19 @@ def test_served_honours_an_ambient_profile_and_an_explicit_one_beats_it(monkeypa
         assert child.profile == "no-faults"
     with served("square", "oauth-only") as child:
         assert child.profile == "oauth-only"
+
+
+def test_served_offers_an_async_client_onto_the_child() -> None:
+    import asyncio
+
+    with served("square") as child:
+
+        async def read() -> int:
+            response = await child.async_client.get("/v2/locations", headers=child.seed.auth)
+            await child.aclose()
+            return response.status_code
+
+        assert asyncio.run(read()) == 200
 
 
 def test_serve_in_thread_offers_an_async_client_onto_the_same_unit() -> None:

@@ -77,6 +77,19 @@ def test_a_malformed_registration_names_the_field(h: Harness, body: dict[str, ob
     assert response.status == 400 and response.json()["unit_error"]["field"] == field
 
 
+def test_a_link_local_url_is_refused(h: Harness) -> None:
+    """A cloud instance's metadata service lives at a link-local address; this stand-in refuses it
+    the same way the control plane's own subscription route already does."""
+    response = h.api.post("/__toast/webhooks/subscriptions", {"url": "https://169.254.169.254/latest"})
+    assert response.status == 400 and response.json()["unit_error"]["field"] == "url"
+
+
+def test_a_loopback_url_is_accepted(h: Harness) -> None:
+    """Loopback stays allowed -- that is where a test's own receiver lives."""
+    response = h.api.post("/__toast/webhooks/subscriptions", {"url": "https://127.0.0.1:9/hook"})
+    assert response.status == 201, response.text
+
+
 def test_remove_deletes_from_the_one_list_and_a_second_remove_is_404(h: Harness) -> None:
     guid = h.api.post("/__toast/webhooks/subscriptions", {"url": "https://example.test/hooks"}).json()["guid"]
     assert h.api.delete(f"/__toast/webhooks/subscriptions/{guid}").status == 204

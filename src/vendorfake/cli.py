@@ -1,11 +1,9 @@
-"""``vendorfake`` -- the command line, and the one place that reads ``os.environ``.
+"""``vendorfake`` -- the command line.
 
-Invariant: this is the only module that resolves a unit's config from
-``os.environ``. ``create_unit``'s ``env`` defaults to an empty mapping, so a
-variable set by one test cannot change the profile a unit built by another
-resolves to. ``vendorfake.testing.served()`` is the one documented exception,
-spawning this module's ``serve`` subcommand as a child that inherits the real
-environment by construction.
+Invariant: the process environment reaches a unit through one function,
+``registry.ambient_env()``, which this module, ``unit()`` and ``served()`` all
+layer explicit configuration over; ``create_unit``'s ``env`` itself defaults to
+an empty mapping.
 
 Invariant: ``vendorfake --help`` imports no web framework. Every first-party
 import happens inside a subcommand body, and ``serve`` is the only one that
@@ -594,9 +592,8 @@ def _conformance(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Parse, dispatch, and return an exit code. ``os.environ`` is read here and
-    nowhere else, copied into a plain ``dict`` so nothing downstream can mutate
-    the process environment and a test can substitute one."""
+    """Parse, dispatch, and return an exit code. The environment is copied into a
+    plain ``dict`` so nothing downstream can mutate it and a test can substitute one."""
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     env: Mapping[str, str] = dict(os.environ)

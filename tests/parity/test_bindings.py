@@ -251,3 +251,20 @@ def test_a_reset_returns_the_unit_to_its_seed(binding: str, open_unit: Callable[
         assert bound.client.get(f"/v2/orders/{order_id}", headers=auth).status_code == 200
         assert bound.client.post("/__unit/state/reset", json={}).status_code == 200
         assert bound.client.get(f"/v2/orders/{order_id}", headers=auth).status_code == 404
+
+
+@pytest.mark.parametrize("binding", ALL)
+def test_a_body_over_the_limit_is_the_vendors_bad_request(
+    binding: str, open_unit: Callable[..., Iterator[Bound]]
+) -> None:
+    """The ASGI adapter's 8 MiB cap answers as the vendor's own error over a real
+    socket too; in process there is no framing to cap, so the unit reads the body."""
+    if binding == "unit":
+        pytest.skip("the in-process transport hands the body over in memory; the cap is the ASGI adapter's")
+    with open_unit(unmatched="vendor-404") as bound:
+        body = b"{" + b" " * (8 * 1024 * 1024) + b"}"
+        response = bound.client.post(
+            "/v2/orders", content=body, headers={**_auth(bound), "content-type": "application/json"}
+        )
+        assert response.status_code == 400
+        assert response.headers["x-unit-error"] == "bad_request"

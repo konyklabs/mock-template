@@ -32,7 +32,7 @@ and a behaviour had to be decided, the wire says so — see
 ## Sixty seconds to a first request
 
 ```sh
-pip install "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.1.0"
+pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.1.0"   # [serve] for `vendorfake serve`; in-process tests need no extra
 vendorfake vendors                       # -> clover, lightspeed, square, toast
 vendorfake serve --vendor square         # http://127.0.0.1:8080
 ```

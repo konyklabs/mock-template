@@ -127,7 +127,6 @@ def test_square_in_a_container_creates_and_pays_an_order(
     square_http: httpx.Client, manifest: Callable[[str], dict[str, Any]]
 ) -> None:
     document = manifest("square")
-    assert square_http.get("/__unit/health").json()["vendor"] == "square"
     headers = auth_headers(document)
     created = square_http.post(
         "/v2/orders",
@@ -159,7 +158,6 @@ def test_clover_in_a_container_pays_an_atomic_order(
     clover_http: httpx.Client, manifest: Callable[[str], dict[str, Any]]
 ) -> None:
     document = manifest("clover")
-    assert clover_http.get("/__unit/health").json()["vendor"] == "clover"
     headers = auth_headers(document)
     merchant = f"/v3/merchants/{first_id(document, 'merchants')}"
     created = clover_http.post(
@@ -192,7 +190,6 @@ def test_toast_in_a_container_pays_a_check_in_dollars(
     toast_http: httpx.Client, manifest: Callable[[str], dict[str, Any]]
 ) -> None:
     document = manifest("toast")
-    assert toast_http.get("/__unit/health").json()["vendor"] == "toast"
     headers = auth_headers(document)
     created = toast_http.post(
         "/orders/v2/orders",

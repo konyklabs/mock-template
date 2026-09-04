@@ -2,8 +2,9 @@
 
 Invariant: a typo in a vendor name is a startup failure listing the real ones, a
 silently unloaded vendor otherwise presenting as "every endpoint 404s".
-Invariant: ``env`` defaults to ``{}``, never ``os.environ``, so a variable set by
-one test cannot change the profile of a unit built by another. Vendors come from
+Invariant: ``create_unit``'s ``env`` defaults to ``{}``; the process environment
+enters only through :func:`ambient_env`, which every binding layers explicit
+configuration over. Vendors come from
 the ``vendorfake.vendors`` entry-point group, with a built-in map for a source
 tree that has no installation metadata, both filtered through an importability
 check so no advertised name fails to load.

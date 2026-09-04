@@ -617,15 +617,19 @@ def test_manifest_prints_one_json_document_and_nothing_else() -> None:
     assert (document["vendor"], document["profile"]) == ("square", "full")
 
 
-def test_manifest_matches_the_document_the_control_plane_serves() -> None:
+def test_manifest_matches_the_document_the_control_plane_serves(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two ways in, one function behind them. Were these built separately, a
     field added to one would silently be absent from the other, and a script
-    that read the file would fail only against the served world."""
+    that read the file would fail only against the served world. Both units run
+    on the same pinned virtual clock: the seeded tokens carry an expiry."""
     from vendorfake.core.transport.inprocess import in_process
     from vendorfake.registry import create_unit
 
+    pinned = {"VENDORFAKE_CLOCK": "virtual", "VENDORFAKE_CLOCK_START": "2026-01-01T00:00:00Z"}
+    for key, value in pinned.items():
+        monkeypatch.setenv(key, value)
     _, out = run("manifest", "--vendor", "square")
-    unit = create_unit(vendor="square", env={})
+    unit = create_unit(vendor="square", env=pinned)
     try:
         served = in_process(unit).get("/__unit/manifest").json()
     finally:

@@ -300,6 +300,28 @@ def test_the_allow_insecure_callbacks_switch_lifts_the_check_for_a_local_receive
         assert request.headers[AUTH_HEADER] == verified["authCode"]
 
 
+def test_a_link_local_notification_url_is_refused(sink: MemorySink) -> None:
+    """A cloud instance's metadata service lives at a link-local address; this stand-in refuses it
+    the same way the control plane's own subscription route already does. Insecure callbacks are
+    allowed here so the failure is the link-local check, not the unrelated HTTPS-only rule."""
+    env = {"VENDORFAKE_VENDOR_ALLOW_INSECURE_CALLBACKS": "true"}
+    for h in build_harness("full", sink=sink, env=env):
+        h.drop_seeded_subscriber()
+        response = h.api.post("/__clover/webhooks/subscriptions", {"url": "http://169.254.169.254/latest"})
+        assert response.status == 400, response.text
+        assert response.headers["x-unit-error"] == "invalid_value"
+        assert first_error(response)["field"] == "url"
+
+
+def test_a_loopback_notification_url_is_accepted(sink: MemorySink) -> None:
+    """Loopback stays allowed -- that is where a test's own receiver lives."""
+    env = {"VENDORFAKE_VENDOR_ALLOW_INSECURE_CALLBACKS": "true"}
+    for h in build_harness("full", sink=sink, env=env):
+        h.drop_seeded_subscriber()
+        registered = register(h, url="http://127.0.0.1:9/hook")
+        assert registered["url"] == "http://127.0.0.1:9/hook"
+
+
 def test_a_profile_declared_http_subscriber_is_exempt_and_still_delivers(sink: MemorySink) -> None:
     """The dashboard's pre-verified entries are not a request to this route;
     a scenario may point them at whatever its author's receiver listens on."""

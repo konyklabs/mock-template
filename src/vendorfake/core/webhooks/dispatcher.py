@@ -505,8 +505,9 @@ class WebhookDispatcher:
         body_text: str = "",
         next_attempt_in_ms: int | None = None,
     ) -> None:
-        """Append one record, from the worker thread only. ``body_hash`` is empty, not the
-        hash of the empty string, when there was no delivery."""
+        """Append one record under the log lock, from the worker thread or, for a
+        queue-full drop, the enqueueing thread. ``body_hash`` is empty, not the hash of
+        the empty string, when there was no delivery."""
         with self._log_lock:
             self._delivery_seq += 1
             delivery_id = f"dlv_{self._delivery_seq:05d}"
