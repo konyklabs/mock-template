@@ -68,8 +68,6 @@ nav:
   - Recipes:
       - Sync pytest: pytest-plugin.md
       - Async pytest: async-consumers.md
-      - Vitest: recipes/vitest.md
-      - Playwright: recipes/playwright.md
       - Docker compose: recipes/docker-compose.md
       - CI: recipes/ci.md
   - Concepts:

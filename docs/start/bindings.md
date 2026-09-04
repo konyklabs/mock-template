@@ -75,9 +75,7 @@ differently-seeded children can run in one process with nothing written to
 Entries for what `served()` passes as a flag — `VENDORFAKE_PROFILE`,
 `VENDORFAKE_HOST`, `VENDORFAKE_PORT`, `VENDORFAKE_LOG_LEVEL` — are refused
 with a `ValueError` naming the parameter to use, rather than silently
-beaten by the flag. `VENDORFAKE_TRANSPORT` and `VENDORFAKE_TRANSPORT_DIR`
-are refused because a served unit is an HTTP unit by definition (there is no parameter to use; build a unit
-in-process for another binding), `VENDORFAKE_SEED` because `.seed` is
+beaten by the flag. `VENDORFAKE_SEED` is refused because `.seed` is
 derived from the vendor's constants and could not describe a child hydrated
 from another document, and `VENDORFAKE_SEED_OVERLAY` because
 [`seed_overlay=`](../concepts/seed.md#seed-overlays) is the parameter for it —
@@ -101,10 +99,8 @@ docker run --rm -p 127.0.0.1:8080:8080 -e VENDORFAKE_VENDOR=square vendorfake
 
 One image, every vendor; which one it serves is chosen at run time, never
 baked into the image. Reach for this when the consumer under test is not a
-Python process at all — a TypeScript service (see
-[Recipes → Vitest](../recipes/vitest.md) and
-[Recipes → Playwright](../recipes/playwright.md)), a browser end-to-end
-suite, or anything driven through
+Python process at all — a service in another language, a browser
+end-to-end suite, or anything driven through
 [docker compose](../recipes/docker-compose.md) or
 [Testcontainers](https://testcontainers.com/). It is also the binding
 [CI](../recipes/ci.md) reaches for when the suite under test is not Python.

@@ -28,9 +28,7 @@ from vendorfake.core.config.models import (
     parse_profile_document,
 )
 from vendorfake.core.config.profile import (
-    ENV_TABLE,
     ENV_VENDOR_PREFIX,
-    env_names,
     load_profile,
     merge_documents,
     resolve_config,
@@ -165,59 +163,6 @@ def test_the_process_environment_is_never_read(tmp_path: Path, monkeypatch: pyte
 # ---------------------------------------------------------------------------
 
 
-def test_the_table_carries_the_sixteen_reference_names_renamed() -> None:
-    """Renaming is checkable rather than remembered: a variable lost in
-    translation shows up here as a failure.
-
-    The table is allowed to GROW -- this build has variables the reference
-    never had, and they carry ``replaces=None`` -- but the sixteen it inherited
-    must all still be there, in order, mapped to a ``VENDORFAKE_`` name.
-    ``test_the_native_rows_declare_no_reference_equivalent`` pins the added
-    ones.
-    """
-    inherited = [var for var in ENV_TABLE if var.replaces is not None]
-    assert len(inherited) == 16
-    assert [var.replaces for var in inherited] == [
-        "UNIT_PROFILE",
-        "UNIT_CAPABILITIES",
-        "UNIT_SEED",
-        "UNIT_WEBHOOK_URL",
-        "UNIT_WEBHOOK_EVENTS",
-        "UNIT_WEBHOOK_SIGNATURE_KEY",
-        "UNIT_WEBHOOK_TIME_SCALE",
-        "UNIT_WEBHOOK_TIMEOUT_MS",
-        "UNIT_CHAOS_SEED",
-        "UNIT_CLOCK",
-        "UNIT_TRANSPORT",
-        "UNIT_TRANSPORT_DIR",
-        "UNIT_PORT",
-        "UNIT_HOST",
-        "UNIT_LOG_LEVEL",
-        "UNIT_VENDOR_",
-    ]
-    assert all(name.startswith("VENDORFAKE_") for name in env_names())
-    assert sum(1 for var in ENV_TABLE if var.is_prefix) == 1
-    # Every added variable states what it applies to, so `--help` and the
-    # README can be generated from the table rather than kept in step by hand.
-    assert all(var.applies_to and var.summary for var in ENV_TABLE)
-
-
-def test_the_native_rows_declare_no_reference_equivalent() -> None:
-    """konyklabs/roadmap#71, #72 and #85: five controls this project added; the
-    reference never emitted a switchable sidecar location, an env-settable
-    clock start, a request log, a strict unmatched policy or a seed overlay, so
-    there is no name to cite and ``replaces`` says so."""
-    native = {var.name for var in ENV_TABLE if var.replaces is None}
-    assert native == {
-        "VENDORFAKE_CLOCK_START",
-        "VENDORFAKE_ERROR_SIDECAR",
-        "VENDORFAKE_REQUEST_LOG_CAPACITY",
-        "VENDORFAKE_SEED_OVERLAY",
-        "VENDORFAKE_UNMATCHED",
-    }
-    assert len(ENV_TABLE) == 21
-
-
 def test_no_unit_prefixed_alias_is_honoured() -> None:
     config = resolve_config(ProfileDocument(chaos={"seed": 5}), name="p", env={"UNIT_CHAOS_SEED": "9"})  # type: ignore[arg-type]
     assert config.chaos.seed == 5
@@ -255,24 +200,12 @@ def test_vendor_prefixed_variables_become_snake_case_keys() -> None:
 
 def test_the_transport_block_is_environment_only() -> None:
     default = resolve_config(ProfileDocument(), name="p")
-    assert (default.transport.kind, default.transport.port, default.transport.host, default.transport.dir) == (
-        "http",
-        8080,
-        None,
-        None,
-    )
+    assert (default.transport.port, default.transport.host) == (8080, None)
     overridden = resolve_config(
         ProfileDocument(),
         name="p",
-        env={
-            "VENDORFAKE_TRANSPORT": "filedrop",
-            "VENDORFAKE_TRANSPORT_DIR": "/tmp/drop",
-            "VENDORFAKE_PORT": "9999",
-            "VENDORFAKE_HOST": "127.0.0.1",
-        },
+        env={"VENDORFAKE_PORT": "9999", "VENDORFAKE_HOST": "127.0.0.1"},
     )
-    assert overridden.transport.kind == "filedrop"
-    assert overridden.transport.dir == "/tmp/drop"
     assert overridden.transport.port == 9999
     assert overridden.transport.host == "127.0.0.1"
 

@@ -62,10 +62,8 @@ wants to rehearse -- their client raising :class:`httpx.ReadTimeout` and their
 retry path running -- was unreachable without starting a real server.
 
 *It made the kernel choose a thread to block.* The ASGI binding must not block
-the event loop, the async in-process transport must yield to it, and a
-file-drop binding wants an interruptible wait so shutdown does not have to
-outlast the delay. One ``time.sleep`` in here forces every one of them to be
-wrong in the same way.
+the event loop and the async in-process transport must yield to it. One
+``time.sleep`` in here forces both to be wrong in the same way.
 
 So the kernel decides *whether* to delay and the binding decides *how*: the
 delay travels out on :attr:`UnitError.delay_ms`, the pipeline copies it onto

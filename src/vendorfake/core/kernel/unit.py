@@ -90,9 +90,7 @@ DELAYS LEAVE AS DATA. A fault that wants the caller made to wait sets
 ``_finish`` carries it through. Nothing in this file, or anywhere below the
 seam, sleeps for it. The kernel decides *whether* to delay and the binding
 decides *how*, because only the binding knows the caller's clock and the
-caller's timeout -- and because a ``time.sleep`` here would block a request
-thread, an event loop and a file-drop poller with the same line. See
-``core/chaos/faults.py`` for the reversal that produced this.
+caller's timeout.
 
 THE REQUEST LOCK. ``handle`` is synchronous and takes one re-entrant lock for
 the whole pipeline, unless the matched route declares ``serialized=False``.

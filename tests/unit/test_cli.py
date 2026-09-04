@@ -142,7 +142,6 @@ def test_every_declared_subcommand_has_a_dispatch_arm() -> None:
         "profiles",
         "routes",
         "faults",
-        "agent-setup",
         "explain",
         "conformance",
     }

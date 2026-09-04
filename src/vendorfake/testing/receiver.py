@@ -46,8 +46,7 @@ class WebhookReceiver:
     address the container sees on ``port`` -- Docker Desktop and colima
     publish the host as ``http://host.docker.internal:{port}{path}``, and
     testcontainers as ``host.testcontainers.internal`` after
-    ``exposeHostPorts`` (the Vitest example's ``setup/global.ts`` does
-    exactly this). ``url`` refuses to guess a routable address for a
+    ``exposeHostPorts``. ``url`` refuses to guess a routable address for a
     wildcard bind.
     """
 

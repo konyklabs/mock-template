@@ -106,26 +106,9 @@ DEFAULT_ENV_SIGNATURE_KEY = "unit-signature-key"
 
 @dataclass(frozen=True, slots=True)
 class EnvVar:
-    """One environment variable, with the reference name it replaces.
-
-    ``replaces`` exists so the rename is a checkable fact: a test asserts the
-    *ported* rows of this table against the reference's sixteen, which is the
-    only way a variable silently disappearing in translation shows up as a
-    failure. ``replaces=None`` marks a row with no reference equivalent at all
-    -- a control this project added that the TypeScript original never had --
-    so the absence is a stated fact rather than something a reader has to
-    notice is missing from the citation. Streams #71 and #72 each reached for a
-    sentinel here and picked differently (``""`` and ``None``); ``None`` won on
-    integration because it is the value the declared type already allowed and
-    the one a ported row can never take by accident.
-    """
+    """One environment variable ``load_profile`` reads."""
 
     name: str
-    #: The reference's name for this variable, or ``None`` for one this build
-    #: added and the reference never had. Kept as a distinct value rather than
-    #: an empty string so the test asserting "all sixteen survived the rename"
-    #: still counts sixteen as the table grows.
-    replaces: str | None
     applies_to: str
     summary: str
     #: True for ``VENDORFAKE_VENDOR_``, which is a prefix rather than a name.
@@ -133,98 +116,76 @@ class EnvVar:
 
 
 ENV_TABLE: tuple[EnvVar, ...] = (
-    EnvVar("VENDORFAKE_PROFILE", "UNIT_PROFILE", "profile", "Profile name or path to load when none is passed."),
+    EnvVar("VENDORFAKE_PROFILE", "profile", "Profile name or path to load when none is passed."),
     EnvVar(
         "VENDORFAKE_CAPABILITIES",
-        "UNIT_CAPABILITIES",
         "capabilities",
         "Absolute list, or a +add,-remove delta against the profile's list.",
     ),
-    EnvVar(ENV_SEED, "UNIT_SEED", "seed_path", "Seed document path, overriding the profile's."),
+    EnvVar(ENV_SEED, "seed_path", "Seed document path, overriding the profile's."),
     EnvVar(
         "VENDORFAKE_SEED_OVERLAY",
-        None,
         "seed_overlay",
         "Partial seed document merged over the seed: a JSON file path, or the JSON itself inline.",
     ),
     EnvVar(
         "VENDORFAKE_WEBHOOK_URL",
-        "UNIT_WEBHOOK_URL",
         "webhooks.subscribers",
         "Appends one subscriber so a container can push to a caller with no API call.",
     ),
     EnvVar(
         "VENDORFAKE_WEBHOOK_EVENTS",
-        "UNIT_WEBHOOK_EVENTS",
         "webhooks.subscribers",
         "Comma-separated event types for that subscriber. Defaults to '*'.",
     ),
     EnvVar(
         "VENDORFAKE_WEBHOOK_SIGNATURE_KEY",
-        "UNIT_WEBHOOK_SIGNATURE_KEY",
         "webhooks.subscribers",
         "Signing key for that subscriber.",
     ),
     EnvVar(
         "VENDORFAKE_WEBHOOK_TIME_SCALE",
-        "UNIT_WEBHOOK_TIME_SCALE",
         "webhooks.retry.time_scale",
         "Multiplier on every retry delay.",
     ),
     EnvVar(
         "VENDORFAKE_WEBHOOK_TIMEOUT_MS",
-        "UNIT_WEBHOOK_TIMEOUT_MS",
         "webhooks.retry.timeout_ms",
         "Milliseconds before a subscriber is called timed out.",
     ),
-    EnvVar("VENDORFAKE_CHAOS_SEED", "UNIT_CHAOS_SEED", "chaos.seed", "Seed for the fault engine's RNG."),
-    EnvVar("VENDORFAKE_CLOCK", "UNIT_CLOCK", "clock.mode", "'real' or 'virtual'."),
+    EnvVar("VENDORFAKE_CHAOS_SEED", "chaos.seed", "Seed for the fault engine's RNG."),
+    EnvVar("VENDORFAKE_CLOCK", "clock.mode", "'real' or 'virtual'."),
     EnvVar(
         "VENDORFAKE_CLOCK_START",
-        None,
         "clock.start",
         "RFC 3339 instant the virtual clock starts at. Requires clock.mode='virtual'.",
     ),
     EnvVar(
         "VENDORFAKE_ERROR_SIDECAR",
-        None,
         "errors.sidecar",
         "Where the 'unit_error' sidecar is emitted: 'headers' (default), 'body' or 'both'.",
     ),
-    EnvVar("VENDORFAKE_TRANSPORT", "UNIT_TRANSPORT", "transport.kind", "Which binding the CLI stands up."),
-    EnvVar(
-        "VENDORFAKE_TRANSPORT_DIR",
-        "UNIT_TRANSPORT_DIR",
-        "transport.dir",
-        "Directory the file-drop binding watches.",
-    ),
-    EnvVar("VENDORFAKE_PORT", "UNIT_PORT", "transport.port", "Port for the HTTP binding."),
-    EnvVar("VENDORFAKE_HOST", "UNIT_HOST", "transport.host", "Interface for the HTTP binding."),
-    EnvVar("VENDORFAKE_LOG_LEVEL", "UNIT_LOG_LEVEL", "log_level", "Minimum level the unit's logger emits."),
+    EnvVar("VENDORFAKE_PORT", "transport.port", "Port for the HTTP binding."),
+    EnvVar("VENDORFAKE_HOST", "transport.host", "Interface for the HTTP binding."),
+    EnvVar("VENDORFAKE_LOG_LEVEL", "log_level", "Minimum level the unit's logger emits."),
     EnvVar(
         ENV_VENDOR_PREFIX,
-        "UNIT_VENDOR_",
         "vendor_config",
-        "Prefix: the remainder becomes a snake_case vendor-config key. The reference camel-cased it.",
+        "Prefix: the remainder becomes a snake_case vendor-config key.",
         is_prefix=True,
     ),
     EnvVar(
         "VENDORFAKE_REQUEST_LOG_CAPACITY",
-        None,
         "requests.capacity",
         "How many requests the in-memory request log keeps before evicting the oldest.",
     ),
     EnvVar(
         "VENDORFAKE_UNMATCHED",
-        None,
         "unmatched.policy",
         "'vendor-404' or 'error': what an in-process binding does with a request no route matched.",
     ),
 )
-"""Every environment variable this loader reads. Twenty-one entries, one of them
-a prefix: the sixteen the reference read, renamed (``replaces`` set), plus five
-vendorfake-native controls the reference never had (``replaces=None``) -- see
-:attr:`EnvVar.replaces`.
+"""Every environment variable this loader reads; one entry is a prefix.
 
 ``VENDORFAKE_VENDOR`` (no trailing underscore) is deliberately absent: it
 selects which vendor module to load, which happens before a profile exists, and
@@ -521,10 +482,8 @@ def resolve_config(
         if error_sidecar is None
         else document.errors.model_copy(update={"sidecar": error_sidecar}),
         transport=TransportSection(
-            kind=environ.get("VENDORFAKE_TRANSPORT", "http"),
             port=8080 if port is None else port,
             host=environ.get("VENDORFAKE_HOST"),
-            dir=environ.get("VENDORFAKE_TRANSPORT_DIR"),
         ),
         requests=(
             document.requests if capacity is None else document.requests.model_copy(update={"capacity": capacity})

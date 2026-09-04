@@ -6,9 +6,8 @@ than against any particular vendor or any particular transport.
 
 INVARIANT: **this is deliberately not an HTTP contract.** A unit consumes a
 ``UnitRequest`` and produces a ``UnitResponse``, and ``transport`` names
-whichever binding produced it. HTTP is one binding; in-process and file-drop
-bindings feed the same ``Unit.handle``, which is what keeps "the core does not
-assume HTTP" a mechanical fact rather than an aspiration.
+whichever binding produced it. HTTP is one binding; the in-process binding
+feeds the same ``Unit.handle``.
 
 Two fields carry most of that weight:
 
@@ -115,7 +114,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 TransportKind = str
-"""Names the binding that produced a request: ``http``, ``inprocess``, ``filedrop``, ..."""
+"""Names the binding that produced a request: ``http`` or ``inprocess``."""
 
 AuthMode = str
 """Passed verbatim to the vendor auth adapter; the core never interprets it."""
@@ -234,8 +233,7 @@ class UnitRequest:
 
     #: Unique per received request; echoed on the response for correlation.
     id: str
-    #: Verb. HTTP methods for the HTTP binding; other bindings supply their own
-    #: (the file-drop binding reads the verb out of the request document).
+    #: Verb.
     method: str
     #: Logical resource path, always starting with ``/``.
     path: str
@@ -285,10 +283,7 @@ class TransportDirective:
 
     The kernel never touches sockets, so it builds this value and stops; each
     binding that holds one interprets it in the terms of the caller it holds
-    (see ``testing/transport.py`` and ``asgi/app.py``). A binding with no
-    caller -- the file-drop binding, which writes a document rather than
-    answering a request -- has nothing to interpret this against and ignores
-    it, exactly as it already ignores a field it does not recognise.
+    (see ``testing/transport.py`` and ``asgi/app.py``).
 
     provenance: transport. No vendor documents any of the three; they are what
     any HTTP dependency can do to a caller, independent of which vendor is
@@ -318,9 +313,8 @@ class UnitResponse:
     #: in-process ``httpx`` transport can turn a delay longer than the client's
     #: read timeout into an immediate ``httpx.ReadTimeout`` and never wait at
     #: all; the ASGI application must ``await asyncio.sleep`` so it does not
-    #: block the event loop; a file-drop binding waits on its stop event so a
-    #: shutdown does not have to outlast the delay. Encoding "sleep here, on
-    #: this thread" in the kernel forces all three to be wrong in the same way.
+    #: block the event loop. Encoding "sleep here, on this thread" in the
+    #: kernel forces both to be wrong in the same way.
     #:
     #: Earlier this did not exist and the fault engine called ``time.sleep``
     #: itself. That produced no client-side timeout in process at all -- the

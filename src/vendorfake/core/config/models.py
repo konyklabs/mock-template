@@ -252,10 +252,8 @@ class TransportSection(BaseModel):
 
     model_config = _MODEL
 
-    kind: str = "http"
     port: int = 8080
     host: str | None = None
-    dir: str | None = None
 
 
 class ProfileDocument(BaseModel):

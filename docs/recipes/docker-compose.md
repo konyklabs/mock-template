@@ -65,9 +65,7 @@ only between runs.
 ## Testcontainers, as an alternative
 
 [`examples/pytest-consumer`](https://github.com/konyklabs/vendorfake/tree/main/examples/pytest-consumer)
-and
-[`examples/vitest-consumer`](https://github.com/konyklabs/vendorfake/tree/main/examples/vitest-consumer)
-both ship a Testcontainers variant of the same idea — starting the image
+ships a Testcontainers variant of the same idea — starting the image
 from inside the test process rather than from a compose file — for a suite
 that would rather manage the container's lifecycle in code. Compose is the
 better fit for a stack with several services wired together ahead of time;

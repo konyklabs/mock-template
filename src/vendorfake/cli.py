@@ -201,25 +201,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subcommands.add_parser("faults", help="List the built-in fault catalogue.", parents=[_json_flag_parent()])
 
-    agent_setup = subcommands.add_parser(
-        "agent-setup",
-        help="Write a Claude Code rules file for a consumer repo (and optionally an .mcp.json entry).",
-    )
-    agent_setup.add_argument("--dir", default=".", help="Repo root to write into. Defaults to the current directory.")
-    agent_setup.add_argument(
-        "--tests-glob",
-        default=None,
-        help="Glob the rules file's `paths:` frontmatter is scoped to. Defaults to 'tests/**'.",
-    )
-    agent_setup.add_argument("--mcp", action="store_true", help="Also add a vendorfake entry to <dir>/.mcp.json.")
-    agent_setup.add_argument(
-        "--allow-future",
-        action="store_true",
-        help="Required together with --mcp to actually write the .mcp.json entry; `vendorfake mcp` does not "
-        "exist until 0.4. Without it, --mcp only prints a notice.",
-    )
-    agent_setup.add_argument("--force", action="store_true", help="Overwrite an existing rules file.")
-
     explain = subcommands.add_parser(
         "explain",
         help="Explain one route, fault, profile, error kind, or Vendorfake-* header.",
@@ -632,46 +613,6 @@ def _faults(args: argparse.Namespace, out: TextIO) -> int:
     return 0
 
 
-def _agent_setup(args: argparse.Namespace, out: TextIO) -> int:
-    """Write a Claude Code rules file for a consumer repo, and its ``.mcp.json``
-    entry if asked.
-
-    Deferred imports throughout, matching every other subcommand body in this
-    module: nothing about ``agent-setup`` should cost anything until a
-    consumer actually types it. The mechanics live in
-    :mod:`vendorfake.agent.setup`; this only wires argparse onto it and
-    prints what it reports.
-
-    ``ValueError`` is caught alongside ``FileExistsError``: ``FileExistsError``
-    is an existing rules file without ``--force``; ``ValueError`` is a
-    ``.mcp.json`` that ``--mcp --allow-future`` cannot safely merge into (not
-    valid JSON, or not a JSON object at the top level) -- see
-    :func:`vendorfake.agent.setup.write_agent_setup`. Both are refusals with
-    nothing written, not crashes.
-    """
-    from pathlib import Path
-
-    from vendorfake.agent.rules_template import DEFAULT_TESTS_GLOB
-    from vendorfake.agent.setup import write_agent_setup
-
-    try:
-        result = write_agent_setup(
-            directory=Path(args.dir),
-            tests_glob=args.tests_glob or DEFAULT_TESTS_GLOB,
-            mcp=args.mcp,
-            allow_future=args.allow_future,
-            force=args.force,
-        )
-    except (FileExistsError, ValueError) as exc:
-        raise SystemExit(f"{PROG}: {exc}") from None
-
-    for path in result.written:
-        print(path, file=out)
-    if result.notice is not None:
-        print(f"{PROG}: {result.notice}", file=out)
-    return 0
-
-
 def _explain(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
     """Look up one route, fault, profile, error kind or header, and print it.
 
@@ -785,8 +726,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _routes_cmd(args, env, out)
     if args.command == "faults":
         return _faults(args, out)
-    if args.command == "agent-setup":
-        return _agent_setup(args, out)
     if args.command == "explain":
         return _explain(args, env, out)
     if args.command == "conformance":

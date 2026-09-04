@@ -2,16 +2,14 @@
 
 FOR: keeping "how a delivery leaves the process" out of the dispatcher. The
 dispatcher decides *what* to send, to whom, when to retry and what to record;
-:class:`DeliverySink` decides how the bytes leave. Real vendors push over HTTP,
-some drop a file on a share, and a test wants neither.
+:class:`DeliverySink` decides how the bytes leave.
 
 INVARIANT: **the sink is the only place in the core that may reach the network,
 and it is the only place ``httpx`` may be imported.** ``tools/boundary.toml``
 records that permission. The invariant it protects is the one D-001 exists for:
 the core does not assume HTTP. A dispatcher that called ``httpx`` itself would
 make that claim untestable, because there would be no seam at which to prove
-it; with the seam, :class:`FileSink` *is* the proof -- it is a delivery path
-with no socket in it, exercised by the same dispatcher and the same tests.
+it.
 
 WHY ``SinkResult.status == 0`` IS A CONTRACT AND NOT AN ACCIDENT. There is no
 status when the transport failed before a response existed, and the reference
@@ -34,18 +32,15 @@ the full ``timeout_ms`` to answer costs one background thread and no request.
 
 from __future__ import annotations
 
-import json
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
 
 __all__ = [
     "DeliverySink",
-    "FileSink",
     "HttpSink",
     "MemorySink",
     "SinkRequest",
@@ -191,44 +186,6 @@ class HttpSink:
             self._client = None
         if client is not None:
             client.close()
-
-
-@dataclass
-class FileSink:
-    """Writes each delivery as a JSON document. The proof the sink is not HTTP.
-
-    One file per attempt, numbered in delivery order, so a consumer with no
-    HTTP server can still observe the full transcript -- headers and signature
-    included -- by reading a directory. The body is written as text when it
-    decodes as UTF-8 and as a hex string when it does not, because a vendor
-    whose payload is binary must still produce a readable transcript rather
-    than a file that cannot be written at all.
-    """
-
-    dir: Path
-    kind: str = "file"
-    _seq: int = field(default=0, init=False, repr=False)
-    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
-
-    def send(self, req: SinkRequest) -> SinkResult:
-        with self._lock:
-            self._seq += 1
-            seq = self._seq
-        self.dir.mkdir(parents=True, exist_ok=True)
-        try:
-            body_text: str | None = req.body.decode("utf-8")
-            body_hex: str | None = None
-        except UnicodeDecodeError:
-            body_text = None
-            body_hex = req.body.hex()
-        document: dict[str, object] = {"url": req.url, "headers": dict(req.headers)}
-        if body_text is not None:
-            document["body"] = body_text
-        else:
-            document["body_hex"] = body_hex
-        path = self.dir / f"delivery-{seq:05d}.json"
-        path.write_text(json.dumps(document, indent=2, ensure_ascii=False), encoding="utf-8")
-        return SinkResult(status=200)
 
 
 def _describe(exc: BaseException) -> str:

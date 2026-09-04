@@ -784,14 +784,11 @@ def test_programming_a_sink_that_is_not_the_memory_sink_is_a_conflict() -> None:
     """`conflict`, not the brief's `invalid_state`: the twenty kinds are fixed
     by a conformance check asserting the literal count, and "the unit is not in
     a state where this is possible" is what `conflict` already means."""
-    import tempfile
+    from vendorfake.core.webhooks.sink import HttpSink
 
-    from vendorfake.core.webhooks.sink import FileSink
-
-    with tempfile.TemporaryDirectory() as tmp:
-        api, _ = _api(sink=FileSink(tmp))
-        res = api.post("/__unit/webhooks/sink", {"statuses": [500]})
-        assert (res.status, res.header("x-unit-error")) == (409, "conflict")
+    api, _ = _api(sink=HttpSink())
+    res = api.post("/__unit/webhooks/sink", {"statuses": [500]})
+    assert (res.status, res.header("x-unit-error")) == (409, "conflict")
 
 
 # ---------------------------------------------------------------------------

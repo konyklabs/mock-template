@@ -173,7 +173,7 @@ def test_the_vendor_decorate_hook_survives_the_transport(app: Any) -> None:
 
     The alternative design -- setting it in middleware at the edge, which the
     fidelity audit suggested -- would give it to the HTTP binding only, so the
-    in-process and file-drop bindings would silently lack it.
+    in-process binding would silently lack it.
     """
     assert call(app, "GET", "/v2/orders/abc").headers["acme-version"] == "2024-01-01"
 

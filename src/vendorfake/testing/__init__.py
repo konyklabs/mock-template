@@ -1490,8 +1490,7 @@ def _served(
     the four things this function passes to the child as explicit flags
     (``profile=``, ``host=``, ``port=``, ``log_level=``), and the CLI prefers
     a flag to the variable, so the entry would change nothing -- use the
-    parameter. ``VENDORFAKE_TRANSPORT`` and ``VENDORFAKE_TRANSPORT_DIR`` are
-    ignored by ``serve``, which only ever binds HTTP. ``VENDORFAKE_SEED`` is refused because the seed handed
+    parameter. ``VENDORFAKE_SEED`` is refused because the seed handed
     back on ``.seed`` is derived from the vendor's module constants, not read
     from a document, and could not follow an alternate one -- the child would
     answer with tokens the seed does not carry.
@@ -1665,13 +1664,6 @@ def _served(
     # nothing is worse than one that is refused, because the caller reads
     # "env reaches the child" and then debugs a child still logging at
     # `error`, still on a random port, still on loopback.
-    transport_keys = sorted({"VENDORFAKE_TRANSPORT", "VENDORFAKE_TRANSPORT_DIR"} & set(layer))
-    if transport_keys:
-        raise ValueError(
-            f"served(env=...) cannot carry {', '.join(transport_keys)}: `vendorfake serve` only ever binds HTTP, "
-            "so the entry would change nothing, and there is no parameter to use instead -- a served unit is an "
-            "HTTP unit by definition. Build a unit in-process for any other binding."
-        )
     beaten = sorted(_FLAG_BEATEN_ENV & set(layer))
     if beaten:
         raise ValueError(
@@ -1776,10 +1768,8 @@ _FLAG_BEATEN_ENV: frozenset[str] = frozenset(
 """The ``VENDORFAKE_*`` names an ``env=`` entry to :func:`served` is refused
 for because the child gets each as a flag (``--profile``, ``--host``,
 ``--port``, ``--log-level``) that beats the variable; the refusal names the
-parameter to use. ``VENDORFAKE_TRANSPORT``, ``VENDORFAKE_TRANSPORT_DIR``,
-``VENDORFAKE_SEED`` and ``VENDORFAKE_SEED_OVERLAY`` are refused too, each with
-its own reason -- and of those four only the overlay has a parameter to use
-instead (``seed_overlay=``). See :func:`_served`."""
+parameter to use. ``VENDORFAKE_SEED`` and ``VENDORFAKE_SEED_OVERLAY`` are
+refused too, each with its own reason. See :func:`_served`."""
 
 _FLAG_BEATEN_HINT = "profile=, host=, port= and log_level="
 
