@@ -1,7 +1,7 @@
 site_name: vendorfake
 site_description: >-
-  High-fidelity fakes of third-party vendor APIs for testing an integration
-  without a vendor sandbox.
+  Fakes of third-party vendor APIs for testing an integration without a
+  vendor sandbox, checked against the vendors' published schemas.
 site_author: Oleg Konyk
 repo_url: https://github.com/konyklabs/vendorfake
 repo_name: konyklabs/vendorfake

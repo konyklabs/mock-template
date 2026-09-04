@@ -127,7 +127,7 @@ def test_a_base64_body_signs_the_same_bytes_as_the_text_one() -> None:
     ("changes", "message"),
     [
         ({"schema": "vendorfake.webhook-golden/2"}, f"expected {GOLDEN_SCHEMA!r}"),
-        ({"secret": ...}, "no secret"),
+        ({"secret": ...}, "exactly one of secret"),
         ({"delivery.url": ...}, "delivery has no url"),
         ({"delivery.body": ...}, "exactly one of body"),
         ({"signature_headers": []}, "a golden with nothing to compare proves nothing"),

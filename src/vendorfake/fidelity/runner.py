@@ -73,7 +73,6 @@ __all__ = [
     "Opener",
     "World",
     "modeled_routes",
-    "remote_opener",
     "resolve_target",
     "run_case",
     "run_corpus",
@@ -487,16 +486,6 @@ def _profile(case: Case, target: FidelityTarget, override: str | None) -> str:
     return override or case.profile or target.default_profile
 
 
-def remote_opener(base_url: str) -> tuple[Opener, str]:
-    """An opener over a unit somebody else is running, and the profile it reports.
-
-    Kept as the thin form of :func:`world_opener` over a
-    :class:`ControlPlaneWorld`, which is what it always was.
-    """
-    world = ControlPlaneWorld(base_url)
-    return world_opener(base_url, world), world.profile()
-
-
 def world_opener(base_url: str, world: World) -> Opener:
     """A fresh HTTP client per case over ``base_url``, the world reset first. The reset is the world's to define, and
     one that cannot says so in a caveat rather than pretending the state is fresh."""
@@ -636,7 +625,7 @@ def run_case(
                         "response",
                         "an answer",
                         f"{type(exc).__name__}",
-                        detail=(errors[0] if errors else str(exc)[:1200]),
+                        detail=("\n".join(errors)[:1200] if errors else str(exc)[:1200]),
                         kind="request" if errors is None else "schema",
                     )
                     break

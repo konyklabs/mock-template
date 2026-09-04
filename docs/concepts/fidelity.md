@@ -147,8 +147,9 @@ under the totals.
 
 Webhooks go the other way and no corpus case can reach them, so a captured
 delivery is its own document — a `vendorfake.webhook-golden/1` file carrying
-the URL, the exact bytes, the secret and the header names the signature
-occupies. `verify_golden` hands the vendor's own signer the same three inputs
+the URL, the exact bytes, the header names the signature occupies, and
+`secret_env`, the name of the variable holding the signing key: a recording
+never carries the key itself into a commit (a stub golden may inline `secret`). `verify_golden` hands the vendor's own signer the same three inputs
 and compares:
 
 ```sh

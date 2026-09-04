@@ -114,6 +114,7 @@ def _parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="a directory of vendorfake.webhook-golden/1 documents; every *.json in it is verified",
     )
+    webhooks.add_argument("--allow-empty", action="store_true", help="exit 0 on a directory with no goldens")
     return parser
 
 
@@ -164,7 +165,7 @@ def _dispatch(
     if args.command == "fetch":
         return _fetch(target, fetcher=fetcher)
     if args.command == "webhooks":
-        return _webhooks(target, args.golden)
+        return _webhooks(target, args.golden, allow_empty=bool(args.allow_empty))
     try:
         cases = _select(load_corpus(target.anchor), args.case_ids if args.command == "run" else None)
     except (LookupError, ValueError) as exc:
@@ -221,7 +222,7 @@ def _world(args: argparse.Namespace) -> tuple[World | None, str]:
     return world, str(base_url)
 
 
-def _webhooks(target: FidelityTarget, directory: str) -> int:
+def _webhooks(target: FidelityTarget, directory: str, *, allow_empty: bool = False) -> int:
     """Every golden in ``directory`` against the target's own signer."""
     if target.signer is None:
         return _fail(
@@ -233,8 +234,10 @@ def _webhooks(target: FidelityTarget, directory: str) -> int:
     except (GoldenError, OSError) as exc:
         return _fail(f"webhooks: {exc}")
     if not results:
-        print(f"webhooks: no goldens in {directory}")
-        return 0
+        if allow_empty:
+            print(f"webhooks: no goldens in {directory}")
+            return 0
+        return _fail(f"webhooks: no goldens in {directory} (pass --allow-empty if that is expected)")
     print(format_goldens(results))
     return 0 if all(result.ok for result in results) else 1
 

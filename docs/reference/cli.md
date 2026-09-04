@@ -9,7 +9,8 @@ Every subcommand's `--help`.
 ```text
 usage: vendorfake [-h] [--json] [--version] COMMAND ...
 
-Run or describe a high-fidelity fake of a third-party vendor API.
+Run or describe a fake of a third-party vendor API, checked against its
+published schema.
 
 positional arguments:
   COMMAND

@@ -345,6 +345,12 @@ def test_an_observer_that_refuses_turns_the_answer_into_the_vendor_s_500(unit: A
     assert "a body that fails" in body["error"]["detail"]
 
 
-def test_no_observer_is_the_default_and_costs_the_dispatch_nothing(app: Any) -> None:
-    """The flag is opt-in; a unit built without one answers exactly as before."""
-    assert call(app, "GET", "/v2/orders/abc").status_code == 200
+def test_a_silent_observer_changes_no_byte_of_the_answer(unit: Any, app: Any) -> None:
+    """The observer is a witness: with one that says nothing, the wire answer is
+    the same bytes as with none, headers included but for the request id."""
+    plain = call(app, "GET", "/v2/orders/abc")
+    observed = call(create_app(unit, observer=lambda request, response: None), "GET", "/v2/orders/abc")
+    assert (observed.status_code, observed.content) == (plain.status_code, plain.content)
+    assert {k: v for k, v in observed.headers.items() if k != "x-unit-request-id"} == {
+        k: v for k, v in plain.headers.items() if k != "x-unit-request-id"
+    }

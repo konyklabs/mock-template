@@ -483,8 +483,11 @@ def test_webhooks_on_a_directory_that_is_not_there_is_a_usage_error(
     assert "no such directory of goldens" in capsys.readouterr().err
 
 
-def test_webhooks_on_an_empty_directory_says_so_rather_than_passing_silently(
+def test_webhooks_on_an_empty_directory_fails_unless_told_that_is_expected(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert main(["webhooks", "--target", SIGNING_TARGET, "--golden", str(tmp_path)]) == 0
+    """A mistyped directory must not be a permanently green step."""
+    assert main(["webhooks", "--target", SIGNING_TARGET, "--golden", str(tmp_path)]) == 2
+    assert "no goldens in" in capsys.readouterr().err
+    assert main(["webhooks", "--target", SIGNING_TARGET, "--golden", str(tmp_path), "--allow-empty"]) == 0
     assert "no goldens in" in capsys.readouterr().out

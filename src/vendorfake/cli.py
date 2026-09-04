@@ -82,7 +82,7 @@ def _wants_json(args: argparse.Namespace) -> bool:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG,
-        description="Run or describe a high-fidelity fake of a third-party vendor API.",
+        description="Run or describe a fake of a third-party vendor API, checked against its published schema.",
         epilog=(
             "Unofficial. Not affiliated with, endorsed by, or connected to any vendor whose public API "
             "a module here imitates."

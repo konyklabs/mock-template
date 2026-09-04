@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,7 +85,10 @@ class Golden:
 
     vendor: str
     source: Source
-    secret: str
+    #: The key itself, for a stub, or ``None`` when ``secret_env`` names the variable
+    #: holding it: a recording never carries a live key into a commit.
+    secret: str | None
+    secret_env: str | None
     delivery: Delivery
     signature_headers: tuple[str, ...]
     attempt: int = 1
@@ -97,9 +101,13 @@ class Golden:
         schema = doc.get("schema")
         if schema != GOLDEN_SCHEMA:
             raise GoldenError(f"{where}: schema is {schema!r}, expected {GOLDEN_SCHEMA!r}")
-        for required in ("vendor", "source", "secret", "delivery", "signature_headers"):
+        for required in ("vendor", "source", "delivery", "signature_headers"):
             if required not in doc:
                 raise GoldenError(f"{where}: no {required}")
+        if ("secret" in doc) == ("secret_env" in doc):
+            raise GoldenError(
+                f"{where}: exactly one of secret (a stub's) or secret_env (the variable holding a real key)"
+            )
         errors = sorted(_source_validator().iter_errors(doc["source"]), key=lambda e: list(e.absolute_path))
         if errors:
             lines = [f"{where}: source is not a valid provenance block ({len(errors)} problem(s)):"]
@@ -118,7 +126,8 @@ class Golden:
         return cls(
             vendor=str(doc["vendor"]),
             source=Source.of(doc["source"]),
-            secret=str(doc["secret"]),
+            secret=None if "secret" not in doc else str(doc["secret"]),
+            secret_env=None if "secret_env" not in doc else str(doc["secret_env"]),
             delivery=delivery,
             signature_headers=names,
             attempt=int(doc.get("attempt", 1)),
@@ -127,10 +136,18 @@ class Golden:
 
     def sign_input(self) -> SignInput:
         """The three inputs the recording had, in the shape a signer takes."""
+        if self.secret is not None:
+            secret = self.secret
+        else:
+            secret = os.environ.get(str(self.secret_env), "")
+            if not secret:
+                raise GoldenError(
+                    f"secret_env {self.secret_env!r} is not set; the golden's key never lives in the file"
+                )
         return SignInput(
             notification_url=self.delivery.url,
             raw_body=self.delivery.body,
-            secret=self.secret,
+            secret=secret,
             attempt=self.attempt,
             event=self.event if self.event is not None else _blank_event(self.delivery),
         )
