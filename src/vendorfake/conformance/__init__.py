@@ -23,8 +23,11 @@ HOW IT IS RUN. Three entry points over one registry, never three lists.
 ``run_conformance(target)`` is the framework-free façade; ``python -m
 vendorfake.conformance`` is that façade with an exit code, and takes either a
 ``--target module:attribute`` or a ``--base-url`` pointing at a unit somebody
-else is already running; ``pytest --pyargs vendorfake.conformance`` renders the
-same registry as one test per (contract x profile). The pytest layer states no
+else is already running; ``pytest --pyargs vendorfake.conformance -p
+vendorfake.conformance.plugin`` renders the same registry as one test per
+(contract x profile) -- both flags, because ``--pyargs`` only *selects* the
+tests and nothing under this package auto-loads the plugin that registers
+``--conformance-target`` (see ``plugin.py``). The pytest layer states no
 contract the façade does not -- its one session-level rule is the anti-vacuity
 rule :class:`~vendorfake.conformance.report.ConformanceReport` already applies,
 restored in the only place a per-test rendering can assert it. A vendor

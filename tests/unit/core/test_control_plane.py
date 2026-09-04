@@ -1,4 +1,4 @@
-"""The control plane's thirty routes, asserted on shape rather than on 200.
+"""The control plane's thirty-three routes, asserted on shape rather than on 200.
 
 Every test here pins something a reviewer could reasonably disagree about: a
 path, a key name, an error kind, an ordering, or which of two plausible
@@ -8,7 +8,7 @@ would pass under an implementation that answered every route with ``{}``.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -17,6 +17,7 @@ from tests.fakes import (
     FakeEvents,
     FakeSigner,
     FakeVendor,
+    VendorWithoutRoles,
     make_unit,
     route,
 )
@@ -58,13 +59,17 @@ REFERENCE_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/__unit/clock/advance"),
 )
 
-#: The nine the conformance design requires so that every check can be driven
-#: through a URL instead of an in-process object graph. The last three closed
+#: Nine the conformance design requires so that every check can be driven
+#: through a URL instead of an in-process object graph -- three of those closed
 #: measured holes: with no ``/__unit/auth`` no check could obtain a credential,
 #: so the whole authentication layer could be deleted and the suite stayed
 #: green; with no ``state/update`` and no ``state/page`` the store's version
 #: and cursor rules were reachable only through whichever endpoint a particular
-#: vendor happened to publish.
+#: vendor happened to publish -- plus three carrying the request log, which
+#: answers the question the journal cannot be asked: not "what changed" but
+#: "what was called". A 4xx and a request that matched no route leave no
+#: journal entry by design, so without these a consumer whose call never landed
+#: has nothing to look at.
 ADDED_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/__unit/errors"),
     ("GET", "/__unit/machines"),
@@ -75,6 +80,9 @@ ADDED_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/__unit/auth"),
     ("POST", "/__unit/state/update"),
     ("POST", "/__unit/state/page"),
+    ("GET", "/__unit/requests"),
+    ("DELETE", "/__unit/requests"),
+    ("GET", "/__unit/requests/unmatched/near-misses"),
 )
 
 #: The routes whose handler blocks on machinery another request must feed.
@@ -151,13 +159,13 @@ def test_every_reference_path_is_present_byte_for_byte() -> None:
     assert missing == []
 
 
-def test_the_plane_is_exactly_the_twenty_one_plus_nine_and_nothing_else() -> None:
+def test_the_plane_is_exactly_the_twenty_one_plus_twelve_and_nothing_else() -> None:
     """A count, and then the set, because a count alone would pass if one route
     were dropped and an unrelated one added."""
     unit = _unit()
     control = {(r.method, r.path) for r in unit.routes if r.internal}
     assert control == set(REFERENCE_ROUTES) | set(ADDED_ROUTES)
-    assert len(control) == 30
+    assert len(control) == 33
 
 
 def test_every_control_route_is_internal_and_owns_the_control_capability() -> None:
@@ -229,6 +237,22 @@ def test_info_carries_all_seven_keys_the_conformance_suite_asserts_by_name() -> 
     body = api.get("/__unit/info").json()
     for key in ("vendor", "profile", "capabilities", "chaos", "webhooks", "clock", "state"):
         assert key in body, key
+
+
+def test_info_publishes_empty_roles_for_a_vendor_that_predates_the_property() -> None:
+    """``VendorDefinition.roles`` became a required protocol member in 0.2, so
+    a third-party vendor from the ``vendorfake.vendors`` entry-point group
+    built against 0.1.0 has no such attribute.
+
+    ``GET /__unit/info`` is on the path of the CLI's ``info`` subcommand,
+    ``Driver.clock()`` and the conformance runner, so reading ``roles`` as a
+    plain attribute would make every one of those an ``AttributeError`` --
+    turning a documented, fixable gap into a unit that cannot answer at all.
+    It publishes ``{}`` instead, which is what lets conformance C34 report the
+    real defect ("add ``VendorDefinition.roles``") against a live unit.
+    """
+    api, _ = _api(vendor=cast("FakeVendor", VendorWithoutRoles(_vendor())))
+    assert api.get("/__unit/info").json()["vendor"]["roles"] == {}
 
 
 def test_info_omits_an_absent_signer_rather_than_sending_null() -> None:

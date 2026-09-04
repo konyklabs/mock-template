@@ -40,13 +40,19 @@ from vendorfake.toast.entities import COL, TokenEntity
 from vendorfake.toast.jwt import mint_jwt
 from vendorfake.toast.model.auth import MACHINE_CLIENT, LoginRequest, LoginResponseWire
 from vendorfake.toast.model.common import validate_body
+from vendorfake.toast.paths import LOGIN
 from vendorfake.toast.surface.common import ToastDeps, now_ms
 
 __all__ = ["CAPABILITY", "INVALID_CREDENTIALS_MESSAGE", "LOGIN_PATH", "ToastAuthSurface", "auth_routes"]
 
 CAPABILITY = "auth"
 
-LOGIN_PATH = "/authentication/v1/authentication/login"
+LOGIN_PATH = LOGIN
+"""Deprecated alias of ``vendorfake.toast.paths.LOGIN``, kept because v0.1.0
+consumers may already import it from here. New code should import ``LOGIN``
+from ``vendorfake.toast.paths``, which ``tests/unit/test_paths_drift.py``
+keeps honest against the route table; this name will not be removed without a
+CHANGELOG entry of its own."""
 
 INVALID_CREDENTIALS_MESSAGE = "The credentials in your request are not valid."
 """The documented 401 phrase, as this unit prints it."""

@@ -55,11 +55,13 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from vendorfake.core.capability.registry import apply_capability_delta
 from vendorfake.core.config.models import (
+    UNMATCHED_POLICIES,
     ProfileDocument,
     ResolvedChaos,
     ResolvedConfig,
@@ -67,6 +69,7 @@ from vendorfake.core.config.models import (
     RetryPolicy,
     SubscriberConfig,
     TransportSection,
+    UnmatchedPolicy,
     parse_profile_document,
 )
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
@@ -95,13 +98,24 @@ DEFAULT_ENV_SIGNATURE_KEY = "unit-signature-key"
 class EnvVar:
     """One environment variable, with the reference name it replaces.
 
-    ``replaces`` exists so the rename is a checkable fact: a test asserts this
-    table against the reference's sixteen, which is the only way a variable
-    silently disappearing in translation shows up as a failure.
+    ``replaces`` exists so the rename is a checkable fact: a test asserts the
+    *ported* rows of this table against the reference's sixteen, which is the
+    only way a variable silently disappearing in translation shows up as a
+    failure. ``replaces=None`` marks a row with no reference equivalent at all
+    -- a control this project added that the TypeScript original never had --
+    so the absence is a stated fact rather than something a reader has to
+    notice is missing from the citation. Streams #71 and #72 each reached for a
+    sentinel here and picked differently (``""`` and ``None``); ``None`` won on
+    integration because it is the value the declared type already allowed and
+    the one a ported row can never take by accident.
     """
 
     name: str
-    replaces: str
+    #: The reference's name for this variable, or ``None`` for one this build
+    #: added and the reference never had. Kept as a distinct value rather than
+    #: an empty string so the test asserting "all sixteen survived the rename"
+    #: still counts sixteen as the table grows.
+    replaces: str | None
     applies_to: str
     summary: str
     #: True for ``VENDORFAKE_VENDOR_``, which is a prefix rather than a name.
@@ -149,6 +163,18 @@ ENV_TABLE: tuple[EnvVar, ...] = (
     ),
     EnvVar("VENDORFAKE_CHAOS_SEED", "UNIT_CHAOS_SEED", "chaos.seed", "Seed for the fault engine's RNG."),
     EnvVar("VENDORFAKE_CLOCK", "UNIT_CLOCK", "clock.mode", "'real' or 'virtual'."),
+    EnvVar(
+        "VENDORFAKE_CLOCK_START",
+        None,
+        "clock.start",
+        "RFC 3339 instant the virtual clock starts at. Requires clock.mode='virtual'.",
+    ),
+    EnvVar(
+        "VENDORFAKE_ERROR_SIDECAR",
+        None,
+        "errors.sidecar",
+        "Where the 'unit_error' sidecar is emitted: 'headers' (default), 'body' or 'both'.",
+    ),
     EnvVar("VENDORFAKE_TRANSPORT", "UNIT_TRANSPORT", "transport.kind", "Which binding the CLI stands up."),
     EnvVar(
         "VENDORFAKE_TRANSPORT_DIR",
@@ -166,9 +192,23 @@ ENV_TABLE: tuple[EnvVar, ...] = (
         "Prefix: the remainder becomes a snake_case vendor-config key. The reference camel-cased it.",
         is_prefix=True,
     ),
+    EnvVar(
+        "VENDORFAKE_REQUEST_LOG_CAPACITY",
+        None,
+        "requests.capacity",
+        "How many requests the in-memory request log keeps before evicting the oldest.",
+    ),
+    EnvVar(
+        "VENDORFAKE_UNMATCHED",
+        None,
+        "unmatched.policy",
+        "'vendor-404' or 'error': what an in-process binding does with a request no route matched.",
+    ),
 )
-"""Every environment variable this loader reads. Sixteen entries, one of them a
-prefix -- the same sixteen the reference read, renamed.
+"""Every environment variable this loader reads. Twenty entries, one of them a
+prefix: the sixteen the reference read, renamed (``replaces`` set), plus four
+vendorfake-native controls the reference never had (``replaces=None``) -- see
+:attr:`EnvVar.replaces`.
 
 ``VENDORFAKE_VENDOR`` (no trailing underscore) is deliberately absent: it
 selects which vendor module to load, which happens before a profile exists, and
@@ -269,6 +309,30 @@ def _env_float(env: Mapping[str, str], name: str) -> float | None:
     return value
 
 
+def _env_unmatched(env: Mapping[str, str]) -> UnmatchedPolicy | None:
+    """``VENDORFAKE_UNMATCHED``, checked against the two policies.
+
+    A typo here is the worst possible silent failure: ``VENDORFAKE_UNMATCHED=err``
+    would fall back to the binding's default, and a CI run configured to fail
+    loudly on a mis-targeted request would go on answering 404s. So it is an
+    ``invalid_value`` that names the variable and lists what it accepts,
+    exactly as ``VENDORFAKE_CLOCK`` is.
+    """
+    raw = env.get("VENDORFAKE_UNMATCHED")
+    if not raw:
+        return None
+    for policy in UNMATCHED_POLICIES:
+        # Compared one at a time rather than with `in`, so the value that comes
+        # back is the *literal* and no cast is needed to say so.
+        if raw == policy:
+            return policy
+    raise UnitError(
+        UnitErrorKind.INVALID_VALUE,
+        detail=f"VENDORFAKE_UNMATCHED={raw!r} is not one of {', '.join(UNMATCHED_POLICIES)}.",
+        field="VENDORFAKE_UNMATCHED",
+    )
+
+
 def _env_clock_mode(env: Mapping[str, str]) -> str | None:
     raw = env.get("VENDORFAKE_CLOCK")
     if not raw:
@@ -278,6 +342,60 @@ def _env_clock_mode(env: Mapping[str, str]) -> str | None:
             UnitErrorKind.INVALID_VALUE,
             detail=f"VENDORFAKE_CLOCK={raw!r} is not 'real' or 'virtual'.",
             field="VENDORFAKE_CLOCK",
+        )
+    return raw
+
+
+def _env_clock_start(env: Mapping[str, str]) -> str | None:
+    """``VENDORFAKE_CLOCK_START``, validated as an RFC 3339 instant.
+
+    Before this the virtual clock's *mode* was env-overridable but its *start*
+    instant was not, so an expiry assertion was deterministic within a run and
+    irreproducible across two (konyklabs/roadmap#71). Malformed input is a
+    loud startup failure naming the expected format, matching every other
+    variable this module parses -- not the bare ``ValueError``
+    ``Clock.__init__`` itself raises for a profile document's own malformed
+    ``clock.start``, which this loader does not otherwise touch.
+
+    A naive value is refused, not merely parsed: ``datetime.fromisoformat``
+    happily accepts ``"2026-01-01T00:00:00"`` and even a bare
+    ``"2026-01-01"``, neither of which names an instant, and this loader's
+    error message says "RFC 3339 instant" -- an ``UnitError`` naming that
+    format while silently accepting a string outside it would be worse than
+    no check at all. This mirrors the sibling check on the ``datetime`` this
+    module's own callers may pass instead of a string
+    (``vendorfake.testing._clock_start_env_value``), which raises for the
+    identical reason: a naive value has no defined instant across machines.
+    """
+    raw = env.get("VENDORFAKE_CLOCK_START")
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"VENDORFAKE_CLOCK_START={raw!r} is not an RFC 3339 instant, e.g. '2026-01-01T00:00:00Z'.",
+            field="VENDORFAKE_CLOCK_START",
+        ) from exc
+    if parsed.tzinfo is None:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"VENDORFAKE_CLOCK_START={raw!r} is not an RFC 3339 instant, e.g. '2026-01-01T00:00:00Z'.",
+            field="VENDORFAKE_CLOCK_START",
+        )
+    return raw
+
+
+def _env_error_sidecar(env: Mapping[str, str]) -> str | None:
+    raw = env.get("VENDORFAKE_ERROR_SIDECAR")
+    if not raw:
+        return None
+    if raw not in ("headers", "body", "both"):
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"VENDORFAKE_ERROR_SIDECAR={raw!r} is not 'headers', 'body' or 'both'.",
+            field="VENDORFAKE_ERROR_SIDECAR",
         )
     return raw
 
@@ -335,7 +453,31 @@ def resolve_config(
 
     chaos_seed = _env_int(environ, "VENDORFAKE_CHAOS_SEED")
     clock_mode = _env_clock_mode(environ)
+    clock_start = _env_clock_start(environ)
+    if clock_start is not None and (clock_mode or document.clock.mode) != "virtual":
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                "VENDORFAKE_CLOCK_START requires a virtual clock; set VENDORFAKE_CLOCK=virtual "
+                '(or env={"VENDORFAKE_CLOCK": "virtual"}) rather than silently switching modes.'
+            ),
+            field="VENDORFAKE_CLOCK_START",
+        )
+    clock_updates: dict[str, Any] = {}
+    if clock_mode is not None:
+        clock_updates["mode"] = clock_mode
+    if clock_start is not None:
+        clock_updates["start"] = clock_start
+    error_sidecar = _env_error_sidecar(environ)
     port = _env_int(environ, "VENDORFAKE_PORT")
+    capacity = _env_int(environ, "VENDORFAKE_REQUEST_LOG_CAPACITY")
+    if capacity is not None and capacity < 0:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=f"VENDORFAKE_REQUEST_LOG_CAPACITY={capacity} must be zero or more (zero switches the log off).",
+            field="VENDORFAKE_REQUEST_LOG_CAPACITY",
+        )
+    unmatched = _env_unmatched(environ)
 
     return ResolvedConfig(
         profile=document.name or name,
@@ -352,12 +494,21 @@ def resolve_config(
             rules=document.chaos.rules,
             strict_rules=document.chaos.strict_rules,
         ),
-        clock=document.clock if clock_mode is None else document.clock.model_copy(update={"mode": clock_mode}),
+        clock=document.clock if not clock_updates else document.clock.model_copy(update=clock_updates),
+        errors=document.errors
+        if error_sidecar is None
+        else document.errors.model_copy(update={"sidecar": error_sidecar}),
         transport=TransportSection(
             kind=environ.get("VENDORFAKE_TRANSPORT", "http"),
             port=8080 if port is None else port,
             host=environ.get("VENDORFAKE_HOST"),
             dir=environ.get("VENDORFAKE_TRANSPORT_DIR"),
+        ),
+        requests=(
+            document.requests if capacity is None else document.requests.model_copy(update={"capacity": capacity})
+        ),
+        unmatched=(
+            document.unmatched if unmatched is None else document.unmatched.model_copy(update={"policy": unmatched})
         ),
         log_level=environ.get("VENDORFAKE_LOG_LEVEL", "info"),
     )

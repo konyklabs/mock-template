@@ -155,10 +155,19 @@ def test_a_rule_injects_a_shaped_five_hundred(h: Harness) -> None:
     assert error["category"] == "API_ERROR"
 
 
-def test_a_timeout_fault_stalls_and_then_fails_the_request(h: Harness) -> None:
-    """The elapsed floor is asserted on a *real* clock, which is what `full`
-    configures; the virtual-mode branch of the same fault is covered in the
-    core's own suite, where a wall-clock assertion would be meaningless."""
+def test_a_timeout_fault_declares_its_delay_and_then_fails_the_request(h: Harness) -> None:
+    """The delay is *declared*, not slept, and this binding does not carry it out.
+
+    ``InProcessClient`` holds no caller: it is a function call, so there is
+    nobody to make wait and nothing to time out. It hands the delay back on
+    ``.raw.delay_ms`` and elapsed time here stays a measurement of the unit.
+    The bindings that do hold a caller -- the ``httpx`` transport, the ASGI
+    application, the file drop -- honour it, and are tested where they live
+    (``tests/unit/test_async_seam.py``, ``tests/integration``).
+
+    This used to assert ``elapsed_ms >= 20`` against a ``time.sleep`` in the
+    kernel. See ``vendorfake.core.chaos.faults`` for why that went.
+    """
     import time
 
     add_rule(
@@ -176,7 +185,8 @@ def test_a_timeout_fault_stalls_and_then_fails_the_request(h: Harness) -> None:
 
     assert response.status == 504
     assert first_error(response)["code"] == "GATEWAY_TIMEOUT"
-    assert elapsed_ms >= 20
+    assert response.raw.delay_ms == 25
+    assert elapsed_ms < 25, f"the unit waited {elapsed_ms:.1f}ms for a delay no binding asked it to take"
 
 
 def test_a_rejected_request_creates_nothing(h: Harness) -> None:
