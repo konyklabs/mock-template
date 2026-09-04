@@ -1,0 +1,115 @@
+{
+  "schema": 1,
+  "id": "orders.search.by-location",
+  "title": "SearchOrders by location answers order_entries when return_entries is true and full orders when it is false",
+  "source": {
+    "url": "https://developer.squareup.com/reference/square/orders-api/search-orders",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "return_entries: true returns OrderEntry objects (order_id, location_id, version, per the example response); false (the default) returns 'complete order objects' in `orders`, and 'The list is populated only if return_entries is set to' the matching value, so the other list is asserted absent. cursor: 'If unset, this is the final response.' The single seeded OPEN order at the location (CAISENgvlJ6jLWAzERDzjyHVybY, the example's own id) is this scenario's; the page does not say how many orders a fresh account has."
+  },
+  "routes": [
+    "POST /v2/orders/search"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "entries",
+      "request": {
+        "method": "POST",
+        "path": "/v2/orders/search",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "location_ids": [
+            "${vars.location_id}"
+          ],
+          "return_entries": true,
+          "query": {
+            "filter": {
+              "state_filter": {
+                "states": [
+                  "OPEN"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "order_entries": [
+            {
+              "order_id": "CAISENgvlJ6jLWAzERDzjyHVybY",
+              "location_id": "${vars.location_id}",
+              "version": "${any}"
+            }
+          ]
+        },
+        "absent": [
+          "/orders",
+          "/cursor",
+          "/errors"
+        ]
+      },
+      "capture": {
+        "order_id": "/order_entries/0/order_id"
+      }
+    },
+    {
+      "name": "full",
+      "request": {
+        "method": "POST",
+        "path": "/v2/orders/search",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "location_ids": [
+            "${vars.location_id}"
+          ],
+          "query": {
+            "filter": {
+              "state_filter": {
+                "states": [
+                  "OPEN"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "orders": [
+            {
+              "id": "${cap.order_id}",
+              "location_id": "${vars.location_id}",
+              "state": "OPEN",
+              "version": "${any}",
+              "created_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}",
+              "total_money": {
+                "amount": "${any}",
+                "currency": "${any}"
+              }
+            }
+          ]
+        },
+        "absent": [
+          "/order_entries",
+          "/cursor",
+          "/errors"
+        ]
+      }
+    }
+  ]
+}

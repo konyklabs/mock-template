@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import re
 from collections.abc import Iterator
 from typing import Any
@@ -172,7 +173,13 @@ def test_the_documented_get_refusals(h: Harness) -> None:
 
 def test_customer_and_delivery_info_need_their_documented_scopes(h: Harness) -> None:
     body = order_body(
-        deliveryInfo={"address1": "1 Main St", "city": "Springfield", "notes": "ring twice"},
+        deliveryInfo={
+            "address1": "1 Main St",
+            "city": "Springfield",
+            "state": "MA",
+            "zipCode": "01101",
+            "notes": "ring twice",
+        },
     )
     body["checks"][0]["customer"] = {"firstName": "Ada", "lastName": "Lovelace", "phone": "2175550199"}
     body["diningOption"] = {"guid": c.DINING_OPTION_TAKE_OUT_GUID}
@@ -326,7 +333,7 @@ def test_voiding_an_other_paid_order_voids_its_payments_too(h: Harness) -> None:
             }
         ],
     ).json()
-    assert paid["checks"][0]["paymentStatus"] == "PAID"
+    assert paid["checks"][0]["paymentStatus"] == "CLOSED"
     voided = h.post(
         f"/orders/v2/orders/{guid}/void", {"selections": {"voidAll": True}, "payments": {"voidAll": True}}
     ).json()
@@ -355,9 +362,6 @@ def test_item_discount_reproduces_the_documented_applied_discount(h: Harness) ->
         "guid",
         "entityType",
         "externalId",
-        "approver",
-        "processingState",
-        "loyaltyDetails",
         "name",
         "comboItems",
         "discountAmount",
@@ -414,13 +418,19 @@ def test_applicable_discounts_answers_the_documented_shape(h: Harness) -> None:
 
 
 def test_delivery_info_patch_merges_and_journals(h: Harness) -> None:
-    order = h.post("/orders/v2/orders", order_body(deliveryInfo={"address1": "1 Main St"})).json()
+    order = h.post(
+        "/orders/v2/orders",
+        order_body(deliveryInfo={"address1": "1 Main St", "city": "Springfield", "state": "MA", "zipCode": "01101"}),
+    ).json()
     response = h.patch(
         f"/orders/v2/orders/{order['guid']}/deliveryInfo", {"notes": "leave at door", "deliveryState": "IN_PROGRESS"}
     )
     assert response.status == 200, response.text
     assert response.json()["deliveryInfo"] == {
         "address1": "1 Main St",
+        "city": "Springfield",
+        "state": "MA",
+        "zipCode": "01101",
         "notes": "leave at door",
         "deliveryState": "IN_PROGRESS",
     }
@@ -443,3 +453,16 @@ def test_the_restaurant_header_and_scopes_are_required_on_every_order_route(h: H
     assert h.api.post("/orders/v2/orders", order_body(), headers=h.read_auth).status == 403
     assert h.api.post("/orders/v2/prices", order_body(), headers=h.read_auth).status == 403  # documented on /prices
     assert h.api.get(f"/orders/v2/orders/{c.SEED_ORDER_GUID}", headers=h.read_auth).status == 200
+
+
+def test_a_check_level_external_id_is_echoed(h: Harness) -> None:
+    """Adversarial A4 (konyklabs/roadmap#56): the null-externalId deviation is
+    unrouted, so only an assertion on the echoed value keeps this honest."""
+    body = copy.deepcopy(order_body())  # order_body shares module-level dicts; do not mutate them
+    body["checks"][0]["externalId"] = "c1"
+    body["externalId"] = "o1"
+    body["checks"][0]["selections"][0]["externalId"] = "s1"
+    order = h.post("/orders/v2/orders", body).json()
+    assert order["externalId"] == "o1"
+    assert order["checks"][0]["externalId"] == "c1"
+    assert order["checks"][0]["selections"][0]["externalId"] == "s1"

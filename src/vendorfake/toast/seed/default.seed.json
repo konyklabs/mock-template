@@ -141,7 +141,7 @@
       "selectionType": "ITEM",
       "nonExclusive": false,
       "promoCodes": [
-        "SOUP"
+        { "guid": "5d0e2b11-0000-4000-8000-00000000d801", "code": "SOUP", "name": "Soup of the day", "usageType": "MULTI_USE" }
       ]
     },
     {

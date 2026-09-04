@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "id": "webhooks.subscriptions.create.shape",
+  "title": "CreateWebhookSubscription answers the subscription with a Square-generated id, signature_key, enabled and timestamps",
+  "source": {
+    "url": "https://developer.squareup.com/reference/square/webhook-subscriptions-api/create-webhook-subscription",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "Response `subscription` fields: id, name, enabled, event_types, notification_url, api_version, signature_key, created_at, updated_at; the example shows enabled true and a wbhk_-prefixed id. WebhookSubscription (linked): id 'A Square-generated unique ID', signature_key 'The Square-generated signature key used to validate the origin of the webhook event', created_at/updated_at 'in RFC 3339 format' (the object page's example is 2016-09-04T23:59:33.123Z, whereas this page's example response prints '2022-01-10 23:29:48 +0000 UTC' -- the object page's stated format is asserted). The id prefix is only an example, so id is ${any}. The seeded bearer stands in for the application credential Square requires here."
+  },
+  "routes": [
+    "POST /v2/webhooks/subscriptions"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "create",
+      "request": {
+        "method": "POST",
+        "path": "/v2/webhooks/subscriptions",
+        "headers": {
+          "$auth": "bearer"
+        },
+        "body": {
+          "idempotency_key": "corpus-webhooks-subscriptions-create",
+          "subscription": {
+            "name": "corpus",
+            "event_types": [
+              "order.created",
+              "order.updated"
+            ],
+            "notification_url": "https://example.test/webhooks/corpus",
+            "api_version": "2026-08-19"
+          }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "subscription": {
+            "id": "${any}",
+            "name": "corpus",
+            "enabled": true,
+            "event_types": [
+              "order.created",
+              "order.updated"
+            ],
+            "notification_url": "https://example.test/webhooks/corpus",
+            "api_version": "2026-08-19",
+            "signature_key": "${any}",
+            "created_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}",
+            "updated_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}"
+          }
+        },
+        "absent": [
+          "/errors"
+        ]
+      },
+      "capture": {
+        "subscription_id": "/subscription/id"
+      }
+    },
+    {
+      "name": "retrieve",
+      "request": {
+        "method": "GET",
+        "path": "/v2/webhooks/subscriptions/${cap.subscription_id}",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "subscription": {
+            "id": "${cap.subscription_id}",
+            "name": "corpus",
+            "enabled": true
+          }
+        }
+      }
+    }
+  ]
+}

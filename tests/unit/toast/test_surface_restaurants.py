@@ -15,6 +15,11 @@ def h() -> Iterator[Harness]:
     yield from harness()
 
 
+def _extra_guid(n: int) -> str:
+    """A real uuid: the schema says ``format: uuid`` and the validator checks it."""
+    return f"e6a4a8d2-0000-4000-8000-00000000ee{n:02x}"
+
+
 def test_the_restaurant_document_has_the_documented_blocks(h: Harness) -> None:
     response = h.api.get(f"/restaurants/v1/restaurants/{c.SEED_RESTAURANT_GUID}", headers=h.bearer_only)
     assert response.status == 200, response.text
@@ -50,19 +55,22 @@ def test_connected_restaurants_is_the_documented_page_envelope(h: Harness) -> No
     response = h.api.get("/partners/v1/connectedRestaurants", headers=h.bearer_only)
     assert response.status == 200, response.text
     body = response.json()
+    # One page: no next token (omitted, JUDGMENT), nextPageNum and
+    # previousPageNum null as the guide documents, currentPageToken a string
+    # in the guide's own format.
     assert list(body) == [
         "currentPageNum",
         "results",
         "totalResultCount",
         "pageSize",
         "currentPageToken",
-        "nextPageToken",
         "totalCount",
         "nextPageNum",
         "lastPageNum",
         "previousPageNum",
     ]
-    assert body["pageSize"] == 100 and body["currentPageNum"] == 1 and body["nextPageToken"] is None
+    assert body["currentPageToken"] == "cD0xLHM6MTAw"
+    assert body["pageSize"] == 100 and body["currentPageNum"] == 1 and "nextPageToken" not in body
     (row,) = body["results"]
     assert list(row) == [
         "restaurantGuid",
@@ -90,7 +98,7 @@ def test_connected_restaurants_pages_and_filters(h: Harness) -> None:
     partners = h.unit.context.store.collection("partners")
     for n in range(3):
         partners.insert(
-            {"id": f"extra-{n}", "restaurantName": f"Extra {n}", "modifiedDate": 1_000 * n, "createdDate": 0},
+            {"id": _extra_guid(n), "restaurantName": f"Extra {n}", "modifiedDate": 1_000 * n, "createdDate": 0},
             {"seed": True},
         )
     first = h.api.get("/partners/v1/connectedRestaurants", query={"pageSize": "2"}, headers=h.bearer_only).json()
@@ -100,12 +108,12 @@ def test_connected_restaurants_pages_and_filters(h: Harness) -> None:
         query={"pageSize": "2", "pageToken": first["nextPageToken"]},
         headers=h.bearer_only,
     ).json()
-    assert second["currentPageNum"] == 2 and second["previousPageNum"] == 1 and second["nextPageToken"] is None
+    assert second["currentPageNum"] == 2 and second["previousPageNum"] == 1 and "nextPageToken" not in second
     assert {r["restaurantGuid"] for r in first["results"]} | {r["restaurantGuid"] for r in second["results"]} == {
         c.SEED_RESTAURANT_GUID,
-        "extra-0",
-        "extra-1",
-        "extra-2",
+        _extra_guid(0),
+        _extra_guid(1),
+        _extra_guid(2),
     }
     filtered = h.api.get(
         "/partners/v1/restaurants", query={"lastModified": "2025-08-21T14:21:42.000+0000"}, headers=h.bearer_only

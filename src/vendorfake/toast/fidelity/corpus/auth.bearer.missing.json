@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "id": "auth.bearer.missing",
+  "title": "A restaurant-scoped call with no Authorization header is a 401 ErrorMessage",
+  "source": {
+    "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html",
+    "fetched": "2026-09-02",
+    "provenance": "judgment",
+    "note": "The page documents 401 as 'The authentication token you submitted is not a recognized Toast API authentication token' and is silent on a request that submits no token at all; the unit answers the same 401 for both, which is this project's judgment (toast/auth.py). The ErrorMessage shape is the page's example; the message wording is not documented and is asserted as any string."
+  },
+  "routes": ["GET /menus/v3/metadata"],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "no-bearer",
+      "request": {
+        "method": "GET",
+        "path": "/menus/v3/metadata",
+        "headers": {"toast-restaurant-external-id": "e6a4a8d2-0000-4000-8000-000000000001"}
+      },
+      "expect": {
+        "status": 401,
+        "headers": {"content-type": "application/json"},
+        "body": {
+          "status": 401,
+          "code": "${re:[0-9]+}",
+          "message": "${re:.+}",
+          "requestId": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}",
+          "errors": "${any}"
+        },
+        "absent": ["/restaurantGuid", "/lastUpdated"]
+      }
+    }
+  ]
+}

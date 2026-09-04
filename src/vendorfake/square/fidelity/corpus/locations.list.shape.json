@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "id": "locations.list.shape",
+  "title": "ListLocations answers the seller's locations with the documented Location fields",
+  "source": {
+    "url": "https://developer.squareup.com/reference/square/locations-api/list-locations",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "Response field `locations`: 'The business locations'. The example response shows id, name, address, timezone, capabilities [CREDIT_CARD_PROCESSING], status ACTIVE, created_at, merchant_id, country, language_code, currency, business_name and type; LocationType (linked) is PHYSICAL or MOBILE. The first seeded location reuses the example's id 18YC4JDH91E1H and name; two locations is this scenario's count. The page does not document the `type` of each example location, only the enum."
+  },
+  "routes": [
+    "GET /v2/locations"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "list",
+      "request": {
+        "method": "GET",
+        "path": "/v2/locations",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "locations": [
+            {
+              "id": "${vars.location_id}",
+              "name": "${any}",
+              "address": {
+                "address_line_1": "${any}",
+                "locality": "${any}",
+                "administrative_district_level_1": "${any}",
+                "postal_code": "${any}",
+                "country": "${any}"
+              },
+              "timezone": "${any}",
+              "capabilities": [
+                "CREDIT_CARD_PROCESSING"
+              ],
+              "status": "ACTIVE",
+              "created_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}",
+              "merchant_id": "${any}",
+              "country": "${any}",
+              "language_code": "${any}",
+              "currency": "${any}",
+              "business_name": "${any}",
+              "type": "PHYSICAL"
+            },
+            {
+              "id": "${any}",
+              "name": "${any}",
+              "status": "ACTIVE",
+              "merchant_id": "${any}",
+              "currency": "${any}",
+              "type": "${re:PHYSICAL|MOBILE}"
+            }
+          ]
+        },
+        "absent": [
+          "/errors",
+          "/cursor"
+        ]
+      }
+    }
+  ]
+}

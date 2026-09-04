@@ -58,8 +58,27 @@ def _by_reference(rows: Any) -> dict[str, Any]:
     return {str(row["referenceId"]): _dollars(row) for row in rows if isinstance(row, dict) and "referenceId" in row}
 
 
+def _omit_nulls(node: Any) -> Any:
+    """JUDGMENT: an optional field the document has no value for is omitted,
+    not answered null. The menus specification marks the fields it means to
+    be null with ``x-nullable`` and types the rest as plain strings and
+    objects; the guide page that would show a full response answers 403 to
+    anything but a browser, so the specification is the source. Found by the
+    fidelity validator (konyklabs/roadmap#56)."""
+    if isinstance(node, dict):
+        return {key: _omit_nulls(value) for key, value in node.items() if value is not None}
+    if isinstance(node, list):
+        return [_omit_nulls(item) for item in node]
+    return node
+
+
 def project_menu_v3(entity: Mapping[str, Any], *, time_zone: str) -> dict[str, Any]:
     """The whole documented document, keys in the specification's order."""
+    document = _omit_nulls(_menu_document(entity, time_zone=time_zone))
+    return dict(document)
+
+
+def _menu_document(entity: Mapping[str, Any], *, time_zone: str) -> dict[str, Any]:
     return {
         "restaurantGuid": str(entity["id"]),
         "lastUpdated": rest_date(int(entity.get("lastUpdated", 0))),

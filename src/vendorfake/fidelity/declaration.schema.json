@@ -1,0 +1,256 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://konyklabs.github.io/vendorfake/fidelity/declaration.schema.json",
+  "title": "vendorfake fidelity declaration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "sources"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "url"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "openapi3",
+              "swagger2",
+              "fragments"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "base_path": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "error_envelope": {
+      "type": "string",
+      "pattern": "^[1-5][0-9][0-9]$"
+    },
+    "error_member": {
+      "type": "string",
+      "minLength": 1
+    },
+    "aliases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "method",
+          "path",
+          "spec_path",
+          "reason"
+        ],
+        "properties": {
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "spec_path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "excused": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "method",
+          "path",
+          "reason"
+        ],
+        "properties": {
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "deviations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "pointer",
+          "keyword",
+          "reason",
+          "url"
+        ],
+        "properties": {
+          "pointer": {
+            "type": "string",
+            "pattern": "^/"
+          },
+          "keyword": {
+            "type": "string",
+            "minLength": 1
+          },
+          "value": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ],
+            "description": "The one instance value excused, in its JSON type; null is a value."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Z]+ /"
+            }
+          },
+          "pattern": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A regular expression every excused instance must fully match; exactly one of value and pattern."
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "value"
+            ],
+            "not": {
+              "required": [
+                "pattern"
+              ]
+            }
+          },
+          {
+            "required": [
+              "pattern"
+            ],
+            "not": {
+              "required": [
+                "value"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "variables": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "stubs_accepted": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Schema names the extract may stub to {} because upstream dangles there. Every stub in the extract must be listed, or pin --check --offline fails."
+    },
+    "vendored": {
+      "type": "boolean",
+      "description": "False = fetch-never-commit: only pin.json ships; the extract is cut at run time into a local cache."
+    },
+    "error_schema": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Component schema an error body is validated against when the document declares the status without a schema."
+    },
+    "extension_map": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "propertyNames": {
+        "pattern": "^x-"
+      }
+    },
+    "overrides": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "route",
+          "status",
+          "schema",
+          "reason",
+          "url"
+        ],
+        "properties": {
+          "route": {
+            "type": "string",
+            "pattern": "^[A-Z]+ /"
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          },
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      }
+    }
+  },
+  "dependentRequired": {
+    "error_envelope": [
+      "error_member"
+    ]
+  }
+}

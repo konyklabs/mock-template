@@ -107,7 +107,7 @@ def drive_selection_discount(h: Harness) -> None:
 
 
 def drive_delivery_info(h: Harness) -> None:
-    body = order_body(deliveryInfo={"address1": "1 Main St"})
+    body = order_body(deliveryInfo={"address1": "1 Main St", "city": "Springfield", "state": "MA", "zipCode": "01101"})
     body["diningOption"] = {"guid": c.DINING_OPTION_TAKE_OUT_GUID}
     order = h.post("/orders/v2/orders", body).json()
     assert h.patch(f"/orders/v2/orders/{order['guid']}/deliveryInfo", {"notes": "ring twice"}).status == 200

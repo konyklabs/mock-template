@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "sources": [
+    {
+      "kind": "openapi3",
+      "url": "https://raw.githubusercontent.com/square/connect-api-specification/master/api.json"
+    }
+  ],
+  "error_envelope": "200",
+  "error_member": "errors",
+  "aliases": [],
+  "excused": [
+    {
+      "method": "GET",
+      "path": "/oauth2/authorize",
+      "reason": "The seller-facing authorization page. It is a browser redirect flow documented in prose (OAuth guide), not an operation in the API document."
+    },
+    {
+      "method": "POST",
+      "path": "/v2/locations/{location_id}/orders",
+      "reason": "The pre-2019 CreateOrder path, no longer in the published document. Served for consumers still on it; the body and response are those of POST /v2/orders."
+    }
+  ],
+  "deviations": [
+    {
+      "pointer": "/errors/*/code",
+      "keyword": "enum",
+      "value": "VERSION_MISMATCH",
+      "reason": "Named in prose on the optimistic-concurrency page and quoted from real 400 responses, but absent from the published ErrorCode enumeration. The unit answers what the API answers, on the four routes that take a version; see square/errors.py UNPUBLISHED_CODES.",
+      "url": "https://developer.squareup.com/docs/working-with-apis/optimistic-concurrency",
+      "routes": [
+        "PUT /v2/orders/{order_id}",
+        "POST /v2/orders/{order_id}/pay",
+        "POST /v2/catalog/object",
+        "POST /v2/payments/{payment_id}/complete"
+      ]
+    }
+  ],
+  "stubs_accepted": [
+    "AppFeeAllocation",
+    "CurrencyExchange"
+  ],
+  "variables": {
+    "location_id": "18YC4JDH91E1H"
+  }
+}

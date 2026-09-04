@@ -65,11 +65,35 @@ TARGETS=(
   "toast=tests.conformance.harness:toast_target"
 )
 
+# Fidelity to the vendor (D-006), the targets. Only vendors with a fidelity
+# declaration are listed; a vendor without one is reported by `fidelity
+# report` as undeclared rather than skipped here. A vendor whose terms keep
+# its specification out of the repository (`vendored: false`,
+# konyklabs/roadmap#56) is ALSO listed in FIDELITY_FETCH_TARGETS: its extract
+# is cut at run time into ~/.cache/vendorfake/fidelity, and `fetch` below
+# populates that cache before pytest so the first thing to hit the network is
+# a named step and never a unit test.
+FIDELITY_TARGETS=(
+  "square=vendorfake.testing.fidelity:square_target"
+  "toast=vendorfake.testing.fidelity:toast_target"
+)
+FIDELITY_FETCH_TARGETS=(
+  "toast=vendorfake.testing.fidelity:toast_target"
+)
+
 step "ruff check"        uv run ruff check .
 step "ruff format"       uv run ruff format --check .
 step "mypy --strict"     uv run mypy
 step "import-linter"     uv run lint-imports
 step "boundary check"    uv run python tools/boundary_check.py -v
+if [ "$QUICK" -eq 0 ]; then
+  for entry in "${FIDELITY_FETCH_TARGETS[@]}"; do
+    vendor="${entry%%=*}"
+    TARGET="${entry#*=}"
+    step "fidelity fetch ($vendor)" \
+      uv run python -m vendorfake.fidelity fetch --target "$TARGET"
+  done
+fi
 if [ "$QUICK" -eq 0 ]; then
   step "pytest"          uv run pytest
 fi
@@ -100,6 +124,20 @@ for entry in "${TARGETS[@]}"; do
     uv run python -m pytest --pyargs vendorfake.conformance -q \
       -p vendorfake.conformance.plugin \
       --conformance-target "$TARGET" --conformance-strict
+done
+
+# Fidelity to the vendor (D-006): the extract (committed, or cached by the
+# `fetch` step above) and the pin agree with each other and the declaration
+# (offline -- whether UPSTREAM moved is the scheduled drift job's question,
+# never a pull request's), and the documented corpus passes with every
+# response schema-validated.
+for entry in "${FIDELITY_TARGETS[@]}"; do
+  vendor="${entry%%=*}"
+  TARGET="${entry#*=}"
+  step "fidelity pin ($vendor)" \
+    uv run python -m vendorfake.fidelity pin --check --offline --target "$TARGET"
+  step "fidelity report ($vendor)" \
+    uv run python -m vendorfake.fidelity report --target "$TARGET"
 done
 
 printf '\n\033[1m== summary ==\033[0m\n'

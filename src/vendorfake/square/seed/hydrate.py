@@ -285,7 +285,20 @@ def _insert_loyalty(ctx: UnitContext, doc: SeedDocument) -> None:
         spend_amount=Money(amount=program.spend_amount.amount, currency=program.spend_amount.currency),
         tax_mode=program.tax_mode,
         reward_tiers=tuple(
-            compact({"id": tier.id, "points": tier.points, "name": tier.name, "created_at": tier.created_at})
+            compact(
+                {
+                    "id": tier.id,
+                    "points": tier.points,
+                    "name": tier.name,
+                    "pricing_rule_reference": compact(
+                        {
+                            "object_id": tier.pricing_rule_reference.object_id,
+                            "catalog_version": tier.pricing_rule_reference.catalog_version,
+                        }
+                    ),
+                    "created_at": tier.created_at,
+                }
+            )
             for tier in program.reward_tiers
         ),
     ).to_entity()

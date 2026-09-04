@@ -6,7 +6,9 @@ import pytest
 
 import vendorfake.toast as toast
 from tests.unit.toast.conftest import fake_ctx
+from tests.unit.toast.harness import LEDGER, SURFACE
 from vendorfake.core.kernel.types import MutableResponse, UnitError, UnitErrorKind, UnitRequest, VendorDefinition
+from vendorfake.fidelity.validate import ValidatingClient
 from vendorfake.registry import available_vendors, create_unit, resolve_vendor
 from vendorfake.toast.auth import ToastAuth
 from vendorfake.toast.entities import COL
@@ -199,11 +201,10 @@ def test_two_toast_units_seed_identically_and_do_not_share_an_id_stream() -> Non
 
 
 def test_the_control_plane_publishes_the_two_machines_and_the_documented_errors() -> None:
-    from vendorfake.core.transport.inprocess import in_process
 
     unit = create_unit(vendor="toast", profile="full")
     try:
-        api = in_process(unit)
+        api = ValidatingClient(unit, SURFACE, LEDGER)
         machines = api.get("/__unit/machines").json()["machines"]
         assert set(machines) == {"check", "order"}
         assert machines["check"]["field"] == "paymentStatus"

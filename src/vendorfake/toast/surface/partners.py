@@ -22,6 +22,8 @@ token is the core's opaque cursor.
 
 from __future__ import annotations
 
+from typing import Any
+
 from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import HandlerArgs, PaginationSpec, ReplyInit, Route
 from vendorfake.toast.entities import COL
@@ -30,6 +32,8 @@ from vendorfake.toast.model.partners import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
     page_envelope,
+    page_token,
+    parse_page_token,
     project_connected_restaurant,
 )
 from vendorfake.toast.surface.common import BEARER_AUTH, ToastDeps, int_param
@@ -103,35 +107,43 @@ class ToastPartnersSurface:
         )
         rows = self._rows(args)
         token = args.query("pageToken")
-        page = args.ctx.store.collection(COL.partners).paginate(
-            rows,
-            limit=page_size,
-            cursor=token,
-            fingerprint={
-                "resource": "connectedRestaurants",
-                "pageSize": page_size,
-                "lastModified": args.query("lastModified"),
-            },
-            max_limit=MAX_PAGE_SIZE,
-            default_limit=DEFAULT_PAGE_SIZE,
-        )
-        # The page number is derived from how many rows precede this page; the
-        # core's cursor carries the offset but does not expose it, so it is
-        # recomputed from the first row's position.
-        first_index = rows.index(page.items[0]) if page.items else len(rows)
+        # JUDGMENT on the format, DOCUMENTED on the shape: the guide's page
+        # tokens are base64 of ``p=<page>,s:<size>`` (``cD0xLHM6MTAw`` on its
+        # first page). The unit mints and accepts exactly that, so the token
+        # it answers is one a consumer can send back -- a deep-lens finding on
+        # roadmap#56 caught the earlier null/opaque-cursor mismatch.
+        page_number = 1 if token is None else parse_page_token(token, page_size=page_size)
+        start = (page_number - 1) * page_size
+        items = rows[start : start + page_size]
+        has_more = start + page_size < len(rows)
         return json_(
-            page_envelope(
-                page.items,
-                total=len(rows),
-                page_size=page_size,
-                page_number=first_index // page_size + 1,
-                current_token=token,
-                next_token=page.cursor,
+            _omit_none(
+                page_envelope(
+                    items,
+                    total=len(rows),
+                    page_size=page_size,
+                    page_number=page_number,
+                    current_token=page_token(page_number, page_size),
+                    next_token=page_token(page_number + 1, page_size) if has_more else None,
+                )
             )
         )
 
     def restaurants(self, args: HandlerArgs) -> ReplyInit:
-        return json_(self._rows(args))
+        return json_(_omit_none(self._rows(args)))
+
+
+def _omit_none(node: Any) -> Any:
+    """JUDGMENT: a page token or a restaurant field with no value is omitted,
+    not answered null -- the partners specification types them as plain
+    strings; the guide documents null only for ``nextPageNum`` and
+    ``previousPageNum`` (declared deviations). Found by the fidelity
+    validator (konyklabs/roadmap#56)."""
+    if isinstance(node, dict):
+        return {k: _omit_none(v) for k, v in node.items() if v is not None or k in ("nextPageNum", "previousPageNum")}
+    if isinstance(node, list):
+        return [_omit_none(item) for item in node]
+    return node
 
 
 def partner_routes(deps: ToastDeps) -> tuple[Route, ...]:

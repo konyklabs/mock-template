@@ -176,7 +176,22 @@ class SeedDiscount(_ConfigEntity):
     itemPickingPriority: str | None = None
     #: Cents.
     fixedTotal: int | None = None
-    promoCodes: list[str] = Field(default_factory=list)
+    promoCodes: list[SeedPromoCode] = Field(default_factory=list)
+
+
+class SeedPromoCode(BaseModel):
+    """A ``PromoCode`` on a discount: a ToastReference (``guid``, ``entityType``)
+    plus ``code``, ``name`` and ``usageType`` -- the shape the configuration
+    specification gives it. The unit carried bare strings until the fidelity
+    validator found them (konyklabs/roadmap#56)."""
+
+    model_config = _SEED
+
+    guid: str = Field(min_length=1)
+    code: str = Field(min_length=1)
+    name: str | None = None
+    usageType: Literal["SINGLE_USE_PHONE", "SINGLE_USE_UNIQUE_CODE", "MULTI_USE"] = "MULTI_USE"
+    entityType: Literal["PromoCode"] = "PromoCode"
 
 
 class SeedServiceCharge(_ConfigEntity):

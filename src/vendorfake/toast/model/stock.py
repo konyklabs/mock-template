@@ -13,9 +13,10 @@ addressed by ``guid`` or ``multiLocationId`` carrying ``status`` and, for
 ``QUANTITY`` only, ``quantity`` > 0 -- "Do not include a quantity value for
 ... IN_STOCK or OUT_OF_STOCK".
 
-JUDGMENT: a searched guid that names no item answers a row with
-``itemGuidValidity: INVALID`` and null everything else -- the field exists
-for exactly this, and refusing the whole search for one typo would hide the
+DOCUMENTED: a searched guid that names no item answers a row with
+``itemGuidValidity: INVALID``, ``status: OUT_OF_STOCK`` and the string
+``"null"`` for the identifiers it lacks -- the guide's own search walkthrough
+shows both shapes. Refusing the whole search for one typo would hide the
 other results.
 """
 
@@ -66,11 +67,19 @@ def project_stock(stored: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def invalid_stock_row(guid: str | None, multi_location_id: str | None) -> dict[str, Any]:
+    """DOCUMENTED (apiUsingTheStockApi.html, the search walkthrough's two
+    INVALID rows): an unknown identifier answers ``status: OUT_OF_STOCK`` and
+    ``quantity`` null, and -- as the guide literally shows -- the STRING
+    ``"null"`` for what the row lacks, never a JSON null (the schema types
+    them as plain strings). Its first row, searched by guid, echoes that guid
+    as ``versionId`` and answers ``multiLocationId: "null"``; its second,
+    searched by multiLocationId, answers ``guid: "null"`` and
+    ``versionId: "null"``. Found by the fidelity validator (roadmap#56)."""
     return {
-        "guid": guid,
+        "guid": guid if guid is not None else "null",
         "itemGuidValidity": "INVALID",
-        "status": None,
+        "status": "OUT_OF_STOCK",
         "quantity": None,
-        "multiLocationId": multi_location_id,
-        "versionId": None,
+        "multiLocationId": multi_location_id if multi_location_id is not None else "null",
+        "versionId": guid if guid is not None else "null",
     }

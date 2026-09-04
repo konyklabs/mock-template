@@ -36,7 +36,8 @@ def test_an_other_payment_pays_the_check_and_journals_under_one_operation(h: Har
     assert response.status == 200, response.text
     order = response.json()
     check = order["checks"][0]
-    assert check["paymentStatus"] == "PAID"
+    # CLOSED, not PAID: an OTHER payment leaves no tip to adjust (documented; konyklabs/roadmap#56).
+    assert check["paymentStatus"] == "CLOSED"
     assert check["paidDate"] and order["paidDate"]
     (payment,) = check["payments"]
     assert payment["type"] == "OTHER" and payment["amount"] == 9.55 and payment["tipAmount"] == 0.0
@@ -64,9 +65,9 @@ def test_two_partial_payments_cover_the_check_and_a_third_is_refused(h: Harness)
     first = pay(h, guid, check_guid, {**OTHER, "amount": 5.0, "tipAmount": 1.0}).json()["checks"][0]
     assert first["paymentStatus"] == "OPEN" and len(first["payments"]) == 1
     second = pay(h, guid, check_guid, {**OTHER, "amount": 4.55}).json()["checks"][0]
-    assert second["paymentStatus"] == "PAID" and len(second["payments"]) == 2
+    assert second["paymentStatus"] == "CLOSED" and len(second["payments"]) == 2
     third = pay(h, guid, check_guid, OTHER)
-    assert third.status == 400 and "PAID" in third.json()["message"]
+    assert third.status == 400 and "CLOSED" in third.json()["message"]
 
 
 def test_an_empty_amount_is_the_one_documented_code(h: Harness) -> None:
@@ -139,7 +140,7 @@ def test_payments_can_ride_along_on_create(h: Harness) -> None:
     before = h.journal_len()
     response = h.post("/orders/v2/orders", body)
     assert response.status == 200, response.text
-    assert response.json()["checks"][0]["paymentStatus"] == "PAID"
+    assert response.json()["checks"][0]["paymentStatus"] == "CLOSED"
     assert response.json()["paidDate"]
     ops = [
         (e["collection"], e["op"], e["meta"]["operation_id"])
@@ -157,12 +158,15 @@ def test_payments_can_ride_along_on_create(h: Harness) -> None:
     assert h.journal_len() == before + 3
 
 
-def test_the_tip_patch_takes_tip_amount_only_and_answers_the_payment(h: Harness) -> None:
+def test_the_tip_patch_takes_tip_amount_only_and_answers_the_order(h: Harness) -> None:
+    """The orders specification declares the tip PATCH's 200 as the Order
+    (the unit answered the payment until the fidelity validator found it)."""
     guid, check_guid = created(h)
     payment = pay(h, guid, check_guid, OTHER).json()["checks"][0]["payments"][0]
     response = h.patch(f"/orders/v2/orders/{guid}/checks/{check_guid}/payments/{payment['guid']}", {"tipAmount": 15})
     assert response.status == 200, response.text
-    assert response.json()["guid"] == payment["guid"] and response.json()["tipAmount"] == 15.0
+    answered = response.json()["checks"][0]["payments"][0]
+    assert response.json()["guid"] == guid and answered["guid"] == payment["guid"] and answered["tipAmount"] == 15.0
     assert h.get(f"/orders/v2/orders/{guid}").json()["checks"][0]["payments"][0]["tipAmount"] == 15.0
     missing = h.patch(f"/orders/v2/orders/{guid}/checks/{check_guid}/payments/{payment['guid']}", {})
     assert missing.status == 400 and missing.json()["unit_error"]["field"] == "tipAmount"
@@ -186,3 +190,35 @@ def test_payment_routes_need_the_payments_scope_and_the_restaurant_header(h: Har
     assert h.api.post(path, [OTHER], headers=h.read_auth).status == 403
     assert h.api.post(path, [OTHER], headers=h.restricted_token("orders:write", "orders:read")).status == 403
     assert h.api.post(path, [OTHER], headers=h.bearer_only).status == 400
+
+
+def test_a_credit_payment_is_paid_until_its_tip_is_adjusted_then_closed(h: Harness) -> None:
+    """The Check schema's own per-value notes: PAID describes a card charge
+    that cleared while its gratuity is still unadjusted; CLOSED describes a
+    check with nothing left owing. An OTHER payment closes the check outright
+    (the payment walkthrough's example); a CREDIT one waits for its tip.
+    Found by the fidelity corpus, konyklabs/roadmap#56."""
+    guid, check_guid = created(h)
+    paid = pay(h, guid, check_guid, {"type": "CREDIT", "guid": c.CREDIT_AUTHORIZATION_GUID, "amount": 9.55})
+    assert paid.status == 200
+    assert paid.json()["checks"][0]["paymentStatus"] == "PAID"
+    tipped = h.patch(
+        f"/orders/v2/orders/{guid}/checks/{check_guid}/payments/{c.CREDIT_AUTHORIZATION_GUID}", {"tipAmount": 2.0}
+    )
+    assert tipped.status == 200 and tipped.json()["checks"][0]["payments"][0]["tipAmount"] == 2.0
+    after = h.get(f"/orders/v2/orders/{guid}").json()
+    assert after["checks"][0]["paymentStatus"] == "CLOSED"
+
+
+def test_a_closed_check_takes_no_more_selections_or_payments(h: Harness) -> None:
+    """History-lens finding H1 (konyklabs/roadmap#56): CLOSED became reachable
+    through the API, and the selections guard only knew PAID."""
+    guid, check_guid = created(h)
+    assert pay(h, guid, check_guid, OTHER).json()["checks"][0]["paymentStatus"] == "CLOSED"
+    more = h.post(
+        f"/orders/v2/orders/{guid}/checks/{check_guid}/selections",
+        [{"item": {"guid": c.ITEM_SOUP_GUID, "entityType": "MenuItem"}, "quantity": 1}],
+    )
+    assert more.status == 400 and "CLOSED" in more.json()["message"]
+    again = pay(h, guid, check_guid, OTHER)
+    assert again.status == 400 and "CLOSED" in again.json()["message"]

@@ -1,0 +1,106 @@
+{
+  "schema": 1,
+  "id": "orders.void.voidall",
+  "title": "Create an order, pay it with an OTHER payment, void it with voidAll on selections and payments: voided, VOIDED statuses, voidDate and voidBusinessDate, and the order still readable",
+  "source": {
+    "url": "https://doc.toasttab.com/doc/devguide/apiVoidOrder.html",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "The page: POST /orders/v2/orders/{orderGuid}/void with {selections: {voidAll: true}, payments: {voidAll: true}}, 'Each voidAll value must be set to true'; only OTHER payments can be voided; the same clientId that created the order; the voided order carries voided true, voidDate, voidBusinessDate, guestOrderStatus VOIDED and paymentStatus VOIDED; 'Once an order has been voided, it can not be updated' while retrieval remains available, which the last step exercises. The payment's voidInfo {voidDate, voidBusinessDate} is the orders specification's Payment.voidInfo. The payment is added through the payments route so the void has an OTHER payment to void; the amounts are the documented 8.99 example. The page does not state the status of a second void and the case does not send one."
+  },
+  "routes": [
+    "POST /orders/v2/orders",
+    "POST /orders/v2/orders/{guid}/checks/{checkGuid}/payments",
+    "POST /orders/v2/orders/{guid}/void",
+    "GET /orders/v2/orders/{guid}"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "create",
+      "request": {
+        "method": "POST",
+        "path": "/orders/v2/orders",
+        "headers": {"$auth": "restaurant", "content-type": "application/json"},
+        "body": {
+          "entityType": "Order",
+          "diningOption": {"guid": "5d0e2b11-0000-4000-8000-00000000d002", "entityType": "DiningOption"},
+          "checks": [
+            {
+              "entityType": "Check",
+              "selections": [
+                {"entityType": "MenuItemSelection", "item": {"guid": "3c9a1f00-0000-4000-8000-00000000c201", "entityType": "MenuItem"}, "quantity": 1}
+              ]
+            }
+          ]
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {"guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}", "voided": false, "checks": [{"guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}", "totalAmount": 9.55, "paymentStatus": "OPEN", "payments": []}]},
+        "absent": ["/voidDate"]
+      },
+      "capture": {"order_guid": "/guid", "check_guid": "/checks/0/guid"}
+    },
+    {
+      "name": "pay",
+      "request": {
+        "method": "POST",
+        "path": "/orders/v2/orders/${cap.order_guid}/checks/${cap.check_guid}/payments",
+        "headers": {"$auth": "restaurant", "content-type": "application/json"},
+        "body": [
+          {"type": "OTHER", "amount": 9.55, "tipAmount": 0, "otherPayment": {"guid": "5d0e2b11-0000-4000-8000-00000000d101"}}
+        ]
+      },
+      "expect": {
+        "status": 200,
+        "body": {"guid": "${cap.order_guid}", "checks": [{"guid": "${cap.check_guid}", "payments": [{"guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}", "type": "OTHER", "amount": 9.55}]}]}
+      },
+      "capture": {"payment_guid": "/checks/0/payments/0/guid"}
+    },
+    {
+      "name": "void",
+      "request": {
+        "method": "POST",
+        "path": "/orders/v2/orders/${cap.order_guid}/void",
+        "headers": {"$auth": "restaurant", "content-type": "application/json"},
+        "body": {"selections": {"voidAll": true}, "payments": {"voidAll": true}}
+      },
+      "expect": {
+        "status": 200,
+        "headers": {"content-type": "application/json"},
+        "body": {
+          "guid": "${cap.order_guid}",
+          "voided": true,
+          "voidDate": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+0000}",
+          "voidBusinessDate": "${re:[0-9]{8}}",
+          "guestOrderStatus": "VOIDED",
+          "checks": [
+            {
+              "guid": "${cap.check_guid}",
+              "voided": true,
+              "paymentStatus": "VOIDED",
+              "selections": [{"guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}", "voided": true}],
+              "payments": [
+                {
+                  "guid": "${cap.payment_guid}",
+                  "type": "OTHER",
+                  "paymentStatus": "VOIDED",
+                  "voidInfo": {"voidDate": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+0000}", "voidBusinessDate": "${re:[0-9]{8}}"}
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "still-readable",
+      "request": {"method": "GET", "path": "/orders/v2/orders/${cap.order_guid}", "headers": {"$auth": "restaurant"}},
+      "expect": {
+        "status": 200,
+        "body": {"guid": "${cap.order_guid}", "voided": true, "guestOrderStatus": "VOIDED", "checks": [{"guid": "${cap.check_guid}", "paymentStatus": "VOIDED"}]}
+      }
+    }
+  ]
+}

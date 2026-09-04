@@ -12,8 +12,10 @@ from typing import Any
 
 from vendorfake import create_unit
 from vendorfake.core.kernel.unit import Unit
-from vendorfake.core.transport.inprocess import InProcessClient, InProcessResponse, in_process
+from vendorfake.core.transport.inprocess import InProcessClient, InProcessResponse
 from vendorfake.core.webhooks.sink import MemorySink
+from vendorfake.fidelity import Surface, load_declaration, load_extract
+from vendorfake.fidelity.validate import Ledger, ValidatingClient
 from vendorfake.toast.entities import COL, TokenEntity
 from vendorfake.toast.seed.constants import (
     SEED_ACCESS_TOKEN,
@@ -39,6 +41,17 @@ class Silent:
     def info(self, msg: str, fields: Mapping[str, Any] | None = None) -> None: ...
     def warn(self, msg: str, fields: Mapping[str, Any] | None = None) -> None: ...
     def error(self, msg: str, fields: Mapping[str, Any] | None = None) -> None: ...
+
+
+FIDELITY_ANCHOR = "vendorfake.toast.fidelity"
+SURFACE = Surface(load_declaration(FIDELITY_ANCHOR), load_extract(FIDELITY_ANCHOR))
+LEDGER = Ledger()
+"""Every response a Toast test receives through a harness client is validated
+against Toast's published schema for that operation and status (D-006). The
+extract is never committed (konyklabs/roadmap#56): ``load_extract`` cuts it
+from a fresh fetch into the local cache on first use, so a cold cache needs
+the network once -- ``vendorfake-fidelity fetch`` in ``tools/self-test.sh``
+pays for it before pytest runs."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +119,10 @@ def harness(profile: str = "full", **kwargs: Any) -> Iterator[Harness]:
     try:
         yield Harness(
             unit=unit,
-            api=in_process(unit),
+            # Lenient on an undeclared route: the extract is cut from TODAY's
+            # documents, so a route Toast renames must not redden every test --
+            # the report step prints it in capitals and fails there instead.
+            api=ValidatingClient(unit, SURFACE, LEDGER, strict_undeclared=False),
             auth={"authorization": f"Bearer {SEED_ACCESS_TOKEN}", RESTAURANT_HEADER.lower(): RESTAURANT},
         )
     finally:

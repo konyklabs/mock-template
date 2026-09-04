@@ -81,6 +81,7 @@ nav:
       - Driver: concepts/driver.md
       - Journal and request log: concepts/journal-and-request-log.md
       - Clock: concepts/clock.md
+      - Fidelity: concepts/fidelity.md
       - Chaos rules and faults: concepts/chaos-rules-and-faults.md
       - Provenance labels: concepts/provenance-labels.md
   - Reference:

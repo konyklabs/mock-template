@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "id": "config.taxrates.list",
+  "title": "GET /config/v2/taxRates answers an array of TaxRate objects; the default PERCENT rate carries its decimal rate",
+  "source": {
+    "url": "https://doc.toasttab.com/toast-api-specifications/toast-config-api.yaml",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "The operation hands back the restaurant's list of TaxRate objects (at most 300 per page) and requires Toast-Restaurant-External-ID, which names the POS-side restaurant the request is scoped to. TaxRate: guid is the identifier Toast's POS assigns and keeps, entityType names the object's kind, name, isDefault flags whether this is the restaurant's fallback rate, rate holds a percent rate as its decimal fraction -- a 6.25% rate stores as 0.0625, type enum PERCENT|FIXED|TABLE|NONE|EXTERNAL, roundingType meaningful only for PERCENT rates, taxTable and conditionalTaxRates arrays. The seed carries exactly the documented 6.25% example as its one, default rate; the list length is the seed's."
+  },
+  "routes": ["GET /config/v2/taxRates"],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "list",
+      "request": {"method": "GET", "path": "/config/v2/taxRates", "headers": {"$auth": "restaurant"}},
+      "expect": {
+        "status": 200,
+        "headers": {"content-type": "application/json"},
+        "body": [
+          {
+            "guid": "${re:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}",
+            "entityType": "TaxRate",
+            "name": "${re:.+}",
+            "isDefault": true,
+            "rate": 0.0625,
+            "type": "PERCENT",
+            "roundingType": "${re:HALF_UP|HALF_EVEN|ALWAYS_UP|ALWAYS_DOWN}",
+            "taxTable": [],
+            "conditionalTaxRates": []
+          }
+        ]
+      },
+      "capture": {"tax_rate_guid": "/0/guid"}
+    }
+  ]
+}

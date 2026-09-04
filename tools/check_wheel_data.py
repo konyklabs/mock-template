@@ -14,6 +14,7 @@ This builds the artifact and looks inside it, which is the only way to know.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -25,7 +26,41 @@ REPO = Path(__file__).resolve().parent.parent
 #: Every non-Python file the package promises to ship, by wheel-relative path.
 REQUIRED = (
     "vendorfake/py.typed",
+    "vendorfake/fidelity/corpus.schema.json",
+    "vendorfake/fidelity/declaration.schema.json",
     "vendorfake/square/seed/default.seed.json",
+    "vendorfake/square/fidelity/declaration.json",
+    "vendorfake/square/fidelity/extract.json",
+    "vendorfake/square/fidelity/pin.json",
+    "vendorfake/square/fidelity/corpus/auth.unauthenticated.json",
+    "vendorfake/square/fidelity/corpus/locations.list.shape.json",
+    "vendorfake/square/fidelity/corpus/loyalty.programs.retrieve.main.json",
+    "vendorfake/square/fidelity/corpus/merchants.retrieve.me.json",
+    "vendorfake/square/fidelity/corpus/oauth.token.refresh.json",
+    "vendorfake/square/fidelity/corpus/orders.create.idempotency-key-reused.json",
+    "vendorfake/square/fidelity/corpus/orders.create.idempotent-replay.json",
+    "vendorfake/square/fidelity/corpus/orders.create.minimal.json",
+    "vendorfake/square/fidelity/corpus/orders.create.missing-location-id.json",
+    "vendorfake/square/fidelity/corpus/orders.pay.external-payment.json",
+    "vendorfake/square/fidelity/corpus/orders.pay.zero-total.json",
+    "vendorfake/square/fidelity/corpus/orders.search.by-location.json",
+    "vendorfake/square/fidelity/corpus/webhooks.subscriptions.create.shape.json",
+    "vendorfake/toast/fidelity/declaration.json",
+    "vendorfake/toast/fidelity/pin.json",
+    "vendorfake/toast/fidelity/corpus/auth.bearer.missing.json",
+    "vendorfake/toast/fidelity/corpus/auth.bearer.unrecognized.json",
+    "vendorfake/toast/fidelity/corpus/auth.login.invalid-credentials.json",
+    "vendorfake/toast/fidelity/corpus/auth.login.machine-client.json",
+    "vendorfake/toast/fidelity/corpus/auth.restaurant.unknown.json",
+    "vendorfake/toast/fidelity/corpus/config.taxrates.by-guid.json",
+    "vendorfake/toast/fidelity/corpus/config.taxrates.list.json",
+    "vendorfake/toast/fidelity/corpus/menus.v3.menus.json",
+    "vendorfake/toast/fidelity/corpus/menus.v3.metadata.json",
+    "vendorfake/toast/fidelity/corpus/orders.create.other-payment.json",
+    "vendorfake/toast/fidelity/corpus/orders.get.errors.json",
+    "vendorfake/toast/fidelity/corpus/orders.prices.documented-example.json",
+    "vendorfake/toast/fidelity/corpus/orders.void.voidall.json",
+    "vendorfake/toast/fidelity/corpus/stock.search.by-guid.json",
     "vendorfake/square/profiles/full.json",
     "vendorfake/square/profiles/no-chaos.json",
     "vendorfake/square/profiles/no-faults.json",
@@ -49,6 +84,26 @@ REQUIRED = (
 )
 
 
+#: Files that must NOT ship: a non-vendored vendor's extract is cut at run time
+#: from a fresh fetch and never committed (konyklabs/roadmap#56). Its presence in
+#: a wheel would mean a copy of the vendor's document went out under our name.
+
+
+def _forbidden_from_declarations() -> tuple[str, ...]:
+    """Every ``vendored: false`` declaration's extract, derived rather than
+    listed, so a second fetch-never-commit vendor is covered the day it is
+    declared."""
+    found: list[str] = []
+    for declaration in sorted((REPO / "src" / "vendorfake").glob("*/fidelity/declaration.json")):
+        with declaration.open(encoding="utf-8") as handle:
+            if json.load(handle).get("vendored", True) is False:
+                found.append(f"vendorfake/{declaration.parent.parent.name}/fidelity/extract.json")
+    return tuple(found)
+
+
+FORBIDDEN = _forbidden_from_declarations()
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as out:
         built = subprocess.run(
@@ -69,15 +124,29 @@ def main() -> int:
             return 1
 
         names = set(zipfile.ZipFile(wheels[0]).namelist())
-        missing = [path for path in REQUIRED if path not in names]
-        for path in REQUIRED:
-            print(f"  {'ok  ' if path in names else 'MISS'} {path}")
-        if missing:
-            print(f"wheel: {len(missing)} data file(s) missing from {wheels[0].name}")
-            print("       the source tree works and the wheel does not; check")
-            print("       [tool.hatch.build.targets.wheel] in pyproject.toml")
-            return 1
-        print(f"wheel: {wheels[0].name} carries all {len(REQUIRED)} data files")
+        return verify(names, wheels[0].name)
+
+
+def verify(
+    names: set[str], wheel_name: str, *, required: tuple[str, ...] = REQUIRED, forbidden: tuple[str, ...] = FORBIDDEN
+) -> int:
+    """The verdict on a wheel's file list: 1 if anything forbidden is in it or
+    anything required is not. Pure, so a test can hand it a name list."""
+    missing = [path for path in required if path not in names]
+    for path in required:
+        print(f"  {'ok  ' if path in names else 'MISS'} {path}")
+    leaked = [path for path in forbidden if path in names]
+    for path in leaked:
+        print(f"  LEAK {path} -- must never ship; see FORBIDDEN")
+    if leaked:
+        print(f"wheel: {len(leaked)} file(s) that must never ship are in {wheel_name}")
+        return 1
+    if missing:
+        print(f"wheel: {len(missing)} data file(s) missing from {wheel_name}")
+        print("       the source tree works and the wheel does not; check")
+        print("       [tool.hatch.build.targets.wheel] in pyproject.toml")
+        return 1
+    print(f"wheel: {wheel_name} carries all {len(required)} data files")
     return 0
 
 

@@ -19,7 +19,7 @@ Every route toast's surface serves -- vendor-facing only. The `/__unit/*` contro
 | POST | `/orders/v2/orders/{guid}/checks/{checkGuid}/appliedDiscounts` | CheckDiscountsPost | orders | Apply CHECK-type discounts to a check. |
 | POST | `/orders/v2/orders/{guid}/checks/{checkGuid}/selections/{selectionGuid}/appliedDiscounts` | SelectionDiscountsPost | orders | Apply ITEM-type discounts to a selection. |
 | POST | `/orders/v2/orders/{guid}/checks/{checkGuid}/payments` | CheckPaymentsPost | payments | Add OTHER or pre-authorised CREDIT payments to a check; answers the Order. |
-| PATCH | `/orders/v2/orders/{guid}/checks/{checkGuid}/payments/{paymentGuid}` | PaymentTipPatch | payments | Set a payment's tipAmount; answers the Payment. |
+| PATCH | `/orders/v2/orders/{guid}/checks/{checkGuid}/payments/{paymentGuid}` | PaymentTipPatch | payments | Set a payment's tipAmount; answers the Order. |
 | GET | `/orders/v2/payments` | PaymentsGet | payments | Payment guids for exactly one of paidBusinessDate, refundBusinessDate, voidBusinessDate. |
 | GET | `/orders/v2/payments/{guid}` | PaymentGet | payments | One payment by guid. |
 | GET | `/menus/v3/menus` | MenusV3Get | menus | The published V3 menu document: menus, groups, items and the three reference maps. |

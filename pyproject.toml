@@ -31,6 +31,10 @@ dependencies = [
   "uvicorn>=0.30",
   "pydantic>=2.7",
   "httpx>=0.27",
+  "jsonschema>=4.18",
+  "openapi-schema-validator>=0.6",
+  "referencing>=0.30",
+  "pyyaml>=6",
   # Declared because vendorfake.testing.transport imports it directly, for the
   # async half of the in-process seam: an `httpx.AsyncClient` is meant to be
   # usable under any anyio backend, so the deliberate `delay_ms` wait is
@@ -49,6 +53,7 @@ Issues = "https://github.com/konyklabs/vendorfake/issues"
 [project.scripts]
 vendorfake = "vendorfake.cli:main"
 vendorfake-conformance = "vendorfake.conformance.__main__:main"
+vendorfake-fidelity = "vendorfake.fidelity.__main__:main"
 
 [project.entry-points."vendorfake.vendors"]
 clover = "vendorfake.clover:VENDOR"
@@ -72,6 +77,8 @@ dev = [
   "mypy>=1.11",
   "ruff>=0.6",
   "import-linter>=2.0",
+  "types-jsonschema>=4.18",
+  "types-PyYAML>=6",
   # Not used by a single test in this repository directly. It is installed so
   # that tests/unit/test_pytest_plugin_async.py can run a *consumer's* suite
   # under it, in both strict and auto mode, and prove the claim the README
@@ -172,7 +179,7 @@ include_external_packages = true
 [[tool.importlinter.contracts]]
 name = "The core imports no web framework"
 type = "forbidden"
-source_modules = ["vendorfake.core", "vendorfake.conformance"]
+source_modules = ["vendorfake.core", "vendorfake.conformance", "vendorfake.fidelity"]
 forbidden_modules = ["fastapi", "starlette", "uvicorn", "multipart"]
 
 # A contract per vendor is added as each vendor lands; tools/boundary_check.py

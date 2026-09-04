@@ -1,0 +1,126 @@
+{
+  "schema": 1,
+  "id": "loyalty.programs.retrieve.main",
+  "title": "RetrieveLoyaltyProgram accepts the documented keyword `main` and answers the seller's single program, the same one the literal id answers",
+  "source": {
+    "url": "https://developer.squareup.com/reference/square/loyalty-api/retrieve-loyalty-program",
+    "fetched": "2026-09-02",
+    "provenance": "documented",
+    "note": "The program_id parameter description: 'The ID of the loyalty program or the keyword `main`. Either value can be used to retrieve the single loyalty program that belongs to the seller.' Step 2 retrieves it by the literal id captured from step 1. Field names, status ACTIVE, accrual_type SPEND and tax_mode BEFORE_TAX are from the example response. One reward tier and two locations are this scenario's counts (lists match by length), not the page's."
+  },
+  "routes": [
+    "GET /v2/loyalty/programs/{program_id}"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "main",
+      "request": {
+        "method": "GET",
+        "path": "/v2/loyalty/programs/main",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "program": {
+            "id": "${any}",
+            "status": "ACTIVE",
+            "reward_tiers": [
+              {
+                "id": "${any}",
+                "points": "${any}",
+                "name": "${any}",
+                "created_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}"
+              }
+            ],
+            "terminology": {
+              "one": "${any}",
+              "other": "${any}"
+            },
+            "location_ids": [
+              "${vars.location_id}",
+              "${any}"
+            ],
+            "created_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}",
+            "updated_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}",
+            "accrual_rules": [
+              {
+                "accrual_type": "SPEND",
+                "points": "${any}",
+                "spend_data": {
+                  "amount_money": {
+                    "amount": "${any}",
+                    "currency": "${any}"
+                  },
+                  "tax_mode": "BEFORE_TAX"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "capture": {
+        "program_id": "/program/id"
+      }
+    },
+    {
+      "name": "literal",
+      "request": {
+        "method": "GET",
+        "path": "/v2/loyalty/programs/${cap.program_id}",
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "program": {
+            "id": "${cap.program_id}",
+            "status": "ACTIVE",
+            "reward_tiers": [
+              {
+                "id": "${any}",
+                "points": "${any}",
+                "name": "${any}",
+                "created_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}"
+              }
+            ],
+            "terminology": {
+              "one": "${any}",
+              "other": "${any}"
+            },
+            "location_ids": [
+              "${vars.location_id}",
+              "${any}"
+            ],
+            "created_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}",
+            "updated_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}",
+            "accrual_rules": [
+              {
+                "accrual_type": "SPEND",
+                "points": "${any}",
+                "spend_data": {
+                  "amount_money": {
+                    "amount": "${any}",
+                    "currency": "${any}"
+                  },
+                  "tax_mode": "BEFORE_TAX"
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

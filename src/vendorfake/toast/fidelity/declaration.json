@@ -1,0 +1,266 @@
+{
+  "schema": 1,
+  "vendored": false,
+  "sources": [
+    {
+      "kind": "swagger2",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-authentication-api.yaml",
+      "label": "authentication"
+    },
+    {
+      "kind": "swagger2",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-config-api.yaml",
+      "label": "config"
+    },
+    {
+      "kind": "swagger2",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-menus-api-v3.yaml",
+      "label": "menus"
+    },
+    {
+      "kind": "swagger2",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-orders-api.yaml",
+      "label": "orders"
+    },
+    {
+      "kind": "swagger2",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-partners-api.yaml",
+      "label": "partners"
+    },
+    {
+      "kind": "swagger2",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-restaurants-api.yaml",
+      "label": "restaurants"
+    },
+    {
+      "kind": "openapi3",
+      "url": "https://doc.toasttab.com/toast-api-specifications/toast-stock-api.yaml",
+      "label": "stock"
+    }
+  ],
+  "error_schema": "ErrorMessage",
+  "extension_map": {
+    "x-nullable": "nullable",
+    "x-toast-read-only": "readOnly"
+  },
+  "aliases": [],
+  "excused": [],
+  "deviations": [
+    {
+      "pointer": "/**/externalId",
+      "keyword": "type",
+      "value": null,
+      "reason": "ToastReference.externalId is typed string, not nullable, in the orders specification; every response example in the ordering guides answers it null (eight times on the payment walkthrough, six on the prices page). The unit answers what the examples answer.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiCreatingAnOrderWithPaymentInformation.html"
+    },
+    {
+      "pointer": "/token/scope",
+      "keyword": "type",
+      "value": null,
+      "reason": "Token.scope is typed string in the authentication specification; the authentication guide's documented response answers null.",
+      "url": "https://doc.toasttab.com/doc/devguide/authentication.html"
+    },
+    {
+      "pointer": "/token/refreshToken",
+      "keyword": "type",
+      "value": null,
+      "reason": "Token.refreshToken is typed string in the authentication specification; the authentication guide's documented response answers null.",
+      "url": "https://doc.toasttab.com/doc/devguide/authentication.html"
+    },
+    {
+      "pointer": "/token/idToken",
+      "keyword": "type",
+      "value": null,
+      "reason": "Token.idToken is typed string in the authentication specification; the authentication guide's documented response answers null.",
+      "url": "https://doc.toasttab.com/doc/devguide/authentication.html"
+    },
+    {
+      "pointer": "/status",
+      "keyword": "type",
+      "value": 400,
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 400 among the statuses it describes.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/status",
+      "keyword": "type",
+      "value": 401,
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 401 among the statuses it describes.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/status",
+      "keyword": "type",
+      "value": 403,
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 403 among the statuses it describes.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/status",
+      "keyword": "type",
+      "value": 404,
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 404 among the statuses it describes.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/status",
+      "keyword": "type",
+      "value": 405,
+      "reason": "ErrorMessage.status is typed string in the authentication specification. The responses-and-errors guide's documented error shows the numeric type on its 400 example; 405 is not on that page, so this row extends the documented type to a status the unit emits (JUDGMENT by consistency, labelled in toast/errors.py).",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/status",
+      "keyword": "type",
+      "value": 409,
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 409 among the statuses it describes.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/status",
+      "keyword": "type",
+      "value": 429,
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 429 among the statuses it describes.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/status",
+      "keyword": "type",
+      "value": 500,
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 500 among the statuses it describes.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/status",
+      "keyword": "type",
+      "value": 501,
+      "reason": "ErrorMessage.status is typed string in the authentication specification. The responses-and-errors guide's documented error shows the numeric type on its 400 example; 501 is not on that page, so this row extends the documented type to a status the unit emits (JUDGMENT by consistency, labelled in toast/errors.py).",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/status",
+      "keyword": "type",
+      "value": 503,
+      "reason": "ErrorMessage.status is typed string in the authentication specification. The responses-and-errors guide's documented error shows the numeric type on its 400 example; 503 is not on that page, so this row extends the documented type to a status the unit emits (JUDGMENT by consistency, labelled in toast/errors.py).",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/status",
+      "keyword": "type",
+      "value": 504,
+      "reason": "ErrorMessage.status is typed string in the authentication specification; the responses-and-errors guide's documented error answers the HTTP status as a number (its 400 example), and lists 504 among the statuses it describes.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/messageKey",
+      "keyword": "type",
+      "value": null,
+      "reason": "ErrorMessage.messageKey is typed string in the authentication specification; the responses-and-errors guide's documented error answers it null.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/link",
+      "keyword": "type",
+      "value": null,
+      "reason": "ErrorMessage.link is typed string in the authentication specification; the responses-and-errors guide's documented error answers it null.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/fieldName",
+      "keyword": "type",
+      "value": null,
+      "reason": "ErrorMessage.fieldName is typed string in the authentication specification; the responses-and-errors guide's documented error answers it null.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/developerMessage",
+      "keyword": "type",
+      "value": null,
+      "reason": "ErrorMessage.developerMessage is typed string in the authentication specification; the responses-and-errors guide's documented error answers it null.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/canRetry",
+      "keyword": "type",
+      "value": null,
+      "reason": "ErrorMessage.canRetry is typed string in the authentication specification; the responses-and-errors guide's documented error answers it null.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html"
+    },
+    {
+      "pointer": "/**/guid",
+      "keyword": "type",
+      "value": null,
+      "routes": [
+        "POST /orders/v2/prices",
+        "POST /orders/v2/applicableDiscounts"
+      ],
+      "reason": "The prices guide's documented response is the priced order as it would be created, with every guid null because nothing was saved (three nulls on the page). applicableDiscounts answers the same unsaved order (JUDGMENT that the same rule holds there; the guide for it shows no response body).",
+      "url": "https://doc.toasttab.com/doc/devguide/apiOrderPrices.html"
+    },
+    {
+      "pointer": "/checks/*/paymentStatus",
+      "keyword": "enum",
+      "value": "VOIDED",
+      "reason": "Check.paymentStatus is enumerated OPEN|PAID|CLOSED in the orders specification; the void guide's documented result shows a voided check answering VOIDED. The unit answers what the guide shows.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiVoidOrder.html"
+    },
+    {
+      "pointer": "/nextPageNum",
+      "keyword": "type",
+      "value": null,
+      "routes": [
+        "GET /partners/v1/connectedRestaurants"
+      ],
+      "reason": "PaginatedResponse.nextPageNum is typed integer in the partners specification; the partners guide's documented page answers null when there is no such page.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiPartnersGettingAccessibleRestaurants.html"
+    },
+    {
+      "pointer": "/previousPageNum",
+      "keyword": "type",
+      "value": null,
+      "routes": [
+        "GET /partners/v1/connectedRestaurants"
+      ],
+      "reason": "PaginatedResponse.previousPageNum is typed integer in the partners specification; the partners guide's documented page answers null when there is no such page.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiPartnersGettingAccessibleRestaurants.html"
+    },
+    {
+      "pointer": "/**/*Date",
+      "keyword": "format",
+      "pattern": "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}\\+0000",
+      "reason": "Toast's timestamps are yyyy-MM-dd'T'HH:mm:ss.SSS+0000 -- the +0000 offset without a colon fails RFC 3339's date-time, which is what the schema's format keyword checks. The payment walkthrough's documented request and response carry twelve such timestamps.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiCreatingAnOrderWithPaymentInformation.html"
+    },
+    {
+      "pointer": "/*/guid",
+      "keyword": "format",
+      "value": "null",
+      "routes": [
+        "POST /stock/v1/inventory/search"
+      ],
+      "reason": "MenuItemInventory.guid is format uuid in the stock specification; the stock guide's documented INVALID rows answer the literal string null there.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiUsingTheStockApi.html"
+    },
+    {
+      "pointer": "/*/versionId",
+      "keyword": "format",
+      "value": "null",
+      "routes": [
+        "POST /stock/v1/inventory/search"
+      ],
+      "reason": "MenuItemInventory.versionId is format uuid in the stock specification; the stock guide's documented INVALID rows answer the literal string null there.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiUsingTheStockApi.html"
+    }
+  ],
+  "overrides": [
+    {
+      "route": "GET /partners/v1/connectedRestaurants",
+      "status": 200,
+      "schema": "PaginatedResponse",
+      "reason": "The partners specification declares the response as an array of PaginatedResponse; the partners guide documents (and the unit answers) one PaginatedResponse envelope with the restaurants under results.",
+      "url": "https://doc.toasttab.com/doc/devguide/apiPartnersGettingAccessibleRestaurants.html"
+    }
+  ],
+  "stubs_accepted": [],
+  "variables": {}
+}

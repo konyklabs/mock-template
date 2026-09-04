@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import uuid
 from decimal import Decimal
 
-from vendorfake.toast.model.pricing import TaxRate, discount_amount, quantity_price, tax_on, taxes_on
+from vendorfake.toast.model.pricing import (
+    APPLIED_TAX_NAMESPACE,
+    TaxRate,
+    discount_amount,
+    quantity_price,
+    tax_on,
+    taxes_on,
+)
 
 SALES_TAX = TaxRate(guid="t1", name="Sales Tax", rate=Decimal("0.0625"))
 
@@ -13,7 +21,8 @@ def test_the_documented_example_8_99_at_0_0625_is_0_56() -> None:
     """899 x 0.0625 = 56.1875 -> 56 half-up; 899 + 56 = 955 (apiOrderPrices.html)."""
     assert tax_on(899, SALES_TAX) == 56
     assert 899 + tax_on(899, SALES_TAX) == 955
-    (applied,) = taxes_on(899, [SALES_TAX])
+    (applied,) = taxes_on(899, [SALES_TAX], owner="sel-1")
+    assert applied.pop("guid") == str(uuid.uuid5(APPLIED_TAX_NAMESPACE, "sel-1:t1"))
     assert applied == {
         "entityType": "AppliedTaxRate",
         "taxRate": {"guid": "t1", "entityType": "TaxRate"},

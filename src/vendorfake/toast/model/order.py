@@ -25,6 +25,7 @@ by the surface so the 400 names the field path.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -33,6 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from vendorfake.core.util.json import compact
 from vendorfake.toast.model.dates import rest_date
 from vendorfake.toast.model.money import to_dollars
+from vendorfake.toast.model.pricing import APPLIED_TAX_NAMESPACE
 from vendorfake.toast.model.references import RefRequest
 
 __all__ = [
@@ -252,24 +254,32 @@ def _external_ref(guid: Any, entity_type: str, external_id: Any) -> dict[str, An
 
 def project_applied_discount(stored: Mapping[str, Any]) -> dict[str, Any]:
     """The documented AppliedDiscount, key order from apiDiscountingOrders.html."""
-    return {
+    # ``approver``, ``processingState`` and ``loyaltyDetails`` are omitted
+    # rather than answered null: the schema types them as objects/enums with
+    # no nullable, and the discounting walkthrough's example does not carry
+    # them (JUDGMENT: omission; found by the fidelity validator, roadmap#56).
+    document = {
         "guid": stored.get("guid"),
         "entityType": "AppliedCustomDiscount",
         "externalId": stored.get("externalId"),
-        "approver": None,
-        "processingState": None,
-        "loyaltyDetails": None,
-        "name": stored.get("name"),
-        "comboItems": [],
-        "discountAmount": _money(stored.get("discountAmount")),
-        "discount": _ref(stored.get("discount")),
-        "triggers": [
-            {"selection": _ref(trigger.get("selection")), "quantity": trigger.get("quantity")}
-            for trigger in stored.get("triggers", [])
-            if isinstance(trigger, Mapping)
-        ],
-        "appliedPromoCode": stored.get("appliedPromoCode"),
     }
+    document.update(
+        compact(
+            {
+                "name": stored.get("name"),
+                "comboItems": [],
+                "discountAmount": _money(stored.get("discountAmount")),
+                "discount": _ref(stored.get("discount")),
+                "triggers": [
+                    {"selection": _ref(trigger.get("selection")), "quantity": trigger.get("quantity")}
+                    for trigger in stored.get("triggers", [])
+                    if isinstance(trigger, Mapping)
+                ],
+                "appliedPromoCode": stored.get("appliedPromoCode"),
+            }
+        )
+    )
+    return document
 
 
 def _external(stored: Mapping[str, Any], entity_type: str, rest: dict[str, Any]) -> dict[str, Any]:
@@ -282,6 +292,16 @@ def _external(stored: Mapping[str, Any], entity_type: str, rest: dict[str, Any])
         "externalId": stored.get("externalId"),
         **compact(rest),
     }
+
+
+def applied_tax_guid(selection_guid: object, tax: Mapping[str, Any]) -> str | None:
+    """The derived AppliedTaxRate guid for a saved selection, or None for an
+    unsaved one (the documented null). One rule, shared with the builder."""
+    rate = tax.get("taxRate")
+    rate_guid = rate.get("guid") if isinstance(rate, Mapping) else None
+    if not selection_guid or not rate_guid:
+        return None
+    return str(uuid.uuid5(APPLIED_TAX_NAMESPACE, f"{selection_guid}:{rate_guid}"))
 
 
 def project_selection(stored: Mapping[str, Any]) -> dict[str, Any]:
@@ -317,9 +337,16 @@ def project_selection(stored: Mapping[str, Any]) -> dict[str, Any]:
             "fulfillmentStatus": stored.get("fulfillmentStatus", "NEW"),
             "taxInclusion": stored.get("taxInclusion", "NOT_INCLUDED"),
             "appliedTaxes": [
-                compact(
+                {
+                    # ``guid`` stays even when null: the schema requires the key,
+                    # and on an unsaved order the value is the documented null.
+                    # A saved selection whose taxes were built before it had a
+                    # guid (the seed, add_selections) gets the same derived id
+                    # the builder would have given it.
+                    "guid": tax.get("guid") or applied_tax_guid(stored.get("guid"), tax),
+                }
+                | compact(
                     {
-                        "guid": tax.get("guid"),
                         "entityType": tax.get("entityType", "AppliedTaxRate"),
                         "taxRate": _ref(tax.get("taxRate")),
                         "name": tax.get("name"),

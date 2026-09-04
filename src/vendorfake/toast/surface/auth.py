@@ -10,9 +10,9 @@ toast-authentication-api.yaml):
 
 * the body is ``{clientId, clientSecret, userAccessType: "TOAST_MACHINE_CLIENT"}``;
 * the answer is ``{"@class": ".SuccessfulResponse", "token": {...}, "status":
-  "SUCCESS"}`` with ``expiresIn`` "the number of seconds that the
-  authentication token is valid";
-* 401: "the credentials in your request are not valid";
+  "SUCCESS"}`` with ``expiresIn`` counting down the token's remaining
+  lifetime in seconds;
+* 401: the submitted client id and secret didn't check out;
 * there is no refresh: a client logs in again when the token expires.
 
 JUDGMENT, each labelled at its site:
