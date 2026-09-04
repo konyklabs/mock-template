@@ -20,11 +20,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
+from typing import Any
 
 from vendorfake.conformance import ConformanceClient, ConformanceTarget, HttpConformanceClient
 from vendorfake.conformance.client import InProcessConformanceClient
 from vendorfake.core.logging import JsonLogger
 from vendorfake.core.transport.inprocess import in_process
+from vendorfake.core.util.json import canonical_json
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.registry import create_unit
 from vendorfake.testing import served
@@ -40,6 +42,7 @@ __all__ = [
     "TOAST_INAPPLICABLE",
     "clover_target",
     "lightspeed_target",
+    "open_with_seed_overlay",
     "square_target",
     "target",
     "toast_target",
@@ -168,12 +171,29 @@ LIGHTSPEED_INAPPLICABLE: Mapping[str, str] = {
 
 
 @contextmanager
-def _in_process(vendor: str, profile: str) -> Iterator[ConformanceClient]:
-    built = create_unit(vendor=vendor, profile=profile, sink=MemorySink(), logger=JsonLogger("warn"))
+def _in_process(vendor: str, profile: str, env: Mapping[str, str] | None = None) -> Iterator[ConformanceClient]:
+    built = create_unit(vendor=vendor, profile=profile, sink=MemorySink(), logger=JsonLogger("warn"), env=env)
     try:
         yield InProcessConformanceClient(in_process(built))
     finally:
         built.stop()
+
+
+@contextmanager
+def open_with_seed_overlay(vendor: str, profile: str, overlay: Mapping[str, Any]) -> Iterator[ConformanceClient]:
+    """A unit with ``overlay`` laid over the profile's seed, in process.
+
+    In process whatever the matrix row's transport is, because the overlay is
+    applied while the *unit* is built and a binding is only ever put in front
+    of one afterwards -- see ``ConformanceTarget.open_with_seed_overlay``.
+    Standing a second uvicorn up to ask a question about construction would
+    cost a thread and a socket to measure the same thing.
+
+    Nothing is caught: an overlay the unit refuses raises out of the ``with``,
+    which is the half of the contract the clause is about.
+    """
+    with _in_process(vendor, profile, {"VENDORFAKE_SEED_OVERLAY": canonical_json(dict(overlay))}) as client:
+        yield client
 
 
 @contextmanager
@@ -244,9 +264,13 @@ def target(
     def opener(profile: str, transport: str) -> AbstractContextManager[ConformanceClient]:
         return open_client(vendor, profile, transport)
 
+    def overlay_opener(profile: str, overlay: Mapping[str, Any]) -> AbstractContextManager[ConformanceClient]:
+        return open_with_seed_overlay(vendor, profile, overlay)
+
     return ConformanceTarget(
         name=vendor,
         open_client=opener,
+        open_with_seed_overlay=overlay_opener,
         profiles=tuple(profiles),
         transports=tuple(transports),
         out_of_process=tuple(out_of_process),

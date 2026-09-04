@@ -232,11 +232,21 @@ def test_health_reports_the_transport_adapters_counter_when_one_is_supplied() ->
     assert in_process(unit).get("/__unit/health").json()["framework_answered"] == 3
 
 
-def test_info_carries_all_seven_keys_the_conformance_suite_asserts_by_name() -> None:
+def test_info_carries_all_eight_keys_the_conformance_suite_asserts_by_name() -> None:
     api, _ = _api()
     body = api.get("/__unit/info").json()
-    for key in ("vendor", "profile", "capabilities", "chaos", "webhooks", "clock", "state"):
+    for key in ("vendor", "profile", "capabilities", "chaos", "webhooks", "clock", "seed_overlay", "state"):
         assert key in body, key
+
+
+def test_info_reports_no_seed_overlay_for_a_unit_built_without_one() -> None:
+    """``active`` says something about this run only if the no-overlay case
+    reports false rather than omitting the key: ``compact()`` strips a top-level
+    ``None``, so publishing the digest bare would make "no overlay" and "a
+    control plane that predates overlays" the same document."""
+    api, _ = _api()
+    overlay = api.get("/__unit/info").json()["seed_overlay"]
+    assert overlay == {"active": False, "digest": None}
 
 
 def test_info_publishes_empty_roles_for_a_vendor_that_predates_the_property() -> None:

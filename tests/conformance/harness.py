@@ -42,9 +42,10 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 
@@ -55,6 +56,7 @@ from vendorfake.conformance.client import InProcessConformanceClient
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.logging import JsonLogger
 from vendorfake.core.transport.inprocess import in_process
+from vendorfake.core.util.json import canonical_json
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.registry import create_unit
 from vendorfake.testing.conformance import CLOVER_EXPECTED_SKIPS as _CLOVER_EXPECTED_SKIPS
@@ -100,7 +102,13 @@ indefensible, so it is paid for by the one contract whose claim requires it.
 CHILD_STARTUP_TIMEOUT_S = 60.0
 
 
-def build_unit(profile: str, *, tripwire: FrameworkTripwire | None = None, vendor: str = VENDOR) -> Unit:
+def build_unit(
+    profile: str,
+    *,
+    tripwire: FrameworkTripwire | None = None,
+    vendor: str = VENDOR,
+    env: Mapping[str, str] | None = None,
+) -> Unit:
     """One unit for one check, built the same way for every transport.
 
     ``warn`` rather than the profile's own level: a matrix run builds close to
@@ -127,6 +135,10 @@ def build_unit(profile: str, *, tripwire: FrameworkTripwire | None = None, vendo
         sink=MemorySink(),
         logger=JsonLogger("warn"),
         framework_answered=None if tripwire is None else tripwire.get,
+        # Empty for every ordinary check -- the registry's own default -- and
+        # named only by `open_with_seed_overlay` below, which is the one caller
+        # that has to reach a `VENDORFAKE_*` layer to build the unit it needs.
+        env=env,
     )
 
 
@@ -267,6 +279,24 @@ def _in_process(profile: str, vendor: str = VENDOR) -> Iterator[ConformanceClien
 
 
 @contextmanager
+def open_with_seed_overlay(
+    profile: str, overlay: Mapping[str, Any], vendor: str = VENDOR
+) -> Iterator[ConformanceClient]:
+    """A unit with ``overlay`` laid over the profile's seed, in process.
+
+    In process for every matrix row, because the overlay is applied while the
+    unit is *built* and a binding is only put in front of one afterwards --
+    see ``ConformanceTarget.open_with_seed_overlay``. Nothing is caught: a
+    refused overlay raises out of the ``with``, which is the answer C36 reads.
+    """
+    unit = build_unit(profile, vendor=vendor, env={"VENDORFAKE_SEED_OVERLAY": canonical_json(dict(overlay))})
+    try:
+        yield InProcessConformanceClient(in_process(unit))
+    finally:
+        unit.stop()
+
+
+@contextmanager
 def open_client(profile: str, transport: str, vendor: str = VENDOR) -> Iterator[ConformanceClient]:
     if transport == "inprocess":
         with _in_process(profile, vendor) as client:
@@ -292,6 +322,7 @@ def target(
     return ConformanceTarget(
         name=VENDOR,
         open_client=open_client,
+        open_with_seed_overlay=open_with_seed_overlay,
         profiles=profiles,
         transports=transports,
         out_of_process=out_of_process,
@@ -325,6 +356,7 @@ def clover_target(
     return ConformanceTarget(
         name=CLOVER_VENDOR,
         open_client=functools.partial(open_client, vendor=CLOVER_VENDOR),
+        open_with_seed_overlay=functools.partial(open_with_seed_overlay, vendor=CLOVER_VENDOR),
         profiles=profiles,
         transports=transports,
         out_of_process=out_of_process,
@@ -383,6 +415,7 @@ def toast_target(
     return ConformanceTarget(
         name=TOAST_VENDOR,
         open_client=functools.partial(open_client, vendor=TOAST_VENDOR),
+        open_with_seed_overlay=functools.partial(open_with_seed_overlay, vendor=TOAST_VENDOR),
         profiles=profiles,
         transports=transports,
         out_of_process=out_of_process,
@@ -414,6 +447,7 @@ def lightspeed_target(
     return ConformanceTarget(
         name=LIGHTSPEED_VENDOR,
         open_client=functools.partial(open_client, vendor=LIGHTSPEED_VENDOR),
+        open_with_seed_overlay=functools.partial(open_with_seed_overlay, vendor=LIGHTSPEED_VENDOR),
         profiles=profiles,
         transports=transports,
         out_of_process=out_of_process,

@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - types only
     from contextlib import AbstractContextManager
@@ -159,6 +159,14 @@ class Requires:
     #: from the process itself -- a pid, an import-time counter, a hash seed --
     #: and "deterministic across runs" is a claim about processes.
     out_of_process: bool = False
+    #: The target can build a unit with a partial seed document laid over the
+    #: profile's -- ``ConformanceTarget.open_with_seed_overlay``. A contract
+    #: about what happens when a unit is *constructed* cannot be asked through
+    #: a client onto a unit that is already running, so it is the one
+    #: precondition here that is a property of the target rather than of the
+    #: unit; a target that does not publish the opener skips instead of
+    #: reporting a pass it never measured.
+    seed_overlay: bool = False
 
 
 CheckFn = Callable[["CheckEnv"], str]
@@ -226,6 +234,18 @@ class ConformanceTarget:
     #: manifest under ``--strict``: an undeclared skip fails, and so does a
     #: declared skip that stops happening.
     expected_skips: Mapping[str, Sequence[str]] | None = None
+    #: Builds a unit with ``overlay`` -- a partial seed document -- laid over
+    #: the profile's seed, and yields a client onto it; or raises whatever the
+    #: unit's construction raises, which is the half the seed-overlay contract
+    #: is actually about. ``None`` for a target that cannot build one, in
+    #: which case that contract skips rather than passing unmeasured.
+    #:
+    #: No ``transport`` parameter, unlike :attr:`open_client`, and
+    #: deliberately: the overlay is applied while the *unit* is built, which
+    #: happens before a binding is put in front of it, so every transport
+    #: would be asking the identical question and paying for a second server
+    #: to do it. A target is free to build the unit however it likes.
+    open_with_seed_overlay: Callable[[str, Mapping[str, Any]], AbstractContextManager[ConformanceClient]] | None = None
     #: Check id -> why this vendor can never be asked it. Distinct from a skip
     #: matrix on purpose: a contract skipped on every profile is a contract
     #: nobody tested, and the anti-vacuity rule refuses it -- unless the

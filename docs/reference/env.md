@@ -9,6 +9,7 @@ Every environment variable `load_profile` reads. `Replaces` names the reference 
 | `VENDORFAKE_PROFILE` | `UNIT_PROFILE` | profile | Profile name or path to load when none is passed. |
 | `VENDORFAKE_CAPABILITIES` | `UNIT_CAPABILITIES` | capabilities | Absolute list, or a +add,-remove delta against the profile's list. |
 | `VENDORFAKE_SEED` | `UNIT_SEED` | seed_path | Seed document path, overriding the profile's. |
+| `VENDORFAKE_SEED_OVERLAY` |  | seed_overlay | Partial seed document merged over the seed: a JSON file path, or the JSON itself inline. |
 | `VENDORFAKE_WEBHOOK_URL` | `UNIT_WEBHOOK_URL` | webhooks.subscribers | Appends one subscriber so a container can push to a caller with no API call. |
 | `VENDORFAKE_WEBHOOK_EVENTS` | `UNIT_WEBHOOK_EVENTS` | webhooks.subscribers | Comma-separated event types for that subscriber. Defaults to '*'. |
 | `VENDORFAKE_WEBHOOK_SIGNATURE_KEY` | `UNIT_WEBHOOK_SIGNATURE_KEY` | webhooks.subscribers | Signing key for that subscriber. |

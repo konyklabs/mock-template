@@ -203,18 +203,19 @@ def test_the_table_carries_the_sixteen_reference_names_renamed() -> None:
 
 
 def test_the_native_rows_declare_no_reference_equivalent() -> None:
-    """konyklabs/roadmap#71 and #72: four controls this project added; the
+    """konyklabs/roadmap#71, #72 and #85: five controls this project added; the
     reference never emitted a switchable sidecar location, an env-settable
-    clock start, a request log or a strict unmatched policy, so there is no
-    name to cite and ``replaces`` says so."""
+    clock start, a request log, a strict unmatched policy or a seed overlay, so
+    there is no name to cite and ``replaces`` says so."""
     native = {var.name for var in ENV_TABLE if var.replaces is None}
     assert native == {
         "VENDORFAKE_CLOCK_START",
         "VENDORFAKE_ERROR_SIDECAR",
         "VENDORFAKE_REQUEST_LOG_CAPACITY",
+        "VENDORFAKE_SEED_OVERLAY",
         "VENDORFAKE_UNMATCHED",
     }
-    assert len(ENV_TABLE) == 20
+    assert len(ENV_TABLE) == 21
 
 
 def test_no_unit_prefixed_alias_is_honoured() -> None:

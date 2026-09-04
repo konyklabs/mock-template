@@ -18,18 +18,26 @@ for the same reason, and an overload set that is never exercised rots.
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
+from pathlib import Path
 from typing import assert_type
 
 from vendorfake.testing import (
     CloverSeed,
+    CloverSeedOverlay,
     Credentials,
     Driver,
+    LightspeedSeed,
+    LightspeedSeedOverlay,
     Seed,
     ServedUnit,
     SquareSeed,
+    SquareSeedOverlay,
     StartedUnit,
     ToastSeed,
+    ToastSeedOverlay,
     Token,
+    async_unit,
     serve_in_thread,
     served,
     unit,
@@ -104,3 +112,68 @@ def a_child_process_narrows_too() -> None:
     with served("clover") as child:
         assert_type(child, ServedUnit[CloverSeed])
         assert_type(child.seed.merchant_id, str)
+
+
+# ---------------------------------------------------------------------------
+# Seed overlays: the collection names are typed, per vendor.
+#
+# The positives only. That an overlay naming a collection the vendor does NOT
+# have is *rejected* is a negative, and a negative cannot be asserted by a
+# type check that passes -- it is asserted by running mypy on
+# `tests/typing/negative/square_overlay_unknown_collection.py` from
+# `tests/unit/testing/test_seed_typing.py`.
+# ---------------------------------------------------------------------------
+
+
+def a_square_overlay_takes_squares_own_collections() -> None:
+    with unit("square", seed_overlay={"catalog": {}, "orders": []}) as started:
+        assert_type(started.seed, SquareSeed)
+
+
+def a_clover_overlay_takes_clovers_own_collections() -> None:
+    with unit("clover", seed_overlay={"items": [], "tenders": []}) as started:
+        assert_type(started.seed, CloverSeed)
+
+
+def a_toast_overlay_takes_toasts_own_collections() -> None:
+    with unit("toast", seed_overlay={"menu_v3": {}, "dining_options": []}) as started:
+        assert_type(started.seed, ToastSeed)
+
+
+def an_overlay_may_be_a_path() -> None:
+    """Both spellings the parameter accepts, on the literal overloads: a
+    ``str`` and an ``os.PathLike``, neither of which is a mapping."""
+    with unit("square", seed_overlay="overlay.json") as from_str:
+        assert_type(from_str.seed, SquareSeed)
+    with unit("clover", seed_overlay=Path("overlay.json")) as from_path:
+        assert_type(from_path.seed, CloverSeed)
+
+
+def an_overlay_variable_of_the_declared_type_is_accepted() -> None:
+    """The types are usable as annotations and not only as literal contexts,
+    which is how a consumer's fixture would hold one."""
+    square: SquareSeedOverlay = {"merchant": {"business_name": "Overlaid"}}
+    clover: CloverSeedOverlay = {"merchant": {}}
+    toast: ToastSeedOverlay = {"restaurant": {}}
+    lightspeed: LightspeedSeedOverlay = {"inventory": []}
+    with unit("square", seed_overlay=square) as a, unit("clover", seed_overlay=clover) as b:
+        assert_type(a.seed, SquareSeed)
+        assert_type(b.seed, CloverSeed)
+    with unit("toast", seed_overlay=toast) as c:
+        assert_type(c.seed, ToastSeed)
+    with unit("lightspeed", seed_overlay=lightspeed) as d:
+        assert_type(d.seed, LightspeedSeed)
+
+
+def a_vendor_that_is_not_a_literal_takes_any_object_as_an_overlay(vendor: str) -> None:
+    """``SeedOverlay`` is ``Mapping[str, Any]``: the honest answer when the
+    call site does not know which vendor's collections apply."""
+    with unit(vendor, seed_overlay={"whatever": 1}) as started:
+        assert_type(started, StartedUnit[Seed])
+
+
+def served_and_async_unit_carry_the_same_overlay_types() -> None:
+    with served("toast", seed_overlay={"orders": []}) as child:
+        assert_type(child, ServedUnit[ToastSeed])
+    holder: AbstractAsyncContextManager[StartedUnit[SquareSeed]] = async_unit("square", seed_overlay={"locations": []})
+    del holder
