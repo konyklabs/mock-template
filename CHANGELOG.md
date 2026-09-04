@@ -12,12 +12,14 @@ Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
   `toast/signer.py` exactly -- the timestamp is appended only when the body is
   a JSON object carrying one as a string; anything else is signed alone. It
   used to throw on a body without one. Four parity vectors are pinned in both
-  suites so the two cannot drift again (#49).
-* **testing:** `served(env=)` refuses, with a `ValueError` naming the
-  parameter to use, an entry for `VENDORFAKE_PROFILE`, `VENDORFAKE_HOST`,
-  `VENDORFAKE_PORT`, `VENDORFAKE_LOG_LEVEL` or `VENDORFAKE_TRANSPORT` -- the
-  child gets the first four as explicit flags and `serve` only binds HTTP, so
-  the entry changed nothing and was documented as silently beaten (#105).
+  suites, and the full self-test now runs the Vitest example as well as the
+  pytest one, so the two cannot drift again without a step going red (#49).
+* **testing:** `served(env=)` refuses an entry for `VENDORFAKE_PROFILE`,
+  `VENDORFAKE_HOST`, `VENDORFAKE_PORT` or `VENDORFAKE_LOG_LEVEL` with a
+  `ValueError` naming the parameter to use -- the child gets each as an
+  explicit flag, so the entry changed nothing and was documented as silently
+  beaten -- and a `VENDORFAKE_TRANSPORT` entry with its own message: `serve`
+  only ever binds HTTP, and there is no parameter to use instead (#105).
 
 * **examples:** both consumer examples now assert the documented status a
   Toast check lands in after an OTHER payment covering its total: `CLOSED`,
@@ -35,9 +37,11 @@ Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
   `bandit -ll` over the package in its full mode (main and a laptop before a
   push; not `--quick`). Bandit's one finding, the wildcard-bind comparison in
   `webhook_receiver`, is annotated at the site (#105).
-* `uv.lock` carries the 0.3.0 version `pyproject.toml` already had;
-  release-please bumps only the latter, so every `uv run` since v0.3.0 had
-  been rewriting the lockfile in the working tree (#103).
+* `uv.lock` carries the 0.3.0 version `pyproject.toml` already had, aligned
+  by hand on vendorfake#43: release-please bumps only the latter, so every
+  `uv run` since v0.3.0 had been rewriting the lockfile in the working tree.
+  The root-cause fix -- the lockfile in the release config's extra-files --
+  is still pending, as #105's item 2 (it needs a workflow change).
 
 ---
 

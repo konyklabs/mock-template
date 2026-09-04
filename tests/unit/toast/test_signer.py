@@ -121,7 +121,7 @@ def test_the_signature_vectors_the_vitest_example_pins_too(body: bytes, expected
     timestamp unconditionally and threw on a body without one, while this
     signer signs such a body alone. These four vectors -- no timestamp, a
     string one, a numeric one, an array -- are pinned identically in
-    ``examples/vitest-consumer/tests/toast.test.ts``, so the two
-    implementations cannot drift apart again without one of the suites
-    going red. The secret is ``unit-toast-secret``."""
+    ``examples/vitest-consumer/tests/toast.test.ts``, and the full self-test
+    runs both suites, so the two implementations cannot drift apart again
+    without a step going red. The secret is ``unit-toast-secret``."""
     assert toast_signature("unit-toast-secret", body) == expected

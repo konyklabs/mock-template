@@ -236,9 +236,14 @@ def test_served_refuses_an_env_entry_a_flag_would_beat_rather_than_ignoring_it(
     import vendorfake.testing as testing
 
     monkeypatch.setattr(testing, "SERVE_COMMAND", (sys.executable, "-c", "raise SystemExit('spawned')"))
-    with pytest.raises(ValueError, match=name):  # noqa: SIM117 - the `with served(...)` is the subject
+    # The explanation, not just the name: the transport has no parameter to
+    # point at, and a message that said "use the parameter" for it sent the
+    # reader looking for one (review of konyklabs/roadmap#105).
+    explanation = "only ever binds HTTP" if name == "VENDORFAKE_TRANSPORT" else "Use the parameter instead"
+    with pytest.raises(ValueError, match=name) as refused:  # noqa: SIM117 - the `with served(...)` is the subject
         with served("square", "no-faults", env={name: "x"}) as driver:
             pytest.fail(f"served() yielded {driver!r} with {name} in env=")
+    assert explanation in str(refused.value)
 
 
 def test_served_s_env_credential_override_reaches_the_child_and_the_seed_alike(

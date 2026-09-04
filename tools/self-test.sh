@@ -103,21 +103,25 @@ step "docs"              _docs_step
 # Security scanners, full run only (konyklabs/roadmap#105): pip-audit over the
 # runtime dependencies as the lockfile resolves them, bandit over the package
 # at medium severity and up. Both run from their published packages via uvx,
-# so neither is a dependency of vendorfake itself. A finding that is a
-# deliberate choice is annotated at the site with its reason, never silenced
-# by configuration.
+# so neither is a dependency of vendorfake itself, and both are pinned so a
+# tool release cannot turn main red with an empty diff -- pip-audit's advisory
+# database stays live, which is the point; the tool that reads it does not
+# move on its own. A finding that is a deliberate choice is annotated at the
+# site with its reason, never silenced by configuration.
+BANDIT_VERSION="1.9.4"
+PIP_AUDIT_VERSION="2.10.1"
 _pip_audit_step() {
   local requirements
   requirements="$(mktemp)"
   uv export --frozen --no-dev --no-hashes --no-emit-project > "$requirements" || return 1
-  uvx pip-audit --strict -r "$requirements"
+  uvx "pip-audit==$PIP_AUDIT_VERSION" --strict -r "$requirements"
   local code=$?
   rm -f "$requirements"
   return $code
 }
 if [ "$QUICK" -eq 0 ]; then
   step "pip-audit"         _pip_audit_step
-  step "bandit"            uvx bandit -q -r src/vendorfake -ll
+  step "bandit"            uvx "bandit==$BANDIT_VERSION" -q -r src/vendorfake -ll
 fi
 
 # The pytest consumer example, run as its own uv project against THIS
@@ -129,8 +133,17 @@ fi
 _example_step() {
   (cd examples/pytest-consumer && uv sync -q --reinstall-package vendorfake && uv run pytest -q -p no:randomly)
 }
+# The Vitest example too: it is the side the #49 signer divergence lived on,
+# and its parity vectors guard nothing unless something runs them. Needs npm;
+# a machine without it fails the step rather than skipping it, because a
+# skipped step reads as a pass in the table.
+_vitest_example_step() {
+  command -v npm >/dev/null 2>&1 || { echo "npm is not on PATH; the Vitest example cannot run" >&2; return 1; }
+  (cd examples/vitest-consumer && npm ci --no-audit --no-fund --silent && npm test --silent)
+}
 if [ "$QUICK" -eq 0 ]; then
   step "example (pytest)"  _example_step
+  step "example (vitest)"  _vitest_example_step
 fi
 
 # The conformance suite through its own entry points, which pytest does not

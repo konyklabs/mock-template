@@ -61,9 +61,10 @@ a call without it behaves as before. Entries for what `served()` passes as a
 flag (`VENDORFAKE_PROFILE`, `VENDORFAKE_HOST`, `VENDORFAKE_PORT`,
 `VENDORFAKE_LOG_LEVEL`), for `VENDORFAKE_TRANSPORT`, and for
 `VENDORFAKE_SEED` are refused with `ValueError` before the child is spawned
-— the first five because the flag would beat them and the entry would change
-nothing, the last because `.seed` could not describe it. There is still no
-`capabilities=`.
+— the first four because the flag would beat them (the message names the
+parameter to use), the transport because `serve` only ever binds HTTP and
+there is no parameter to use, the seed because `.seed` could not describe
+it. There is still no `capabilities=`.
 
 **`served()`'s startup failures are eager, in the parent process.** An
 unknown vendor, a nonexistent or malformed profile, and a vendor with no seed

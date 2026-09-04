@@ -118,12 +118,13 @@ function order() {
  * before assuming its HMAC is wrong.
  */
 function toastSignature(secret: string, rawBody: Buffer): string {
-  // Mirrors `toast/signer.py` exactly (konyklabs/roadmap#49): the timestamp is
-  // appended only when the body is a JSON object carrying one as a string;
-  // any other body -- no timestamp, a numeric one, an array, not JSON at all
-  // -- is signed alone. Every delivery the fake generates carries a string
-  // timestamp, so the shipped suite never reaches the other branches; the
-  // parity vectors below do, and are the same four `tests/unit/toast/test_signer.py` pins.
+  // Mirrors `toast/signer.py` for every body the fake emits (konyklabs/roadmap#49):
+  // the timestamp is appended only when the body is a JSON object carrying one
+  // as a string; any other body -- no timestamp, a numeric one, an array, not
+  // JSON at all -- is signed alone. The two still differ where JSON.parse and
+  // Python's json.loads do (NaN/Infinity, which the fake never emits) and on
+  // invalid UTF-8 (Node substitutes U+FFFD, Python falls back to the raw body).
+  // The parity vectors below are the same four `tests/unit/toast/test_signer.py` pins.
   let timestamp = "";
   try {
     const parsed: unknown = JSON.parse(rawBody.toString("utf8"));

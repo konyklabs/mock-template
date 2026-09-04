@@ -1389,6 +1389,12 @@ def _served(
     # nothing is worse than one that is refused, because the caller reads
     # "env reaches the child" and then debugs a child still logging at
     # `error`, still on a random port, still on loopback.
+    if "VENDORFAKE_TRANSPORT" in layer:
+        raise ValueError(
+            "served(env=...) cannot carry VENDORFAKE_TRANSPORT: `vendorfake serve` only ever binds HTTP, so the "
+            "entry would change nothing, and there is no parameter to use instead -- a served unit is an HTTP "
+            "unit by definition. Build a unit in-process for any other binding."
+        )
     beaten = sorted(_FLAG_BEATEN_ENV & set(layer))
     if beaten:
         raise ValueError(
@@ -1463,12 +1469,13 @@ def _served(
 
 
 _FLAG_BEATEN_ENV: frozenset[str] = frozenset(
-    {"VENDORFAKE_PROFILE", "VENDORFAKE_HOST", "VENDORFAKE_PORT", "VENDORFAKE_LOG_LEVEL", "VENDORFAKE_TRANSPORT"}
+    {"VENDORFAKE_PROFILE", "VENDORFAKE_HOST", "VENDORFAKE_PORT", "VENDORFAKE_LOG_LEVEL"}
 )
 """The ``VENDORFAKE_*`` names an ``env=`` entry to :func:`served` is refused
-for, because the child gets each as a flag (``--profile``, ``--host``,
-``--port``, ``--log-level``) or, for the transport, is ``serve`` and only ever
-binds HTTP. See :func:`_served`."""
+for because the child gets each as a flag (``--profile``, ``--host``,
+``--port``, ``--log-level``) that beats the variable; the refusal names the
+parameter to use. ``VENDORFAKE_TRANSPORT`` and ``VENDORFAKE_SEED`` are refused
+too, each with its own reason and no substitute parameter. See :func:`_served`."""
 
 _FLAG_BEATEN_HINT = "profile=, host=, port= and log_level="
 
