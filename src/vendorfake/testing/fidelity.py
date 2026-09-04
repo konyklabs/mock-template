@@ -1,16 +1,7 @@
-"""Fidelity targets for the vendors shipped in this distribution.
-
-FOR: a consumer who installed the wheel and wants to run the documented corpus
-and the per-route matrix without a checkout::
-
-    python -m vendorfake.fidelity report --target vendorfake.testing.fidelity:square_target
-    pytest --pyargs vendorfake.fidelity -p vendorfake.fidelity.plugin --fidelity-target vendorfake.testing.fidelity:square_target
-
-``vendorfake.fidelity`` may not import a vendor or the registry, so the
-targets live here, one layer out, exactly as the conformance targets do in
-``vendorfake.testing.conformance``. The repository's own harness
-(``tests/fidelity/harness.py``) re-exports these rather than defining its own,
-so the wheel's target and CI's cannot disagree.
+"""Fidelity targets for the vendors shipped in this distribution, usable from an
+installed wheel with no checkout. ``vendorfake.fidelity`` may not import a vendor
+or the registry, so the targets live here; ``tests/fidelity/harness.py``
+re-exports them rather than defining its own.
 """
 
 from __future__ import annotations
@@ -61,13 +52,8 @@ def square_target() -> FidelityTarget:
 
 
 def lightspeed_target() -> FidelityTarget:
-    """The first VENDORED vendor after Square: the specification is published
-    under Apache 2.0, so a structural extract may be committed and no ``fetch``
-    step is needed.
-
-    Both fidelity steps therefore run offline for this vendor: there is no
-    ``fetch`` to pay for, and ``pin --check --offline`` compares a committed
-    ``extract.json`` against a committed ``pin.json``."""
+    """A vendored vendor: the specification is Apache 2.0, so the extract is
+    committed and both fidelity steps run offline."""
     return FidelityTarget(
         name=_LIGHTSPEED,
         anchor=_LIGHTSPEED_ANCHOR,
@@ -77,10 +63,8 @@ def lightspeed_target() -> FidelityTarget:
 
 
 def toast_target() -> FidelityTarget:
-    """The first non-vendored vendor: its extract is fetched, never committed
-    (konyklabs/roadmap#56), so the first use on a cold cache needs the network
-    -- ``vendorfake-fidelity fetch --target vendorfake.testing.fidelity:toast_target``
-    is the step that pays for it once."""
+    """A non-vendored vendor: its extract is fetched, never committed, so the
+    first use on a cold cache needs the network (konyklabs/roadmap#56)."""
     return FidelityTarget(
         name=_TOAST,
         anchor=_TOAST_ANCHOR,

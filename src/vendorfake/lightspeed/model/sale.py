@@ -1,81 +1,21 @@
 """The sale wire shapes: what a request may carry, what a sale is stored as,
 and what the two response envelopes print.
 
-FOR: keeping the whole of "what a sale looks like" in one module, so the
-surface in ``surface/sales.py`` reads as routing and rules rather than as dict
-building, and so the entity a ``sale.update`` webhook carries and the entity
-``GET /sales/{sale_id}`` answers are produced by the same function.
+DOCUMENTED (``api-2026-07``): ``line_items`` and ``payments`` are inline
+arrays on the sale itself -- there is no ``/sales/{sale_id}/payments`` or
+``/sales/{sale_id}/line_items`` sub-resource in this version of the
+specification, which is the single most important shape fact about this tag.
+The vendor's own spelling differs between the two outlet fields: the line
+item's is ``fulfilment_outlet_id`` (one ``l``), the sale's is
+``fulfillment_outlet_id`` (two) -- both reproduced exactly, because hiding the
+typo would hide what a consumer meets in production.
 
-DOCUMENTED, and read out of ``api-2026-07`` schema by schema:
-
-``SaleRequestBase``
-    The editable body, with ``source`` and ``state`` the only two ``required``
-    members. ``line_items`` and ``payments`` are **inline arrays on the sale
-    itself** -- there is no ``/sales/{sale_id}/payments`` and no
-    ``/sales/{sale_id}/line_items`` sub-resource anywhere in this version of
-    the specification, which is the single most important shape fact about
-    this tag. ``SaleRequest`` adds an optional caller-supplied ``id``;
-    ``SaleUpdateRequest`` is ``SaleRequestBase`` unchanged, with the id in the
-    path.
-``SaleLineItem``
-    ``product`` (``{id}``), ``quantity``, ``pricing`` (``{price}`` required,
-    plus ``cost``, ``discount``, ``loyalty_amount``, ``adjustments``) and
-    ``tax`` (``{id, amount}``, both required) are the four ``required``
-    members; ``id``, ``status``, ``fulfilment_outlet_id``, ``source``,
-    ``attributes`` and ``_metadata`` are optional. Note the vendor's own
-    spelling: the LINE ITEM's outlet field is ``fulfilment_outlet_id`` (one
-    ``l``) while the SALE's is ``fulfillment_outlet_id`` (two). Both are
-    reproduced exactly, because a fake that silently accepts the tidier
-    spelling hides the typo a consumer will meet in production.
-``SalePayment``
-    ``amount`` and ``type`` are required; ``type`` is a ``PaymentTypeConfig``,
-    i.e. ``{"config_id": "<payment type id>"}`` -- "Payment type id to be used
-    for the payment" -- and the register is ``source.register_id``, "The ID of
-    the register used to add this payment to the sale". So a payment names its
-    payment type and its register through two nested one-member objects, not
-    as flat ids.
-``Sale`` (the response)
-    ``line_items`` become ``SaleResponseLineItem`` (``pricing`` gains
-    ``cost_total``/``discount_total``/``loyalty_amount_total``/``total``,
-    ``tax`` gains ``total``), ``payments`` become ``SaleResponsePayment``
-    (``type`` becomes ``PaymentTypeDetails``, which carries the payment type's
-    ``name``), and the sale gains ``totals`` (``SaleTotals``), ``taxes``
-    (``SaleResponseTax[]``), ``return`` (``SaleReturn``) and ``_metadata``
-    (``SaleResponseMetadata``, whose ``version`` is "Monotonically increasing
-    version number of the sale").
-
-JUDGMENT, each labelled at its site below:
-
-* **``version`` is emitted twice** -- at ``_metadata.version`` because the
-  ``Sale`` schema declares it only there, and at the top level because the
-  pagination contract every list in this API follows requires a caller to read
-  the next ``after`` off the rows themselves
-  (https://x-series-api.lightspeedhq.com/docs/pagination, "Every entity carries
-  version") and because ``initReturnSale``'s own response example prints
-  ``"version": 1978890425`` at the top level. The two are always the same
-  number. Emitting only one of them would break either the schema or the
-  documented walk.
-* **the totals are computed, never taken from the request.** ``SaleTotals`` is
-  absent from ``SaleRequestBase`` -- a caller cannot send one -- so every
-  member is derived from the line items here. A fake that let a caller declare
-  its own totals would be unable to show a consumer the rounding the real API
-  does.
-* **tax is per line item and inclusive of nothing.** ``LineItemTax.amount`` is
-  "The unit tax value associated with this line item", so the line's tax total
-  is ``amount x quantity`` and the sale's ``totals.tax`` is the sum of those;
-  ``totals.price`` is documented "tax exclusive" and ``totals.price_incl_tax``
-  is the two added. No tax RATE is read anywhere, because the Taxes tag is
-  outside issue #94's scoped surface and a rate would have to be invented.
-* **``totals.surcharge`` is always 0.** Surcharges arrive through
-  ``SalePayment.surcharge`` (``SalePaymentSurcharge``) and the promotions and
-  adjustment machinery this slice does not model; reporting a number this unit
-  cannot compute would be worse than reporting the zero it can.
-* **``pricing.adjustments`` and ``SalePricing.adjustments`` are accepted and
-  do not change any total.** They are ``SaleAdjustment``/``LineItemAdjustment``
-  arrays whose semantics (``NON_CASH_FEE``, ``DISCOUNT``, ``TIP``, each with an
-  ``AdjustmentAmount`` and an ``AdjustmentSource``) belong to the promotions
-  surface this slice does not serve. Recorded in ``capabilities.py`` under
-  ``sale-adjustments`` rather than half-implemented.
+JUDGMENT: ``version`` is emitted twice -- at ``_metadata.version``, where the
+``Sale`` schema declares it, and at the top level, because the pagination
+contract every list in this API follows requires reading the next ``after``
+off the rows themselves (https://x-series-api.lightspeedhq.com/docs/pagination)
+and ``initReturnSale``'s own example prints it there too. The two are always
+the same number.
 """
 
 from __future__ import annotations
@@ -106,24 +46,18 @@ __all__ = [
 ]
 
 _REQUEST = ConfigDict(extra="ignore", frozen=True)
-"""``extra="ignore"``, as every request model in this package is: a consumer
-sending a member of the schema this slice does not model (``service_fields``,
-``fulfillment_details``, ``ecom_custom_charges``) gets the sale it asked for
-rather than a 422 about a field the vendor really does accept."""
+"""A member this slice does not model (``service_fields``,
+``fulfillment_details``, ...) is ignored, not refused."""
 
 LINE_ITEM_STATUS_CONFIRMED = "CONFIRMED"
-"""``SaleLineItem.status``: "If defined as ``CONFIRMED`` for pending sales, the
-line item will be added as **read-only**"."""
+"""``SaleLineItem.status``: ``CONFIRMED`` on a pending sale is read-only."""
 
 
 # -- request models ---------------------------------------------------------
 #
-# Money and quantity are typed `Any` here rather than `float`, deliberately.
-# Pydantic would coerce `"12.34"`, `true` and `Decimal` alike and report its own
-# failure wording for the rest; `model/money.py`'s `to_minor` is this package's
-# one amount reader and it raises the vendor's 422 naming the exact dotted
-# field. Typing them loosely and converting in `build_*` below is what keeps
-# one error vocabulary for every amount on this surface.
+# Money/quantity are typed `Any` rather than `float`: `model/money.py`'s
+# `to_minor` is this package's one amount reader, and raises the vendor's 422
+# naming the exact dotted field instead of Pydantic's own coercion errors.
 
 
 class LineItemProductRef(BaseModel):
@@ -156,8 +90,7 @@ class LineItemTaxRequest(BaseModel):
 
 
 class LineItemMetadataRequest(BaseModel):
-    """``LineItemMetadata``: ``sequence``, ``is_price_override``,
-    ``fulfillment_method``."""
+    """``LineItemMetadata``: ``sequence``, ``is_price_override``, ``fulfillment_method``."""
 
     model_config = _REQUEST
 
@@ -176,8 +109,7 @@ class LineItemSourceRequest(BaseModel):
 
 
 class SaleLineItemRequest(BaseModel):
-    """``SaleLineItem``. ``product``, ``quantity``, ``pricing`` and ``tax`` are
-    the four documented ``required`` members."""
+    """``SaleLineItem``. ``product``, ``quantity``, ``pricing`` and ``tax`` are the four required members."""
 
     model_config = _REQUEST
 
@@ -187,8 +119,7 @@ class SaleLineItemRequest(BaseModel):
     tax: LineItemTaxRequest
     id: str | None = None
     status: str | None = None
-    #: The vendor's own single-``l`` spelling on the LINE ITEM; see the module
-    #: docstring.
+    #: The vendor's own single-``l`` spelling; see the module docstring.
     fulfilment_outlet_id: str | None = None
     source: LineItemSourceRequest | None = None
     attributes: list[dict[str, Any]] = Field(default_factory=list)
@@ -224,14 +155,9 @@ class SalePaymentRequest(BaseModel):
 
 
 class SaleSourceRequest(BaseModel):
-    """``SaleRequestSource``. ``author_id`` is the one required member.
-
-    ``author_id`` is NOT resolved against anything: the Users tag (``GET
-    /users``, ``GET /users/{user_id}``) is outside issue #94's scoped surface,
-    so this unit has no user collection to check it against and refusing an
-    unknown cashier would be inventing a rule it cannot apply consistently.
-    Recorded in ``capabilities.py`` under ``sale-author-not-resolved``.
-    """
+    """``SaleRequestSource``. ``author_id`` (the one required member) is not
+    resolved against anything -- the Users tag is out of scope; recorded in
+    ``capabilities.py`` under ``sale-author-not-resolved``."""
 
     model_config = _REQUEST
 
@@ -250,8 +176,7 @@ class SalePricingRequest(BaseModel):
 
 
 class SaleUpdateRequest(BaseModel):
-    """``SaleUpdateRequest`` == ``SaleRequestBase``: ``source`` and ``state``
-    required, everything else optional."""
+    """``SaleUpdateRequest`` == ``SaleRequestBase``: ``source``/``state`` required, everything else optional."""
 
     model_config = _REQUEST
 
@@ -271,8 +196,7 @@ class SaleUpdateRequest(BaseModel):
 
 
 class SaleRequest(SaleUpdateRequest):
-    """``SaleRequest``: the update body plus an optional caller-supplied ``id``
-    ("If not included, one will be generated")."""
+    """``SaleRequest``: the update body plus an optional caller-supplied ``id`` (else one is generated)."""
 
     model_config = _REQUEST
 
@@ -291,25 +215,13 @@ def build_line_item(
     is_return: bool = False,
 ) -> dict[str, Any]:
     """One stored line item: ids and text as given, money in minor units.
-
-    ``field`` is the dotted path this line item sits at in the request body
-    (``line_items[0]``), so a bad amount is refused naming
-    ``line_items[0].pricing.price`` rather than "a price".
-
-    THE LINE'S PRODUCTS ARE COMPUTED HERE AND THROWN AWAY, deliberately.
-    ``_scale`` refuses an amount whose product with the quantity overflows the
-    decimal context, and the only other place that product is taken is
-    ``project_sale`` -- which runs AFTER the insert. A refusal raised there
-    would answer the caller a correct 422 for a sale that is already in the
-    store and already in the journal, so the check is pulled forward to where
-    every other amount on this line is validated: before any id is minted and
-    before anything commits.
+    ``field`` is this line's dotted request path (``line_items[0]``), for the
+    refusal naming ``line_items[0].pricing.price``. Also runs ``_scale``'s
+    overflow check here, before anything commits.
     """
     quantity = _quantity(request.quantity, field=f"{field}.quantity", allow_negative=is_return)
     metadata = request.metadata_
-    # The caller's own ordering wins where it gives one: `_metadata.sequence`
-    # is "Order of the line item in the sale", and a caller that numbers its
-    # lines is telling the receipt what order to print them in.
+    # The caller's own `_metadata.sequence` wins where it gives one.
     ordinal = sequence if metadata is None or metadata.sequence is None else metadata.sequence
     line = compact(
         {
@@ -346,8 +258,8 @@ def build_payment(
     allow_negative: bool = False,
 ) -> dict[str, Any]:
     """One stored payment. The caller has already resolved the payment type and
-    the register, because both are refusals with the vendor's payment-error
-    body rather than plain field validation -- see ``surface/sales.py``."""
+    the register -- both refuse with the vendor's payment-error body rather
+    than plain field validation, in ``surface/sales.py``."""
     return compact(
         {
             "id": payment_id,
@@ -360,14 +272,8 @@ def build_payment(
 
 
 def _quantity(value: Any, *, field: str, allow_negative: bool) -> float:
-    """``SaleLineItem.quantity``, ``format: double`` and required.
-
-    JUDGMENT: zero is refused, and a negative quantity is refused on a sale
-    that is not a return. ``initReturnSale``'s own example prints
-    ``"quantity": -1`` on every line of a return, which is where negatives come
-    from; a zero-quantity line is a line that sells nothing and is far more
-    likely to be a caller's bug than an intention.
-    """
+    """``SaleLineItem.quantity``, required. JUDGMENT: zero is refused, and a
+    negative quantity is refused unless the sale is a return."""
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,
@@ -401,17 +307,9 @@ def _optional_minor(value: Any, *, field: str) -> int | None:
 
 def _line_money(line: Mapping[str, Any], *, field: str) -> tuple[float, int, int, int, int]:
     """``(quantity, price, discount, tax, loyalty)`` in minor units, rounded
-    once per line.
-
-    Rounded HERE and not at the end, because a receipt shows a total per line
-    and the sale's total is the sum of what the receipt printed. Summing
-    unrounded products and rounding once would produce a sale total a
-    consumer's own line-by-line arithmetic cannot reproduce.
-
-    ``field`` is the dotted path this line sits at in the request body
-    (``line_items[0]``), so an amount that cannot be scaled is refused naming
-    ``line_items[0].pricing.price`` rather than "a price" -- the same rule
-    ``build_line_item`` follows for the amounts themselves.
+    once per line -- so a receipt's line totals sum to the sale total a
+    consumer's own arithmetic reproduces. ``field`` is the dotted request path
+    this line sits at, as in :func:`build_line_item`.
     """
     quantity = float(line.get("quantity", 0) or 0)
     price = _minor(line, "price_minor")
@@ -433,21 +331,11 @@ def _minor(line: Mapping[str, Any], key: str) -> int:
 
 
 def _scale(minor: int, quantity: float, *, field: str) -> int:
-    """``minor x quantity`` back to whole minor units, half-up.
-
-    ``quantity`` is ``format: double`` -- a weighed item is ``0.35`` kg -- so
-    the product needs rounding. Half-up, matching ``model/money.py``.
-
-    THE GUARD IS THE ONE ``money.to_minor`` AND ``scalars.decimal_text``
-    CARRY, and it is here for the same reason: each operand passes its own
-    validator, but their PRODUCT can still need more than the decimal
-    context's 28 significant digits (a legal price times a legal quantity),
-    and an unguarded ``quantize`` then raises ``InvalidOperation`` out of the
-    handler. The kernel shapes that as a 500 carrying the exception's own
-    text, which konyklabs/roadmap#41 declared a defect class rather than an
-    acceptable outcome for caller-supplied extremes: they answer the
-    documented invalid-value refusal, naming the line item field that could
-    not be scaled.
+    """``minor x quantity`` back to whole minor units, half-up. Guards the
+    same overflow ``money.to_minor``/``scalars.decimal_text`` do -- each
+    operand passes its own validator but their product can still exceed the
+    decimal context's precision -- raising the documented invalid-value
+    refusal rather than a raw 500 (konyklabs/roadmap#41).
     """
     try:
         return int((Decimal(minor) * Decimal(str(quantity))).quantize(Decimal(1), rounding=ROUND_HALF_UP))
@@ -463,12 +351,8 @@ def _scale(minor: int, quantity: float, *, field: str) -> int:
 
 
 def compute_totals(line_items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """``SaleTotals`` from the stored line items.
-
-    ``price`` is documented "tax exclusive" and ``price_incl_tax`` "tax
-    inclusive", so the second is the first plus ``tax``. ``surcharge`` is
-    always ``0.0``; see the module docstring.
-    """
+    """``SaleTotals`` from the stored line items. ``price`` is tax-exclusive;
+    ``surcharge`` is always ``0.0`` -- this unit has no promotions machinery."""
     price = 0
     tax = 0
     loyalty = 0
@@ -487,13 +371,7 @@ def compute_totals(line_items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def compute_taxes(line_items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """``SaleResponseTax[]``: one row per distinct tax id, in first-seen order.
-
-    ``SaleResponseTax`` is ``{id, tax}`` -- "The total tax value for this tax"
-    -- so this is the per-line tax totals grouped by ``LineItemTax.id``.
-    First-seen order rather than sorted, so the rows follow the sale's own
-    lines the way a printed receipt does.
-    """
+    """``SaleResponseTax[]``: per-line tax totals grouped by ``LineItemTax.id``, in first-seen order."""
     totals: dict[str, int] = {}
     for index, line in enumerate(line_items):
         tax_id = str(line.get("tax_id", ""))
@@ -509,20 +387,10 @@ def aggregate_payments_by_type(
     *,
     names: Mapping[str, str],
 ) -> list[dict[str, Any]]:
-    """Stored sale payments summed per payment type, in the register payments
-    summary's own wire shape.
-
-    ``RegisterPaymentSummaryPaymentType`` is ``{payment_type_id,
-    payment_type_name, total}`` and its ``total`` is a decimal **string** --
-    the register summary is on the string side of this vendor's two money
-    shapes even though the sale payments feeding it are numbers. Both
-    conversions are ``model/money.py``'s.
-
-    A payment naming a type this retailer no longer has is still counted, under
-    the empty name: dropping money from a total because a lookup missed would
-    make the summary silently wrong, which is the one thing a totals endpoint
-    must not be.
-    """
+    """Stored sale payments summed per payment type, as
+    ``RegisterPaymentSummaryPaymentType`` (``total`` a decimal string). A
+    payment naming a type the retailer no longer has is counted under the
+    empty name rather than dropped."""
     totals: dict[str, int] = {}
     for payment in payments:
         payment_type_id = str(payment.get("payment_type_id", ""))
@@ -543,11 +411,8 @@ def aggregate_payments_by_type(
 
 
 def project_line_item(line: Mapping[str, Any], *, field: str = "line_items[]") -> dict[str, Any]:
-    """``SaleResponseLineItem``: the request's nested shape plus the totals
-    ``LineItemResponsePricing`` and ``LineItemResponseTax`` add.
-
-    ``field`` names this line's place in the body, for the refusal ``_scale``
-    raises; ``project_sale`` passes the index."""
+    """``SaleResponseLineItem``: the request's shape plus the totals
+    ``LineItemResponsePricing``/``LineItemResponseTax`` add."""
     quantity, price_total, discount_total, tax_total, loyalty_total = _line_money(line, field=field)
     cost = _minor(line, "cost_minor")
     pricing = compact(
@@ -578,9 +443,7 @@ def project_line_item(line: Mapping[str, Any], *, field: str = "line_items[]") -
             },
             "status": line.get("status"),
             "fulfilment_outlet_id": line.get("fulfilment_outlet_id"),
-            # `LineItemReturn` is emitted only on a return's lines: a
-            # `{"is_return": false}` on every line of every ordinary sale is
-            # noise the vendor's own examples do not print.
+            # `LineItemReturn` only on a return's lines, matching the vendor's examples.
             "return": {"is_return": True} if line.get("is_return") else None,
             "_metadata": metadata or None,
         }
@@ -588,8 +451,8 @@ def project_line_item(line: Mapping[str, Any], *, field: str = "line_items[]") -
 
 
 def project_payment(payment: Mapping[str, Any], *, names: Mapping[str, str]) -> dict[str, Any]:
-    """``SaleResponsePayment``. ``type`` is a ``PaymentTypeDetails``, which is
-    where the payment type's ``name`` reaches a consumer."""
+    """``SaleResponsePayment``. ``type`` is a ``PaymentTypeDetails``, carrying
+    the payment type's ``name``."""
     payment_type_id = str(payment.get("payment_type_id", ""))
     return compact(
         {
@@ -603,13 +466,9 @@ def project_payment(payment: Mapping[str, Any], *, names: Mapping[str, str]) -> 
 
 
 def project_sale(entity: Mapping[str, Any], *, names: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """One stored sale as the ``Sale`` schema puts it on the wire.
-
-    ``names`` maps payment type id to name, for ``PaymentTypeDetails.name``. It
-    is optional because the webhook mapper projects a sale with no store in
-    hand; a delivery then carries the payment's ``config_id`` and no name,
-    which is what the request itself carried.
-    """
+    """One stored sale as the ``Sale`` schema puts it on the wire. ``names``
+    maps payment type id to name; optional because the webhook mapper
+    projects a sale with no store in hand."""
     sale = SaleEntity.from_entity(entity)
     lookup = names or {}
     line_items = [project_line_item(line, field=f"line_items[{index}]") for index, line in enumerate(sale.line_items)]
@@ -652,9 +511,7 @@ def project_sale(entity: Mapping[str, Any], *, names: Mapping[str, str] | None =
             "updated_at": sale.updated_at or None,
             "deleted_at": sale.deleted_at,
             "_metadata": {"version": version},
-            # The second half of the twice-emitted version; see the module
-            # docstring. `versioning.envelope` reads this member off the
-            # PROJECTED rows to build the list envelope's max/min.
+            # The second half of the twice-emitted version; see the module docstring.
             "version": version,
         }
     )

@@ -1,34 +1,19 @@
 """The webhook wire vocabulary: the documented envelope, the category
 vocabulary, and the subscription stand-in's shapes.
 
-THE ENVELOPE is DOCUMENTED verbatim
-(https://doc.toasttab.com/doc/devguide/apiMessageDataSchema.html)::
+DOCUMENTED (https://doc.toasttab.com/doc/devguide/apiMessageDataSchema.html): the envelope is ``{timestamp,
+eventCategory, eventType, guid, details}``.
 
-    {"timestamp": "2024-03-28T15:11:01.050Z", "eventCategory": "...",
-     "eventType": "...", "guid": "<eventGuid>", "details": {...}}
+DOCUMENTED (devOrdersWebhookRef.html, apiStockWebhook.html, the menus webhook
+page): ``order_updated`` carries the full Order as ``GET /orders/{guid}``
+returns it ("a new order is also considered an update"); ``stock`` is
+``in_stock``/``out_of_stock``/``low_quantity``; ``menus`` is
+``menus_updated`` with ``{restaurantGuid, publishedDate}``.
+:data:`CATEGORY_TYPES` maps each category to its types for the dispatcher.
 
-THE CATEGORIES this unit emits, and their documented types
-(devOrdersWebhookRef.html, apiStockWebhook.html, the menus webhook page):
-
-* ``order_updated`` -- ``eventCategory`` and ``eventType`` are both
-  ``order_updated``; ``details`` is ``{restaurantGuid, order}`` with the full
-  Order as ``GET /orders/{guid}`` returns it; "A new order is also considered
-  an update";
-* ``stock`` -- ``in_stock``, ``out_of_stock``, ``low_quantity``; ``details``
-  is ``{itemGuid, restaurantGuid, status, multiLocationId, versionId}`` plus
-  ``quantity`` for ``QUANTITY`` rows;
-* ``menus`` -- ``menus_updated``; ``details`` is ``{restaurantGuid, publishedDate}``.
-
-On the core's side an event's type is the Toast ``eventType`` string, and a
-subscription "to a category" is the core's list of that category's types
-(:data:`CATEGORY_TYPES`) -- so the dispatcher's own matcher does the filtering.
-
-THE SUBSCRIPTION SHAPES are JUDGMENT: Toast has no subscription API (two
-official pages disagree only on whether the integrations team or the developer
-portal creates one -- audit gap 10), so the request a consumer sends to the
-stand-in, and the record it gets back, are this project's: a callback URL,
-the categories, and the per-subscription secret Toast documents as "the
-webhook secret".
+JUDGMENT: the subscription shapes are this project's, since Toast has no
+subscription API (audit gap 10) -- a callback URL, the categories, and the
+per-subscription secret Toast documents as "the webhook secret".
 """
 
 from __future__ import annotations

@@ -1,23 +1,18 @@
 """The customers surface: list, filter, create.
 
-====================  ========================================================
-GetCustomers          ``GET  /v3/merchants/{mId}/customers``
-                      https://docs.clover.com/dev/reference/customersgetcustomers
-CreateCustomer        ``POST /v3/merchants/{mId}/customers``
-                      https://docs.clover.com/dev/reference/customerscreatecustomer
-====================  ========================================================
+GetCustomers ``GET /v3/merchants/{mId}/customers``
+(https://docs.clover.com/dev/reference/customersgetcustomers), CreateCustomer
+``POST`` on the same path
+(https://docs.clover.com/dev/reference/customerscreatecustomer).
 
-Documented: a customer carries ``firstName``, ``lastName`` (each "Maximum 64
+DOCUMENTED: a customer carries ``firstName``, ``lastName`` (each "Maximum 64
 characters") and ``addresses[{address1, address2, city, state, zip,
-country}]``; the list takes ``filter`` and the elements envelope. As on the
-orders list, ``filter`` repeats and the clauses are ANDed:
-``filter=firstName=Ada&filter=lastName=Lovelace`` is one request, read through
-``args.query_all`` (konyklabs/roadmap#37).
+country}]``; ``filter`` repeats and the clauses are ANDed
+(konyklabs/roadmap#37).
 
-JUDGMENT: a create must carry at least one of the two names (the page says
-only "the request body cannot be null"); ``customerSince`` is stamped at
-creation, in ms, because the field is documented and a consumer displaying
-it needs a value.
+JUDGMENT: a create must carry at least one of the two names ("the request
+body cannot be null" is all the page says); ``customerSince`` is stamped at
+creation in ms.
 """
 
 from __future__ import annotations

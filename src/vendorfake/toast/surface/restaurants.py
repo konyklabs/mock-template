@@ -1,22 +1,15 @@
 """The restaurants API surface: one restaurant, and a management group's restaurants.
 
 DOCUMENTED (toast-restaurants-api.yaml v1.0.0):
+``GET /restaurants/v1/restaurants/{restaurantGUID}`` and
+``GET /restaurants/v1/groups/{managementGroupGUID}/restaurants?includeArchived``.
+The document's top-level blocks are documented with no example values (audit
+gap 11), so the seed supplies ``general``/``location`` and chooses the rest.
 
-============  =============================================================
-GetRestaurant ``GET /restaurants/v1/restaurants/{restaurantGUID}``
-GetGroup      ``GET /restaurants/v1/groups/{managementGroupGUID}/restaurants?includeArchived``
-============  =============================================================
-
-The restaurant document is ``{guid, general{...}, urls{}, location{...},
-schedules{}, delivery{}, onlineOrdering{}, prepTimes{}}``; the specification
-gives no example values (audit gap 11), so the seed supplies the documented
-``general`` and ``location`` fields and the other blocks as it chooses.
-
-JUDGMENT: both routes take a bearer and no ``Toast-Restaurant-External-ID`` --
-the guid is in the path, and the group route is about several restaurants at
-once. The group answer is the array of full restaurant documents (the
-specification names an array and not its element shape). ``includeArchived``
-is accepted and changes nothing: nothing here archives.
+JUDGMENT: both routes take a bearer and no ``Toast-Restaurant-External-ID``,
+since the guid is in the path; the group route answers an array of full
+restaurant documents. ``includeArchived`` is accepted and changes nothing,
+since nothing here archives.
 """
 
 from __future__ import annotations

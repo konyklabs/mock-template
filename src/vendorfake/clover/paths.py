@@ -1,21 +1,11 @@
 """Hand-written path constants for Clover, one per route with an operation_id.
 
-FOR: a consumer who wants ``paths.REFRESH_TOKEN`` instead of a route path
-typed into every test -- and a route path that CANNOT drift from what the
-router actually serves, because ``tests/unit/test_paths_drift.py`` builds a
-real Clover vendor, reads its route table and asserts these constants against
-it: one constant per non-internal route carrying an ``operation_id``, values
-equal, and no constant naming a route that does not exist.
+Constants are ``UPPER_SNAKE`` of the route's ``operation_id``, the same
+identifier :func:`vendorfake.registry.routes` publishes. Path templates keep
+the brace form (``{mId}``, ``{orderId}``).
 
-Constants are ``UPPER_SNAKE`` of the route's ``operation_id`` -- the same
-identifier :func:`vendorfake.registry.routes` and ``GET /__unit/routes``
-publish. Path templates keep the brace form (``{mId}``, ``{orderId}``),
-matching every other place a template is written in this project; Clover's own
-``{mId}`` segment is the merchant every route below the OAuth surface is
-scoped to.
-
-Do not hand-edit a value without also fixing the route it names, or the drift
-test fails naming exactly which constant disagrees with the router.
+INVARIANT: ``tests/unit/test_paths_drift.py`` asserts these against the real
+route table -- do not hand-edit a value without also fixing the route it names.
 """
 
 from __future__ import annotations

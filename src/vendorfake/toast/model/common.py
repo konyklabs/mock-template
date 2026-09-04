@@ -1,17 +1,11 @@
-"""Turning a Pydantic validation failure into the error this vendor publishes.
+"""Turning a Pydantic validation failure into the error this vendor publishes,
+so "clientId is required" is a ``missing_field`` naming ``clientId`` rather
+than a Pydantic report.
 
-FOR: letting a surface state its request shape as a model and still answer
-with the vendor's own error vocabulary, so that "clientId is required" is a
-``missing_field`` naming ``clientId`` rather than a Pydantic report.
-
-INVARIANT: **an absent field and an empty field are the same failure.** Every
-required string in a request model is spelled ``min_length=1`` and this module
-maps Pydantic's ``missing`` and ``string_too_short`` onto the one
-``missing_field`` kind. Everything else is ``invalid_value``.
-
-CHASSIS: this module is byte-for-byte the Clover package's ``model/common.py``
-with the vendor name changed. The cross-vendor extraction into ``core`` is
-konyklabs/roadmap#35; when it lands, this file goes and the import moves.
+INVARIANT: an absent field and an empty field are the same failure -- every
+required string is spelled ``min_length=1``, and this module maps Pydantic's
+``missing``/``string_too_short`` onto ``missing_field``; everything else is
+``invalid_value`` (konyklabs/roadmap#35 tracks its cross-vendor extraction).
 """
 
 from __future__ import annotations
@@ -69,12 +63,9 @@ def validate_body(model: type[_M], body: Any) -> _M:
 
 
 def validate_items(model: type[_M], body: Any, *, what: str) -> list[_M]:
-    """Validate a non-empty JSON array of ``model``; a failure names ``[i].field``.
-
-    Several Toast routes take a bare array (payments, selections, applied
-    discounts, stock updates). The index prefix is what lets a consumer see
-    which element was refused.
-    """
+    """Validate a non-empty JSON array of ``model`` (several Toast routes take
+    a bare array); a failure names ``[i].field``, so a consumer sees which
+    element was refused."""
     if not isinstance(body, list) or not body:
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,

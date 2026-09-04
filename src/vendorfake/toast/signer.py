@@ -1,32 +1,16 @@
 """Toast's webhook signature: HMAC-SHA256 over the body and the timestamp.
 
-FOR: producing the ``Toast-Signature`` header a consumer's verification code
-checks, with the algorithm Toast publishes, so that a handler that verifies
-correctly against this unit verifies correctly against Toast -- and one that
-does not fails here first.
-
-WHAT TOAST DOCUMENTS (https://doc.toasttab.com/doc/devguide/apiMessageSigning.html):
-the signature is "derived by concatenating the body and timestamp of the
-webhook message into a string, which is hashed and then signed using the
-HMAC-SHA256 algorithm and the secret key"; the Java sample is
+DOCUMENTED (https://doc.toasttab.com/doc/devguide/apiMessageSigning.html):
 ``signature = body + timestamp`` -> ``HmacSHA256(secret)`` -> Base64 ->
 ``Toast-Signature``; the secret is generated per subscription per environment.
 
-JUDGMENT, and the loudest one in this package (audit gap 3): **which
-timestamp string is appended.** The page never says. There is no timestamp
-header on a delivery (apiHttpHeaders.html lists none), so the envelope's own
-``timestamp`` field is the only candidate, and that is what this unit appends:
-``body_bytes + body["timestamp"]``, the timestamp exactly as it is spelled
-inside the body. A consumer verifying against Toast and finding the header
-disagrees should try this reading first and the raw body alone second; the
-``describe()`` block at ``/__unit/info`` says the same. When the delivered
-body is not an object with a string ``timestamp`` -- the control plane's
-``POST /__unit/webhooks/emit`` accepts any document -- nothing is appended.
+JUDGMENT (audit gap 3): which timestamp string is appended -- the page never
+says, and no timestamp header is documented on a delivery, so this unit
+appends the envelope's own ``timestamp`` field verbatim; ``describe()`` at
+``/__unit/info`` states this reading.
 
-THE PROPERTIES FOLLOW: bound to the body and the secret, not to the URL and
-not to the attempt (a retry re-sends the same bytes and the same header;
-"updates ... more than once" is the documented at-least-once, and a consumer
-deduplicating on ``guid`` must find the redelivery verifiable).
+Bound to the body and the secret, not the URL or the attempt, so a retry
+resends the same signature.
 """
 
 from __future__ import annotations
@@ -64,8 +48,7 @@ _DOC_URL = "https://doc.toasttab.com/doc/devguide/apiMessageSigning.html"
 
 
 def signed_payload(raw_body: bytes | str) -> bytes:
-    """``body + timestamp`` -- the bytes the HMAC covers. See the module
-    docstring for what "timestamp" is read as."""
+    """``body + timestamp`` -- the bytes the HMAC covers; see the module docstring."""
     body = raw_body.encode("utf-8") if isinstance(raw_body, str) else bytes(raw_body)
     timestamp = ""
     try:
@@ -84,11 +67,8 @@ def toast_signature(secret: str, raw_body: bytes | str) -> str:
 
 
 def verify_toast_signature(secret: str, raw_body: bytes | str, signature: str) -> bool:
-    """Whether ``signature`` is what this scheme produces for ``raw_body``.
-
-    Shipped for consumers to copy; the comparison is
-    :func:`hmac.compare_digest`, never ``==``.
-    """
+    """Whether ``signature`` is what this scheme produces for ``raw_body``,
+    compared with :func:`hmac.compare_digest`, never ``==``."""
     return hmac.compare_digest(toast_signature(secret, raw_body), signature)
 
 

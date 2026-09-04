@@ -1,31 +1,12 @@
 """Which vendor, and the one constructor that builds a unit from it.
 
-FOR: turning a *name* -- from a CLI flag, an environment variable or a test --
-into a running :class:`Unit`, and doing it in the one place that is allowed to
-know both that vendors exist and how a profile is loaded.
-
-INVARIANT: **a typo in a vendor name is a startup failure that lists the real
-ones.** ``resolve_vendor("sqaure")`` raises ``ValueError`` naming every
-available vendor; it never falls back to a default and never returns a unit
-that quietly answers nothing. A fake whose vendor silently did not load would
-present as "every endpoint 404s", which is indistinguishable from a consumer's
-own misconfiguration.
-
-SECOND INVARIANT: **``env`` defaults to ``{}``, never ``os.environ``.** Only
-the CLI passes the real environment. The reference spread ``process.env`` into
-every unit it built, which made a variable set by one test change the profile
-of a unit built by another -- a whole class of order-dependent flakes that
-simply cannot occur here. The rule is pinned by a test that sets real
-environment variables and asserts they are ignored.
-
-DISCOVERY. Vendors are found through the ``vendorfake.vendors`` entry-point
-group, so a third-party distribution can add one without this file changing.
-A built-in map covers the vendors shipped in this distribution, because a
-source tree with no installation metadata has no entry points and "it works
-from a checkout" is not a nicety -- it is how every test in this repository
-runs. Both directions are filtered through an importability check, so
-:func:`available_vendors` never advertises a name that would fail to load: an
-error message listing a vendor that does not exist is worse than no message.
+Invariant: a typo in a vendor name is a startup failure listing the real ones, a
+silently unloaded vendor otherwise presenting as "every endpoint 404s".
+Invariant: ``env`` defaults to ``{}``, never ``os.environ``, so a variable set by
+one test cannot change the profile of a unit built by another. Vendors come from
+the ``vendorfake.vendors`` entry-point group, with a built-in map for a source
+tree that has no installation metadata, both filtered through an importability
+check so no advertised name fails to load.
 """
 
 from __future__ import annotations
@@ -64,11 +45,8 @@ ENTRY_POINT_GROUP = "vendorfake.vendors"
 ``square = "vendorfake.square:VENDOR"``."""
 
 VENDOR_ENV_VAR = "VENDORFAKE_VENDOR"
-"""Selects the vendor when ``create_unit`` is given none.
-
-Deliberately absent from the profile loader's environment table: it decides
-which module to import, which happens before a profile exists, so it belongs to
-the registry rather than to configuration."""
+"""Selects the vendor when ``create_unit`` is given none. Absent from the profile
+loader's table: it decides which module to import, before a profile exists."""
 
 _BUILTIN: Mapping[str, str] = {
     "clover": "vendorfake.clover:VENDOR",
@@ -76,10 +54,8 @@ _BUILTIN: Mapping[str, str] = {
     "square": "vendorfake.square:VENDOR",
     "toast": "vendorfake.toast:VENDOR",
 }
-"""Vendors shipped in this distribution, as ``module:attribute`` targets.
-
-The fallback for a source tree with no installation metadata. Entry points win
-where both exist, so an installed override is never shadowed by this."""
+"""Vendors shipped in this distribution, as ``module:attribute`` targets: the
+fallback for a source tree with no installation metadata. Entry points win."""
 
 
 def _targets() -> dict[str, str]:
@@ -104,21 +80,15 @@ def available_vendors() -> tuple[str, ...]:
     return tuple(sorted(name for name, target in _targets().items() if _importable(target)))
 
 
-# ---------------------------------------------------------------------------
-# Discovery: profiles, routes, and the neutral capability-role vocabulary.
-#
-# FOR: finding a profile name or a route path by code, never by listing a
-# vendor package in a scratch clone. Every function below reads through the
-# same loader or the same route table ``create_unit`` and the control plane
-# already use, so what this reports can never disagree with what a unit
-# actually accepts or serves.
-# ---------------------------------------------------------------------------
+# Discovery: profiles, routes, and the neutral capability-role vocabulary. Every
+# function below reads through the same loader or route table ``create_unit`` and
+# the control plane use, so what it reports cannot disagree with what a unit
+# accepts or serves.
 
 ROLE_NAMES: tuple[str, ...] = ("auth", "orders", "webhooks", "chaos")
-"""The neutral capability roles every vendor's ``VendorDefinition.roles`` maps
--- the vocabulary ``capabilities=`` accepts alongside a vendor's own capability
-names. Fixed at four: a fifth is added only together with a role in every
-shipped vendor's ``roles`` mapping and the conformance clause that checks it."""
+"""The neutral capability roles every vendor's ``VendorDefinition.roles`` maps,
+accepted by ``capabilities=`` alongside a vendor's own names. Fixed at four: a
+fifth needs a role in every shipped vendor and the clause that checks it."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,32 +99,22 @@ class ProfileInfo:
     name: str
     summary: str
     capabilities: tuple[str, ...]
-    #: The seed document path the profile names, relative to the vendor
-    #: package -- ``None`` for a profile that loads no seed.
+    #: The seed document the profile names, or ``None`` if it loads none.
     seed: str | None
 
 
 def _profiles_of(definition: VendorDefinition) -> tuple[ProfileInfo, ...]:
-    """The scan :func:`available_profiles` and :func:`_narrowest_profile_for`
-    both need, off an already-resolved :class:`VendorDefinition` rather than a
-    name -- so a caller holding one directly (a test's fixture vendor, a
-    capability request mid-resolution) never pays for a second, redundant
-    trip through :func:`resolve_vendor`, and a fixture vendor whose name is
-    not a registered entry point can be scanned at all."""
+    """The profile scan, off an already-resolved :class:`VendorDefinition` rather
+    than a name, so a caller holding one pays for no second lookup and a fixture
+    vendor that is not a registered entry point can be scanned at all."""
     out: list[ProfileInfo] = []
     for path in sorted(definition.profile_dir.glob("*.json"), key=lambda candidate: candidate.stem):
         document = parse_profile_document(json.loads(path.read_text(encoding="utf-8")), source=str(path))
         out.append(
             ProfileInfo(
                 vendor=definition.name,
-                # The file's stem, not `document.name` -- `load_profile` addresses a
-                # profile by stem (`profile_path` below), so the name reported here
-                # must be the name that then loads, not whatever a document's own
-                # optional `name` field happens to say. All eighteen shipped
-                # profiles agree today, which is exactly why a mismatch would go
-                # unnoticed without this: `available_profiles` advertising a name
-                # that `unit(vendor, that_name)` cannot load is precisely the class
-                # of surprise this module exists to rule out.
+                # The file's stem, not `document.name`: `load_profile` addresses a
+                # profile by stem, so the name reported must be the one that loads.
                 name=path.stem,
                 summary=document.summary or "",
                 capabilities=document.capabilities,
@@ -165,43 +125,17 @@ def _profiles_of(definition: VendorDefinition) -> tuple[ProfileInfo, ...]:
 
 
 def available_profiles(vendor: str) -> tuple[ProfileInfo, ...]:
-    """Every profile ``vendor`` ships, sorted by name.
-
-    Read from the packaged profile JSON through
-    :func:`~vendorfake.core.config.models.parse_profile_document` -- the same
-    schema :func:`~vendorfake.core.config.profile.load_profile` validates a
-    profile against before ``create_unit`` will start on it -- so a name
-    reported here can never be a name that then fails to parse. Each
-    :class:`ProfileInfo`'s ``name`` is the file's *stem*, not its optional
-    ``name`` field: :func:`~vendorfake.core.config.profile.load_profile`
-    addresses a profile by stem, so a name this reports and the name that
-    then loads it are guaranteed to be the same string, never merely the same
-    string by every shipped profile happening to agree. Not the fully
-    resolved config: no environment layer, no vendor defaults merged in, none
-    of that is a property of the *profile document* this call describes.
-    """
+    """Every profile ``vendor`` ships, sorted by name, read through the same schema
+    ``load_profile`` validates against, each ``name`` being the file's stem it
+    addresses. Not the fully resolved config: no environment layer."""
     return _profiles_of(resolve_vendor(vendor))
 
 
 @dataclass(frozen=True, slots=True)
 class RouteInfo:
-    """One row of a vendor's route table -- what a consumer discovers a route
-    *by*, trimmed from everything ``GET /__unit/routes`` also publishes for
-    the control plane's own reasons (scopes, idempotency, an example body).
-    See :func:`routes`.
-
-    This is a distinct, smaller type from
-    :class:`vendorfake.core.kernel.unit.RouteInfo`, not a shadowing accident:
-    the kernel's version is what the control plane actually publishes at
-    ``GET /__unit/routes`` (with ``scopes``, ``idempotency``, ``example_body``
-    and ``auth`` besides), and ``registry.RouteInfo`` is the six-field
-    consumer-facing *projection* of one of its rows -- named ``RouteInfo`` in
-    the spec this module implements, kept under that name here, and never
-    re-exported next to the kernel's own so that an import naming
-    ``vendorfake.registry.RouteInfo`` or
-    ``vendorfake.core.kernel.unit.RouteInfo`` is always unambiguous about
-    which shape it names.
-    """
+    """One row of a vendor's route table, trimmed of what the control plane also
+    publishes. Deliberately a smaller type than
+    :class:`vendorfake.core.kernel.unit.RouteInfo`, never re-exported beside it."""
 
     method: str
     path: str
@@ -212,17 +146,11 @@ class RouteInfo:
 
 
 def routes(vendor: str, profile: str = "full") -> tuple[RouteInfo, ...]:
-    """Every route ``vendor``'s surface -- and its control plane -- serves.
-
-    Built from the same table ``GET /__unit/routes`` answers, read through a
-    real unit's :class:`~vendorfake.core.kernel.unit.ControlBinding` rather
-    than reassembled by hand, so a row reported here is a row the unit will
-    actually match. ``profile`` exists because building a unit needs one; the
-    route table itself does not vary by profile -- every route the vendor
-    declares is registered whether or not its capability is currently
-    enabled, which is exactly what lets a disabled capability answer
-    explicitly instead of 404 (see ``core/capability/registry.py``).
-    """
+    """Every route ``vendor``'s surface and control plane serve, built from the
+    table ``GET /__unit/routes`` answers rather than reassembled, so a row here is
+    one the unit will match. ``profile`` exists because building a unit needs one;
+    the table does not vary by profile, every declared route being registered
+    whether or not its capability is enabled."""
     built = create_unit(vendor=vendor, profile=profile)
     try:
         return tuple(
@@ -241,27 +169,10 @@ def routes(vendor: str, profile: str = "full") -> tuple[RouteInfo, ...]:
 
 
 def _translate_capability_names(definition: VendorDefinition, requested: Sequence[str]) -> tuple[str, ...]:
-    """A role name becomes this vendor's own capability name; anything else
-    passes through, on the assumption that it is already one.
-
-    ``roles`` is read with :func:`getattr` rather than as the attribute the
-    ``VendorDefinition`` protocol declares, because a third-party vendor
-    registered through the ``vendorfake.vendors`` entry-point group and built
-    against v0.1.0 predates the property and simply does not have it. A bare
-    ``definition.roles`` there is an ``AttributeError`` from inside a
-    ``create_unit`` call the caller cannot connect to anything -- which is a
-    worse failure than the one it is standing in for, and it fires even when
-    the caller asked for no role at all. See ``CHANGELOG.md``'s **Breaking
-    changes**: the fix is for the vendor to implement ``roles``, and this is
-    what makes the intervening failure legible.
-
-    A vendor that maps no roles still cannot answer a request *for* one, so
-    that case is a ``ValueError`` naming the vendor and the role rather than a
-    silent pass-through: ``capabilities=["auth"]`` against such a vendor would
-    otherwise be read as a request for a capability literally called ``auth``
-    and resolve to whatever profile happens to be a superset of it -- an
-    answer that looks like it worked.
-    """
+    """A role name becomes this vendor's own capability name; anything else passes
+    through as already being one. ``roles`` is read with :func:`getattr`, an older
+    third-party vendor not having the property. A vendor that maps no roles raises
+    ``ValueError`` rather than passing ``"auth"`` through as a capability name."""
     roles: Mapping[str, str] = getattr(definition, "roles", {})
     if not roles:
         asked = [name for name in requested if name in ROLE_NAMES]
@@ -280,9 +191,7 @@ def _translate_capability_names(definition: VendorDefinition, requested: Sequenc
 
 def _narrowest_profile_for(definition: VendorDefinition, translated: Sequence[str]) -> str | None:
     """The shipped profile whose capability set is the smallest superset of
-    ``translated``, ties broken by name -- or ``None`` when no shipped
-    profile qualifies, in which case the caller falls back to ``full`` plus
-    an absolute capability list through the environment layer."""
+    ``translated``, ties broken by name, or ``None`` when none qualifies."""
     wanted = frozenset(translated)
     candidates = [profile for profile in _profiles_of(definition) if wanted <= frozenset(profile.capabilities)]
     if not candidates:
@@ -292,12 +201,9 @@ def _narrowest_profile_for(definition: VendorDefinition, translated: Sequence[st
 
 
 def resolve_vendor(name: str) -> VendorDefinition:
-    """Load the vendor called ``name``.
-
-    Raises ``ValueError`` -- not a ``UnitError`` -- because this happens before
-    a unit exists and therefore before there is a vendor to shape an error
-    with. A caller at the edge turns it into whatever its own surface needs.
-    """
+    """Load the vendor called ``name``. Raises ``ValueError``, not a ``UnitError``:
+    this happens before a unit exists, so there is no vendor to shape an error
+    with, and a caller at the edge turns it into whatever its surface needs."""
     targets = _targets()
     target = targets.get(name)
     if target is None or not _importable(target):
@@ -317,9 +223,7 @@ def _pick(vendor: str | VendorDefinition | None, env: Mapping[str, str]) -> Vend
             return resolve_vendor(named)
         offered = available_vendors()
         if len(offered) == 1:
-            # Exactly one vendor is installed, so there is no choice to make and
-            # forcing the caller to name it would be ceremony. Two or more is a
-            # genuine ambiguity and is refused.
+            # Exactly one vendor installed, so there is no choice to make.
             return resolve_vendor(offered[0])
         listing = ", ".join(offered) if offered else "(none installed)"
         raise ValueError(
@@ -342,45 +246,20 @@ def create_unit(
 ) -> Unit:
     """Build and start a unit. The single constructor.
 
-    The order is fixed and is the reason this function exists rather than being
-    inlined into every caller:
+    The order is fixed: resolve the vendor, resolve ``capabilities`` into a
+    profile name when given, load the profile with ``vendor.retry_defaults``
+    merged under the document and the document under the environment layer,
+    construct the unit with its control plane, and start it, which hydrates the
+    store from the seed document.
 
-    1. resolve the vendor, because the profile directory and the retry defaults
-       are properties of it;
-    2. resolve ``capabilities`` into a profile name, when given (see below);
-    3. load the profile with ``vendor.retry_defaults`` as ``defaults`` -- i.e.
-       merged **under** the profile document, which is itself under the
-       environment layer -- so a profile can override a vendor default and an
-       operator can override both;
-    4. construct the unit -- with the control plane, which is where the
-       capability-declaration, retry-schedule and dead-chaos-rule assertions
-       live;
-    5. start it, which hydrates the store from the seed document.
-
-    ``env`` is a plain mapping and defaults to empty. Pass ``os.environ``
-    explicitly if that is what you mean.
-
-    ``capabilities``, when given, is resolved instead of ``profile`` --
-    passing both is a ``ValueError``, because the two are two different
-    answers to "which profile" and a caller who supplied both cannot have
-    meant for one to be ignored. An empty ``capabilities=[]`` is a
-    ``ValueError`` too, rather than "no request": the empty set is a subset
-    of every profile's capabilities, so resolving it the way any other
-    request resolves would silently pick the smallest shipped profile, which
-    is the one reading of an empty list a caller almost certainly did not
-    intend. Pass ``capabilities=None`` (the default) to mean no request at
-    all. Each name is either a role
-    (:data:`ROLE_NAMES` -- ``auth``, ``orders``, ``webhooks``, ``chaos``),
-    translated through ``vendor.roles`` into this vendor's own capability
-    name, or already one of this vendor's own capability names, used as
-    given. The translated set then picks the **narrowest shipped profile
-    that is a superset of it** (fewest capabilities, ties broken by name);
-    when no shipped profile qualifies, the unit starts on ``full`` with the
-    set applied as an absolute list through the same ``VENDORFAKE_CAPABILITIES``
-    layer an operator would use. Either way, ``GET /__unit/info`` reports
-    the original request under ``requested_capabilities`` alongside whichever
-    profile it resolved to, so a consumer can confirm what was asked for and
-    not merely what was answered.
+    ``env`` is a plain mapping and defaults to empty. ``capabilities`` is resolved
+    instead of ``profile``, and passing both is a ``ValueError``, as is an empty
+    list, which is a subset of every profile and would pick the smallest. Each
+    name is a role in :data:`ROLE_NAMES`, translated through ``vendor.roles``, or
+    one of this vendor's own capability names; the set picks the narrowest shipped
+    profile that is a superset of it, and ``full`` plus
+    ``VENDORFAKE_CAPABILITIES`` when none qualifies. ``GET /__unit/info`` reports
+    the original request under ``requested_capabilities``.
     """
     environ: Mapping[str, str] = {} if env is None else env
     definition = _pick(vendor, environ)
@@ -428,11 +307,8 @@ def create_unit(
         seed=loaded.seed,
         sink=sink,
         logger=logger,
-        # Every unit built through this function has a control plane. The
-        # constructor keeps it optional so a kernel test can build a unit with
-        # a vendor surface and nothing else -- but a unit a *consumer* is given
-        # without `/__unit/*` is a unit they cannot drive, and there is exactly
-        # one place to decide that.
+        # Every unit built here has a control plane; the constructor keeps it
+        # optional only so a kernel test can build a unit without one.
         control_routes=control_plane_routes,
     )
     unit.start()

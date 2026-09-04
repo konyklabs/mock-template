@@ -1,25 +1,8 @@
-"""C01, C30, C31, C32, C33 -- the unit describes itself, describing is free, and
-it says so when nothing answered.
+"""C01, C30-C33 -- the unit describes itself, describing is free, and it says so when nothing answered.
 
-Every other contract reads the control plane to aim itself, so C01 runs
-first and states the minimum: the unit is alive, it says what it is, and it
-publishes its own surface. A unit that fails C01 cannot be examined at all,
-and every later failure would be a consequence rather than a finding.
+Every other contract reads the control plane to aim itself, so C01 runs first and states the minimum: the unit is alive, says what it is, and publishes its own surface.
 
-C30 through C32 are the other half of that bargain (konyklabs/roadmap#42):
-looking at the fake must not change what it says next. Toast's error
-catalogue shipped drawing twenty request ids and a live rate-limit epoch per
-GET, because the description was rendered by calling the real refusal path --
-a read-only diagnostic call renumbered every id in the rest of a consumer's
-scenario, which is the determinism this project sells. The instance was
-fixed on konyklabs/vendorfake#31; these contracts close the class.
-
-C33 is the other direction: what the unit says about a request it could not
-answer. A vendor's own 404 names nothing -- it cannot, because the vendor has
-no idea what surface this fake models -- so the diagnosis rides in a header and
-the request itself is recorded as unmatched. Both halves are asserted here
-rather than in ``transport.py`` because both are control-plane observations
-about the unit, and neither is a property of the binding that carried them.
+C30 through C32 assert that looking at the fake must not change what it says next (konyklabs/roadmap#42, konyklabs/vendorfake#31). C33 is the other direction: what the unit says about a request it could not answer, since a vendor's own 404 cannot name anything -- the diagnosis rides in a header and the request is recorded as unmatched.
 """
 
 from __future__ import annotations
@@ -40,27 +23,14 @@ __all__ = [
 _MUTATING_METHODS = frozenset({"POST", "PUT"})
 
 
-#: A path no vendor can serve, deliberately deep enough that it cannot collide
-#: with a template of the same shape and deliberately not a plausible resource.
+#: A path no vendor can serve, deep enough not to collide with any real route template.
 UNMATCHED_PROBE = "/conformance-probe/no/such/route/here"
 
 NEAR_MISS_HEADER = "vendorfake-near-miss"
-"""Restated as a literal rather than imported from the kernel.
+"""Restated as a literal, not imported from the kernel: a foreign implementation reached over ``--base-url`` has no ``vendorfake.core`` to import it from."""
 
-Every other constant a check needs comes from the core's own vocabulary, but
-this one is a *wire* name: a foreign implementation reached over ``--base-url``
-has no ``vendorfake.core`` to import it from, and a contract that asserted the
-header the core happens to define would pass by construction for the Python
-one and be unaskable for anyone else."""
-
-#: The keys ``/__unit/info`` is documented to carry, all eight of them. Listed
-#: literally rather than derived from the answer, because "every key it sends
-#: is present" is not an assertion.
-#:
-#: ``seed_overlay`` joined with konyklabs/roadmap#85. Its *shape* -- an object
-#: with ``active`` and ``digest`` -- is asserted by C36, which is the check
-#: that can build a unit both with an overlay and without; here it is only
-#: required to be present, exactly as every other key is.
+#: The keys ``/__unit/info`` is documented to carry, listed literally rather than derived from the answer.
+#: ``seed_overlay``'s shape is asserted by C36 (konyklabs/roadmap#85); here it is only required present.
 INFO_KEYS: tuple[str, ...] = (
     "vendor",
     "profile",
@@ -134,46 +104,11 @@ def control_plane_describes_the_unit(env: CheckEnv) -> str:
     requires=Requires(surface_route=True),
 )
 def control_plane_reads_are_inert(env: CheckEnv) -> str:
-    """The consequence, asserted instead of the mechanism.
+    """The consequence, asserted instead of the mechanism: read EVERYTHING readable on one of two same-profile units (enumerated from ``GET /__unit/routes``), then do the same observable things on both and require the answers to agree.
 
-    Nothing on the control plane publishes a draw count, deliberately: a
-    conformance check that reached for one would be asserting bookkeeping
-    rather than behaviour, and would only ever catch the stream somebody
-    remembered to count. Instead: read EVERYTHING readable on one of two
-    same-profile units -- enumerated from ``GET /__unit/routes``, so a control
-    route added later is covered without anyone remembering -- then do the
-    same observable things on both and require the answers to agree. Whole
-    bodies are compared for the refusals, which is what makes it
-    vendor-neutral: the core does not need to know an envelope carries a
-    request id, only that looking at the fake did not change what it says
-    next.
+    Refusals are compared by whole body. The one mutating example available, if any, is compared by state digest instead of bytes, since a 2xx mutation embeds ``created_at`` from the live clock on all three built-in vendors even when refusals are byte-identical; the mutation must also succeed on both units, since a refused one commits nothing to compare. Where no mutating example or usable credential exists (e.g. oauth-only), the check degrades to the refusal comparison only, and says so.
 
-    The mutation must SUCCEED on both units and is compared by state digest
-    rather than bytes, both measured rather than assumed: a refused mutation
-    commits nothing on either side, so 400==400 with matching digests would
-    certify inertness having exercised no stream at all; and a 2xx mutation
-    body embeds ``created_at`` from the live clock on all three built-in
-    vendors, so two fresh units answer byte-identical refusals but not
-    byte-identical successes. The digest excludes volatile fields and covers
-    every minted id, which is exactly the stream a consuming read would
-    shift.
-
-    The coverage is exactly what the two probe families render, stated
-    plainly (konyklabs/roadmap#42 review): the refusal comparison catches a
-    consumed stream only where refusals embed drawn values (Toast's request
-    ids -- the shipped defect's class); the digest comparison catches the
-    entity/id stream wherever a mutating example exists. Where a profile has
-    neither a mutating example nor a usable credential for one (oauth-only),
-    the check degrades to the refusal comparison rather than skipping, and
-    says so -- on a vendor whose refusals are static, that degraded run
-    proves inertness of nothing but the refusal path. A read that consumes
-    an UNOBSERVED stream (core rng feeding no answer) is out of reach by
-    design: this check asserts consequences, not bookkeeping.
-
-    Chaos is reset on both units first, symmetrically: a standing rule
-    answering a probe with a rate-limit fault would compare a live reset
-    epoch, and what this check asks is about reads, not faults. (That reset
-    is also why chaos-stream consumption is not observable here.)
+    Chaos is reset on both units first, so a standing fault rule cannot masquerade as an inert-reads result.
     """
     env.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
     reads = tuple(row for row in env.routes() if row.internal and row.method == "GET")
@@ -203,9 +138,7 @@ def control_plane_reads_are_inert(env: CheckEnv) -> str:
     degraded_because = f"no enabled mutating route publishes an example on profile {env.profile!r}"
     if mutation is not None:
         try:
-            # Resolved up front: a missing credential degrades this half the
-            # same way a missing example does, instead of surfacing as an
-            # undeclared skip from the middle of the check.
+            # Resolved up front, so a missing credential degrades this half like a missing example.
             mutation_headers = env.authorized(mutation)
         except ConformanceSkip as unusable:
             degraded_because = str(unusable)
@@ -284,14 +217,7 @@ def control_plane_reads_are_inert(env: CheckEnv) -> str:
     ),
 )
 def the_error_catalogue_reads_the_same_twice(env: CheckEnv) -> str:
-    """The original repro, verbatim, as a standing contract.
-
-    Toast's catalogue answered different bytes to two identical GETs because
-    each rendering drew twenty fresh request ids (konyklabs/roadmap#42). C30
-    catches a read that consumes a stream the VENDOR draws from; this one
-    catches the smaller lie where the catalogue only desynchronizes itself --
-    a per-render counter, a fresh uuid, anything minted at describe time.
-    """
+    """C30 catches a read that consumes a stream the vendor draws from; this one catches the catalogue desynchronizing itself -- a per-render counter, a fresh uuid, anything minted at describe time (konyklabs/roadmap#42)."""
     first = env.client.call("GET", f"{CONTROL_PREFIX}errors")
     require(
         first.status == 200,
@@ -320,17 +246,7 @@ def the_error_catalogue_reads_the_same_twice(env: CheckEnv) -> str:
     requires=Requires(virtual_clock=True),
 )
 def the_error_catalogue_does_not_move_with_the_clock(env: CheckEnv) -> str:
-    """The half of konyklabs/roadmap#42 that actually failed in CI.
-
-    Toast's catalogue computed the 429 row's rate-limit reset as
-    ``floor(now/1000) + retry_after`` from the live clock, so two renderings
-    a second apart disagreed -- red on a loaded runner, green locally, and
-    the "3.13 red, 3.11 green" it produced was timing luck wearing a version
-    number. Crossing a second boundary reliably means moving the clock, and
-    moving the clock without waiting needs the virtual one, so this runs
-    where C21 runs and skips where it skips. An hour is used rather than a
-    second to make the point unmissable in the diff of a failure.
-    """
+    """A description must not move with the clock (konyklabs/roadmap#42). Needs the virtual clock to cross a time boundary without waiting, so this runs and skips exactly where C21 does; an hour rather than a second makes a failure's diff unmissable."""
     before = env.client.call("GET", f"{CONTROL_PREFIX}errors")
     require(
         before.status == 200,
@@ -366,15 +282,7 @@ def the_error_catalogue_does_not_move_with_the_clock(env: CheckEnv) -> str:
     ),
 )
 def an_unmatched_request_is_named_and_recorded(env: CheckEnv) -> str:
-    """The whole premise of a fake that tracks a vendor's surface.
-
-    A vendor's 404 says "not found" and can say nothing else, because the
-    vendor does not know what this unit models. The unit does, and a request
-    aimed at a path it does not serve is, in a test, nearly always a mistake
-    worth naming -- so it names the closest routes it has and records that
-    nothing answered. Without the record, no consumer can ask "did my code
-    call this at all?", because a 4xx leaves no journal entry by design.
-    """
+    """A vendor's 404 says only "not found"; this unit instead names the closest routes it has and records that nothing answered, so a consumer can ask "did my code call this at all?"."""
     answered = env.client.call("GET", UNMATCHED_PROBE)
     require(
         answered.status == 404,

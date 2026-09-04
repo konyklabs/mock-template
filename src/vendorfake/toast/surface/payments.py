@@ -1,50 +1,21 @@
 """The payments surface: adding payments to a check, tipping, and reading them back.
 
-======================  ===================================================
-AddPayments             ``POST  /orders/v2/orders/{o}/checks/{c}/payments``
-UpdateTip               ``PATCH /orders/v2/orders/{o}/checks/{c}/payments/{p}``
-GetPayments             ``GET   /orders/v2/payments?paidBusinessDate|refundBusinessDate|voidBusinessDate``
-GetPayment              ``GET   /orders/v2/payments/{guid}``
-======================  ===================================================
-(apiAddingPaymentsToACheck.html, apiCreatingAnOrderWithPaymentInformation.html,
-authorizingCcPayments.html, toast-orders-api.yaml)
+DOCUMENTED (apiAddingPaymentsToACheck.html,
+apiCreatingAnOrderWithPaymentInformation.html, authorizingCcPayments.html,
+toast-orders-api.yaml): orders created via the API accept only CREDIT and
+OTHER payments; a CREDIT payment must already be authorized; the body is an
+array of payments and the answer is the Order; ``amount``/``tipAmount`` are
+required, with an empty amount the one documented error code (10025); the tip
+PATCH takes ``{tipAmount}`` only; ``GET /payments`` takes exactly one
+business-date parameter.
 
-Documented behaviour reproduced here
-------------------------------------
-* "Orders created using the orders API are limited to the CREDIT and OTHER
-  payment types"; an OTHER payment names an alternate payment type in
-  ``otherPayment.guid`` (from ``/config/v2/alternatePaymentTypes``); "Credit
-  card payments must be authorized before you add them" and the order then
-  carries ``{"guid": "<paymentUuid>", "type": "CREDIT", ...}``;
-* the body is an array of payments and the answer is the Order;
-* ``amount`` "excluding tips" and ``tipAmount`` are required; an empty amount
-  is the one documented error code, 10025 "Payment amount cannot be empty";
-* ``PATCH .../payments/{guid}`` takes ``{"tipAmount"}`` only;
-* ``GET /payments`` takes exactly one of the three business-date parameters
-  and answers payment guid strings; ``GET /payments/{guid}`` answers the
-  Payment; both need ``orders:read``.
-
-JUDGMENT, each labelled
------------------------
-* **CREDIT authorisation** is a seeded record (the credit-cards API is not
-  modelled): the request's ``guid`` must name a seeded authorisation not yet
-  captured, for at most the authorised amount; the payment takes the
-  authorisation's guid, card type, last four digits and
-  ``cardEntryMode: PRE_AUTHED`` (a documented enum value);
-* **``paymentStatus``** after a successful POST is ``CAPTURED`` for both
-  types (audit gap 6: undocumented for OTHER); ``tipAmount`` defaults to 0
-  and ``amountTendered`` to ``amount``;
-* **a check is PAID** when its payments' amounts cover ``totalAmount``; a
-  payment on a PAID check is refused (400), and so is a payment in the SAME
-  request array whose earlier elements already cover the check -- validation
-  runs against an accumulating view of the whole array (a
-  :class:`PaymentBatch`), before any id is drawn or any write happens, so a
-  refusal in the third element leaves nothing of the first two;
-* the same batch is what makes a CREDIT authorisation single-use *within* one
-  array: the second element naming the same authorisation guid is the same
-  400 the store-level replay gets, never a write that could collide;
-* **the tip PATCH** answers the Order (the specification's declared 200; the
-  payment rides inside it), and refuses a voided one (400).
+JUDGMENT, each labelled at its site: CREDIT authorization is a seeded record,
+since the credit-cards API is not modelled, and single-use across a request's
+whole payment array; ``paymentStatus`` is ``CAPTURED`` for both types (audit
+gap 6, undocumented for OTHER); a check is PAID once its payments cover
+``totalAmount``, judged against an accumulating view of the array
+(:class:`PaymentBatch`) before any id is drawn; the tip PATCH refuses a voided
+check.
 """
 
 from __future__ import annotations
@@ -94,14 +65,9 @@ _CHECK_MACHINE = StateMachine(CHECK_MACHINE)
 
 @dataclass(slots=True)
 class PaymentBatch:
-    """What one request's earlier payments have already claimed.
-
-    ``add_payment`` validates one element; this is the memory between
-    elements, so the whole array is judged as it will land rather than each
-    element against a store none of them has touched yet. One batch per
-    validation pass, always -- the id-drawing pass gets a fresh one, so both
-    passes see the same world and agree.
-    """
+    """What one request's earlier payments have already claimed: the memory
+    between elements, so the whole array is judged as it will land. One batch
+    per validation pass; the id-drawing pass gets a fresh one."""
 
     #: CREDIT authorisation guids captured by earlier elements.
     captured: set[str] = dataclass_field(default_factory=set)
@@ -329,16 +295,10 @@ def add_payment(
     mint: Callable[[], str] | None,
     batch: PaymentBatch,
 ) -> dict[str, Any]:
-    """Validate one payment against its check AND against the request's own
-    earlier payments, then build its document.
-
-    Nothing is written here: the caller inserts and then settles the order,
-    so one request with three payments journals under one operation id. With
-    ``mint=None`` nothing is drawn either -- the callers rehearse the whole
-    array that way, over one ``batch``, before drawing a single id; a refusal
-    anywhere therefore leaves the store, the journal and both id streams
-    exactly as they were (konyklabs/roadmap#39 review, B1).
-    """
+    """Validate one payment against its check and the request's own earlier
+    payments, then build its document; nothing is written here. With
+    ``mint=None`` nothing is drawn either, so callers can rehearse the whole
+    array before committing (konyklabs/roadmap#39)."""
     if check.get("paymentStatus") in (
         CheckPaymentStatus.PAID.value,
         CheckPaymentStatus.CLOSED.value,
@@ -352,9 +312,7 @@ def add_payment(
     already_covered = covered_cents(ctx, check) + batch.covered.get(id(check), 0)
     total = int(check.get("totalAmount", 0))
     if already_covered >= total and total > 0:
-        # JUDGMENT: the earlier elements of this very array already cover the
-        # check, so this one would over-pay a check that is about to be PAID --
-        # the same refusal a second request after settling would get.
+        # JUDGMENT: earlier elements of this array already cover the check.
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,
             detail=f"Check {check.get('guid')} is already covered by the preceding payments and takes no further payment.",
@@ -382,9 +340,7 @@ def add_payment(
     paid_at = now if request.paidDate is None else parse_rest_date(request.paidDate, field=f"{field}paidDate")
     document: dict[str, Any] = {
         "restaurant_guid": restaurant.id,
-        # The documented order visibility rule -- an integration sees only
-        # what it submitted -- holds for the order's payments too; stamped so
-        # the payment reads can enforce it (vendorfake#30 gate, finding 3).
+        # Order visibility (an integration sees only what it submitted) applies to payments too.
         "client_id": order.get("client_id"),
         "orderGuid": order.get("id"),
         "checkGuid": check.get("guid"),
@@ -399,9 +355,7 @@ def add_payment(
         "type": kind,
         "amount": amount,
         "tipAmount": tip,
-        # Internal (never projected): whether the tip has been set by the
-        # caller, at creation or by PATCH. A CREDIT payment's check stays PAID
-        # until it has (the documented meaning of PAID); zero is a tip too.
+        # Internal (never projected): whether the tip was set, at creation or by PATCH.
         "tip_adjusted": request.tipAmount is not None,
         "amountTendered": amount if tendered is None else tendered,
         "paymentStatus": "CAPTURED",
@@ -431,8 +385,7 @@ def add_payment(
             raise UnitError(UnitErrorKind.INVALID_VALUE, detail=CREDIT_NOT_AUTHORIZED, field=f"{field}guid")
         auth_guid = str(authorization["id"])
         if auth_guid in batch.captured or ctx.store.collection(COL.payments).get(auth_guid) is not None:
-            # Captured by the store OR by an earlier element of this array:
-            # the same 400 either way, and never a write that could collide.
+            # Captured by the store or by an earlier element of this array: same 400 either way.
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail=f"Authorization {request.guid} was already captured.",
@@ -455,19 +408,16 @@ def add_payment(
 
 
 def settle_order(draft: Entity, ctx: UnitContext) -> None:
-    """Attach every stored payment of this order to its check and move the
-    statuses; the order's ``paidDate`` is set when every check is settled.
-    Idempotent, so the create path, the append path and the tip path share it.
+    """Attach every stored payment to its check and move the statuses; sets
+    the order's ``paidDate`` once every check is settled. Idempotent, shared
+    by the create, append and tip paths.
 
-    DOCUMENTED, from the Check schema's own per-value notes
-    (toast-orders-api.yaml): a card charge that cleared while its gratuity
-    still awaits adjustment leaves the check ``PAID``; a check with nothing
-    left owing is ``CLOSED``. The payment walkthrough
-    (https://doc.toasttab.com/doc/devguide/apiCreatingAnOrderWithPaymentInformation.html)
-    shows an OTHER payment covering the total answering ``CLOSED``. So a
-    covered check is ``PAID`` only while a CREDIT payment on it still awaits
-    its tip, and ``CLOSED`` otherwise -- found by the fidelity corpus
-    (konyklabs/roadmap#56); the unit answered ``PAID`` for both before."""
+    DOCUMENTED (https://doc.toasttab.com/toast-api-specifications/toast-orders-api.yaml,
+    https://doc.toasttab.com/doc/devguide/apiCreatingAnOrderWithPaymentInformation.html):
+    a covered check is
+    ``PAID`` while a CREDIT payment on it awaits its tip, and ``CLOSED``
+    once nothing is owing or an OTHER payment covers it
+    (konyklabs/roadmap#56)."""
     now = now_ms(ctx)
     rows = [row for row in ctx.store.collection(COL.payments).all() if row.get("orderGuid") == draft.get("id")]
     all_paid = True

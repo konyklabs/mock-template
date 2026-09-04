@@ -1,33 +1,10 @@
-"""Runtime discovery: how a check learns what this unit is without being told.
+"""Runtime discovery: how a check learns what this unit is without being told, so a contract can say "probe the first enabled mutating route" instead of "POST /v2/orders". Everything a check needs -- routes, capabilities, the seed digest, declared lifecycles, the in-band trigger's spelling -- is read from the control plane at run time, so a second vendor inherits the contracts rather than editing them.
 
-FOR: letting a contract say "probe the first enabled mutating route" instead of
-"POST /v2/orders". Everything a check needs to aim itself -- routes,
-capabilities, the seed digest, declared lifecycles, the in-band trigger's
-spelling -- is read from the control plane at run time, so a second vendor
-inherits the contracts rather than editing them.
+No per-profile skip list, anywhere: preconditions are declared as :class:`~vendorfake.conformance.types.Requires` and resolved here by asking the unit.
 
-INVARIANT: **no per-profile skip list, anywhere.** Preconditions are declared
-as :class:`~vendorfake.conformance.types.Requires` and resolved here by asking
-the unit. A list of "checks to skip on the oauth-only profile" would be a
-second source of truth about a profile, and the moment the profile changed it
-would be a lie that reported as a pass.
+A path template's parameters are filled with a value that cannot exist in any seed (``conformance-probe``), so a probe is refused for a reason the check is asserting about rather than accidentally succeeding. The one exception is a parameter the target declares as its tenant (``ConformanceTarget.path_params``), filled with the seeded value instead so an authenticated probe can be honoured.
 
-WHY THE PROBE VALUES ARE WHAT THEY ARE. A path template's parameters are
-filled with a value that cannot exist in any seed (``conformance-probe``), so
-a probe reaches the handler and is refused for a reason the check is asserting
-about -- a disabled capability, an injected fault, a missing token -- rather
-than accidentally succeeding and mutating state a later assertion reads. The
-one exception is a parameter the target declares as its *tenant*
-(``ConformanceTarget.path_params``): a path scoped to the merchant a
-credential belongs to has to name that merchant, or no authenticated probe can
-ever be honoured and no example body can ever commit. Everything below the
-tenant stays the probe.
-
-WHAT A CHECK MAY IMPORT FROM THE CORE. The core's own vocabulary: the error
-kinds it raises and the capabilities it gates on. Those are the contract; a
-check asserting on them is asserting on the specification. What a check may
-never do is reach a unit object -- which is why this module holds a client and
-a profile name and nothing else.
+A check may import the core's own vocabulary -- error kinds, capability names -- but never reach a unit object, which is why this module holds only a client and a profile name.
 """
 
 from __future__ import annotations
@@ -58,8 +35,7 @@ PROBE_SEGMENT = "conformance-probe"
 """What a path parameter is filled with. Not a plausible id, deliberately."""
 
 CONTROL_PREFIX = "/__unit/"
-"""Where the control plane lives. Restated as a constant so the checks read as
-prose; the kernel owns the enforcement that no vendor route may start here."""
+"""Where the control plane lives, restated here so the checks read as prose."""
 
 _MUTATING_METHODS = frozenset({"POST", "PUT"})
 
@@ -143,11 +119,7 @@ class RouteRow:
 
     @property
     def example_path(self) -> str:
-        """The path the published example applies to: the route's declared
-        example_params first, the target's tenant parameters over them (the
-        tenant is authoritative about who the credential belongs to), and the
-        probe segment for anything neither names. Equal to :attr:`probe_path`
-        for a route that declares no example_params."""
+        """The path the published example applies to: declared ``example_params`` first, the target's tenant parameters over them, and the probe segment for anything neither names."""
         return concrete_path(self.path, {**(self.example_params or {}), **self.path_params})
 
 
@@ -178,12 +150,7 @@ class CapabilityRow:
 
 @dataclass(frozen=True, slots=True)
 class Credential:
-    """One row of ``GET /__unit/auth``: something a caller can actually present.
-
-    ``headers`` is the whole instruction, so a check never has to know that a
-    bearer scheme spells itself ``Authorization: Bearer``; it copies what the
-    unit published onto the request and sees what happens.
-    """
+    """One row of ``GET /__unit/auth``: something a caller can actually present. ``headers`` is the whole instruction, so a check never has to know how a bearer scheme spells itself."""
 
     label: str
     mode: str
@@ -208,15 +175,7 @@ class Credential:
 
 @dataclass(frozen=True, slots=True)
 class InBandTrigger:
-    """How this vendor lets a consumer ask for a fault inside a normal request.
-
-    Discovered from ``/__unit/info``'s ``magic`` block, so a vendor that spells
-    its trigger as a query parameter and one that spells it as a header both
-    get the same contracts asked of them. The query form is preferred where a
-    vendor offers it because it disturbs nothing else about the request; a body
-    path is the last resort, since writing into the body changes what the
-    handler would otherwise have parsed.
-    """
+    """How this vendor lets a consumer ask for a fault inside a normal request, discovered from ``/__unit/info``'s ``magic`` block so a query-parameter vendor and a header vendor get the same contracts. Query is preferred where offered since it disturbs nothing else about the request; body is the last resort."""
 
     prefix: str
     where: str
@@ -237,14 +196,7 @@ class InBandTrigger:
 
 
 class CheckEnv:
-    """Everything one check may reach: a client, a profile name, and discovery.
-
-    Discovery results that cannot change under a check -- the route table, the
-    declared machines, the vendor's own description -- are memoised. Anything a
-    check deliberately mutates (capabilities, chaos, state) is fetched every
-    time, because a cached copy of a thing the check just changed is a fault
-    injection of its own.
-    """
+    """Everything one check may reach: a client, a profile name, and discovery. Results that cannot change under a check (routes, machines, the vendor's own description) are memoised; anything a check deliberately mutates (capabilities, chaos, state) is fetched fresh every time."""
 
     __slots__ = ("_cache", "client", "profile", "target", "transport")
 
@@ -265,11 +217,7 @@ class CheckEnv:
     # -- raw access ---------------------------------------------------------
 
     def get_json(self, path: str) -> Any:
-        """GET a control route and parse it, or fail naming the route.
-
-        A control route that is missing is a failure of the unit and not of the
-        check, and the message says which file publishes the route table.
-        """
+        """GET a control route and parse it, or fail naming the route -- a missing control route is a failure of the unit, not of the check."""
         res = self.client.call("GET", path)
         if res.status != 200:
             raise ConformanceFailure(
@@ -313,11 +261,7 @@ class CheckEnv:
         return document
 
     def credentials(self) -> tuple[Credential, ...]:
-        """Every credential the unit says would authenticate right now.
-
-        Fetched rather than memoised: a check that revoked a token and asked
-        again must not be handed the answer from before it did so.
-        """
+        """Every credential the unit says would authenticate right now. Fetched rather than memoised, so a check that revoked a token sees the change."""
         rows: Sequence[Mapping[str, Any]] = self.auth_document()["credentials"]
         return tuple(Credential.of(row) for row in rows)
 
@@ -346,8 +290,7 @@ class CheckEnv:
         return any(row.name == name for row in self.capabilities())
 
     def set_capabilities(self, names: Sequence[str]) -> None:
-        """Replace the enabled set. Used only by checks that restore it in a
-        ``finally``; each check has its own unit, so nothing else can see it."""
+        """Replace the enabled set. Used only by checks that restore it in a ``finally``; each check has its own unit."""
         self.client.call("POST", f"{CONTROL_PREFIX}capabilities", json_body={"set": list(names)})
 
     def vendor_routes(
@@ -391,13 +334,7 @@ class CheckEnv:
         methods: frozenset[str] | None = None,
         idempotent: bool = False,
     ) -> tuple[RouteRow, ...]:
-        """Enabled vendor routes publishing a body they accept.
-
-        The only way a language-independent check can cause a *successful*
-        vendor mutation: a body a check assembled itself can only ever be
-        refused by the vendor's own validation, and every contract about what a
-        committed mutation does is unaskable until one has succeeded.
-        """
+        """Enabled vendor routes publishing a body they accept -- the only way a language-independent check can cause a successful vendor mutation, since one it assembled itself could only ever be refused."""
         return tuple(
             row
             for row in self.vendor_routes(methods=methods)
@@ -423,15 +360,7 @@ class CheckEnv:
         return tuple(row for row in self.vendor_routes() if row.idempotency is not None)
 
     def partner_idempotent_route(self, route: RouteRow) -> RouteRow | None:
-        """Another enabled idempotent route to send ``route``'s key to.
-
-        A DIFFERENT declared scope first -- that is the pair the isolation
-        contract wants -- and within each tier the one with an example body,
-        because a key replayed into a request that then *succeeds* is stronger
-        evidence than one refused by validation. A same-scope partner is still
-        returned when no other scope exists: the check treats fully collapsed
-        declarations as its own finding, so the selection must not hide them.
-        """
+        """Another enabled idempotent route to send ``route``'s key to. Prefers a different declared scope, and within each tier one with an example body, since a key replayed into a request that then succeeds is stronger evidence. A same-scope partner is still returned when no other scope exists, rather than hidden."""
         scope = None if route.idempotency is None else route.idempotency.get("scope")
         others = [row for row in self.idempotent_routes() if row.key != route.key]
         tiers = (
@@ -485,30 +414,14 @@ class CheckEnv:
 
     @contextmanager
     def fresh(self, *, transport: str | None = None) -> Iterator[CheckEnv]:
-        """A second, freshly constructed unit on the same profile.
-
-        Determinism is a claim about two units, not about one unit asked twice,
-        so C06 and C08 need this. It is also how C10 reaches the other binding.
-        """
+        """A second, freshly constructed unit on the same profile -- determinism is a claim about two units, not one unit asked twice, and this is also how C10 reaches the other binding."""
         wanted = self.transport if transport is None else transport
         with self.target.open_client(self.profile, wanted) as client:
             yield CheckEnv(target=self.target, profile=self.profile, transport=wanted, client=client)
 
     @contextmanager
     def seed_overlay_unit(self, overlay: Mapping[str, Any]) -> Iterator[CheckEnv]:
-        """A unit on the same profile with ``overlay`` laid over its seed.
-
-        Raises whatever the target's construction raises, unwrapped -- which
-        is the point: the seed-overlay contract is about a refusal that must
-        happen while the unit is *built*, and a helper that turned it into a
-        skip or an error would be answering the question on the check's
-        behalf. A check calling this catches the exception itself.
-
-        :class:`ConformanceSkip` if the target publishes no such opener,
-        which the ``seed_overlay`` precondition also reports; the guard is
-        repeated here so a check that reaches for this without declaring the
-        precondition skips rather than raising ``AttributeError`` on ``None``.
-        """
+        """A unit on the same profile with ``overlay`` laid over its seed. Raises whatever the target's construction raises, unwrapped, since the seed-overlay contract is about a refusal during build and a check must catch it itself. Raises :class:`ConformanceSkip` if the target publishes no such opener."""
         opener = self.target.open_with_seed_overlay
         if opener is None:
             raise ConformanceSkip(
@@ -527,12 +440,7 @@ def check_env(target: ConformanceTarget, profile: str, transport: str) -> Iterat
 
 
 def unmet_precondition(requires: Requires, env: CheckEnv) -> str | None:
-    """The first unmet precondition, as the reason to print, or ``None``.
-
-    Every branch resolves by asking the unit. The reason is prose a reader can
-    act on, because a skip nobody can explain is indistinguishable from a
-    contract nobody wrote.
-    """
+    """The first unmet precondition, as the reason to print, or ``None``. Every branch resolves by asking the unit."""
     if requires.surface_route and not env.vendor_routes():
         return f"profile {env.profile!r} enables no vendor route to probe"
     if requires.mutating_route and not env.vendor_routes(methods=_MUTATING_METHODS):
@@ -595,11 +503,7 @@ def unmet_precondition(requires: Requires, env: CheckEnv) -> str | None:
     if requires.webhooks_chaos and not env.capability_enabled(CoreCapability.WEBHOOKS_CHAOS.value):
         return f"the {CoreCapability.WEBHOOKS_CHAOS.value!r} capability is off in profile {env.profile!r}"
     if requires.virtual_clock:
-        # ``.get`` and not ``[...]``: a unit that publishes no clock block at
-        # all has not met the precondition either, and an unmet precondition is
-        # a skip with a reason -- never a KeyError that the runner would have
-        # to report as this contract failing. The contract that fails for a
-        # missing documented key is C01, which is where it belongs.
+        # `.get`, not `[...]`: a unit publishing no clock block has simply not met the precondition (a skip, not a KeyError).
         clock = env.info().get("clock") or {}
         if clock.get("mode") != "virtual":
             return (

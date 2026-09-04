@@ -1,27 +1,12 @@
-"""The Payment Types tag: one route, the version-cursor list.
+"""Payment Types tag: one route, the version-cursor list.
 
-DOCUMENTED (``GET /payment_types``, operationId ``ListPaymentTypes``,
-``🔒 Requires: `payment_types:read` scope``): "Returns a paginated collection
-of payment types", answering ``PaymentTypeCollection``. Beyond the four version
-parameters it declares three filters -- ``outlet_id`` ("Only effective when the
-payment_type_controls feature is enabled"), ``currency`` and ``only_lspay``
-("If true, returns only LSPay payment types").
-
-``outlet_id`` is honoured: the entity carries ``outlet_ids`` and filtering on
-it is what the parameter means. The feature flag its description mentions is
-not modelled -- there is no way to read a retailer's feature flags in this
-specification -- so the filter is always effective here, which is the
-permissive reading and is stated at the site.
-
-``currency`` and ``only_lspay`` are NOT modelled: ``PaymentType`` carries no
-currency member at all, and the ``GlobalPaymentType`` embedded object has no
-LSPay marker either, so there is nothing in the documented schema for either
-filter to select on. Both are accepted and change nothing, which is recorded
-here rather than silently.
-
-THE SCOPE'S OWN WORDING drives the default: ``payment_types:read`` is "Read
-payment types, **excluding internal payment types**", so an internal type is
-absent from the list. See ``model/payment_type.py``.
+DOCUMENTED (``GET /payment_types``, ``ListPaymentTypes``, scope
+``payment_types:read``): answers ``PaymentTypeCollection``, filterable by
+``outlet_id``, ``currency`` and ``only_lspay`` beyond the version parameters.
+``outlet_id`` is honoured against the entity's ``outlet_ids``; ``currency`` and
+``only_lspay`` have no schema member to select on and are accepted but
+change nothing. Internal types are excluded per the scope's own wording (see
+``model/payment_type.py``).
 """
 
 from __future__ import annotations
@@ -82,8 +67,7 @@ def _visible(entity: dict[str, Any], outlet_id: str | None) -> bool:
         return False
     if outlet_id is None:
         return True
-    # An empty `outlet_ids` means "every outlet": the member is nullable and
-    # optional, so a type that names none is not scoped to one.
+    # Empty `outlet_ids` means every outlet (nullable, optional member).
     return not payment_type.outlet_ids or outlet_id in payment_type.outlet_ids
 
 

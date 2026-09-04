@@ -1,23 +1,9 @@
-"""Square (Connect v2), as a vendorfake vendor.
+"""Square (Connect v2), as a vendorfake vendor. Publishes ``VENDOR`` -- via the ``vendorfake.vendors``
+entry point -- plus the pieces a consumer legitimately imports directly: the error table, the order
+machine, id shapes, wire projections and webhook signature helpers.
 
-FOR: publishing one name -- ``VENDOR`` -- that the registry resolves through the
-``vendorfake.vendors`` entry point, plus the handful of pieces a consumer or a
-test legitimately imports directly: the error table, the order machine, the id
-shapes, the wire projections and the webhook signature helpers -- the last of
-those because a consumer verifying a delivery should run *one* implementation
-of the scheme rather than copying it out of a docstring.
-
-INVARIANT: **``VENDOR`` is a fresh definition on every access.** A vendor owns
-a stateful, seeded id stream; two units sharing one would interleave their
-draws and neither would reproduce its own ids. The registry resolves a module
-attribute rather than calling a factory, so the attribute *is* the factory,
-through :func:`__getattr__`. ``vendorfake.square.VENDOR is
-vendorfake.square.VENDOR`` is therefore False, which is stated here because it
-is the one surprising thing in this package.
-
-Nothing in this package imports a web framework, and nothing in it is imported
-by the core. A vendor supplies data -- routes, tables, machines -- and the core
-supplies behaviour.
+INVARIANT: ``VENDOR`` is a fresh definition on every access (through :func:`__getattr__`), since a vendor
+owns a stateful seeded id stream two units must not share.
 """
 
 from __future__ import annotations
@@ -89,11 +75,7 @@ __all__ = [
 
 
 def __getattr__(name: str) -> VendorDefinition:
-    """``VENDOR``, minted per access. See the module docstring for why.
-
-    Any other missing name raises ``AttributeError`` as usual, so a typo does
-    not silently return a vendor.
-    """
+    """``VENDOR``, minted per access; any other missing name raises ``AttributeError``."""
     if name == "VENDOR":
         return create_square_vendor()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

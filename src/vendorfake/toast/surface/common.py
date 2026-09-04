@@ -1,23 +1,18 @@
 """What every Toast surface is handed, and the helpers they share.
 
-FOR: naming the dependency a surface has on its vendor -- the resolved
-configuration and the unit's id stream -- as a protocol, so a surface module
-never imports :mod:`vendorfake.toast.vendor` and the vendor is free to import
-the surfaces.
+Names a surface's dependency on its vendor -- resolved config and the id
+stream -- as a protocol, so a surface never imports
+:mod:`vendorfake.toast.vendor`.
 
-INVARIANT: **a surface reads its configuration through the vendor, live.**
-Both members of :class:`ToastDeps` are properties on the vendor object, not
-values copied at route construction: a profile's ``vendor`` block resolves in
-``hydrate``, which runs after the routes are built and again on every
-``POST /__unit/state/reset``.
+INVARIANT: a surface reads its configuration through the vendor, live --
+both :class:`ToastDeps` members are properties on the vendor object, since a
+profile's ``vendor`` block resolves in ``hydrate``.
 
-THE RESTAURANT HEADER. "``Toast-Restaurant-External-ID``: the GUID of the
-restaurant ... It cannot be the GUID of a restaurant group"
-(https://doc.toasttab.com/doc/devguide/apiOrdersGetDetailedInfoAboutOneOrder.html).
-The auth adapter resolves it for every route whose ``auth`` is
-``RESTAURANT_AUTH`` and records the guid on the ``AuthResult``;
-:func:`require_restaurant` is how a handler reads it back, typed, without a
-second parse of the header.
+DOCUMENTED: "``Toast-Restaurant-External-ID``: the GUID of the restaurant ...
+It cannot be the GUID of a restaurant group"
+(https://doc.toasttab.com/doc/devguide/apiOrdersGetDetailedInfoAboutOneOrder.html);
+the auth adapter resolves it,
+and :func:`require_restaurant` reads it back, typed.
 """
 
 from __future__ import annotations
@@ -81,18 +76,14 @@ def now_ms(ctx: UnitContext) -> int:
 
 
 def is_guid(value: str) -> bool:
-    """The documented lowercase-UUID shape. ``GET /orders/{guid}`` documents a
-    400 for "The GUID was malformed", which is what this decides."""
+    """The documented lowercase-UUID shape (400: "The GUID was malformed")."""
     return _GUID.match(value) is not None
 
 
 def require_restaurant(args: HandlerArgs) -> RestaurantEntity:
-    """The restaurant the auth adapter resolved for this request.
-
-    A route declaring ``RESTAURANT_AUTH`` always has one by the time its
-    handler runs; a route that did not declare it and calls this is a defect
-    here, answered as the vendor's 500 rather than a plausible 4xx.
-    """
+    """The restaurant the auth adapter resolved for this request; calling this
+    from a route that did not declare ``RESTAURANT_AUTH`` is a defect here,
+    answered as a 500 rather than a plausible 4xx."""
     meta = args.auth.meta if args.auth is not None else None
     guid = None if meta is None else meta.get(RESTAURANT_META_KEY)
     if not isinstance(guid, str) or not guid:
@@ -120,8 +111,7 @@ def int_param(raw: str, field: str, *, minimum: int | None = None, maximum: int 
 
 
 def strip_internal(entity: dict[str, Any]) -> dict[str, Any]:
-    """A stored reference document minus the store's own bookkeeping keys, with
-    ``id`` spelled ``guid`` first, the way every Toast document starts."""
+    """A stored entity minus bookkeeping keys, with ``id`` spelled ``guid`` first."""
     out: dict[str, Any] = {"guid": entity["id"]}
     for key, value in entity.items():
         if key in ("id", "version", "created_at", "updated_at"):

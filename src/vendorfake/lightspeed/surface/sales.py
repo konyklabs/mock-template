@@ -1,58 +1,19 @@
-"""The Sales tag: the list, one sale, create, update, and the return action.
+"""The Sales tag: list, one sale, create, update, and the return action.
 
-DOCUMENTED, all five operations of the tag and every scope read out of the
-operation's own ``description`` annotation:
+DOCUMENTED: scopes come from each operation's own ``description``
+(``initReturnSale`` also needs ``users:read``); ``ListSales`` takes only
+``after``/``before``/``page_size``, since its description points searches at
+``GET /search`` instead.
 
-=================================================  =====================  =====================================
-``GET /sales``                                     ``ListSales``          ``sales:read``
-``POST /sales``                                    ``CreateSale``         ``sales:write``
-``GET /sales/{sale_id}``                           ``GetSaleByID``        ``sales:read``
-``PUT /sales/{sale_id}``                           ``UpdateSale``         ``sales:write``
-``POST /sales/{sale_id}/actions/return``           ``initReturnSale``     ``sales:write`` **and** ``users:read``
-=================================================  =====================  =====================================
+Create, update and return all write ``sales`` and fire ``sale.update`` (a
+return fires it twice, per the webhooks page's note on layby/account sales,
+https://x-series-api.lightspeedhq.com/docs/webhooks); closing a sale that
+draws stock also fires ``inventory.update`` per record moved.
 
-The return operation's pair is the vendor's own: "🔒 Requires: ``sales:write``
-``users:read`` scopes". ``users:read`` is on the 58-scope reference page and
-is required here even though the Users tag itself is out of scope -- the
-operation's description names it, so this unit requires it.
-
-``ListSales`` DECLARES ONLY THREE PARAMETERS -- ``after``, ``before`` and
-``page_size``. It declares no ``deleted`` and no resource filter of any kind:
-no ``status``, no ``outlet_id``, no ``customer_id``, no date range. The
-description says so outright -- "To search for sales, please have a look at our
-Search endpoint on what is supported" -- and ``GET /search`` is outside issue
-#94's scoped surface. So this route accepts the same
-``after``/``before``/``page_size``/``deleted`` reader every list in this
-package shares (``deleted`` selects nothing, because the Sales tag has no
-delete operation and nothing here ever sets ``deleted_at``) and adds no filter
-the vendor does not publish. Inventing ``?status=closed`` would teach a
-consumer a query the real API answers with an unfiltered page.
-
-WHAT FIRES. Every create, every update and every return writes the ``sales``
-collection, and ``events.py`` maps that collection to ``sale.update``. The
-return fires it **twice** -- once for the new return sale, once for the
-original whose ``return.return_sale_ids`` gains it -- which is the shape the
-webhooks page describes when it says ``sale.update`` "may fire multiple times
-for layby/account sales"
-(https://x-series-api.lightspeedhq.com/docs/webhooks). Closing a sale that
-draws stock fires ``inventory.update`` as well, one per inventory record the
-sale moved.
-
-THE PAYMENT ERRORS ARE THE VENDOR'S OWN SHAPE, WITH THIS PROJECT'S CODES.
-``PaymentErrorResponse`` -- ``{"error": {"code": <int>, "message": <str>}}`` --
-is the only named error schema in the whole 373-schema document, and no
-operation in the served document references it (checked: zero ``$ref`` s to it
-across all 201 operations). So the shape is documented and its *use here* is
-JUDGMENT: this unit answers it for the failures that are about a payment
-rather than about the sale's own fields, which is the only class of failure the
-schema's name fits. The integer codes are this project's -- Lightspeed
-publishes no error-code list anywhere -- and live in ``model/error.py`` so
-there is one table rather than literals down this file.
-
-THE STATE MACHINE is ``machine.py``'s, enforced by the core. ``closed`` and
-``voided`` are terminal, so ``PUT`` on a closed sale is a 409
-``invalid_transition``; the return route is the documented carve-out and says
-so at its own site.
+JUDGMENT: ``PaymentErrorResponse`` is documented but unreferenced by any
+operation; used here for payment-specific failures, with this project's own
+codes (``model/error.py``). ``closed``/``voided`` are terminal in the state
+machine (``machine.py``); the return route is the documented carve-out.
 """
 
 from __future__ import annotations
@@ -95,13 +56,10 @@ __all__ = ["CAPABILITY", "LightspeedSalesSurface", "payment_error", "sale_routes
 CAPABILITY = "sales"
 
 _MACHINE = StateMachine(SALE_MACHINE)
-"""Module level, like Toast's: a machine holds no state, so one instance
-enforces every sale on every unit in the process."""
+#: Stateless, so one module-level instance enforces every sale on every unit.
 
 _INVENTORY_LEVEL = "current_inventory_level"
-"""``Inventory.current_inventory_level`` -- the member the schema names. The
-inventory collection belongs to the sibling slice of konyklabs/roadmap#94; this
-surface only ever decrements a row that is already there."""
+#: ``Inventory.current_inventory_level`` -- the member the schema names.
 
 
 def payment_error(
@@ -111,13 +69,9 @@ def payment_error(
     *,
     field: str,
 ) -> UnitError:
-    """A refusal that reaches the wire as ``PaymentErrorResponse``.
-
-    ``field`` still travels, in the ``unit_error`` sidecar rather than in the
-    body: the vendor's schema has room for a code and a message and nothing
-    else, and dropping the field name would make a payment failure the one
-    refusal on this surface a consumer cannot locate.
-    """
+    """A refusal that reaches the wire as ``PaymentErrorResponse``; ``field``
+    travels in the ``unit_error`` sidecar, since that schema has room for only
+    a code and a message."""
     return UnitError(
         kind,
         detail=message,
@@ -145,21 +99,9 @@ class LightspeedSalesSurface:
                 operation_id="ListSales",
                 summary="Sales, ascending by version; after/before/page_size. No resource filter is documented.",
             ),
-            # THE PUBLISHED EXAMPLE LIVES HERE, and that placement is the point
-            # of it. A conformance check that knows no vendor needs one route
-            # it can drive successfully, repeatedly, that COMMITS and ANNOUNCES
-            # -- C18 drives it three times on one unit with the webhooks
-            # capability on, off and on again. Creating a sale is the only such
-            # route this vendor has: the register actions commit and announce
-            # but each is one-shot (opening an open register is a 409), and the
-            # webhook CRUD writes the core's subscription collection, which the
-            # journal listener excludes by design.
-            #
-            # The example is deliberately a PARKED sale with no payments: a
-            # payment requires an open register, and an example body whose
-            # success depends on the state of another entity is an example that
-            # fails for a reason that has nothing to do with the contract
-            # asking. The line item is real, so the mutation is a real sale.
+            # The published example (C18's repeatable commit+announce route)
+            # is a PARKED sale with a real line item but no payments, so its
+            # success doesn't depend on register state.
             Route(
                 method="POST",
                 path=CREATE_SALE,
@@ -218,25 +160,20 @@ class LightspeedSalesSurface:
     # -- writes -------------------------------------------------------------
 
     def create_sale(self, args: HandlerArgs) -> ReplyInit:
-        # The body first, for the reason the register actions record: a body
-        # that is not valid JSON is malformed whatever it was addressed to.
+        # Body validated first: malformed JSON is malformed regardless of state
         request = validate_body(SaleRequest, args.body())
         ctx = args.ctx
         sales = ctx.store.collection(COL.sales)
         sale_id = request.id or self._deps.ids.sale()
         if request.id is not None and sales.get(request.id) is not None:
-            # DOCUMENTED that the id may be caller-supplied ("User-provided
-            # sale ID. If not included, one will be generated"); JUDGMENT that
-            # re-using one is a 409 rather than an overwrite. A POST that
-            # silently replaced an existing sale would let a retried request
-            # destroy the sale its first attempt created.
+            # DOCUMENTED: id may be caller-supplied. JUDGMENT: reusing an
+            # existing one is a 409, not a silent overwrite.
             raise UnitError(
                 UnitErrorKind.CONFLICT,
                 detail=f"Sale {request.id} already exists; update it with PUT /sales/{{sale_id}}.",
                 field="id",
             )
-        # The initial state is the machine's, so creating a sale straight into
-        # `closed` (the one-request POS flow) is validated as the edge it is.
+        # Creating straight into `closed` (one-request POS flow) is just another transition.
         _MACHINE.assert_transition(SaleState.PARKED.value, request.state, f"Sale {sale_id}")
         built = self._build(ctx, request, sale_id=sale_id, previous=None)
         stored = sales.insert(built.to_entity(), {"operation_id": "CreateSale"})
@@ -250,8 +187,7 @@ class LightspeedSalesSurface:
         stored = self._require(args)
         previous = SaleEntity.from_entity(stored)
         subject = f"Sale {previous.id}"
-        # `assert_mutable` before `assert_transition`, as the core's docstring
-        # asks: "this is finished" explains "that move is not allowed".
+        # assert_mutable before assert_transition: "finished" explains "that move is not allowed".
         _MACHINE.assert_mutable(previous.state, subject)
         _MACHINE.assert_transition(previous.state, request.state, subject)
         built = self._build(ctx, request, sale_id=previous.id, previous=previous)
@@ -269,28 +205,11 @@ class LightspeedSalesSurface:
         return json_(single(project_sale(updated, names=_payment_type_names(ctx))))
 
     def return_sale(self, args: HandlerArgs) -> ReplyInit:
-        """Open a return against a closed sale.
-
-        DOCUMENTED: "Initializes a return for an existing **closed** sale and
-        returns the newly created SAVED return sale. Use this endpoint to start
-        the return workflow before adding refund payments or finalizing the
-        returned items." So the answer is a NEW sale, it is editable (the
-        refund payments come later, through ``PUT``), and the original is not
-        edited into a return.
-
-        THE ONE CARVE-OUT FROM THE STATE MACHINE. ``closed`` is terminal, so
-        nothing else may write a closed sale -- but this operation is documented
-        to work on exactly one, and it does write the original: its
-        ``return.return_sale_ids`` gains the new sale's id, which is the member
-        ``SaleReturn`` exists to carry ("IDs of return sales created from this
-        sale"). The machine is not asked, deliberately and only here.
-
-        JUDGMENT: the new sale's line items are the original's with the sign of
-        every quantity flipped and ``is_return`` set, which is what
-        ``initReturnSale``'s own response example shows (``"quantity": -1``,
-        ``"is_return": true``, ``"total_price": -200`` on each line). It carries
-        no payments: the documented workflow adds the refund afterwards.
-        """
+        """Open a return against a closed sale. DOCUMENTED: creates a new,
+        editable PARKED return sale (refund payments come via ``PUT`` later);
+        the original gains the new id in ``return.return_sale_ids`` -- the one
+        write allowed against a closed sale. JUDGMENT: line items mirror the
+        original with quantities negated and ``is_return`` set."""
         ctx = args.ctx
         stored = self._require(args)
         original = SaleEntity.from_entity(stored)
@@ -354,18 +273,9 @@ class LightspeedSalesSurface:
         sale_id: str,
         previous: SaleEntity | None,
     ) -> SaleEntity:
-        """One validated request as the sale it describes.
-
-        A PUT REPLACES. ``SaleUpdateRequest`` is ``SaleRequestBase`` unchanged
-        -- the whole editable document, with ``line_items`` and ``payments``
-        inline -- so an update states the sale it wants rather than patching
-        the one that is there. JUDGMENT, and the alternative is worse: with the
-        arrays inline and no PATCH operation anywhere in the tag, merging would
-        leave a caller no way to REMOVE a line item.
-
-        What survives an update is what a caller cannot send: the id, the
-        creation instant, and the return links.
-        """
+        """One validated request as the sale it describes. A PUT replaces the
+        whole document (no PATCH exists in this tag), so what survives
+        regardless is only the id, the creation instant, and return links."""
         deps = self._deps
         now = wire_time(ctx.clock)
         register = self._register(ctx, request.source.register_id)
@@ -408,28 +318,16 @@ class LightspeedSalesSurface:
         *,
         previous: SaleEntity | None,
     ) -> list[dict[str, Any]]:
-        """Every line validated before any id is minted.
-
-        The two-pass shape is the same one the Toast package uses and for the
-        same reason: a refusal in the third line must not have drawn ids for the
-        first two, or two otherwise identical scenarios stop producing the same
-        transcript.
-
-        ``SaleLineItem.id`` is documented as "Existing line item ID. If included
-        in the POST request it will cause an update instead of a creating a new
-        object", so a caller's own id is kept as given.
-        """
+        """Every line validated before any id is minted (two-pass, like
+        Toast's, so a refusal partway through draws no ids). DOCUMENTED: a
+        caller's own ``SaleLineItem.id`` is kept as given."""
         products = ctx.store.collection(COL.products)
         known = {row["id"] for row in products.all()}
         is_return = previous is not None and previous.is_return
         for index, line in enumerate(requested):
             field = f"line_items[{index}]"
             if known and line.product.id not in known:
-                # Checked only when the scenario HAS products: the products
-                # collection is the sibling slice's, and a unit seeded without
-                # one must not start refusing every sale. JUDGMENT, and it is
-                # the guard rather than the check that is judged -- an unknown
-                # product on a unit that knows its products is a 422.
+                # JUDGMENT: only checked when the scenario has products, so a unit seeded without any is not refused.
                 raise UnitError(
                     UnitErrorKind.INVALID_VALUE,
                     detail=f"{field}.product.id {line.product.id!r} is not a product.",
@@ -457,35 +355,13 @@ class LightspeedSalesSurface:
         previous: SaleEntity | None,
     ) -> list[dict[str, Any]]:
         """Every payment resolved to a payment type and an open register.
-
-        THE OPEN-REGISTER RULE is the one payment rule the vendor states
-        plainly, in the scope it gates the action with: ``register:open`` is
-        "Open a register **to create sales and payments**"
-        (https://x-series-api.lightspeedhq.com/docs/scopes). A till that is
-        closed does not take money, and a fake that accepted the payment anyway
-        would let a consumer's end-of-day reconciliation pass on data a real
-        retailer could never produce.
-
-        A PAYMENT ID SURVIVES A REPLACING PUT. ``SalePayment.id`` is optional
-        and a PUT states the whole document, so the ordinary edit-then-close
-        flow -- park a sale with a part-payment, close the till, reopen it,
-        correct a line item with a body that resends the payment as the schema
-        documents it (amount and type, no id) -- used to re-mint the id. The
-        closure that had already counted that money records the id it counted
-        (``surface/registers.py``'s ``counted_payment_ids``), so a re-minted id
-        walked straight past the guard and the same cash entered a second
-        closure: two sessions reporting 35.00 for a sale ledger holding 22.50.
-
-        THE MATCHING RULE IS JUDGMENT, because the vendor documents neither the
-        id's optionality nor what a replacing PUT does with it: an id-less
-        payment reuses a stored payment's id when the two agree on
-        ``payment_type_id`` **and** on the amount in minor units, taking each
-        stored payment at most once and in order. Amount-and-type rather than
-        position, so that reordering the array does not swap two payments'
-        identities; and a payment whose amount or type actually changed is a
-        different payment, mints a fresh id, and is counted afresh -- which is
-        the answer a till reconciliation wants for money that moved.
-        """
+        DOCUMENTED: a closed register takes no payments (``register:open``,
+        https://x-series-api.lightspeedhq.com/docs/scopes). JUDGMENT: an
+        id-less payment on a replacing PUT reuses a stored payment's id when
+        type and minor-unit amount both match (amount-and-type, not position,
+        each claimed at most once), so an actually-changed payment mints a
+        fresh id rather than letting a register closure's counted-ids guard
+        miss money already counted."""
         types = {row["id"]: PaymentTypeEntity.from_entity(row) for row in ctx.store.collection(COL.payment_types).all()}
         carried = list(previous.payments) if previous is not None else []
         kept: set[str] = {payment.id for payment in request.payments if payment.id}
@@ -527,8 +403,7 @@ class LightspeedSalesSurface:
                     f"Register {on.id} is not open; a closed register takes no payments.",
                     field=f"{field}.source.register_id",
                 )
-            # A refund is a negative payment; the amount is signed on a return
-            # sale and never on an ordinary one.
+            # A refund's amount is signed; an ordinary sale's never is.
             allow_negative = _is_refund(request)
             amount_minor = to_minor(payment.amount, field=f"{field}.amount", allow_negative=allow_negative)
             payment_id = (
@@ -553,22 +428,11 @@ class LightspeedSalesSurface:
     # -- inventory ----------------------------------------------------------
 
     def _draw_stock(self, ctx: UnitContext, sale: SaleEntity, *, direction: int) -> None:
-        """Move the outlet's stock by the sale's line quantities, if there is
-        any stock to move.
-
-        GUARDED ON THE COLLECTION BEING POPULATED, deliberately: ``inventory``
-        belongs to the sibling slice of konyklabs/roadmap#94 and a unit whose
-        scenario carries no inventory records must still be able to close a
-        sale. Once the two slices are merged this branch stops being reachable
-        for the shipped scenario and the decrement is simply what closing does.
-
-        Each updated record is its own journal entry, so a sale of three
-        tracked products fires three ``inventory.update`` deliveries -- one per
-        record that actually moved, which is what the event names.
-
-        A RETURN GIVES STOCK BACK for free: its line quantities are negative,
-        so the same subtraction adds.
-        """
+        """Move the outlet's stock by the sale's line quantities, if any
+        inventory exists to move (guarded, so a unit seeded without it can
+        still close sales). Each moved record fires its own
+        ``inventory.update``; a return's negative quantities give stock back
+        for free."""
         inventory = ctx.store.collection(COL.inventory)
         rows = inventory.all()
         if not rows:
@@ -600,54 +464,19 @@ class LightspeedSalesSurface:
         return None if stored is None else RegisterEntity.from_entity(stored)
 
     def _outlet_id(self, request: SaleUpdateRequest, register: RegisterEntity | None) -> str | None:
-        """Which outlet this sale belongs to.
-
-        JUDGMENT on the ORDER, because the vendor documents the two inputs and
-        not their precedence: the register's own outlet first (a sale rung up
-        at a till happened at that till's outlet), then
-        ``fulfillment_outlet_id``, documented as "The default outlet that
-        should fulfill this sale when a line item does not specify its own
-        ``fulfilment_outlet_id``". ``SaleResponseSource.outlet_id`` is where the
-        answer is published.
-        """
+        """Which outlet this sale belongs to: JUDGMENT on the order -- the
+        register's own outlet first, then ``fulfillment_outlet_id`` -- since
+        the vendor documents both inputs but not their precedence."""
         if register is not None:
             return register.outlet_id
         return request.fulfillment_outlet_id
 
     def _check_outlet(self, ctx: UnitContext, request: SaleUpdateRequest, outlet_id: str | None) -> None:
-        """A sale that CLOSES must say which outlet each of its lines comes out
-        of, and that outlet must exist, because closing is what moves stock.
-
-        JUDGMENT, and it is a refusal rather than a silent no-op. Neither
-        ``SaleRequestSource`` (``author_id`` is its one required member) nor
-        ``SaleRequestBase`` makes an outlet required, so a body carrying no
-        ``source.register_id``, no ``fulfillment_outlet_id`` and no line-level
-        ``fulfilment_outlet_id`` is schema-legal -- and closing it used to
-        answer 200 while moving nothing and firing no ``inventory.update``. A
-        consumer's stock-decrement test then passed while exercising nothing,
-        which is a failure wearing the shape of a success on the one side
-        effect closing a sale has. So an unresolvable outlet joins the other
-        unresolvable references on this surface (``product.id``,
-        ``customer_id``, ``payments[n].type.config_id``) and is a 422.
-
-        RESOLVING IS THE HALF THAT MATTERS. Checking only that an outlet id is
-        *present* leaves the failure this guard exists to remove exactly where
-        it was: a close naming an outlet that is not an outlet -- a stale
-        fixture id, an id off by a character, an id from another tenant --
-        answers 200, echoes the id back as ``source.outlet_id`` so the body
-        looks right, moves no stock and fires no ``inventory.update``. So the
-        id is resolved against the ``outlets`` collection, the way
-        ``products.py``'s ``_check_outlets`` resolves the one an opening-stock
-        payload names, and an unknown one is the same 422.
-
-        GUARDED ON THE COLLECTION BEING POPULATED, like ``_check_customer``:
-        ``outlets`` belongs to a sibling slice, and a unit seeded without it
-        must not start refusing every sale.
-
-        ONLY ON A CLOSE, and only for a line that resolves to nothing: a
-        parked or pending sale moves no stock, and a line naming its own
-        ``fulfilment_outlet_id`` resolves whatever the sale does.
-        """
+        """A sale that CLOSES must resolve every line to a real outlet, since
+        closing is what moves stock. JUDGMENT: an unresolvable outlet is a
+        422, resolved against ``outlets`` (not just checked for presence) so a
+        stale or foreign id cannot echo back a 200 that moves nothing. Guarded
+        on the collection being populated; checked only on a close."""
         if request.state != SaleState.CLOSED.value:
             return
         outlets = {str(row["id"]) for row in ctx.store.collection(COL.outlets).all()}
@@ -680,11 +509,7 @@ class LightspeedSalesSurface:
             )
 
     def _check_customer(self, ctx: UnitContext, customer_id: str | None) -> None:
-        """A named customer must exist -- when the scenario knows any customers.
-
-        The same guard the product check carries, for the same reason: the
-        ``customers`` collection is the sibling slice's.
-        """
+        """A named customer must exist, when the scenario knows any customers."""
         if customer_id is None:
             return
         customers = ctx.store.collection(COL.customers)
@@ -698,21 +523,10 @@ class LightspeedSalesSurface:
 
     def _invoice_number(self, ctx: UnitContext, register_id: str | None, sale_id: str | None) -> str | None:
         """``{invoice_prefix}{sequence}{invoice_suffix}`` off the register.
-
-        DOCUMENTED: ``SaleRequestBase.invoice_number`` is "The invoice number
-        for the sale. If left null it will be populated by Lightspeed with the
-        next available invoice number", and ``Register`` carries
-        ``invoice_prefix``, ``invoice_sequence`` and ``invoice_suffix``, whose
-        own description says a provided number "should use the prefix and suffix
-        defined for the register".
-
-        JUDGMENT: the sequence is the register's ``invoice_sequence`` plus the
-        number of sales already attributed to that register, and the register's
-        own field is NOT bumped. Bumping it would make every sale a second
-        mutation of a second entity -- a second journal entry and a second
-        version draw for a counter no route reads back -- and the derived form
-        gives the same ascending sequence deterministically.
-        """
+        DOCUMENTED: left null, Lightspeed fills it in from the register's own
+        prefix/suffix/sequence. JUDGMENT: the sequence is derived (register's
+        ``invoice_sequence`` plus sales already attributed to it) rather than
+        bumping the register's own counter, which nothing reads back."""
         register = self._register(ctx, register_id)
         if register is None:
             return None
@@ -725,19 +539,10 @@ class LightspeedSalesSurface:
 
 
 def _decrement(quantity: Decimal, deps: LightspeedDeps) -> Callable[[Entity], None]:
-    """A store mutator that moves one inventory record's level by ``quantity``.
-
-    A factory rather than a closure written in the loop: a mutator built inside
-    a ``for`` would capture the loop variable and every record would be moved by
-    the last line item's quantity.
-
-    THE LEVEL IS DECIMAL TEXT, both read and written, which is
-    ``InventoryEntity``'s own storage shape and what
-    ``surface/inventory.py::_move_stock`` writes for a stock adjustment: the
-    two mutators have to agree, or a sale and an adjustment would leave the
-    same record in two different spellings and the projection would only
-    understand one. It is projected to a JSON number by ``model/inventory.py``.
-    """
+    """A store mutator that moves one inventory record's level by ``quantity``
+    (a factory, not a loop-body closure, so each captures its own quantity).
+    The level is stored and read as decimal text, matching
+    ``surface/inventory.py``'s stock-adjustment mutator."""
 
     def mutate(draft: Entity) -> None:
         level = Decimal(str(draft.get(_INVENTORY_LEVEL, "0") or "0"))
@@ -749,14 +554,8 @@ def _decrement(quantity: Decimal, deps: LightspeedDeps) -> Callable[[Entity], No
 
 def _is_refund(request: SaleUpdateRequest) -> bool:
     """Whether this body describes a refund, i.e. carries a negative line.
-
-    A refund's payments are negative, and the only way this unit sees one is a
-    body whose line quantities already are -- which is what the return route
-    produced. Read off the request rather than off the stored sale so that a
-    caller updating a return sale to add its refund payment (the documented
-    workflow: "start the return workflow before adding refund payments") is not
-    refused for sending a negative amount.
-    """
+    Read off the request rather than the stored sale, so adding a refund
+    payment to a return sale is not itself refused for a negative amount."""
     return any(
         isinstance(line.quantity, int | float) and not isinstance(line.quantity, bool) and line.quantity < 0
         for line in request.line_items
@@ -770,13 +569,8 @@ def _carried_payment_id(
     amount_minor: int,
     taken: set[str],
 ) -> str | None:
-    """The stored id an id-less payment on a replacing PUT inherits, if any.
-
-    The first stored payment that agrees on type and amount and has not already
-    been claimed by an earlier payment in this same body. See ``_payments`` for
-    why the rule is amount-and-type rather than position, and why it is
-    JUDGMENT.
-    """
+    """The stored id an id-less payment inherits: first stored payment
+    matching on type and amount, not already claimed. See ``_payments``."""
     for stored in carried:
         stored_id = str(stored.get("id", ""))
         if not stored_id or stored_id in taken:
@@ -791,8 +585,7 @@ def _carried_payment_id(
 
 def _source(request: SaleUpdateRequest, *, outlet_id: str | None) -> dict[str, Any]:
     """The stored ``source`` block. ``author_id`` is stored flat and projected
-    as ``SaleResponseSource.author`` -- ``{"id": ...}`` -- because that is where
-    the request puts it and where the response puts it, respectively."""
+    as ``SaleResponseSource.author`` -- ``{"id": ...}``."""
     return compact(
         {
             "author_id": request.source.author_id,
@@ -816,10 +609,8 @@ def _payment_type_names(ctx: UnitContext) -> dict[str, str]:
 
 
 def _example_body() -> dict[str, Any]:
-    """The body ``POST /sales`` publishes. Built from the seed constants, so a
-    conformance run drives a sale against entities the shipped scenario really
-    has -- and so an edit to the scenario cannot leave the example naming an id
-    that is gone."""
+    """The body ``POST /sales`` publishes, built from the seed constants so it
+    always names entities the shipped scenario really has."""
     from vendorfake.lightspeed.seed.constants import (
         SEED_PRODUCT_TRAIL_MIX_ID,
         SEED_REGISTER_MAIN_ID,
@@ -834,11 +625,7 @@ def _example_body() -> dict[str, Any]:
             {
                 "product": {"id": SEED_PRODUCT_TRAIL_MIX_ID},
                 "quantity": 1,
-                # The trail mix's own catalogue price, tax-exclusive, with the
-                # unit tax beside it: 10.87 + 1.63 = the 12.50 the product
-                # lists at. Nothing makes a line price match the catalogue --
-                # a sale records what was charged -- but a PUBLISHED example
-                # that disagrees with the shipped scenario reads as a bug.
+                # 10.87 + 1.63 tax = the product's 12.50 catalogue price.
                 "pricing": {"price": 10.87},
                 "tax": {"id": SEED_TAX_ID, "amount": 1.63},
             }

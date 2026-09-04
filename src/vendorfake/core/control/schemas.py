@@ -1,52 +1,13 @@
 """Every control-plane request body, as a schema rather than as a hope.
 
-FOR: giving each ``/__unit/*`` route that reads a body one declared shape, and
-giving a malformed body one answer -- a 400 that names the offending field --
-instead of twenty hand-written ``if (!body.x) throw`` chains and a 500 for
-everything nobody thought of.
+No control route can answer 500 for a syntactically valid JSON body: every body is validated
+against a model and :func:`parse_or_raise` turns Pydantic's verdict into the ``UnitError`` the
+rest of the core speaks. One of the four core modules where Pydantic is permitted (named in
+``tools/boundary.toml``), since these are external documents parsed at a boundary.
 
-INVARIANT: **no control route can answer 500 for a syntactically valid JSON
-body.** The reference reads every body with an unvalidated ``readJson<T>()``
-(``control/plane.ts``); the cast is a promise to the compiler that nothing
-enforces at run time, so ``{"ms": "soon"}`` reaches ``Number(...)`` and
-``{"snapshot": 3}`` reaches ``store.restore``. Here each body is validated
-against a model and :func:`parse_or_raise` turns Pydantic's verdict into the
-``UnitError`` the rest of the core speaks -- ``missing_field`` when something
-required was absent, ``invalid_value`` otherwise, both carrying the dotted
-field path. Without that step a ``ValidationError`` would travel to the
-kernel's catch-all and become ``internal``/500 where the contract is a shaped
-400 with ``x-unit-error``.
-
-This is one of the four core modules where Pydantic is permitted, named in
-``tools/boundary.toml`` so that widening the list is a visible diff. The
-justification is the same one that lets ``config/models.py`` use it: these are
-*external documents*, parsed at a boundary, and Pydantic has no notion of HTTP
--- the framework assumption the boundary rule exists to keep out is
-``Form(...)``/``Body(...)``, not schema validation.
-
-THREE MODELLING DECISIONS WORTH THE WORDS
------------------------------------------
-``POST /__unit/chaos/rules`` cannot be one strict model
-    Its reference body is ``{rules?, enabled?} & Partial<ChaosRule>``:
-    ``{"enabled": false}`` is a valid toggle carrying no rule at all and must
-    return 200 -- the reference's own toggle test asserts it -- ``{"rules":
-    [...]}`` replaces the set, and a bare rule object adds one. So
-    :class:`ChaosRulesBody` models only the two envelope keys and lets
-    everything else fall into Pydantic's extras, which are then handed to
-    ``chaos/rules.py:parse_rule``. That keeps the rule grammar stated exactly
-    once, and keeps ``extra="forbid"`` on the *rule* where a misspelled ``when``
-    key is the mistake that actually happens.
-
-Absent is absent, on the way in as well as out
-    Every optional field defaults to ``None`` and every handler distinguishes
-    "not sent" from "sent as null". ``{"enabled": null}`` on the chaos body is
-    therefore not a toggle to off; it is a body that did not ask to toggle.
-
-``strict=True`` on booleans and integers, lax on floats
-    ``{"enabled": "false"}`` is a real request a consumer sends by accident and
-    JavaScript's truthiness makes it mean *true*. Rejecting it names the
-    mistake. Floats stay lax because ``{"time_scale": "0.5"}`` is a query
-    string round-trip away from every shell, and the reference coerced it.
+Every optional field defaults to ``None``, and a handler distinguishes "not sent" from "sent as
+null". ``strict=True`` on booleans and integers rejects a stringly-typed field sent by accident;
+floats stay lax since a query-string round trip coerces them anyway.
 """
 
 from __future__ import annotations
@@ -86,27 +47,13 @@ __all__ = [
 ]
 
 _STRICT = ConfigDict(extra="forbid", frozen=True)
-"""``extra="forbid"`` on every body a consumer writes by hand.
-
-A misspelled key is the control-plane mistake that happens; silently ignoring
-it produces "I sent ``keepRules`` and it wiped my rules anyway", which is
-indistinguishable from a bug in the unit."""
+"""``extra="forbid"`` on every body a consumer writes by hand: a misspelled key is the control-plane mistake that happens."""
 
 _M = TypeVar("_M", bound=BaseModel)
 
 
 def parse_or_raise(model: type[_M], data: object, *, source: str | None = None) -> _M:
-    """Validate ``data`` against ``model``, or raise a field-naming ``UnitError``.
-
-    The one adapter between Pydantic's vocabulary and the core's. Every
-    control-plane handler goes through it, so there is exactly one place where
-    the mapping from a validation failure to an error kind is decided, and
-    exactly one place to change it.
-
-    A body that is not a JSON object fails here rather than inside the model,
-    because Pydantic would report ``loc: ()`` for it and the resulting error
-    would name no field at all.
-    """
+    """Validate ``data`` against ``model``, or raise a field-naming ``UnitError``; a non-object body fails here, not inside the model."""
     if not isinstance(data, Mapping):
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,
@@ -120,13 +67,7 @@ def parse_or_raise(model: type[_M], data: object, *, source: str | None = None) 
 
 
 def require_finite(value: float, *, field: str) -> float:
-    """Refuse a non-finite number with an ``invalid_value`` naming the field.
-
-    JSON has no ``Infinity`` literal, but ``1e400`` parses to ``inf`` in both
-    Python and JavaScript, and an infinite ``ms`` handed to a virtual clock is
-    an unbounded loop rather than an error. The reference guards the same case
-    with ``Number.isFinite``; this is that guard, reusable.
-    """
+    """Refuse a non-finite number with an ``invalid_value`` naming the field: an infinite ``ms`` is an unbounded loop, not an error."""
     if not math.isfinite(value):
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,
@@ -136,20 +77,8 @@ def require_finite(value: float, *, field: str) -> float:
     return value
 
 
-# ---------------------------------------------------------------------------
-# Capabilities.
-# ---------------------------------------------------------------------------
-
-
 class CapabilitiesBody(BaseModel):
-    """``POST /__unit/capabilities``.
-
-    Four independent instructions, applied in the reference's order: ``set``
-    replaces the enabled list, ``delta`` applies ``+a,-b`` against whatever is
-    enabled *after* that, and then ``enable``/``disable`` are applied one name
-    at a time. Order is contract because ``{"set": ["oauth"], "enable":
-    ["orders"]}`` means something different under any other reading.
-    """
+    """``POST /__unit/capabilities``: ``set``, ``delta``, then ``enable``/``disable``, applied in that order. Order is contract."""
 
     model_config = _STRICT
 
@@ -160,18 +89,8 @@ class CapabilitiesBody(BaseModel):
     delta: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Chaos.
-# ---------------------------------------------------------------------------
-
-
 class ChaosRulesBody(BaseModel):
-    """``POST /__unit/chaos/rules``: a toggle, a replacement, or one added rule.
-
-    ``extra="allow"`` on purpose -- see the module docstring. The extras are
-    the bare-rule form, and they are validated by the rule grammar itself
-    rather than a second time here.
-    """
+    """``POST /__unit/chaos/rules``: a toggle, a replacement, or one added rule; ``extra="allow"`` since the extras are the bare-rule form."""
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -181,12 +100,7 @@ class ChaosRulesBody(BaseModel):
     enabled: bool | None = Field(default=None, strict=True)
 
     def rule_document(self) -> dict[str, Any] | None:
-        """The bare-rule form, or ``None`` when the body carried only envelope keys.
-
-        A body with extras *and* ``rules`` is the caller asking for two
-        different things at once; the handler reports it rather than silently
-        honouring one, which is stricter than the reference's ``else if``.
-        """
+        """The bare-rule form, or ``None`` when the body carried only envelope keys."""
         extra = self.__pydantic_extra__
         return dict(extra) if extra else None
 
@@ -199,20 +113,8 @@ class ChaosResetBody(BaseModel):
     keep_rules: bool = Field(default=False, strict=True)
 
 
-# ---------------------------------------------------------------------------
-# State.
-# ---------------------------------------------------------------------------
-
-
 class JournalEntryDocument(BaseModel):
-    """One journal entry on the wire, in both directions.
-
-    Modelled rather than passed through as a dict because a restored snapshot
-    is replayed into ``Store.restore`` and then read by ``/__unit/journal``: a
-    journal entry with a missing ``seq`` would corrupt the store's monotonic
-    sequence, which is the one property the whole event-sourcing claim rests
-    on.
-    """
+    """One journal entry on the wire; modelled, not a raw dict, since a missing ``seq`` would corrupt the store's sequence."""
 
     model_config = _STRICT
 
@@ -241,12 +143,7 @@ class JournalEntryDocument(BaseModel):
 
 
 class IdempotencyDocument(BaseModel):
-    """One stored idempotent response, on the wire.
-
-    Part of a snapshot because a restore that dropped it would let a retried
-    request execute a second time against restored state -- the exact double
-    charge idempotency exists to prevent.
-    """
+    """One stored idempotent response, on the wire; part of a snapshot since dropping it would let a retry double-execute."""
 
     model_config = _STRICT
 
@@ -271,14 +168,7 @@ class IdempotencyDocument(BaseModel):
 
 
 class SnapshotDocument(BaseModel):
-    """The body of ``POST /__unit/state/restore``, and the shape
-    ``GET /__unit/state/snapshot`` publishes.
-
-    The two are the same model deliberately: a snapshot that could be read but
-    not restored would make ``/__unit/state/snapshot`` decoration rather than a
-    capability, and "take a snapshot here, restore it into a second unit" is
-    how a consumer pins a scenario.
-    """
+    """The body of ``POST /__unit/state/restore`` and the shape ``GET /__unit/state/snapshot`` publishes -- the same model deliberately."""
 
     model_config = _STRICT
 
@@ -301,23 +191,12 @@ class SnapshotDocument(BaseModel):
 
 
 class StateRestoreBody(BaseModel):
-    """``POST /__unit/state/restore``.
-
-    ``snapshot`` is optional in the model and required by the handler, which is
-    not a contradiction: the reference answers an absent snapshot with
-    ``missing_field`` naming ``snapshot``, and a Pydantic-required field would
-    report the same kind but only after refusing the whole body. Keeping it
-    optional here lets the handler own the message.
-    """
+    """``POST /__unit/state/restore``; ``snapshot`` is optional here and required by the handler, which owns the ``missing_field`` message."""
 
     model_config = _STRICT
 
     snapshot: SnapshotDocument | None = None
 
-
-# ---------------------------------------------------------------------------
-# Webhooks.
-# ---------------------------------------------------------------------------
 
 DEFAULT_CONTROL_SUBSCRIBER_NAME = "control-plane subscriber"
 DEFAULT_CONTROL_SIGNATURE_KEY = "unit-signature-key"
@@ -325,13 +204,7 @@ DEFAULT_CONTROL_EVENT_TYPES: tuple[str, ...] = ("*",)
 
 
 class SubscriptionCreateBody(BaseModel):
-    """``POST /__unit/webhooks/subscriptions``: register a subscriber directly.
-
-    Exists so that a consumer can point the dispatcher at their own receiver
-    without holding a vendor credential or knowing the vendor's own
-    subscription API -- which is the difference between "test my webhook
-    handler" being one call and being a two-day integration.
-    """
+    """``POST /__unit/webhooks/subscriptions``: register a subscriber directly, without a vendor credential or the vendor's subscription API."""
 
     model_config = _STRICT
 
@@ -345,13 +218,7 @@ class SubscriptionCreateBody(BaseModel):
 
 
 class RetryPolicyPatchBody(BaseModel):
-    """``POST /__unit/webhooks/retry-policy``: sparse, and every key optional.
-
-    Sparse because the three knobs are independent: compressing time without
-    touching the schedule is the common request, and a full-replacement body
-    would make a consumer restate a vendor's documented eleven intervals to
-    change one multiplier.
-    """
+    """``POST /__unit/webhooks/retry-policy``: sparse, every key optional, since the three knobs are independent."""
 
     model_config = _STRICT
 
@@ -360,9 +227,8 @@ class RetryPolicyPatchBody(BaseModel):
     timeout_ms: int | None = None
 
     def patch(self) -> dict[str, Any]:
-        """Only the keys the body actually set -- ``model_fields_set``, not
-        ``model_dump``, so an unmentioned knob is left alone rather than reset
-        to its default."""
+        """Only the keys the body actually set, so an unmentioned knob is left
+        alone rather than reset to its default."""
         out: dict[str, Any] = {}
         for name in self.model_fields_set:
             value = getattr(self, name)
@@ -373,18 +239,7 @@ class RetryPolicyPatchBody(BaseModel):
 
 
 class WebhookEmitBody(BaseModel):
-    """``POST /__unit/webhooks/emit``: fire a synthetic event.
-
-    It exists because a profile with no mutating route -- an OAuth-only one,
-    say -- otherwise has no way to make a delivery happen, and a conformance
-    check that can only run on profiles with a write surface is a check that
-    tests the vendor rather than the unit.
-
-    It is an *emitter*, not a signing oracle: it accepts no secret and returns
-    no signature. Everything it produces goes through the same prepare, sign
-    and deliver path as a journal-derived event, so what a consumer observes at
-    ``/__unit/webhooks/deliveries`` is the real thing.
-    """
+    """``POST /__unit/webhooks/emit``: fire a synthetic event. An *emitter*, not a signing oracle: it accepts no secret and returns none."""
 
     model_config = _STRICT
 
@@ -396,13 +251,7 @@ class WebhookEmitBody(BaseModel):
 
 
 class SinkProgramBody(BaseModel):
-    """``POST /__unit/webhooks/sink``: program the memory sink's next answers.
-
-    ``[500, 200]`` means "fail once, then succeed", which is how a forced retry
-    is driven from *outside* the process. Without it, the only way to observe a
-    retry is to reach into the sink object, which a language-independent
-    conformance suite cannot do.
-    """
+    """``POST /__unit/webhooks/sink``: program the memory sink's next answers, e.g. ``[500, 200]`` for "fail once, then succeed"."""
 
     model_config = _STRICT
 
@@ -412,26 +261,8 @@ class SinkProgramBody(BaseModel):
     then: int = 200
 
 
-# ---------------------------------------------------------------------------
-# Clock and machines.
-# ---------------------------------------------------------------------------
-
-
 class ClockAdvanceBody(BaseModel):
-    """``POST /__unit/clock/advance``. Virtual clock only.
-
-    ``drain`` defaults to true, which is the reference's behaviour and what
-    almost every caller wants: advance, then chase whatever the advance set off
-    until nothing is outstanding. It is a flag rather than a fixed policy
-    because chasing means *advancing further* on a virtual clock, all the way
-    to the last timer -- so "advance ten milliseconds" can silently run a
-    twelve-attempt retry cascade covering twenty-four hours of scheduled time.
-
-    ``drain: false`` advances by exactly ``ms``, fires only what that made due,
-    and settles the delivery worker so the records are readable. It is what
-    makes "nothing had happened one millisecond before the interval, and
-    something had happened at it" an observation anybody can make.
-    """
+    """``POST /__unit/clock/advance``. Virtual clock only. ``drain`` defaults to true, chasing every timer that sets off; ``false`` fires only ``ms``."""
 
     model_config = _STRICT
 
@@ -440,18 +271,7 @@ class ClockAdvanceBody(BaseModel):
 
 
 class MachineProbeBody(BaseModel):
-    """``POST /__unit/machines/probe``: evaluate a transition, mutate nothing.
-
-    ``from`` is a Python keyword, so the field is ``from_`` with ``from`` as
-    its alias and ``populate_by_name`` deliberately **off**: the wire name is
-    the contract and accepting ``from_`` as well would give the same request
-    two spellings, one of which no other language's client would ever produce.
-
-    ``to`` is optional, and its absence is not an omission -- it selects the
-    other question the machine answers. With ``to``, the probe asks "is this
-    move legal"; without it, it asks "may this entity be mutated at all", which
-    is ``assert_mutable`` and is the check a terminal state exists to fail.
-    """
+    """``POST /__unit/machines/probe``: evaluate a transition, mutate nothing; ``to`` absent asks "may this mutate" not "is this move legal"."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=False)
 
@@ -461,23 +281,7 @@ class MachineProbeBody(BaseModel):
 
 
 class StateUpdateBody(BaseModel):
-    """``POST /__unit/state/update``: one committed mutation, under a version.
-
-    FOR: making the store's optimistic-concurrency rule askable without a
-    vendor request body. "A stale version is refused" is a contract about the
-    CORE -- ``core/state/store.py::Collection.update`` -- and a check that
-    could only reach it through whichever endpoint a particular vendor happens
-    to expose for updating whichever entity it happens to own would be a
-    contract about that vendor instead.
-
-    ``version`` absent means "no opinion", exactly as ``expect_version=None``
-    does in the store; it is not the same request as ``version: 0``.
-
-    ``patch`` may be empty, and empty is the useful default: the entity is
-    rewritten unchanged, the version still moves and the journal still records
-    it, so the concurrency rule can be exercised without editing anything a
-    vendor handler will later read.
-    """
+    """``POST /__unit/state/update``: one mutation under a version; ``version`` absent means "no opinion", not ``version: 0``."""
 
     model_config = _STRICT
 
@@ -488,19 +292,7 @@ class StateUpdateBody(BaseModel):
 
 
 class StatePageBody(BaseModel):
-    """``POST /__unit/state/page``: page a collection the way a handler does.
-
-    FOR: making the cursor rules askable. Opacity, the query fingerprint and
-    expiry are all enforced in ``core/state/store.py::Collection.paginate``,
-    and every one of them is a rule a *consumer* gets wrong against a real
-    vendor. Reaching them through a vendor's own search endpoint would mean the
-    check had to know that endpoint's spelling for "cursor" and for "filter",
-    which is precisely the vendor knowledge this suite does not have.
-
-    ``query`` is the fingerprint input, verbatim: any JSON value. Two calls
-    with different ``query`` values are different queries, and a cursor issued
-    for one must be refused by the other.
-    """
+    """``POST /__unit/state/page``: page a collection; ``query`` is the fingerprint input verbatim, so a cursor is refused by another query."""
 
     model_config = _STRICT
 
@@ -510,20 +302,8 @@ class StatePageBody(BaseModel):
     cursor: str | None = None
 
 
-# ---------------------------------------------------------------------------
-# Outbound projections.
-# ---------------------------------------------------------------------------
-
-
 def journal_entry_as_json(entry: JournalEntry) -> dict[str, Any]:
-    """One journal entry, as ``GET /__unit/journal`` publishes it.
-
-    ``from_version``, ``to_version`` and ``meta`` are dropped when absent
-    rather than sent as ``null``: an insert has no ``from_version`` and a
-    ``"from_version": null`` on the wire is a value where the reference has no
-    key. It is also what makes :class:`JournalEntryDocument` able to round-trip
-    its own output.
-    """
+    """One journal entry as ``GET /__unit/journal`` publishes it: absent fields are dropped, not sent as ``null``."""
     return compact(
         {
             "seq": entry.seq,

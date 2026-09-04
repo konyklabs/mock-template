@@ -1,66 +1,14 @@
-"""Square error shaping -- the entire vendor-side error story, in one table.
+"""Square error shaping: each of the core's twenty vendor-neutral error kinds maps to a Square
+``{category, code}`` pair, an HTTP status, and Square's documented envelope.
+https://developer.squareup.com/docs/build-basics/handling-errors https://developer.squareup.com/reference/square/objects/Error
 
-FOR: turning each of the core's twenty vendor-neutral error kinds into a
-Square ``{category, code}`` pair, an HTTP status and Square's documented error
-envelope, so that adding a vendor is a lookup table rather than error handling
-scattered through handlers.
-
-INVARIANT: **the table is exhaustive, and every row says where its status came
-from.** Exhaustiveness is checked at import (see the bottom of this module),
-because the TypeScript original got it from ``Record<UnitErrorKind, Mapping>``
-and a compiler; a missing row here would otherwise present as one error kind
-answering 500 while the other nineteen behaved. Provenance is a real field and
-not a comment because ``/__unit/errors`` and the ``unit_error`` sidecar publish
-it: a consumer can ask this fake which of its statuses Square actually
-documents and which are this project's reading.
-
-The sidecar, the ``retry-after`` and ``x-unit-capability`` headers and the
-exhaustiveness check are the core's (``core/kernel/shaping.py``); this module
-is Square's table and Square's envelope.
-
-Envelope and the four ``Error`` fields (``category``, ``code``, ``detail``,
-``field``) are documented:
-  https://developer.squareup.com/docs/build-basics/handling-errors
-  https://developer.squareup.com/reference/square/objects/Error
-The verbatim documented example is
-``{"errors":[{"category":"AUTHENTICATION_ERROR","code":"UNAUTHORIZED",
-"detail":"This request could not be authorized."}]}`` and that is exactly the
-shape :meth:`SquareErrorShaper.shape` emits.
-
-Statuses marked ``judgment`` are ones Square does not publish. Square documents
-statuses only for the authentication codes and 429
-(https://developer.squareup.com/docs/build-basics/handling-errors) plus a
-verbatim 400 example for ``IDEMPOTENCY_KEY_REUSED``
-(https://developer.squareup.com/docs/build-basics/general-considerations/using-rest-api);
-everything else here is the conventional REST reading of the code name, and is
-labelled as such rather than presented as fidelity. A public-docs audit of this
-table verified the labelling row by row and found it accurate.
-
-Two rows carry a further note, because "judgment" alone understates the
-situation:
-
-``version_conflict`` -> ``VERSION_MISMATCH``
-    The code is real -- Square names it in prose on the Optimistic Concurrency
-    page and a 400 carrying it has been quoted publicly -- but it is **not** in
-    the published ``ErrorCode`` enumeration, and its **category is not
-    verified** at all. See :data:`UNPUBLISHED_CODES`.
-
-``rate_limited`` -> the ``retry-after`` header
-    Square documents 429 and ``RATE_LIMITED``, and prescribes client-side
-    exponential backoff with jitter. It documents no ``Retry-After`` header and
-    publishes no numeric rate limits. Sending one is a convenience for a
-    consumer testing their own backoff, and it is switchable, because a
-    consumer who learns to trust it here would busy-loop against the real API.
-    JUDGMENT.
-
-The ``unit_error`` sidecar is a deliberate, namespaced deviation from Square's
-wire format: a consumer that reads only ``errors`` never sees it, and a
-consumer debugging this fake gets the machine-readable reason without parsing
-prose. It is off with ``"error_sidecar": false`` in a profile's ``vendor``
-block. Since konyklabs/roadmap#71 it defaults to riding as headers rather than
-as a body key -- ``errors.sidecar`` in a profile, or ``VENDORFAKE_ERROR_SIDECAR``
--- so this ``errors`` array is, by default, byte-for-byte what Square itself
-would send.
+INVARIANT: the table is exhaustive, checked at import. JUDGMENT rows are the conventional REST reading of
+the code name where Square publishes no status. ``version_conflict`` -> ``VERSION_MISMATCH`` is JUDGMENT,
+NOT VERIFIED: named in prose on Square's Optimistic Concurrency page but absent from the published
+``ErrorCode`` enum (:data:`UNPUBLISHED_CODES`). ``rate_limited`` is JUDGMENT: Square documents
+429/``RATE_LIMITED`` but no ``Retry-After`` header or numeric limits.
+The ``unit_error`` sidecar is this project's own addition, off via ``errors.sidecar``; by default the
+``errors`` array alone is byte-for-byte what Square would send.
 """
 
 from __future__ import annotations
@@ -100,12 +48,7 @@ __all__ = [
 
 class ErrorCategory(StrEnum):
     """All eight documented categories.
-
     https://developer.squareup.com/reference/square/enums/ErrorCategory
-
-    The reference's union carries only the four it uses. Carrying all eight
-    costs nothing and means a later vendor slice that adds payments does not
-    have to widen a type that tests already pin.
     """
 
     API_ERROR = "API_ERROR"
@@ -119,13 +62,9 @@ class ErrorCategory(StrEnum):
 
 
 class ErrorCode(StrEnum):
-    """The Square error codes this vendor can emit, plus two it cannot.
-
-    Every member except :data:`UNPUBLISHED_CODES` appears in Square's published
-    enumeration (https://developer.squareup.com/reference/square/enums/ErrorCode).
-    ``CLIENT_DISABLED`` and ``FORBIDDEN`` are carried although no code path
-    reaches them -- see :data:`UNREACHABLE_CODES` -- so that the gap is a named
-    fact rather than an omission a reader has to notice.
+    """The Square error codes this vendor can emit, plus two it cannot reach.
+    https://developer.squareup.com/reference/square/enums/ErrorCode
+    See :data:`UNPUBLISHED_CODES` and :data:`UNREACHABLE_CODES`.
     """
 
     BAD_REQUEST = "BAD_REQUEST"
@@ -152,24 +91,14 @@ class ErrorCode(StrEnum):
 
 
 UNPUBLISHED_CODES: frozenset[ErrorCode] = frozenset({ErrorCode.VERSION_MISMATCH})
-"""Codes Square uses but does not list in the published ``ErrorCode`` enum.
-
-``VERSION_MISMATCH`` is named in prose on
-https://developer.squareup.com/docs/working-with-apis/optimistic-concurrency
-and has been quoted from a real 400 response in public developer-forum posts,
-which is weaker provenance than a documentation page. Its **category** is not
-verified anywhere; ``INVALID_REQUEST_ERROR`` below is this project's reading.
-"""
+"""Codes Square uses but does not list in the published ``ErrorCode`` enum. NOT VERIFIED:
+``VERSION_MISMATCH`` is named only in prose
+(https://developer.squareup.com/docs/working-with-apis/optimistic-concurrency)
+and developer-forum posts, not a docs page."""
 
 UNREACHABLE_CODES: frozenset[ErrorCode] = frozenset({ErrorCode.CLIENT_DISABLED, ErrorCode.FORBIDDEN})
-"""Documented codes no core error kind maps onto.
-
-Square publishes 401 ``CLIENT_DISABLED`` and a general 403 ``FORBIDDEN``
-(https://developer.squareup.com/docs/build-basics/handling-errors). Neither
-corresponds to a state this fake can reach: nothing disables an application,
-and every 403 it can produce is a scope failure. Recorded rather than
-implemented.
-"""
+"""Documented codes no core error kind maps onto: 401 ``CLIENT_DISABLED`` and a general 403
+``FORBIDDEN``. Recorded rather than implemented, since nothing here reaches either."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,11 +108,10 @@ class SquareErrorMapping:
     status: int
     category: ErrorCategory
     code: ErrorCode
-    #: Where the status comes from; surfaced in the sidecar and by
-    #: ``GET /__unit/errors``.
+    #: Where the status comes from; surfaced in the sidecar and by ``GET /__unit/errors``.
     provenance: Provenance
     detail: str
-    #: Set only where "judgment" understates the gap. See the module docstring.
+    #: Set only where "judgment" understates the gap.
     note: str | None = None
 
     def as_json(self) -> dict[str, Any]:
@@ -276,10 +204,7 @@ SQUARE_ERROR_TABLE: dict[UnitErrorKind, SquareErrorMapping] = {
         provenance="documented",
         detail="The provided access token does not have permission to execute the requested action.",
     ),
-    # NOT_IMPLEMENTED is a real Square generic error code (api.json
-    # info["x-square-generic-error-codes"]); using it keeps a disabled
-    # capability inside the vendor's own vocabulary instead of inventing one.
-    # The 501 status and the `unit_error` sidecar are this project's addition.
+    # NOT_IMPLEMENTED is a real Square generic error code; the 501 status is this project's addition.
     UnitErrorKind.CAPABILITY_DISABLED: SquareErrorMapping(
         status=501,
         category=ErrorCategory.API_ERROR,
@@ -295,6 +220,8 @@ SQUARE_ERROR_TABLE: dict[UnitErrorKind, SquareErrorMapping] = {
         detail="The supplied version does not match the current version.",
         note=_VERSION_MISMATCH_NOTE,
     ),
+    # DOCUMENTED: Square's verbatim 400 example for IDEMPOTENCY_KEY_REUSED, at
+    # https://developer.squareup.com/docs/build-basics/general-considerations/using-rest-api
     UnitErrorKind.IDEMPOTENCY_CONFLICT: SquareErrorMapping(
         status=400,
         category=ErrorCategory.INVALID_REQUEST_ERROR,
@@ -352,21 +279,15 @@ SQUARE_ERROR_TABLE: dict[UnitErrorKind, SquareErrorMapping] = {
         detail="A general server error occurred.",
     ),
 }
-"""Twenty rows, one per core error kind. See the module docstring for
-provenance."""
+"""Twenty rows, one per core error kind."""
 
 PUBLISHED_ERROR_CODES: frozenset[ErrorCode] = frozenset(ErrorCode) - UNPUBLISHED_CODES
 """Every code above that Square's published ``ErrorCode`` enumeration lists."""
 
 
 class SquareErrorShaper:
-    """Turns a :class:`UnitError` into Square's envelope. Satisfies ``ErrorShaper``.
-
-    Frozen configuration rather than a live read of the profile, because the
-    vendor rebuilds the shaper when its configuration resolves; a shaper that
-    reached back into a context to ask whether the sidecar was on would have to
-    do it on every error.
-    """
+    """Turns a :class:`UnitError` into Square's envelope. Satisfies ``ErrorShaper``; the vendor rebuilds
+    it when configuration resolves."""
 
     __slots__ = ("_retry_after_header", "_sidecar")
 
@@ -375,18 +296,9 @@ class SquareErrorShaper:
         self._retry_after_header = retry_after_header
 
     def shape(self, err: UnitError, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
-        """One core error, as Square would send it.
-
-        ``describing`` is accepted and ignored: this envelope carries no
-        per-request id or timestamp, so a described body and a real one are
-        already the same bytes.
-
-        ``detail`` follows the error's own wording when it has one and the
-        table's otherwise, so a handler that explains precisely what was wrong
-        is not overwritten by a generic sentence. ``field`` is included only
-        when the error names one -- Square's ``Error`` object marks it optional
-        and a null field pointer would be worse than no key.
-        """
+        """One core error, as Square would send it. ``describing`` is ignored (a described body and a real
+        one are the same bytes); ``detail`` follows the error's own wording when present, the table's
+        otherwise."""
         mapping = SQUARE_ERROR_TABLE[err.kind]
         detail = err.detail if err.detail else mapping.detail
         body: dict[str, Any] = {
@@ -403,16 +315,7 @@ class SquareErrorShaper:
         }
         headers = mechanism_headers(err, retry_after_header=self._retry_after_header)
         if self._sidecar:
-            # Since konyklabs/roadmap#35 the sidecar is the core's: `info`
-            # keys come first and the reserved `kind`/`status_provenance` last
-            # (so an info document cannot clobber them), and None-valued info
-            # keys are compacted away. Before, this vendor wrote the reserved
-            # keys first and kept None values. Nothing pinned either detail.
-            #
-            # Since konyklabs/roadmap#71, WHERE it rides is `ctx.config.errors.sidecar`,
-            # not this constructor: `errors.py` builds the one dict either way,
-            # and `core/kernel/shaping.py` is the only place that turns it into
-            # a body key or into headers.
+            # Sidecar shape and key order: roadmap#35. Placement (body vs headers): roadmap#71.
             sidecar = unit_error_sidecar(err, mapping.provenance)
             mode = ctx.config.errors.sidecar
             if mode != "headers":
@@ -422,16 +325,7 @@ class SquareErrorShaper:
         return ShapedError(status=mapping.status, body=body, headers=headers)
 
     def not_found(self, req: UnitRequest, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
-        """The body for a path that matched no route at all.
-
-        It names the control route that lists the surface, because the most
-        common cause of a 404 against a fake is a profile that does not serve
-        the capability the caller assumed.
-
-        ``describing`` is accepted and ignored: Square's envelope carries no
-        per-request id or timestamp, so a described body and a real one are
-        already the same bytes.
-        """
+        """The body for a path that matched no route at all; names the control route that lists the surface."""
         return self.shape(
             UnitError(
                 UnitErrorKind.NOT_FOUND,
@@ -449,6 +343,5 @@ class SquareErrorShaper:
         return {kind.value: mapping.as_json() for kind, mapping in SQUARE_ERROR_TABLE.items()}
 
 
-# Exhaustiveness, at import, as a raise and never as an `assert` -- see
-# core/kernel/shaping.py for why.
+# Exhaustiveness at import, as a raise rather than `assert`.
 assert_error_table_total(SQUARE_ERROR_TABLE, name="SQUARE_ERROR_TABLE")

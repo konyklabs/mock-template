@@ -11,8 +11,8 @@ cd "$(dirname "$0")/.." || exit 2
 
 # `--quick` is what a pull request runs in CI (konyklabs/roadmap#103): every
 # static check, the wheel and the docs -- about half a minute -- and neither
-# the pytest suite (5371 tests, over four minutes single-threaded on a runner)
-# nor the nine conformance runs below. Those the full script keeps for a push
+# the pytest suite (several thousand tests, minutes on a runner)
+# nor the conformance runs below. Those the full script keeps for a push
 # to main, a dispatch, and a laptop before a push, where they belong: the
 # evidence a PR carries is the self-test output pasted from that laptop run.
 QUICK=0

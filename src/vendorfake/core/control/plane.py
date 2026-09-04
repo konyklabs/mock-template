@@ -1,109 +1,24 @@
-"""The ``/__unit/*`` control plane: the same thirty-three routes for every vendor.
+"""The ``/__unit/*`` control plane: the same thirty-three routes for every vendor, reachable over
+the same channel as the vendor's own API, with no second port or client library. Anything a
+conformance check needs to observe is observable here: a check drives a unit through a URL and
+asserts on what comes back.
 
-FOR: making everything a consumer needs in order to *drive* a fake -- what it
-is, what it can do, what it has recorded, what it will do wrong next, and how
-to put it back -- reachable over the same channel as the vendor's own API,
-with no second port, no client library and no in-process object graph.
+Namespaced under ``/__unit/`` since no real vendor serves a double-underscore path segment, and
+``kernel/router.py`` refuses any vendor route that tries. Every route is ``internal=True``, so the
+kernel skips auth, chaos and idempotency for it -- a control call must never trip the fault it is
+configuring.
 
-INVARIANT: **anything a conformance check needs to observe is observable
-here.** That is what makes the suite a specification rather than a Python
-artifact: a check drives a unit through a URL and asserts on what comes back,
-so the same checks can one day be executed by a non-Python consumer against a
-container. The moment a check has to reach for a ``Unit`` object, the contract
-it tests has stopped being a contract about the *unit* and become a contract
-about this codebase.
+``webhooks/drain`` and ``clock/advance`` declare ``serialized=False``: both block on machinery
+another request must feed. ``clock_advance`` also passes ``ctx.webhooks.settle`` to
+``Clock.advance``, since a worker-thread delivery could otherwise under-report a retry cascade;
+``{"drain": false}`` is the only way to observe that a retry did not happen before its interval.
 
-Namespaced under ``/__unit/`` because no real vendor serves a path segment
-beginning with a double underscore, and ``kernel/router.py`` refuses any vendor
-route that tries. Keeping it inside the same unit rather than on a second port
-means a consumer's existing base URL reaches it with no extra plumbing.
+Twelve routes have no counterpart in a real vendor API -- ``errors``, the two ``machines`` routes,
+``echo``, the two ``webhooks`` emit/sink routes, ``auth``, the two ``state`` write routes, and the
+request log -- each documented at its own handler below.
 
-Every route here is ``internal=True``, which makes the kernel skip auth, chaos
-and idempotency. That is not a convenience: a control call must never be the
-thing that trips the fault it is trying to configure, and a chaos rule matching
-``*`` would otherwise make a unit unrecoverable through its own control plane.
-
-THE TWO ROUTES THAT DECLARE ``serialized=False``
-------------------------------------------------
-``POST /__unit/webhooks/drain`` and ``POST /__unit/clock/advance`` block inside
-the handler on machinery *another request must feed*, and either would hold
-the whole unit for the full delivery timeout against an unreachable subscriber.
-The store, the delivery log and the clock each keep their own lock; the request
-lock exists only so that id minting and journal ordering are deterministic,
-which is exactly what those two routes do not touch.
-
-``POST /__unit/clock/advance`` PASSES ``settle=``, AND MAY BE ASKED NOT TO DRAIN
---------------------------------------------------------------------------------
-The reference does ``await clock.advance(ms)`` then ``await webhooks.drain()``.
-Here deliveries run on one worker thread, so ``advance``'s re-scan can run
-*before* the worker has registered the retry it is about to schedule -- and a
-twelve-attempt cascade would report three while the route answered as though
-the subscriber had stopped failing. ``ctx.webhooks.settle`` is the handshake
-that closes that window, and it is why the dispatcher publishes ``settle`` as a
-named public method rather than hiding it.
-
-The drain that follows is the reference's and stays the default, but it is a
-flag: draining a *virtual* clock means advancing to every pending timer in
-turn, so "advance ten milliseconds" can run a cascade spanning the whole
-declared retry schedule. ``{"drain": false}`` advances by exactly what was
-asked, fires only what that made due, and settles the worker -- which is the
-only way to observe that a retry did NOT happen before its interval.
-
-TWELVE ROUTES THE REFERENCE DOES NOT HAVE
------------------------------------------
-``GET /__unit/errors``
-    The vendor's shaping of every one of the twenty core error kinds, read over
-    the wire instead of by importing the vendor's table -- each row with the
-    provenance of its status, from ``ErrorShaper.describe``. Each row's own
-    ``headers`` already shows where the ``unit_error`` sidecar rides under the
-    active ``errors.sidecar`` (``"headers"`` by default since
-    konyklabs/roadmap#71) -- there is no separate contract to document here,
-    only this route's existing ``body``/``headers`` split reflecting it.
-``GET /__unit/machines`` and ``POST /__unit/machines/probe``
-    Declared lifecycles, with ``terminal`` derived from ``to == []`` in the
-    machine itself, and a way to evaluate a transition without mutating
-    anything. The reference's state machine is a module-level singleton that
-    nothing registers, so there is no data source at all without
-    ``VendorDefinition.machines``.
-``POST /__unit/echo``
-    Any content type in, the parsed fields and both query views out. This is what makes the
-    form-encoded-body guarantee testable on a profile whose vendor has no
-    form-accepting route -- the point being that vendor #2 inherits the
-    guarantee rather than vendor #1 happening to own an OAuth endpoint.
-``POST /__unit/webhooks/emit`` and ``POST /__unit/webhooks/sink``
-    An emitter, so a profile with no mutating route can still make a delivery
-    happen, and a way to program the memory sink's next answers, so a forced
-    retry can be driven from outside the process.
-``GET /__unit/auth``
-    Credentials that would authenticate right now. Without it a consumer -- or
-    a conformance check -- can read that a route requires a bearer token and
-    has no way whatever to obtain one, so the entire authentication layer is
-    describable and undrivable.
-``POST /__unit/state/update`` and ``POST /__unit/state/page``
-    The store's write path and its cursor, reached without a vendor body.
-    Optimistic concurrency and the cursor's query fingerprint are rules of the
-    CORE; asking them only through whichever endpoint a vendor happens to
-    expose would make them contracts about that vendor.
-``GET /__unit/requests``, ``DELETE /__unit/requests`` and
-``GET /__unit/requests/unmatched/near-misses``
-    The request log: what was *called*, as against what the journal records,
-    which is what *changed*. Without it a consumer whose call was refused --
-    or matched no route at all -- has nothing to look at, because no 4xx ever
-    leaves a journal entry. The third is the same records narrowed to the
-    unmatched ones, with the routes each nearly asked for.
-
-WIRE CASING IS snake_case, HERE AS EVERYWHERE
----------------------------------------------
-The reference spells five response keys in camelCase (``uptimeMs``,
-``displayName``, ``apiVersion``, ``journalSeq``, ``firedTimers``) and several
-request keys likewise. This build chose one convention across profile
-documents, environment variables, chaos rules, route reports, retry policies
-and delivery records in earlier stages; ``RouteInfo.as_json``,
-``MutableRetryPolicy.as_json`` and ``DeliveryRecord.as_json`` were already
-written that way and are already tested. Carrying camelCase at the top level of
-a document whose nested values are snake_case would be worse than either
-convention on its own. Paths are byte-identical to the reference; keys are
-snake_case. Recorded as ``provenance: judgment``.
+Every response key is snake_case, including five this build could have spelled in camelCase.
+JUDGMENT.
 """
 
 from __future__ import annotations
@@ -169,9 +84,7 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
     A factory rather than a module-level table because two of the routes need
     unit internals that a route handler must not have -- re-seeding the store
     and enumerating the router -- and the binding is the enumerable list of
-    exactly those. The reference reached them through a
-    ``WeakMap<UnitContext, ControlBinding>``; a typed argument is the same
-    guarantee without a global side table.
+    exactly those.
     """
     started = time.monotonic()
     #: Distinct per-unit, so two units in one process do not mint the same
@@ -222,22 +135,13 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
                             "name": ctx.vendor.name,
                             "display_name": ctx.vendor.display_name,
                             "api_version": ctx.vendor.api_version,
-                            # ``getattr``, not the declared attribute: a third-party vendor
-                            # from the ``vendorfake.vendors`` entry-point group built against
-                            # v0.1.0 predates ``VendorDefinition.roles``, and a bare
-                            # ``ctx.vendor.roles`` would turn *every* GET /__unit/info for it
-                            # -- which the CLI's `info`, Driver.clock() and the conformance
-                            # runner all make as a matter of course -- into an AttributeError
-                            # from inside the control plane. Publishing ``{}`` instead means
-                            # conformance C34 reports the real defect ("add
-                            # VendorDefinition.roles") against a unit that still answers.
+                            # `getattr`: a vendor built before `VendorDefinition.roles`
+                            # existed must not turn every GET /__unit/info into an
+                            # AttributeError; `{}` lets conformance C34 report the real gap.
                             "roles": dict(getattr(ctx.vendor, "roles", {})),
-                            # The profile-name contract (conformance C35) is a promise about
-                            # which *names* a vendor ships, not about the unit already running --
-                            # so the check needs the roster, not just this unit's own profile.
-                            # Read the same way registry._profiles_of does (glob profile_dir for
-                            # *.json, name by stem), duplicated rather than imported because the
-                            # core may not import vendorfake.registry (tools/boundary.toml).
+                            # C35 is a promise about which profile *names* a vendor ships, so
+                            # this needs the roster, glob'd rather than imported from
+                            # vendorfake.registry (tools/boundary.toml forbids that import).
                             "profiles": sorted(path.stem for path in ctx.vendor.profile_dir.glob("*.json")),
                         }
                     ),
@@ -268,14 +172,8 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
                         "now": ctx.clock.iso_ms(),
                         "pending_timers": [_timer_as_json(timer) for timer in ctx.clock.pending()],
                     },
-                    # Whether a partial seed document was laid over the
-                    # profile's, and a fingerprint of it -- never its
-                    # contents, which an inline overlay may have filled with
-                    # the consumer's own credentials. The digest is over
-                    # canonical JSON (see core/config/overlay.py), so it
-                    # identifies the overlay rather than the way it was
-                    # spelled, and is the value a report pins to say which
-                    # scenario a run was on.
+                    # A fingerprint of any seed overlay, never its contents (which may
+                    # carry the consumer's own credentials); a report pins this digest.
                     "seed_overlay": {
                         "active": ctx.config.seed_overlay_digest is not None,
                         "digest": ctx.config.seed_overlay_digest,
@@ -296,30 +194,20 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
     def errors(args: HandlerArgs) -> ReplyInit:
         """Every core error kind, shaped by *this* vendor, read over the wire.
 
-        The whole of C05's data source. The kinds are enumerated from the enum
-        rather than from the vendor's table, so a vendor that has forgotten one
-        answers with the shape it produces for an unknown kind -- or fails
-        loudly here -- instead of simply not appearing in the report.
-
-        Each row's ``body`` and ``headers`` are the vendor's shaping under
-        whatever ``errors.sidecar`` this unit was started with, so under the
-        default (``"headers"``, since konyklabs/roadmap#71) the ``unit_error``
-        sidecar shows up in ``headers`` and nowhere in ``body`` -- this route
-        was never body-only, it just used to have nothing to put in
-        ``headers`` before the sidecar moved there.
+        C05's data source. Kinds are enumerated from the enum, not the
+        vendor's table, so a vendor that forgot one answers with its
+        unknown-kind shape -- or fails loudly here -- instead of just missing
+        from the report. Each row's ``body``/``headers`` split reflects
+        whichever ``errors.sidecar`` this unit started with (konyklabs/roadmap#71).
         """
         ctx = args.ctx
-        # Provenance comes from `describe()`, never from the shaped body: the
-        # sidecar that would carry it there is switchable, and a consumer who
-        # turned it off still gets to ask which statuses the vendor documents.
+        # Provenance comes from `describe()`, not the shaped body, since the
+        # sidecar that would carry it there is switchable.
         described = ctx.vendor.errors.describe()
         shaped: list[dict[str, Any]] = []
         for kind in UnitErrorKind:
-            # `describing=True`: this route is a read, and a read that drew a
-            # request id or read the clock would renumber the caller's
-            # scenario and leave the two bindings disagreeing. The signal is
-            # an argument rather than an `info` key because `info` is
-            # published verbatim in the unit_error sidecar.
+            # `describing=True`: a read must not draw a request id or read the
+            # clock, which would renumber the caller's own scenario.
             result = ctx.vendor.errors.shape(
                 UnitError(kind, detail=f"conformance probe for {kind.value}"),
                 ctx,
@@ -327,8 +215,7 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
             )
             provenance = described.get(kind.value, {}).get("provenance")
             if provenance is None:
-                # Unreachable after the unit's startup check of describe();
-                # a 500 that says what is missing rather than a 200 with null.
+                # Unreachable after the unit's startup check of describe().
                 raise UnitError(
                     UnitErrorKind.INTERNAL,
                     detail=f"ErrorShaper.describe() publishes no provenance for {kind.value!r}; the unit's "
@@ -369,7 +256,7 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
     def capabilities_post(args: HandlerArgs) -> ReplyInit:
         ctx = args.ctx
         body = parse_or_raise(CapabilitiesBody, args.body(), source="POST /__unit/capabilities")
-        # Order is the reference's and it is contract; see CapabilitiesBody.
+        # Order is contract; see CapabilitiesBody.
         if body.set is not None:
             ctx.capabilities.set_enabled(body.set)
         if body.delta is not None:
@@ -400,10 +287,8 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
         body = parse_or_raise(ChaosRulesBody, args.body(), source="POST /__unit/chaos/rules")
         document = body.rule_document()
         if body.rules is not None and document is not None:
-            # Stricter than the reference's `else if`, which honours `rules`
-            # and silently drops the bare rule. Two instructions in one body is
-            # a caller who does not know which one will win, and finding out
-            # from a transcript is worse than finding out from a 400.
+            # Two instructions in one body is a caller who does not know which
+            # one will win, and finding out from a transcript is worse than a 400.
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail="Send either 'rules' (replace the whole set) or one bare rule object, not both.",
@@ -489,18 +374,10 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
         )
 
     def auth_get(args: HandlerArgs) -> ReplyInit:
-        """How to authenticate here, and credentials that would work right now.
-
-        The gap this closes is not small: without it, a route table says
-        ``auth: "bearer"`` and a conformance suite can assert the whole
-        ``unauthorized`` row of the error table while never once sending an
-        authenticated request -- which is exactly the state this control plane
-        was in before. A credential has to cross the wire for authentication to
-        be drivable by a consumer in another language.
-
-        Publishing them is safe *because this is a fake*: every credential here
-        is scenario data with no counterpart anywhere real, and withholding
-        them would only mean each consumer copying the seed document instead.
+        """How to authenticate here, and credentials that would work right now:
+        a credential has to cross the wire for authentication to be drivable
+        by a consumer in another language. Safe to publish since every
+        credential here is scenario data with no real-world counterpart.
         """
         ctx = args.ctx
         offered = list(ctx.vendor.auth.credentials(ctx))
@@ -514,15 +391,10 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
         )
 
     def state_update(args: HandlerArgs) -> ReplyInit:
-        """One committed mutation of one entity, under optimistic concurrency.
-
-        The store's write path, reached directly. ``version`` is passed through
-        as ``expect_version``, so a stale value raises ``version_conflict`` from
-        ``core/state/store.py`` and nothing is written -- which is the half of
-        the journal contract no seed insert can demonstrate.
-
-        Journalled like any other mutation, which means it is also delivered
-        like any other mutation: this is a real write, not a simulation of one.
+        """One committed mutation of one entity, under optimistic concurrency:
+        the store's write path, reached directly. ``version`` passes through as
+        ``expect_version``, so a stale value raises ``version_conflict`` and
+        writes nothing. A real, journalled and delivered write, not a simulation.
         """
         ctx = args.ctx
         body = parse_or_raise(StateUpdateBody, args.body(), source="POST /__unit/state/update")
@@ -543,11 +415,8 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
 
     def state_page(args: HandlerArgs) -> ReplyInit:
         """Page a collection through the store's own cursor implementation.
-
-        Ids only, deliberately: the contract being made observable is the
-        cursor's -- opaque, fingerprinted against the query it was issued for,
-        expiring -- and a page of whole entities would invite a check to start
-        asserting on a vendor's field names instead.
+        Ids only, deliberately: the contract observed is the cursor's, not a
+        vendor's field names.
         """
         ctx = args.ctx
         body = parse_or_raise(StatePageBody, args.body(), source="POST /__unit/state/page")
@@ -597,10 +466,8 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
                 field="id",
                 info={"id": subscriber_id},
             )
-        # snake_case keys, and only the keys that were given a value: the
-        # dispatcher's `Subscription.from_entity` is the one place these names
-        # are known, and an entity carrying `"name": null` would make "absent"
-        # and "explicitly nothing" indistinguishable to it.
+        # Only the keys given a value: an entity carrying `"name": null` would
+        # make "absent" and "explicitly null" indistinguishable downstream.
         entity = collection.insert(
             compact(
                 {
@@ -683,10 +550,8 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
         body = parse_or_raise(SinkProgramBody, args.body(), source="POST /__unit/webhooks/sink")
         sink = ctx.webhooks.sink
         if not isinstance(sink, MemorySink):
-            # `conflict` and not the brief's `invalid_state`, which is not one
-            # of the twenty kinds -- and the twenty are fixed by a conformance
-            # check asserting the literal count. "The unit is not in a state
-            # where this is possible" is what `conflict` already means.
+            # `conflict`, since the twenty error kinds are fixed by a
+            # conformance check and this already means "not possible now".
             raise UnitError(
                 UnitErrorKind.CONFLICT,
                 detail=(
@@ -698,9 +563,8 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
             )
         statuses = tuple(body.statuses)
         then = body.then
-        # Offset from where the sink already is: `call_index` counts calls to
-        # this sink for its whole life, and a programme that ignored the calls
-        # already made would replay itself for whoever went first.
+        # Offset from where the sink already is, so a programme does not replay
+        # from its start over calls already made.
         base = len(sink.received)
 
         def responder(request: object, call_index: int) -> int:
@@ -756,10 +620,7 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
         return json_(
             {
                 "count": len(ctx.vendor.machines),
-                # `describe()` lives on the machine so that `terminal` is
-                # derived in exactly one place; a check asserting
-                # `terminal == (to == [])` over the wire then says something
-                # about the enforcement rather than about this report.
+                # `terminal` is derived once, on the machine, not restated here.
                 "machines": {name: StateMachine(definition).describe() for name, definition in _machines(ctx).items()},
             }
         )
@@ -779,10 +640,8 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
         machine = StateMachine(definition)
         subject = f"machine {body.machine!r}"
         if body.from_ not in definition.states:
-            # Checked here rather than left to `assert_transition`, which only
-            # validates the *target*: with no `to`, an undeclared `from` would
-            # sail through `assert_mutable` (an unknown state is not terminal)
-            # and the probe would answer `ok` about a state that does not exist.
+            # `assert_transition` only validates the target: with no `to`, an
+            # undeclared `from` would sail through `assert_mutable` unnoticed.
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail=f"'{body.from_}' is not a declared state of machine {body.machine!r}.",
@@ -793,15 +652,8 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
         # mutates nothing, which is what makes it safe to call from a check
         # that is also asserting on the state digest.
         #
-        # ONE question per call, and never both. A handler runs `assert_mutable`
-        # and then `assert_transition`, in that order and for good reason -- but
-        # a probe that did the same could never report the transition predicate
-        # for a terminal state, because mutability would always answer first. A
-        # machine that treated `from == to` as always legal would then be
-        # undetectable through this route on any vendor whose non-terminal
-        # states all allow themselves, which is the exact defect the route was
-        # added to expose. With `to`, this asks whether the move is legal;
-        # without it, whether the entity may be mutated at all.
+        # ONE question per call: mutability would always answer first if both
+        # ran, hiding a machine that treats `from == to` as always legal.
         if body.to is None:
             machine.assert_mutable(body.from_, subject)
         else:
@@ -821,18 +673,10 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
     # -- the request log ---------------------------------------------------
 
     def requests_get(args: HandlerArgs) -> ReplyInit:
-        """Every request the unit handled, newest first, filtered.
-
-        The journal's counterpart. ``GET /__unit/journal`` answers "what
-        changed"; this answers "what was called, and did anything answer it" --
-        including the calls that changed nothing, were refused, or matched no
-        route at all, which is the whole set a consumer debugging an
-        integration is looking for.
-
-        Control-plane requests are absent by construction (the kernel does not
-        record an internal route), so reading this route does not appear in
-        what it returns and a consumer polling it sees their own traffic rather
-        than their own polling.
+        """Every request the unit handled, newest first, filtered: the
+        journal's counterpart, answering "what was called" including calls
+        that changed nothing or matched no route. Control-plane requests are
+        absent by construction, so polling this route does not show up in it.
         """
         capacity = binding.requests.capacity
         limit = _limit(args.query("limit"), maximum=capacity)
@@ -857,15 +701,9 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
         return json_({"cleared": binding.requests.clear()})
 
     def requests_near_misses(args: HandlerArgs) -> ReplyInit:
-        """The unmatched requests, each with the routes it nearly asked for.
-
-        A projection of the route above rather than a second source: the same
-        records, narrowed to ``matched=false``. It exists because "show me
-        every request that hit nothing, and what it should have hit" is the
-        question this whole feature was added for, and a consumer should not
-        have to know the filter spelling to ask it. The shape mirrors
-        WireMock's ``/__admin/requests/unmatched/near-misses`` so that anyone
-        who knows that tool recognises this one.
+        """The unmatched requests, each with the routes it nearly asked for: a
+        projection of the route above, narrowed to ``matched=false``, so a
+        consumer need not know the filter spelling to ask for it.
         """
         limit = _limit(args.query("limit"), maximum=binding.requests.capacity)
         records = binding.requests.records(unmatched=True, limit=limit)
@@ -891,13 +729,10 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
     # -- transport ---------------------------------------------------------
 
     def echo(args: HandlerArgs) -> ReplyInit:
-        """Reflect what the body reader made of this request, and both query views.
-
-        No capability, any content type, no vendor knowledge. It exists so that
-        "a form-encoded body reaches the handler as fields" is assertable on
-        every profile, including one whose vendor has no form-accepting route
-        at all -- which is the difference between a guarantee vendor #2
-        inherits and one that happens to hold for vendor #1's OAuth endpoint.
+        """Reflect what the body reader made of this request, and both query
+        views: no capability, any content type, no vendor knowledge, so a
+        form-encoded body reaching the handler as fields is assertable on
+        every profile, not just one whose vendor happens to have a form route.
         """
         media_type = args.media_type()
         payload: dict[str, Any] = {
@@ -913,9 +748,8 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
             payload["fields"] = dict(form)
             payload["fields_multi"] = form.multi()
         elif args.req.raw_body.strip():
-            # `json` is present only when there was a JSON document to report.
-            # `null` is a legitimate JSON body, so an always-present key could
-            # not distinguish "the body was null" from "there was no body".
+            # Present only when there was a JSON document: `null` is a
+            # legitimate body, so an always-present key could not tell the two apart.
             payload["json"] = args.json()
         return json_(payload)
 
@@ -1126,9 +960,7 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
     )
 
 
-# ---------------------------------------------------------------------------
 # Helpers. Module level so a test can reach them without building a unit.
-# ---------------------------------------------------------------------------
 
 
 def _machines(ctx: UnitContext) -> Mapping[str, MachineDef]:
@@ -1147,12 +979,9 @@ def _chaos_route_keys(binding: ControlBinding) -> tuple[str, ...]:
 
 
 def _rules_as_json(ctx: UnitContext, route_keys: Sequence[str]) -> list[dict[str, Any]]:
-    """Each rule with its counters and the routes it resolves to.
-
-    ``matched_routes`` is the answer to "why did my rule never fire". The
-    reference validates a rule's ``id``, ``fault`` and ``scope`` and never
-    checks that ``match.route`` names a registered route, so a typo is a rule
-    that matches nothing, forever, silently.
+    """Each rule with its counters and the routes it resolves to:
+    ``matched_routes`` is the answer to "why did my rule never fire", since a
+    rule grammar check alone never catches a ``match.route`` typo.
     """
     out: list[dict[str, Any]] = []
     for status in ctx.chaos.status():
@@ -1164,15 +993,10 @@ def _rules_as_json(ctx: UnitContext, route_keys: Sequence[str]) -> list[dict[str
 
 
 def _validated_rule(document: Mapping[str, Any], ctx: UnitContext, route_keys: Sequence[str]) -> ChaosRule:
-    """Parse one submitted rule and refuse the two things it can be wrong about.
-
-    The grammar check is ``chaos/rules.py``'s. Two more happen here because
-    both need something a pure parser does not have: the capability registry,
-    and the route table.
-
-    The webhook-scope capability assertion is the reference's, verbatim in
-    intent -- a behaviour capability has no surface of its own, so this is
-    where a consumer meets its "disabled" answer.
+    """Parse one submitted rule and refuse the two things it can be wrong about
+    that a pure parser cannot see: the capability registry and the route
+    table. A webhook-scope rule asserts ``webhooks.chaos`` here, since a
+    behaviour capability has no surface of its own to answer "disabled" from.
     """
     rule = parse_rule(document, source="POST /__unit/chaos/rules")
     if rule.scope == "webhook":
@@ -1185,12 +1009,9 @@ def _validated_rule(document: Mapping[str, Any], ctx: UnitContext, route_keys: S
 
 def _report_dead_rule(ctx: UnitContext, rule_id: str, pattern: str | None) -> None:
     """A rule that selects no route: a NOTE, or a 400 under ``strict_rules``.
-
-    Both halves matter. Silence is how the reference ships a profile whose
-    ``match.route`` no longer names anything and produces a transcript with a
-    dead rule in it and nobody the wiser; a hard error by default would refuse
-    a rule aimed at a route a capability has temporarily switched off, which is
-    a legitimate thing to write.
+    Silence alone would let a stale ``match.route`` sit in a profile
+    unnoticed; a hard error by default would refuse a rule aimed at a route a
+    capability has only temporarily switched off, which is legitimate to write.
     """
     detail = (
         f"chaos rule {rule_id!r} matches no registered route (match.route={pattern!r}); it can never fire. "
@@ -1207,12 +1028,9 @@ def _report_dead_rule(ctx: UnitContext, rule_id: str, pattern: str | None) -> No
 
 
 def _since(raw: str | None) -> int:
-    """``?since=`` as an integer, or an ``invalid_value`` naming it.
-
-    The reference does ``Number(query('since') ?? 0)`` and falls back to ``0``
-    for anything unparseable, so ``?since=abc`` silently returns the *whole*
-    journal -- an ignored knob answering with the opposite of what was asked.
-    Recorded as ``provenance: judgment`` and pinned by test.
+    """``?since=`` as an integer, or an ``invalid_value`` naming it: a silent
+    fallback to ``0`` on junk would return the *whole* journal, the opposite
+    of what an ignored knob should do. JUDGMENT, pinned by test.
     """
     if raw is None or raw == "":
         return 0
@@ -1234,20 +1052,14 @@ def _since(raw: str | None) -> int:
 
 
 DEFAULT_REQUEST_LIMIT = 100
-"""How many request records ``GET /__unit/requests`` returns when not asked.
-
-A hundred is what a person reads; the capacity is what a machine reads, and
-asking for it is one query parameter away."""
+"""How many request records ``GET /__unit/requests`` returns when not asked; the
+capacity is a query parameter away."""
 
 
 def _limit(raw: str | None, *, maximum: int) -> int:
-    """``?limit=`` as an integer between 1 and the log's capacity.
-
-    Clamped rather than refused at the top end: a caller asking for more
-    records than the log can hold wants "all of them", and a 400 there would
-    be pedantry about a number they had no way to know. A limit that is not a
-    number, or is zero or negative, IS refused -- ``?limit=abc`` silently
-    meaning "the default" is the same defect ``?since=abc`` had.
+    """``?limit=`` as an integer between 1 and the log's capacity. Clamped, not
+    refused, at the top end -- a caller asking for more than the log holds
+    wants "all of them" -- but a non-number, zero or negative limit is refused.
     """
     if raw is None or raw == "":
         return min(DEFAULT_REQUEST_LIMIT, maximum) if maximum else DEFAULT_REQUEST_LIMIT
@@ -1269,15 +1081,10 @@ def _limit(raw: str | None, *, maximum: int) -> int:
 
 
 def _flag(raw: str | None, *, field: str) -> bool | None:
-    """A tri-state query flag: ``None`` when absent, else a strict boolean.
-
-    ``?unmatched=false`` must mean "only the matched ones" and not "no filter",
-    so absence and ``false`` are different answers. The accepted spellings are
-    ``true``, ``1`` or ``yes`` for true -- plus a bare key (``?unmatched``),
-    which is what a caller types and which every binding delivers as an empty
-    value -- and ``false``, ``0`` or ``no`` for false; anything else is refused
-    rather than guessed, because JavaScript-style truthiness would make
-    ``?unmatched=false`` select exactly the wrong half.
+    """A tri-state query flag: ``None`` when absent, else a strict boolean, so
+    ``?unmatched=false`` (not "no filter") and a bare ``?unmatched`` (true) are
+    both accepted; anything else is refused rather than guessed, since a loose
+    truthiness reading would make ``?unmatched=false`` select the wrong half.
     """
     if raw is None:
         return None
@@ -1298,13 +1105,9 @@ def _timer_as_json(timer: PendingTimer) -> dict[str, Any]:
 
 
 def _subscription_as_json(subscription: Subscription) -> dict[str, Any]:
-    """One subscriber, optional keys omitted rather than nulled.
-
-    Projected from the typed :class:`~vendorfake.core.webhooks.models.Subscription`
-    rather than from the raw entity, so the control plane and the dispatcher
-    agree about what a subscription *is* by construction. The signature key is
-    included: this is a fake, the key is chosen by whoever configured it, and a
-    consumer verifying a signature needs to know what to verify with.
+    """One subscriber, optional keys omitted rather than nulled; projected from
+    the typed :class:`~vendorfake.core.webhooks.models.Subscription`, so the
+    control plane and the dispatcher agree on its shape by construction.
     """
     return compact(
         {
@@ -1320,15 +1123,9 @@ def _subscription_as_json(subscription: Subscription) -> dict[str, Any]:
 
 
 def _signer_as_json(signer: Signer) -> dict[str, Any]:
-    """The signing scheme's own description, plus what it declares it depends on.
-
-    ``describe()`` is free prose a vendor writes for an operator. ``bindings``
-    is the machine-readable half, and it is published because a conformance
-    check has to assert each declared direction *in the direction declared* --
-    a static scheme is conformant, not merely tolerated -- and it cannot do
-    that from prose. ``signature_headers`` is in the same block for the same
-    reason: without it a check comparing two deliveries can see that something
-    moved but not that the *signature* moved.
+    """The signing scheme's own description, plus the machine-readable
+    ``bindings`` a conformance check needs to assert each declared direction,
+    since ``describe()`` alone is free prose it cannot assert against.
     """
     properties = signer.properties
     return {
@@ -1354,12 +1151,8 @@ def _magic_as_json(spec: MagicTriggerSpec | None) -> dict[str, Any] | None:
 
 
 def _synthetic_event_id(event_type: str, entity_id: str, seq: int) -> str:
-    """A stable id for a control-plane emission.
-
-    Derived, not drawn: taking it from the unit's RNG would consume a draw and
-    move every subsequent seeded id, so an emitted probe event would change the
-    ids of the entities a check is asserting on. The shape matches the
-    dispatcher's own minted ids so nothing downstream can tell them apart.
+    """A stable id for a control-plane emission, derived rather than drawn from
+    the unit's RNG, which would otherwise renumber every subsequent seeded id.
     """
     digest = sha256_hex(f"control|{event_type}|{entity_id}|{seq}")
     return "-".join((digest[0:8], digest[8:12], digest[12:16], digest[16:20], digest[20:32]))

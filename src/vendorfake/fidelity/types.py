@@ -1,20 +1,8 @@
-"""The data a vendor declares, and the two documents cut from it.
+"""The data a vendor declares, and the two documents cut from it: one typed reading of ``declaration.json`` and ``extract.json`` so the validator, the corpus runner, the report and the pin tool all agree on what a route *is* in spec terms, without re-deriving it.
 
-FOR: one typed reading of ``declaration.json`` and ``extract.json`` so the
-validator, the corpus runner, the report and the pin tool all agree on what a
-route *is* in spec terms -- an operation, an excused route, or an undeclared
-one -- without any of them re-deriving it.
+A vendor route is never silently unvalidated: ``Surface.classify`` returns exactly one of four kinds for every route the unit serves, and the only kind that carries no schema and no reason is ``undeclared``, which the validator raises on. Excusing a route costs a sentence in the declaration; that sentence is the audit trail.
 
-INVARIANT: **a vendor route is never silently unvalidated.** ``Surface.classify``
-returns exactly one of four kinds for every route the unit serves, and the
-only kind that carries no schema and no reason is ``undeclared`` -- which the
-validator raises on and the report prints in capitals. Excusing a route costs
-a sentence in the declaration; that sentence is the audit trail.
-
-The extract is a valid OpenAPI 3.0 document restricted to the operations the
-unit models and the schemas reachable from them, with prose stripped; see
-``extract.py`` for how it is cut and ``pin.py`` for how it is tied to the
-upstream bytes. This module only reads it.
+The extract is a valid OpenAPI 3.0 document restricted to the operations the unit models and the schemas reachable from them, with prose stripped -- see ``extract.py`` for how it is cut and ``pin.py`` for how it is tied to the upstream bytes. This module only reads it.
 """
 
 from __future__ import annotations
@@ -58,10 +46,7 @@ PIN_FILE = "pin.json"
 CORPUS_DIR = "corpus"
 
 SourceKind = Literal["openapi3", "swagger2", "fragments"]
-"""How an upstream document is fetched and read. Only ``openapi3`` is
-implemented by the first leg (konyklabs/roadmap#55); ``swagger2`` is #56 and
-``fragments`` is #57. Declaring a kind that
-is not implemented is an error at extract time, never a silent skip."""
+"""How an upstream document is fetched and read. Only ``openapi3`` is implemented so far; declaring an unimplemented kind is an error at extract time, never a silent skip."""
 
 
 def route_key(method: str, path: str) -> str:
@@ -70,9 +55,7 @@ def route_key(method: str, path: str) -> str:
 
 
 def template_shape(path: str) -> str:
-    """A path template with every parameter name erased, so ``/v2/orders/{order_id}``
-    and ``/v2/orders/{id}`` compare equal. Parameter *names* differ between a
-    unit and a spec freely; parameter *positions* do not."""
+    """A path template with every parameter name erased, so ``/v2/orders/{order_id}`` and ``/v2/orders/{id}`` compare equal. Parameter names differ freely; parameter positions do not."""
     return re.sub(r"\{[^}]+\}", "{}", path)
 
 
@@ -82,12 +65,9 @@ class SpecSource:
 
     kind: SourceKind
     url: str
-    #: A prefix the spec omits and the unit's paths carry. Empty means "take
-    #: it from the document" (Swagger 2 ``basePath``, OAS 3 ``servers[0].url``);
-    #: set it to override what the document says.
+    #: A prefix the spec omits and the unit's paths carry. Empty takes it from the document.
     base_path: str = ""
-    #: Short name for this source, used to namespace a schema that two sources
-    #: define differently (``<label>.<Name>``). Defaults to the URL's file stem.
+    #: Short name for this source, used to namespace a schema two sources define differently.
     label: str = ""
 
     @classmethod
@@ -102,13 +82,7 @@ class SpecSource:
 
 @dataclass(frozen=True, slots=True)
 class Alias:
-    """A unit route spelled with a literal where the spec has a parameter.
-
-    A unit may serve ``GET /things/me`` as a literal path where the spec has
-    ``/things/{thing_id}`` and documents ``me`` as one accepted value. The
-    alias says which operation the literal is an instance of. It is *also* a fidelity finding -- the real API
-    accepts both spellings -- which is why the reason is mandatory.
-    """
+    """A unit route spelled with a literal where the spec has a parameter -- e.g. ``GET /things/me`` where the spec has ``/things/{thing_id}`` and documents ``me`` as one accepted value. Also a fidelity finding, which is why the reason is mandatory."""
 
     method: str
     path: str
@@ -148,33 +122,17 @@ class Excuse:
 
 @dataclass(frozen=True, slots=True)
 class Deviation:
-    """A place where the unit follows the vendor's prose against the vendor's spec.
-
-    Vendors contradict themselves: a code named on a documentation page and
-    quoted from real responses, but absent from the published enumeration.
-    The unit follows the observed API, and this row says so, in the only
-    place it can be audited -- with the page it rests on. A deviation is
-    matched narrowly: one schema keyword, one instance pointer (``*`` matches
-    a single segment), and optionally one value. It never widens beyond that.
-    """
+    """A place where the unit follows the vendor's prose against the vendor's spec -- a code named on a documentation page but absent from the published enumeration, say. This row says so, with the page it rests on. Matched narrowly: one schema keyword, one instance pointer (``*`` matches a single segment), and optionally one value; it never widens beyond that."""
 
     pointer: str
     keyword: str
-    #: The one instance value excused, kept in its JSON type: a vendor that
-    #: enumerates numeric codes needs ``402`` to mean the number, not the text;
-    #: ``null`` is the value a vendor's examples answer where its schema says
-    #: a string. Exactly one of ``value`` and ``pattern`` is given.
+    #: The one instance value excused, kept in its JSON type. Exactly one of ``value`` and ``pattern`` is given.
     value: object
     reason: str
     url: str
-    #: Instead of one value, a regular expression every excused instance must
-    #: fully match -- for a documented *format* the schema's own ``format``
-    #: keyword rejects (a vendor's ``+0000`` timestamps). Still one keyword,
-    #: one pointer shape, and a shape the instance must fit, never "anything".
+    #: Instead of one value, a regular expression every excused instance must fully match (a documented format the schema's own ``format`` keyword rejects).
     pattern: str | None = None
-    #: Route keys (the unit's spelling) the deviation applies to; empty means
-    #: every route. A code the vendor names for one flow is excused for that
-    #: flow, not for the whole surface.
+    #: Route keys the deviation applies to; empty means every route.
     routes: tuple[str, ...] = ()
 
     @classmethod
@@ -224,9 +182,7 @@ class Deviation:
 
 
 def _pointer_matches(want: Sequence[str], have: Sequence[str]) -> bool:
-    """``*`` matches one segment, ``**`` any number including none, and a
-    segment may carry a shell glob (``*Date``) -- for a field the vendor's
-    examples answer the same way at every depth, or a family of them."""
+    """``*`` matches one segment, ``**`` any number including none, and a segment may carry a shell glob (``*Date``)."""
     if not want:
         return not have
     head, rest = want[0], want[1:]
@@ -239,22 +195,9 @@ def _pointer_matches(want: Sequence[str], have: Sequence[str]) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Annotation:
-    """A machine-readable fact a vendor writes into operation *prose*.
+    """A machine-readable fact a vendor writes into operation *prose* -- some vendors state a rule the OpenAPI document has no keyword for (a required scope written into ``description`` rather than a ``security`` entry), and the cutter would otherwise strip it along with the rest of the prose.
 
-    Some vendors state a rule the OpenAPI document has no keyword for -- the
-    scope an operation requires, written as a line in its ``description``
-    rather than as a ``security`` entry. The cutter strips prose, so the fact
-    would be gone from the extract and the unit's own table would be the only
-    statement of it, checkable against nothing.
-
-    This row makes the fact survive the cut, **as data and without naming a
-    vendor**: ``select`` is a regular expression run over each modeled
-    operation's ``description`` (multiline), and ``item`` -- when given -- is
-    run repeatedly over ``select``'s first group to yield the individual
-    values. The result lands under ``x-vendorfake.annotations[name]`` keyed by
-    route, so it is covered by the extract's own sha256 and a vendor test can
-    compare its route table against it. A vendor that declares none gets a cut
-    that is byte-identical to the one it got before this existed.
+    ``select`` is a regular expression run over each modeled operation's ``description`` (multiline); ``item``, when given, is run repeatedly over ``select``'s first group to yield individual values. The result lands under ``x-vendorfake.annotations[name]`` keyed by route, covered by the extract's own sha256. A vendor that declares none gets a cut byte-identical to the one it got before this existed.
     """
 
     name: str
@@ -296,13 +239,7 @@ class Annotation:
 
 @dataclass(frozen=True, slots=True)
 class Override:
-    """A route whose documented response shape is not the one its spec declares.
-
-    The narrowest tool after a deviation: one route, one status, validated
-    against a named component schema of the extract instead of the declared
-    one, because the vendor's own guide documents that shape. The reason and
-    the page are mandatory; the report lists every override.
-    """
+    """A route whose documented response shape is not the one its spec declares -- the narrowest tool after a deviation: one route, one status, validated against a named component schema instead of the declared one. The reason and the page are mandatory."""
 
     route: str
     status: int
@@ -325,15 +262,7 @@ class Override:
 class FidelityDeclaration:
     """``declaration.json``, read.
 
-    ``error_envelope`` names the status whose response schema also describes
-    error bodies when the spec declares none for the error status -- the
-    convention of a vendor whose every response schema carries an ``errors[]``
-    member and whose document declares only the success status. ``None`` means
-    an undeclared status is a violation. ``error_member`` names that member:
-    an error status answered through the envelope must carry it, non-empty,
-    or the envelope would accept a success payload on a 404 (the success
-    schema requires nothing). Declaring the envelope without the member is
-    refused, because that is exactly the hole.
+    ``error_envelope`` names the status whose response schema also describes error bodies when the spec declares none for the error status. ``None`` means an undeclared status is a violation. ``error_member`` names the member an error status answered through the envelope must carry, non-empty, or the envelope would accept a success payload on a 404; declaring the envelope without the member is refused for exactly that reason.
     """
 
     anchor: str
@@ -344,30 +273,17 @@ class FidelityDeclaration:
     overrides: tuple[Override, ...] = ()
     error_envelope: str | None = None
     error_member: str | None = None
-    #: Schema names the extract may stub to ``{}`` because the upstream
-    #: document dangles there. A stub validates everything it types, so a
-    #: new one is a red offline check until it is listed here, on purpose.
+    #: Schema names the extract may stub to ``{}`` because the upstream document dangles there. A new one is a red offline check until listed here, on purpose.
     stubs_accepted: tuple[str, ...] = ()
-    #: Whether the extract is committed beside the declaration. ``False`` is
-    #: the fetch-never-commit mode (konyklabs/roadmap#56): only ``pin.json``
-    #: (facts about the upstream bytes) ships; the extract is cut at run time
-    #: from a fresh fetch into a local cache and no upstream byte enters the
-    #: repository. The reason is the vendor's terms, not convenience.
+    #: Whether the extract is committed beside the declaration. ``False`` is the fetch-never-commit mode: only ``pin.json`` ships, and the extract is cut at run time into a local cache -- the vendor's terms, not convenience.
     vendored: bool = True
-    #: The component schema an error body is validated against when the
-    #: document declares the status without a schema (or not at all). Kept
-    #: in the extract as a root even if no operation references it.
+    #: The component schema an error body is validated against when the document declares the status without a schema. Kept in the extract as a root even if no operation references it.
     error_schema: str | None = None
-    #: Vendor extension keys with a standard meaning, mapped onto the OAS
-    #: keyword the validator honours (``{"x-nullable": "nullable"}``). Data,
-    #: so this package names no vendor. Unmapped ``x-`` keys are stripped.
+    #: Vendor extension keys mapped onto the OAS keyword the validator honours (``{"x-nullable": "nullable"}``). Unmapped ``x-`` keys are stripped.
     extension_map: Mapping[str, str] = field(default_factory=dict)
-    #: Values a corpus case may interpolate as ``${vars.<name>}`` -- seeded ids
-    #: the vendor's scenario fixes, so a case can name them without a lookup.
+    #: Values a corpus case may interpolate as ``${vars.<name>}`` -- seeded ids the vendor's scenario fixes.
     variables: Mapping[str, str] = field(default_factory=dict)
-    #: Machine-readable facts to lift out of operation prose before it is
-    #: stripped (see :class:`Annotation`). Empty for every vendor that does
-    #: not declare one, and the cut is then exactly what it always was.
+    #: Machine-readable facts to lift out of operation prose before it is stripped (see :class:`Annotation`).
     annotations: tuple[Annotation, ...] = ()
 
     @classmethod
@@ -435,11 +351,7 @@ class Operation:
         return route_key(self.method, self.spec_path)
 
     def response_schema(self, status: int, *, error_envelope: str | None = None) -> Mapping[str, Any] | None:
-        """The JSON schema for ``status``: exact, then the OAS 3 range key
-        (``4XX``), then ``default``, then the envelope status the declaration
-        names. ``None`` when the operation has
-        no JSON schema for that status anywhere -- the caller decides whether
-        that is a violation."""
+        """The JSON schema for ``status``: exact, then the OAS 3 range key (``4XX``), then ``default``, then the envelope status. ``None`` when there is no schema anywhere; the caller decides whether that is a violation."""
         responses = self.raw.get("responses", {})
         for candidate in (str(status), f"{status // 100}XX", "default", error_envelope):
             if candidate is None:
@@ -495,9 +407,7 @@ class Extract:
         return meta if isinstance(meta, Mapping) else {}
 
     def annotations(self, name: str) -> Mapping[str, tuple[str, ...]]:
-        """``{route key: values}`` for the annotation ``name`` the declaration
-        asked the cutter to keep (see :class:`Annotation`). Empty when the
-        extract carries none -- which is what a vendor declaring none has."""
+        """``{route key: values}`` for the annotation ``name`` the declaration asked the cutter to keep (see :class:`Annotation`). Empty when the extract carries none."""
         block = self.metadata.get("annotations", {})
         rows = block.get(name, {}) if isinstance(block, Mapping) else {}
         if not isinstance(rows, Mapping):
@@ -574,9 +484,7 @@ DECLARATION_SCHEMA_FILE = "declaration.schema.json"
 
 
 def validate_declaration(doc: Any, *, where: str) -> None:
-    """The declaration against its shipped JSON Schema. A deviation without
-    a value, an envelope without a member, an unknown key: refused at load,
-    the way corpus cases are, so a widening cannot arrive by typo."""
+    """The declaration against its shipped JSON Schema, refused at load so a widening cannot arrive by typo."""
     import jsonschema
 
     schema = json.loads((resources.files("vendorfake.fidelity") / DECLARATION_SCHEMA_FILE).read_text("utf-8"))
@@ -589,20 +497,14 @@ def validate_declaration(doc: Any, *, where: str) -> None:
 
 
 def load_declaration(anchor: str) -> FidelityDeclaration:
-    """Read ``declaration.json`` from the package named by ``anchor``
-    (``"vendorfake.<vendor>.fidelity"`` for a built-in vendor). The package is
-    *named*, never guessed: this module may not import the registry that
-    knows vendors exist."""
+    """Read ``declaration.json`` from the package named by ``anchor`` (``"vendorfake.<vendor>.fidelity"`` for a built-in vendor). Named, never guessed: this module may not import the registry that knows vendors exist."""
     doc = _read_json(anchor, DECLARATION_FILE)
     validate_declaration(doc, where=f"{anchor}/{DECLARATION_FILE}")
     return FidelityDeclaration.of(anchor, doc)
 
 
 def load_extract(anchor: str) -> Extract:
-    """The extract for ``anchor``: read beside the declaration when it is
-    vendored, otherwise cut from a fresh fetch into the local cache (see
-    ``vendorfake.fidelity.cache``), which is the only place a non-vendored
-    vendor's upstream bytes ever land."""
+    """The extract for ``anchor``: read beside the declaration when it is vendored, otherwise cut from a fresh fetch into the local cache (see ``vendorfake.fidelity.cache``)."""
     declaration = load_declaration(anchor)
     if not declaration.vendored:
         from vendorfake.fidelity.cache import cached_extract

@@ -1,21 +1,12 @@
 """Clover (REST v3), as a vendorfake vendor.
 
-FOR: publishing one name -- ``VENDOR`` -- that the registry resolves through
-the ``vendorfake.vendors`` entry point, plus the pieces a consumer or a test
-legitimately imports directly: the error table, the order machine, the id
-stream, the wire models and the configuration.
+Publishes ``VENDOR`` (via the ``vendorfake.vendors`` entry point) plus the
+pieces a consumer imports directly: the error table, order machine, id
+stream, wire models and configuration.
 
-INVARIANT: **``VENDOR`` is a fresh definition on every access.** A vendor owns
-a stateful, seeded id stream; two units sharing one would interleave their
-draws and neither would reproduce its own ids. The registry resolves a module
-attribute rather than calling a factory, so the attribute *is* the factory,
-through :func:`__getattr__`. ``vendorfake.clover.VENDOR is
-vendorfake.clover.VENDOR`` is therefore False, which is stated here because it
-is the one surprising thing in this package.
-
-Nothing in this package imports a web framework, and nothing in it is imported
-by the core. A vendor supplies data -- routes, tables, machines -- and the
-core supplies behaviour.
+INVARIANT: ``VENDOR`` is fresh on every access -- a vendor owns a stateful,
+seeded id stream, so two units sharing one would interleave draws;
+``vendorfake.clover.VENDOR is vendorfake.clover.VENDOR`` is False.
 """
 
 from __future__ import annotations
@@ -112,11 +103,7 @@ __all__ = [
 
 
 def __getattr__(name: str) -> VendorDefinition:
-    """``VENDOR``, minted per access. See the module docstring for why.
-
-    Any other missing name raises ``AttributeError`` as usual, so a typo does
-    not silently return a vendor.
-    """
+    """``VENDOR``, minted per access; any other name raises ``AttributeError``."""
     if name == "VENDOR":
         return create_clover_vendor()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

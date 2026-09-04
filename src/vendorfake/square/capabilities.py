@@ -1,22 +1,10 @@
-"""What this vendor can be asked to do, and what switching each off removes.
+"""What this vendor can be asked to do, and what switching each off removes. Declared once so the
+route table, the control plane's capability index and the core's own gating all read the same list.
 
-FOR: declaring the capability set once, so that the route table, the control
-plane's capability index and the core's own gating all read the same list.
-
-INVARIANT: **every capability the core gates on is accounted for.** The core
-fails at construction when one of its gated capabilities is neither declared
-here nor excused in ``not_supported`` with a reason -- otherwise a behaviour
-the core silently skips is indistinguishable from a behaviour a vendor never
-had. Square implements all three, so :data:`SQUARE_NOT_SUPPORTED` is empty and
-says why it is empty rather than being absent.
-
-``chaos`` is not a Square concept and is declared anyway. It is the core's
-behaviour gate for request-scope fault injection from every source -- standing
-rules, in-band magic values, forced headers -- and it owns no routes, because
-there is no endpoint whose absence would represent it. ``webhooks.chaos`` keeps
-its own gate for delivery-scope faults: a profile that wants request faults but
-honest delivery, or the reverse, is a real configuration that one gate could
-not express.
+INVARIANT: every capability the core gates on is accounted for here or excused in ``not_supported``
+with a reason -- Square implements chaos, webhooks and webhooks.chaos, so
+:data:`SQUARE_NOT_SUPPORTED` is empty. ``chaos`` is not a Square concept; it is the core's gate for
+request-scope fault injection. ``webhooks.chaos`` gates delivery-scope faults separately.
 """
 
 from __future__ import annotations
@@ -70,11 +58,4 @@ SQUARE_CAPABILITIES: tuple[CapabilityDecl, ...] = (
 )
 
 SQUARE_NOT_SUPPORTED: Mapping[str, str] = {}
-"""Empty, and deliberately so.
-
-The core gates on ``chaos``, ``webhooks`` and ``webhooks.chaos``; this vendor
-declares all three above. A capability listed here would be one the core gates
-on and this vendor does not implement, recorded with the reason it does not
-apply -- "this vendor has no webhook mechanism at all" and "webhooks are on the
-roadmap" being different facts that a bare set would lose.
-"""
+"""Empty, deliberately: everything the core gates on is declared above rather than excused here."""

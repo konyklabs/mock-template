@@ -1,29 +1,19 @@
 """The stock API surface: what is out, what is counted, and updating either.
 
-DOCUMENTED (toast-stock-api.yaml, apiUsingTheStockApi.html):
+DOCUMENTED (toast-stock-api.yaml, apiUsingTheStockApi.html): ``GET
+/stock/v1/inventory[?status=OUT_OF_STOCK|QUANTITY]`` ignores IN_STOCK items;
+``POST /stock/v1/inventory/search`` returns IN_STOCK too; ``PUT
+/stock/v1/inventory/update`` takes an array by ``guid`` or
+``multiLocationId``, ``QUANTITY`` needing ``quantity`` > 0 and
+IN_STOCK/OUT_OF_STOCK carrying none. All three require
+``Toast-Restaurant-External-ID``.
 
-===========  =======================================================
-Inventory    ``GET /stock/v1/inventory[?status=OUT_OF_STOCK|QUANTITY]`` --
-             "ignores menu items that have a stock status of IN_STOCK"
-Search       ``POST /stock/v1/inventory/search`` -- returns IN_STOCK too
-Update       ``PUT /stock/v1/inventory/update`` -- an array of items by
-             ``guid`` or ``multiLocationId``; ``QUANTITY`` needs
-             ``quantity`` > 0; IN_STOCK / OUT_OF_STOCK must carry none
-===========  =======================================================
-
-All three require ``Toast-Restaurant-External-ID``. Modifier options have
-stock rows of their own ("Modifiers are backed by the modifier's item
-reference").
-
-JUDGMENT, labelled (audit gap 4): **an order does not decrement a QUANTITY**
--- the page says ordering on the POS does, and nothing about the API -- and
-**ordering an OUT_OF_STOCK item is refused with a 400 naming the item**
-(``model/build.py``); a quantity reaching 0 through this API is refused
-rather than auto-flipped (``quantity`` > 0 is the documented rule).
-``PUT`` answers the updated rows (the page documents only the codes). An
-update naming an unknown item is a 400 naming its index; a search naming one
-answers an ``INVALID`` row (``model/stock.py``). ``versionId`` never changes:
-"for future use".
+JUDGMENT (audit gap 4): an order does not decrement a QUANTITY, since the
+page describes only POS ordering; ordering an OUT_OF_STOCK item is refused
+with a 400 naming the item (``model/build.py``); a quantity reaching 0
+through this API is refused rather than auto-flipped. An update naming an
+unknown item is a 400 naming its index; a search naming one answers an
+``INVALID`` row (``model/stock.py``).
 """
 
 from __future__ import annotations

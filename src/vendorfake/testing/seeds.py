@@ -1,25 +1,7 @@
-"""What the shipped scenarios contain, as one object per vendor.
-
-FOR: a consumer's fixture. ``started.seed.access_token`` reads better than an
-import from ``vendorfake.square.seed.constants``, and a consumer who does not
-know the package layout should not have to. Every value here is re-exported
-from the vendor's own constants module, which is pinned to the seed document
-by that vendor's tests -- nothing is typed twice.
-
-The application credentials (``application_id`` / ``client_id`` and their
-secrets) come from the profile's ``vendor`` block rather than from a constant:
-a profile may override them, and a fixture that reported the default while the
-unit ran on an override would send a consumer chasing a 401 that the fixture
-caused.
-
-The three seeds also share one structural type, :class:`Seed`, and one neutral
-view of their application credentials, :class:`Credentials`. That exists
-because the vendor-faithful spellings are the whole difficulty for a consumer
-who parametrizes over vendors: ``application_id`` on Square and ``client_id``
-on Clover and Toast name the same thing, and a single test body cannot spell
-both. Nothing here renames or removes a vendor-faithful field; the neutral
-names are a second view of the same strings.
-"""
+"""What the shipped scenarios contain, as one object per vendor. Every value is
+re-exported from the vendor's own constants module, and the application
+credentials come from the profile's ``vendor`` block. All seeds share one
+structural type, :class:`Seed`, and one neutral view of the credentials."""
 
 from __future__ import annotations
 
@@ -28,10 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    # Guarded because the runtime import belongs inside the two functions that
-    # need it: this module is reached through `vendorfake.testing`, which a
-    # consumer's conftest imports, and an unguarded import here would pull the
-    # registry and the whole kernel in behind it for every such session.
+    # Guarded: an unguarded import would pull the kernel into every conftest.
     from vendorfake.core.kernel.types import VendorDefinition
 
 __all__ = [
@@ -55,57 +34,21 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class Credentials:
-    """The application credential a consumer authenticates with, under names
-    that mean the same thing on every vendor.
-
-    JUDGMENT: the names are invented. No vendor calls it ``app_id``; Square
-    calls it ``application_id`` and Clover and Toast call it ``client_id``.
-    The point is a call site that does not have to know which -- a test
-    parametrized over three vendors reads ``seed.credentials.app_id`` once
-    instead of branching on the vendor to pick a spelling.
-    """
+    """The application credential, under names that mean the same on every vendor.
+    JUDGMENT: the names are invented, so a parametrized test does not branch."""
 
     app_id: str
     app_secret: str
     grant: Literal["refresh_token", "client_credentials"]
-    """Which token lifecycle the vendor runs.
-
-    This is the difference a consumer's session handling genuinely has to
-    care about, so it is on the neutral view rather than hidden behind a
-    field that only two of the three seeds carry: ``refresh_token`` means a
-    long-lived grant is rotated (there is a ``refresh_token`` on the seed),
-    ``client_credentials`` means there is no refresh and the client logs in
-    again when the token expires.
-
-    JUDGMENT for the *spelling*: ``client_credentials`` is OAuth's word for
-    the shape, and Toast's login is not literally an OAuth grant. The
-    lifecycle it names is DOCUMENTED per vendor at each seed's
-    :attr:`~SquareSeed.credentials`.
-    """
+    """Which token lifecycle the vendor runs: ``refresh_token`` rotates a grant,
+    ``client_credentials`` logs in again on expiry. JUDGMENT for the spelling; the
+    lifecycle is DOCUMENTED at each seed's :attr:`~SquareSeed.credentials`."""
 
 
 @dataclass(frozen=True, slots=True)
 class Token:
-    """The seeded credential a consumer *stores* per tenant, under names that
-    mean the same thing on every vendor -- the other half of
-    :class:`Credentials`, which is what the application authenticates *as*.
-
-    JUDGMENT: the names are invented, for the same reason ``app_id`` is. A
-    consumer's stored-credential row is an access token, maybe a refresh
-    token, and the vendor's own id for the tenant the token is scoped to;
-    each vendor spells the third one differently, and a test parametrized
-    over vendors wants to read all three without branching.
-
-    ``tenant_id`` is the id the *token* is scoped to, which is not always the
-    narrowest id a vendor has: Clover's ``merchant_id``, Toast's
-    ``restaurant_guid``, and Square's ``merchant_id`` rather than its
-    ``location_id`` -- a Square OAuth token belongs to a seller (the
-    ``merchant_id`` the token response itself carries) and a seller has
-    several locations, so the location is a parameter of a call, not of the
-    credential. ``refresh_token`` is ``None`` exactly when
-    :attr:`Credentials.grant` is ``client_credentials``: the two agree by
-    construction, and a consumer may branch on either.
-    """
+    """The seeded credential a consumer stores per tenant. JUDGMENT: invented names.
+    ``refresh_token`` is ``None`` exactly for a ``client_credentials`` grant."""
 
     access_token: str
     refresh_token: str | None
@@ -113,21 +56,8 @@ class Token:
 
 
 class Seed(Protocol):
-    """What every vendor's seed has, whichever vendor it is.
-
-    FOR: a consumer parametrized over vendors, and for
-    :class:`~vendorfake.testing.StartedUnit`'s fallback type when the vendor
-    is a plain ``str`` rather than a literal. Reading a field through this
-    protocol needs no ``isinstance`` and no per-vendor helper.
-
-    Deliberately small, and deliberately without a bare ``refresh_token``
-    field: Square and Clover have one and Toast does not, so putting it here
-    would either lie about Toast or force a fake value onto it. The seeded
-    token is reached through :attr:`token` instead, whose ``refresh_token``
-    is honestly ``str | None``; a consumer that needs the refresh branch
-    reads :attr:`Credentials.grant`, which is the real vendor difference
-    rather than an artefact of this package.
-    """
+    """What every vendor's seed has, and the fallback type for a plain ``str``
+    vendor. No bare ``refresh_token``, which Toast has not; :attr:`token` has it."""
 
     @property
     def credentials(self) -> Credentials: ...
@@ -147,17 +77,15 @@ class Seed(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class SquareSeed:
-    """The Square scenario: two tokens, a merchant, two locations, a catalog,
-    two orders, a loyalty program. Ids are the ones Square's own documentation
-    examples use, so they look familiar in a consumer's assertions."""
+    """The Square scenario: two tokens, a merchant, two locations, a catalog, two
+    orders, a loyalty program. Ids are those of Square's documentation examples."""
 
     application_id: str
     application_secret: str
     redirect_uri: str
-    #: Full scopes, including webhook subscriptions.
+    #: Full scopes; the read-only one answers 403 to every write path.
     access_token: str
     refresh_token: str
-    #: Reads only; every write path answers 403 to it.
     read_only_access_token: str
     merchant_id: str
     location_id: str
@@ -172,31 +100,23 @@ class SquareSeed:
     completed_order_id: str
     loyalty_program_id: str
     loyalty_account_phone: str
-    #: Every event type the unit can send, as ``GET /v2/webhooks/event-types``
-    #: lists them: ``order.created``, ``order.updated``, ``payment.*`` ...
+    #: Every event type the unit can send, as the event-types route lists them.
     event_types: tuple[str, ...]
 
     @property
     def credentials(self) -> Credentials:
-        """The application credential, under the neutral names.
-
-        DOCUMENTED, the ``grant``: Square issues a refresh token alongside
-        the access token and a consumer rotates it -- "call ObtainToken with
-        the refresh token" -- rather than re-authorizing
-        (https://developer.squareup.com/docs/oauth-api/refresh-revoke-limit-scope).
-        """
+        """DOCUMENTED, the ``grant``: Square issues a refresh token and a consumer
+        rotates it
+        (https://developer.squareup.com/docs/oauth-api/refresh-revoke-limit-scope)."""
         return Credentials(app_id=self.application_id, app_secret=self.application_secret, grant="refresh_token")
 
     @property
     def token(self) -> Token:
-        """The seeded full-scope token, under the neutral names. The tenant is
-        the seller -- ``merchant_id``, as the token response spells it -- not
-        a location; see :class:`Token`."""
+        """The seeded full-scope token; the tenant is the seller's ``merchant_id``."""
         return Token(access_token=self.access_token, refresh_token=self.refresh_token, tenant_id=self.merchant_id)
 
     @property
     def auth(self) -> dict[str, str]:
-        """``Authorization: Bearer`` for the full-scope token."""
         return {"Authorization": f"Bearer {self.access_token}"}
 
     @property
@@ -208,15 +128,14 @@ class SquareSeed:
 class CloverSeed:
     """The Clover scenario: one merchant, three items, a modifier group, two
     employees, two tenders, two order types, the default service charge, a
-    customer, one open order, two tokens and one (disabled) webhook subscriber."""
+    customer, one open order, two tokens and one disabled webhook subscriber."""
 
     client_id: str
     client_secret: str
     redirect_uri: str
-    #: Every permission the app declares.
+    #: Every permission the app declares; the read-only one answers 401 to a write.
     access_token: str
     refresh_token: str
-    #: Reads only; a write answers Clover's undifferentiated 401.
     read_only_access_token: str
     merchant_id: str
     item_beer_id: str
@@ -237,31 +156,23 @@ class CloverSeed:
     open_order_id: str
     webhook_subscription_id: str
     webhook_auth_code: str
-    #: Clover's vocabulary is ``<object key>:<change>`` -- ``O:CREATE``,
-    #: ``P:UPDATE`` ... -- and a subscription may name a glob such as ``O:*``.
+    #: ``<object key>:<change>``; a subscription may name a glob such as ``O:*``.
     event_types: tuple[str, ...]
 
     @property
     def credentials(self) -> Credentials:
-        """The application credential, under the neutral names.
-
-        DOCUMENTED, the ``grant``: Clover's expiring-token apps rotate a
-        single-use refresh token -- "refresh token is for single use and
-        becomes invalid immediately after a new access_token and
-        refresh_token pair is generated"
-        (https://docs.clover.com/dev/docs/refresh-access-tokens).
-        """
+        """DOCUMENTED, the ``grant``: Clover's expiring-token apps rotate a
+        single-use refresh token
+        (https://docs.clover.com/dev/docs/refresh-access-tokens)."""
         return Credentials(app_id=self.client_id, app_secret=self.client_secret, grant="refresh_token")
 
     @property
     def token(self) -> Token:
-        """The seeded full-permission token, under the neutral names; the
-        tenant is the merchant."""
+        """The seeded full-permission token; the tenant is the merchant."""
         return Token(access_token=self.access_token, refresh_token=self.refresh_token, tenant_id=self.merchant_id)
 
     @property
     def auth(self) -> dict[str, str]:
-        """``Authorization: Bearer`` for the full-permission token."""
         return {"Authorization": f"Bearer {self.access_token}"}
 
     @property
@@ -269,26 +180,20 @@ class CloverSeed:
         return {"Authorization": f"Bearer {self.read_only_access_token}"}
 
     def path(self, suffix: str = "") -> str:
-        """``/v3/merchants/{merchant_id}`` plus ``suffix``: every Clover
-        resource lives under the merchant."""
         return f"/v3/merchants/{self.merchant_id}{suffix}"
 
 
 @dataclass(frozen=True, slots=True)
 class ToastSeed:
-    """The Toast scenario: one restaurant, a menu with three items, dining
-    options, a seeded open order with one check, two tokens and a webhook
-    subscription. Toast scopes a request with a **header**, not a path
-    segment, so there is no ``path()`` helper -- use :attr:`auth`, which
-    carries the bearer and the ``Toast-Restaurant-External-ID`` header
-    together, the way every restaurant-scoped call needs them."""
+    """The Toast scenario: one restaurant, a menu of three items, dining options,
+    an open order, two tokens and a webhook subscription. Scoping is by header, so
+    :attr:`auth` carries the bearer and the header together."""
 
     client_id: str
     client_secret: str
     partner_guid: str
-    #: Full scopes.
+    #: Full scopes, then reads only.
     access_token: str
-    #: Reads only.
     read_only_access_token: str
     restaurant_guid: str
     restaurant_name: str
@@ -307,41 +212,28 @@ class ToastSeed:
     open_order_guid: str
     open_order_check_guid: str
     webhook_subscription_id: str
-    #: The HMAC secret behind the ``Toast-Signature`` header.
+    #: The HMAC secret behind ``Toast-Signature``, and the scoping header's name.
     webhook_secret: str
-    #: ``Toast-Restaurant-External-ID``, spelled as the vendor spells it.
     restaurant_header_name: str
     event_types: tuple[str, ...]
 
     @property
     def credentials(self) -> Credentials:
-        """The application credential, under the neutral names.
-
-        DOCUMENTED, the ``grant``: Toast's authentication endpoint takes the
-        client id and secret and answers a bearer token, and there is no
-        refresh -- a client logs in again when the token expires
-        (https://doc.toasttab.com/doc/devguide/authentication.html). That is
-        why :class:`ToastSeed` has no ``refresh_token`` field and why
-        :class:`Seed` does not promise one.
-        """
+        """DOCUMENTED, the ``grant``: Toast answers a bearer token with no refresh
+        (https://doc.toasttab.com/doc/devguide/authentication.html)."""
         return Credentials(app_id=self.client_id, app_secret=self.client_secret, grant="client_credentials")
 
     @property
     def token(self) -> Token:
-        """The seeded full-scope token, under the neutral names. No refresh
-        token -- ``None``, matching ``credentials.grant`` -- and the tenant is
-        the restaurant."""
+        """The seeded full-scope token; no refresh, and the tenant is the restaurant."""
         return Token(access_token=self.access_token, refresh_token=None, tenant_id=self.restaurant_guid)
 
     @property
     def restaurant_header(self) -> dict[str, str]:
-        """Just the scoping header, for pairing with a token you minted."""
         return {self.restaurant_header_name: self.restaurant_guid}
 
     @property
     def auth(self) -> dict[str, str]:
-        """Bearer plus the restaurant header -- what a restaurant-scoped
-        call sends."""
         return {"Authorization": f"Bearer {self.access_token}", **self.restaurant_header}
 
     @property
@@ -350,140 +242,88 @@ class ToastSeed:
 
     @property
     def bearer_only(self) -> dict[str, str]:
-        """The token without the restaurant header, for the endpoints that
-        are not restaurant-scoped (and for asserting the refusal on the
-        ones that are)."""
         return {"Authorization": f"Bearer {self.access_token}"}
 
 
 @dataclass(frozen=True, slots=True)
 class LightspeedSeed:
-    """The Lightspeed scenario: one retailer, two outlets, a register in each,
-    three payment types (one of them internal), six products in four families
-    with stock at both outlets, one customer group and three customers, three
-    sales over that catalogue -- parked, closed with a payment, and a layby --
-    a pre-issued OAuth access and refresh pair, a read-only token, a personal
-    token, and one webhook subscription on ``register_closure.create``.
-
-    Lightspeed scopes a request to its retailer by **subdomain** --
-    ``{domain_prefix}.retail.lightspeed.app`` -- and a unit serves exactly one
-    retailer, so there is no tenant header and no tenant path segment. What a
-    consumer needs instead is :attr:`api_path`, which prefixes a resource path
-    with the version segment every route sits under.
-    """
+    """The Lightspeed scenario: one retailer, two outlets and registers, three
+    payment types, six products, one customer group and three customers, three
+    sales, an OAuth pair, a read-only and a personal token, and one webhook.
+    Scoping is by subdomain, so :attr:`api_path` prefixes the version segment."""
 
     client_id: str
     client_secret: str
     redirect_uri: str
     domain_prefix: str
-    #: Full scopes: reads, both register actions, and webhooks.
+    #: Full scopes; the refresh rotates the pair and revokes the access token it
+    #: came with, the read-only one answers 403 to a write, and the personal token
+    #: has full scopes and no expiry.
     access_token: str
-    #: Rotates the pair above. A refresh retires it and revokes that access
-    #: token, which is the documented behaviour a consumer's session handling
-    #: has to get right.
     refresh_token: str
-    #: Reads only; every write path answers 403 to it.
     read_only_access_token: str
-    #: A personal token -- Plus-plan only, created in the web application, so a
-    #: unit can only ever be seeded with one. Full scopes, and no expiry.
     personal_access_token: str
     retailer_id: str
     retailer_name: str
     outlet_main_id: str
     outlet_second_id: str
-    #: Seeded OPEN, so a close (and the webhook it fires) needs no setup.
+    #: Seeded OPEN and CLOSED respectively, so neither action needs setup.
     register_main_id: str
-    #: Seeded CLOSED, so an open needs none either.
     register_second_id: str
     payment_type_cash_id: str
     payment_type_card_id: str
-    #: ``internal: true``: absent from the payment-types list, because the
-    #: ``payment_types:read`` scope is documented as excluding internal types.
+    #: ``internal: true``, so absent from the payment-types list.
     payment_type_internal_id: str
-    #: A standalone product, and the SKU it answers ``GET /products?sku=`` on.
+    #: Two standalone products holding stock at both outlets, and a third seeded
+    #: INACTIVE so ``include_inactive`` has something to include.
     product_trail_mix_id: str
     product_trail_mix_sku: str
-    #: The second standalone product. Both it and the trail mix hold stock at
-    #: both outlets, which is what lets the seeded sales draw on real levels.
     product_socks_id: str
-    #: Seeded INACTIVE, so ``include_inactive`` on the inventory-levels report
-    #: has something to include.
     product_bottle_id: str
     product_bottle_sku: str
-    #: The family: a parent with ``has_variants`` and no stock of its own, and
-    #: its two variants, which each hold stock at both outlets. ``?name=``
-    #: selects the whole family.
+    #: A parent with ``has_variants`` and its two variants.
     product_tee_id: str
     product_tee_small_id: str
     product_tee_large_id: str
-    #: The retailer's one customer group. There is no route to create another.
+    #: The retailer's one customer group, then three customers: filled in
+    #: completely, a company only, and one whose ``last_name`` is null.
     customer_group_id: str
-    #: Filled in completely: addresses, custom fields, a non-zero balance.
     customer_ada_id: str
-    #: A company and nothing else.
     customer_blake_id: str
-    #: ``last_name`` is null, which is legal: the member is required AND
-    #: nullable on the vendor's own schema.
     customer_noor_id: str
-    #: The two reasons a ``CUSTOM`` stock adjustment may name, one of each
-    #: sign. The tag that would create a third is deferred.
+    #: The two reasons a ``CUSTOM`` stock adjustment may name, one of each sign.
     adjustment_reason_found_id: str
     adjustment_reason_spoiled_id: str
-    # -- sales (slice L2b of konyklabs/roadmap#94) --
-    #: The cashier every seeded sale names as its ``source.author_id``. It is
-    #: the retailer's id: nothing resolves it, because the Users tag is
-    #: outside the issue's scoped surface, and a stock adjustment's
-    #: ``user_id`` is the same id for the same reason.
+    #: The cashier every seeded sale names as ``source.author_id``.
     cashier_user_id: str
-    #: Both outlets' ``default_tax_id``, and the ``tax.id`` on every seeded
-    #: line item. Nothing resolves it either -- the Taxes tag is out of scope.
+    #: Both outlets' ``default_tax_id`` and every line item's ``tax.id``.
     tax_id: str
-    #: The seeded sales name :attr:`product_trail_mix_id` and
-    #: :attr:`product_socks_id` on their line items and
-    #: :attr:`customer_ada_id` as their customer.
-    #: ``state: "parked"`` -- still editable, so a ``PUT`` succeeds against it.
+    #: Parked and still editable; closed and terminal, so a ``PUT`` is a 409; and
+    #: a layby, parked with the ``layby`` attribute and a part payment.
     sale_saved_id: str
-    #: ``state: "closed"`` with a card payment on the open main register. The
-    #: state is terminal, so a ``PUT`` is a 409; the return action is what
-    #: works on it.
     sale_closed_id: str
-    #: A layby: parked, carrying the ``layby`` attribute and a part payment.
-    #: There is no ``LAYBY`` state in the 2026-07 schema.
     sale_layby_id: str
     webhook_subscription_id: str
-    #: The HMAC secret behind the ``X-Signature`` header. Lightspeed signs with
-    #: the application's own ``client_secret``: ``WebhookRequest`` carries no
-    #: per-hook secret.
+    #: The HMAC secret behind ``X-Signature``: the app's own ``client_secret``.
     webhook_secret: str
     #: ``/api/2026-07`` -- the version segment every resource route sits under.
     api_prefix: str
-    #: The seven ``WebhookType`` values. Two of them (the consignment pair) are
-    #: subscribable and never fired here; see the vendor's capabilities.
+    #: The seven ``WebhookType`` values; the consignment pair is never fired.
     event_types: tuple[str, ...]
 
     @property
     def credentials(self) -> Credentials:
-        """The application credential, under the neutral names.
-
-        DOCUMENTED, the ``grant``: Lightspeed issues a refresh token alongside
-        the access token and a consumer rotates it -- "Using a refresh token
-        will revoke the access token that was returned with it ... You must
-        save this new refresh token and use it the next time"
-        (https://x-series-api.lightspeedhq.com/docs/authorization).
-        """
+        """DOCUMENTED, the ``grant``: a refresh revokes the access token it came
+        with (https://x-series-api.lightspeedhq.com/docs/authorization)."""
         return Credentials(app_id=self.client_id, app_secret=self.client_secret, grant="refresh_token")
 
     @property
     def token(self) -> Token:
-        """The seeded full-scope pair, under the neutral names. The tenant is
-        the retailer -- there is no narrower id a token can be scoped to."""
+        """The seeded full-scope pair; the tenant is the retailer."""
         return Token(access_token=self.access_token, refresh_token=self.refresh_token, tenant_id=self.retailer_id)
 
     @property
     def auth(self) -> dict[str, str]:
-        """``Authorization: Bearer`` for the full-scope token. No second
-        header: one flat ``bearerAuth`` scheme is the whole of this vendor's
-        authentication."""
         return {"Authorization": f"Bearer {self.access_token}"}
 
     @property
@@ -492,38 +332,14 @@ class LightspeedSeed:
 
     @property
     def personal_auth(self) -> dict[str, str]:
-        """The personal token, which authenticates identically."""
         return {"Authorization": f"Bearer {self.personal_access_token}"}
 
     def api_path(self, suffix: str = "") -> str:
-        """``/api/2026-07`` plus ``suffix``: every resource route sits under
-        the version segment. The token endpoint does NOT -- it is
-        ``/api/1.0/token`` -- so this helper deliberately does not reach it."""
         return f"{self.api_prefix}{suffix}"
 
 
-# ---------------------------------------------------------------------------
-# Seed overlays: the typed shape of ``unit(seed_overlay=...)``.
-#
-# One ``TypedDict(total=False)`` per vendor, whose keys are exactly that
-# vendor's top-level seed collections. ``total=False`` because an overlay is a
-# PARTIAL document by definition -- naming one collection is the ordinary case
-# -- and the point of the type is the *other* direction: a checker rejects a
-# key that is not a collection at all, which is the mistake an overlay has no
-# other symptom for. A misspelled collection merges cleanly, hydrates nothing
-# and looks like the fake ignoring the scenario; the unit refuses it at start
-# (``core/config/overlay.py``) and these types move the same refusal to the
-# editor.
-#
-# The VALUES are ``object``, not a per-collection model. A seed document's
-# entities are the vendor's own shapes, they differ per collection, and typing
-# them here would mean a second description of every vendor entity that could
-# drift from the document. The key is the half a consumer gets wrong.
-#
-# ``_comment`` is deliberately absent from all four, though the unit accepts
-# it: it is the document's own annotation, not a collection, and offering it as
-# something to override would be a worse answer than not typing it.
-# ---------------------------------------------------------------------------
+# Seed overlays: one ``TypedDict(total=False)`` per vendor, keyed by its seed
+# collections, so a checker rejects a key that is not one. Values are ``object``.
 
 
 class SquareSeedOverlay(TypedDict, total=False):
@@ -582,8 +398,7 @@ class ToastSeedOverlay(TypedDict, total=False):
 
 
 class LightspeedSeedOverlay(TypedDict, total=False):
-    """The collections ``vendorfake/lightspeed/seed/default.seed.json``
-    carries."""
+    """The collections ``vendorfake/lightspeed/seed/default.seed.json`` carries."""
 
     retailer: object
     outlets: object
@@ -603,15 +418,8 @@ class LightspeedSeedOverlay(TypedDict, total=False):
 
 
 SeedOverlay = Mapping[str, Any]
-"""What a vendor passed as a plain ``str`` accepts: any JSON object.
-
-The honest answer for a vendor whose name is not a literal -- a parametrized
-test, or one discovered through the entry-point group -- exactly as
-:class:`Seed` is the honest answer for its ``.seed``. The collections are a
-property of the vendor, and this call site does not know which vendor it has.
-The unit still refuses an unknown collection at start; what is absent is the
-checker's ability to say so first.
-"""
+"""What a plain ``str`` vendor accepts: any JSON object, the collections being a
+property of a vendor this call site does not know."""
 
 
 def _square(vendor_config: Mapping[str, object]) -> SquareSeed:
@@ -763,8 +571,7 @@ def _lightspeed(vendor_config: Mapping[str, object]) -> LightspeedSeed:
         sale_closed_id=c.SEED_SALE_CLOSED_ID,
         sale_layby_id=c.SEED_SALE_LAYBY_ID,
         webhook_subscription_id=c.SEED_WEBHOOK_ID,
-        # Lightspeed signs with the application's own secret; there is no
-        # per-subscription secret member on WebhookRequest.
+        # Lightspeed signs with the application's own secret.
         webhook_secret=config.client_secret,
         api_prefix=API_PREFIX,
         event_types=tuple(LIGHTSPEED_EVENT_TYPES),
@@ -773,128 +580,51 @@ def _lightspeed(vendor_config: Mapping[str, object]) -> LightspeedSeed:
 
 @dataclass(frozen=True, slots=True)
 class _BuiltInSeed:
-    """One shipped vendor's seed, as the two facts this module has about it.
-
-    ONE ENTRY PER VENDOR, both halves together, because they are the same
-    fact stated twice if they are apart: :attr:`build` reads a set of module
-    constants, and :attr:`collections` is which of the seed document's
-    top-level collections those constants are the shipped values *of*. A
-    vendor whose builder starts reading another collection and whose entry is
-    not updated silently reopens the divergence
-    :func:`~vendorfake.testing.seed_collections_for`'s callers exist to
-    refuse, so the table below is the one place either half is written.
-    """
+    """One shipped vendor's seed: :attr:`build` reads module constants, and
+    :attr:`collections` names what they are the values of. Kept together."""
 
     build: Callable[[Mapping[str, object]], Seed]
     collections: frozenset[str]
-    """The seed collections this vendor's seed object speaks for.
-
-    Its *credentials* (the bearer tokens a consumer authenticates with) and
-    its *identity* (the merchant, restaurant or retailer every scoped path is
-    built from) -- the two the seed publishes as concrete strings, from this
-    distribution's constants rather than from the document that was loaded.
-    An overlay naming one of these would change what the unit hydrates
-    without changing what ``.seed`` reports, which is a 401 or a 404 with
-    nothing anywhere to explain it; ``vendorfake.testing`` refuses such an
-    overlay when the unit starts.
-
-    NOT every collection a constant is drawn from. ``.seed`` also carries
-    catalog, order and location ids, and an overlay may still name those:
-    the divergence is then a stale id in one field of a fixture, which the
-    consumer sees as a 404 on the entity they themselves replaced. The
-    credential and the identity are the two whose divergence is *silent* --
-    every request fails, and none of them fails at the thing that was
-    overridden.
-    """
+    """The seed collections this seed object speaks for: its credentials and its
+    identity, the two whose divergence from an overlay would be silent."""
 
 
 _BUILT_IN_SEEDS: Mapping[str, _BuiltInSeed] = {
     "square": _BuiltInSeed(build=_square, collections=frozenset({"tokens", "merchant"})),
     "clover": _BuiltInSeed(build=_clover, collections=frozenset({"tokens", "merchant"})),
     "toast": _BuiltInSeed(build=_toast, collections=frozenset({"tokens", "restaurant"})),
-    # Lightspeed keeps its three credential kinds in three collections --
-    # ``tokens`` (the full-scope and read-only OAuth pair), ``personal_tokens``
-    # and ``refresh_tokens`` -- and its identity in ``retailer``. All four are
-    # what `_lightspeed` above reads its constants for, so all four are bound.
+    # Three credential collections plus ``retailer``: all four are what
+    # `_lightspeed` reads its constants for.
     "lightspeed": _BuiltInSeed(
         build=_lightspeed,
         collections=frozenset({"tokens", "personal_tokens", "refresh_tokens", "retailer"}),
     ),
 }
-"""The four vendors this distribution ships, as data rather than a branch.
-
-This module may name them: it is under ``testing/``, not ``core/`` or
-``conformance/``, and its whole job is to know what the four shipped
-scenarios contain (``tools/boundary.toml`` draws the line in the same place).
-A vendor from the entry-point group is not here -- it publishes its own seed
-through the ``SeedingVendor`` hook and declares its own collections through
-:data:`SEED_COLLECTIONS_ATTR`.
-"""
+"""The four vendors this distribution ships, as data. An entry-point vendor is
+not here: it publishes its own via :data:`SEED_COLLECTIONS_ATTR`."""
 
 SEED_COLLECTIONS_ATTR = "seed_collections"
-"""The optional attribute a :class:`~vendorfake.core.kernel.types.SeedingVendor`
-declares its seed's collections in.
-
-A vendor that publishes a seed through the hook knows, and this module cannot
-know, which of *its* seed document's collections that seed is built from.
-Declaring them -- ``seed_collections = frozenset({"tokens", "tenant"})`` on the
-``VendorDefinition`` -- buys the same start-time refusal the shipped vendors
-get. Left undeclared, an overlay is not refused: silence has to mean "this
-vendor has not said", because making it mean "refuse everything" would break
-every existing hook implementation, and making it mean "refuse the names the
-shipped vendors use" would be this module guessing about a document it has
-never seen.
-
-Read with :func:`getattr` rather than added to the ``SeedingVendor``
-protocol: the protocol is ``runtime_checkable`` and ``seed_for`` discovers it
-with ``isinstance``, so a new required member would make every vendor that
-implements only ``seed`` stop being a ``SeedingVendor`` at all -- it would
-silently lose its seed rather than gain a refusal.
-"""
+"""The optional attribute a ``SeedingVendor`` declares its seed's collections in;
+silence means "this vendor has not said". Read with :func:`getattr`, a new
+protocol member dropping every existing seed."""
 
 
 _SEED_MEMBERS = ("credentials", "token", "auth", "read_only_auth", "event_types")
-"""The five names :class:`Seed` requires, as data, for the hook's shape check.
-
-``token`` joined the list with :class:`Token` (konyklabs/roadmap#101). A
-third-party vendor's seed that predates it is refused here, by name, rather
-than failing later on ``started.seed.token`` -- the same reasoning as the
-other four, and the reason the check is data rather than ``isinstance``.
-
-Written out rather than derived from ``Seed.__protocol_attrs__``: that
-attribute is an implementation detail of ``typing`` with no compatibility
-promise, and the error message wants a stable, readable list anyway.
-"""
+"""The five names :class:`Seed` requires, for the hook's shape check. Written out
+because ``Seed.__protocol_attrs__`` has no compatibility promise."""
 
 
 def _from_hook(definition: VendorDefinition, vendor: str, vendor_config: Mapping[str, object]) -> Seed | None:
-    """The vendor's own seed, if it publishes one, checked before it escapes.
-
-    ``SeedingVendor`` is declared in the core, which may not import this
-    module, so its ``seed`` hook is annotated as returning ``object`` -- the
-    narrowing to :class:`Seed` happens here, at the one point where the two
-    layers meet. A hook that returns the wrong shape is named as a hook
-    defect, on the vendor, at the moment the unit is built. Letting it
-    through would surface later as an ``AttributeError`` on
-    ``started.seed.credentials``, which reads like a bug in vendorfake.
-    """
+    """The vendor's own seed, if it publishes one, checked before it escapes: the
+    hook returns ``object``, so a wrong shape is named here as a hook defect."""
     from vendorfake.core.kernel.types import SeedingVendor
 
     if not isinstance(definition, SeedingVendor):
         return None
     hook = definition.seed
     if not callable(hook):
-        # `runtime_checkable` on a method-only Protocol checks attribute
-        # presence, not callability, so this is reachable: `seed` is a
-        # generic name and this package's own convention for seed *data*
-        # besides (every vendor ships a `seed/` subpackage; a profile
-        # document carries a `"seed"` key), so a `VendorDefinition` with a
-        # non-callable `seed` field is a realistic collision, not a
-        # theoretical one. Named here, at the vendor, as a hook defect --
-        # the same way a hook returning the wrong shape is below -- rather
-        # than left to surface as a bare `TypeError: '...' object is not
-        # callable` three frames inside this module, which reads like a
-        # vendorfake bug and names nothing a vendor author can act on.
+        # `runtime_checkable` checks attribute presence, not callability, and
+        # `seed` is also this package's name for seed data -- a real collision.
         raise TypeError(
             f"vendor {vendor!r} has a SeedingVendor.seed attribute that is not callable "
             f"(a {type(hook).__name__!r}). SeedingVendor.seed must be a method: "
@@ -917,23 +647,8 @@ def seed_for(
     *,
     definition: VendorDefinition | None = None,
 ) -> Seed | None:
-    """The seed object for ``vendor``, or ``None`` when it publishes none.
-
-    Resolution order, and why it is this way round. A vendor that implements
-    the :class:`~vendorfake.core.kernel.types.SeedingVendor` hook is asked
-    first, because that is the vendor's own statement about itself;
-    :data:`_BUILT_IN_SEEDS` above is only *this module's* knowledge of the
-    four vendors shipped here. None of the four implements the hook, so the
-    ordering changes nothing for them -- a test pins that -- and it means a
-    third-party vendor is never shadowed by a name collision with a built-in.
-
-    ``definition`` is optional so the signature stays what v0.1.0 callers
-    passed. Given one, the lookup is free; without one the vendor is resolved
-    by name, and a name that resolves to nothing yields ``None`` exactly as it
-    did before the hook existed -- this function has never been the place a
-    typo is reported, and making it start would move that message away from
-    ``resolve_vendor``, which names the alternatives.
-    """
+    """The seed object for ``vendor``, or ``None`` when it publishes none. The
+    ``SeedingVendor`` hook is asked first, so it is never shadowed by a built-in."""
     if definition is None:
         definition = _resolve_quietly(vendor)
     if definition is not None:
@@ -949,22 +664,8 @@ def seed_collections_for(
     *,
     definition: VendorDefinition | None = None,
 ) -> frozenset[str]:
-    """Which seed collections ``vendor``'s seed object is built from.
-
-    The companion of :func:`seed_for`, resolved by the same rule and in the
-    same order -- the vendor's own hook first, the shipped table second -- so
-    that the two can never answer about different seeds. Empty when the
-    vendor publishes no seed, and empty for a hook that declares nothing;
-    see :data:`SEED_COLLECTIONS_ATTR` for why silence is not a refusal.
-
-    FOR: ``vendorfake.testing``'s start-time refusal of a seed overlay that
-    would make ``started.seed`` describe a unit other than the one it is
-    handed back with. It is separate from :func:`seed_for` rather than a
-    field on the seed object because the answer is needed *before* the
-    question "is this unit worth building" is settled, and because a seed is
-    a consumer's fixture -- a set of collection names on it would be one more
-    thing on a public object that nothing a consumer writes ever reads.
-    """
+    """Which seed collections ``vendor``'s seed object is built from, resolved as
+    :func:`seed_for` is. Empty when no seed is published or none is declared."""
     if definition is None:
         definition = _resolve_quietly(vendor)
     if definition is not None:
@@ -973,11 +674,7 @@ def seed_collections_for(
         if isinstance(definition, SeedingVendor):
             declared = getattr(definition, SEED_COLLECTIONS_ATTR, None)
             if declared is None or isinstance(declared, str) or not isinstance(declared, Iterable):
-                # A `str` is iterable and would decompose into characters, so
-                # it is rejected with the undeclared case rather than turned
-                # into a set of letters that matches nothing and refuses
-                # nothing -- silently, which is the failure mode this whole
-                # function exists to remove.
+                # A `str` is iterable, so it is rejected with the undeclared case.
                 return frozenset()
             return frozenset(str(name) for name in declared)
     built_in = _BUILT_IN_SEEDS.get(vendor)
@@ -985,18 +682,8 @@ def seed_collections_for(
 
 
 def _resolve_quietly(vendor: str) -> VendorDefinition | None:
-    """``vendor``'s definition, or ``None`` if there is no such vendor.
-
-    The import is deferred: this module is imported by ``vendorfake.testing``,
-    which a consumer's ``conftest`` imports, and the registry pulls in the
-    control plane and the kernel behind it. Nothing here needs the registry
-    until a caller actually asks for a seed without one in hand.
-
-    ``resolve_vendor`` raises for an unknown name and that refusal is the
-    right one *at the edge* -- but ``seed_for('nope', {})`` answered ``None``
-    in v0.1.0 and callers rely on it, so the exception is swallowed rather
-    than re-raised here.
-    """
+    """``vendor``'s definition, or ``None`` if there is no such vendor. The import
+    is deferred because the registry pulls the kernel in behind it."""
     from vendorfake.registry import resolve_vendor
 
     try:

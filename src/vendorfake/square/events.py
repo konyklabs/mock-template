@@ -1,62 +1,21 @@
 """Committed state mutation -> Square notification.
 
-FOR: deriving every webhook this unit sends from the journal, so that an event
-exists exactly when a mutation committed.
+INVARIANT: no handler emits; only the store's journal decides whether an event exists (D-001).
 
-INVARIANT: **no handler emits.** Note what is absent from
-:mod:`vendorfake.square.surface.orders`: there is no ``emit`` call anywhere in
-it. An event cannot exist for a create that was rejected, and a mutation cannot
-silently skip its event, because neither the handler nor this mapper decides --
-the store's journal does. That is the structural claim D-001 makes about
-webhooks, and it is worth restating here because a rebuild that added a
-convenience ``ctx.webhooks.emit(...)`` to a handler would dissolve it while
-every test still passed.
+``insert``/``update`` on orders become ``order.created``/``order.updated`` (a summary); the same pair on
+payments becomes ``payment.created``/``payment.updated`` and carries the whole payment; other mutations
+and deletes map to nothing. https://developer.squareup.com/reference/square/webhooks/payment.created
+https://developer.squareup.com/reference/square/webhooks/payment.updated
 
-The dispatcher supplies the rest of the contract: it filters out entries marked
-as seed writes (loading a scenario with two orders in it must not push two
-``order.created`` notifications), it mints the event id, and it will not
-deliver at all without a signer.
+``catalog.version.updated`` fires per written catalog object. JUDGMENT: ``data.id`` carries the written
+object's real id, where Square's example shows a placeholder.
+https://developer.squareup.com/reference/square/webhooks/catalog.version.updated
 
-WHAT IS MAPPED, AND WHAT IS NOT
--------------------------------
-``insert`` on the orders collection becomes ``order.created``; ``update``
-becomes ``order.updated``. The same pair on the payments collection becomes
-``payment.created`` / ``payment.updated``, and those two carry the **whole
-payment** under ``data.object.payment`` -- Square's documented shape for them
-(https://developer.squareup.com/reference/square/webhooks/payment.created,
-https://developer.squareup.com/reference/square/webhooks/payment.updated),
-and the opposite of the order events' summary. Everything else -- a delete, a
-mutation of any other collection -- maps to nothing. Square publishes
-``order.fulfillment.updated`` and ``order.updated`` variants this unit does not
-model, and it publishes no order-deleted event at all, because Square orders
-are not deleted.
+``inventory.count.updated`` carries the changed count. JUDGMENT, NOT VERIFIED: ``data.id`` is this
+unit's ``<variation id>:<location id>`` key.
+https://developer.squareup.com/reference/square/webhooks/inventory.count.updated
 
-Two more, each carrying what its page documents and nothing more:
-
-``catalog.version.updated``
-    Every committed write to the catalog collection, with
-    ``data.object.catalog_version.updated_at`` -- the one field Square's page
-    shows (https://developer.squareup.com/reference/square/webhooks/catalog.version.updated).
-    JUDGMENT, twice: one event per written object rather than one per
-    request, because the journal is per object and an upsert of an item and
-    two variations is three commits; and ``data.id`` carries the written
-    object's id, where Square's example shows a placeholder.
-``inventory.count.updated``
-    Every committed change to a stock count, with the count under
-    ``data.object.inventory_counts`` -- an array, as the page shows
-    (https://developer.squareup.com/reference/square/webhooks/inventory.count.updated),
-    holding the one count that changed. JUDGMENT, NOT VERIFIED -- ``data.id``
-    is this unit's count key, ``<variation id>:<location id>``, a shape Square
-    never emits: its example carries an opaque id and the page says nothing
-    about what it identifies, and a count has no id of its own in Square's
-    object model. A consumer must key on the payload's ``catalog_object_id``
-    and ``location_id``, never on ``data.id``.
-
-SHRINK (prototype): the OAuth, location and loyalty collections emit nothing.
-Square publishes ``oauth.authorization.revoked`` and the ``loyalty.*`` events;
-adding one is a row in this mapper and a row in :data:`SQUARE_EVENT_TYPES`,
-which is the shape this file is in so that the next event type is not a
-redesign.
+SHRINK (prototype): OAuth, location and loyalty collections emit nothing.
 """
 
 from __future__ import annotations
@@ -103,23 +62,14 @@ SQUARE_EVENT_TYPES: tuple[str, ...] = (
     CATALOG_VERSION_UPDATED,
     INVENTORY_COUNT_UPDATED,
 )
-"""Every event type this unit can emit, in the order
-``GET /v2/webhooks/event-types`` lists them.
+"""Every event type this unit can emit, in ``GET /v2/webhooks/event-types`` order. Published rather
+than derived from the mapper's branches, so the listing and the mapper cannot disagree."""
 
-Published rather than derived from the mapper's branches so that the listing
-endpoint and the mapper cannot disagree: a type here with no branch would be
-advertised and never sent, which a test asserts against.
-"""
-
-#: ``data.type`` for each event type. Square names the key inside
-#: ``data.object`` after this value, so the two are one fact and are written
-#: down once: ``order.created`` -> ``order_created`` -> ``object.order_created``.
+#: `data.type` for each event type; Square names the key inside `data.object` after this value.
 _DATA_TYPES: dict[str, str] = {
     ORDER_CREATED: "order_created",
     ORDER_UPDATED: "order_updated",
-    # Both payment events name their object `payment`, not `payment_created`:
-    # the documented pages show ``"type": "payment"`` and the object under
-    # ``data.object.payment`` is the full Payment.
+    # Both payment events name their object `payment`, not `payment_created`.
     PAYMENT_CREATED: "payment",
     PAYMENT_UPDATED: "payment",
     CATALOG_VERSION_UPDATED: "catalog",
@@ -128,19 +78,9 @@ _DATA_TYPES: dict[str, str] = {
 
 
 class SquareEventMapper:
-    """Satisfies ``EventMapper``. The entry and the store are the input.
-
-    Reads the *current* entity rather than reconstructing it from the journal
-    entry, which is the reference's behaviour and the right one for a summary
-    payload: the notification says what the order is now, and a consumer that
-    re-reads it must not find a version older than the one it was told about.
-
-    Holds the vendor, as every surface does, for the one configured value a
-    payload carries: ``application_details.application_id`` on a payment
-    event. Read live so a profile's value is the one published. ``None`` --
-    which a test building the mapper by hand may pass -- reads the default
-    configuration instead.
-    """
+    """Satisfies ``EventMapper``. Reads the *current* entity rather than reconstructing it from the journal
+    entry, so a notification always reflects the latest state; holds the vendor to read
+    ``application_details.application_id`` live for a payment event."""
 
     __slots__ = ("_deps",)
 
@@ -158,9 +98,7 @@ class SquareEventMapper:
             return ()
         stored = ctx.store.collection(COL.orders).get(entry.id)
         if stored is None:
-            # A delete, or an entity that vanished between the commit and the
-            # listener. Nothing to summarise, and inventing a payload from the
-            # journal entry alone would publish a partial order.
+            # A delete, or an entity that vanished before the listener ran.
             return ()
         order = OrderEntity.from_entity(stored)
         if entry.op == "insert":
@@ -244,25 +182,14 @@ class SquareEventMapper:
 
 
 def _merchant_id(ctx: UnitContext) -> str:
-    """The seller, for an envelope whose entity carries no ``merchant_id``.
-
-    A catalog object and a stock count belong to the seller rather than to a
-    location, so the merchant is read from the one merchant the scenario
-    seeds. Empty if a scenario seeds none, which no shipped one does.
-    """
+    """The seller, for an envelope whose entity carries no ``merchant_id``; empty if none seeded."""
     merchants = ctx.store.collection(COL.merchants).all()
     return "" if not merchants else str(merchants[0]["id"])
 
 
 def _order_event(order: OrderEntity, event_type: str) -> MappedEvent:
-    """One named-but-not-yet-built event.
-
-    Two phases because the id belongs to the dispatcher -- it must be stable
-    across retries so a consumer can deduplicate on it -- while its position
-    inside the envelope belongs here. The closure captures the order as it was
-    when the journal entry committed, so a later mutation cannot rewrite an
-    event already queued.
-    """
+    """One named-but-not-yet-built event; the closure captures the order as committed, so a later
+    mutation cannot rewrite an event already queued."""
     data_type = _DATA_TYPES[event_type]
     summary = (
         OrderCreatedSummary(

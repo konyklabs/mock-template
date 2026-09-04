@@ -1,63 +1,21 @@
 """The two Toast lifecycles, as data the core's state machine enforces.
 
-FOR: stating which values a check's ``paymentStatus`` and an order's
-``guestOrderStatus`` may hold and which moves between them are legal, once, as
-tables -- so that the rule is enforced by the core, published at
-``GET /__unit/machines``, and probeable at ``POST /__unit/machines/probe``
-without any consumer importing this module.
+States which values a check's ``paymentStatus`` and an order's
+``guestOrderStatus`` may hold and which moves are legal, published at
+``GET /__unit/machines``. INVARIANT: terminal means no outgoing edges.
 
-INVARIANT: **terminal means no outgoing edges, and nothing else.** The core
-derives terminality from an empty ``to`` tuple.
+DOCUMENTED (https://doc.toasttab.com/toast-api-specifications/toast-orders-api.yaml,
+https://doc.toasttab.com/doc/devguide/apiVoidOrder.html): Check
+``paymentStatus`` is ``OPEN | PAID | CLOSED``, plus ``VOIDED`` from the void
+walkthrough, a fourth value the schema's enum omits. Each transition's
+rationale is on its ``StateDef.summary`` below (konyklabs/roadmap#56).
 
-Check ``paymentStatus`` -- PARTIAL
-----------------------------------
-DOCUMENTED values: ``OPEN | PAID | CLOSED`` on the Check schema
-(https://doc.toasttab.com/toast-api-specifications/toast-orders-api.yaml), and
-``"paymentStatus": "VOIDED"`` in the void walkthrough's result
-(https://doc.toasttab.com/doc/devguide/apiVoidOrder.html) -- a fourth value the
-schema's enum does not list, which is why the machine carries it.
-
-The transitions, each labelled:
-
-* ``OPEN -> CLOSED`` when the payments on the check cover its ``totalAmount``
-  and none of them awaits a tip -- DOCUMENTED: the schema's note for
-  ``CLOSED`` describes a check whose balance is fully paid off, and the
-  payment walkthrough answers ``CLOSED`` for an OTHER payment covering the
-  total
-  (https://doc.toasttab.com/doc/devguide/apiCreatingAnOrderWithPaymentInformation.html).
-  The fidelity corpus found this (konyklabs/roadmap#56); the unit said
-  ``PAID`` before.
-* ``OPEN -> PAID`` when a CREDIT payment covers the check and its tip has not
-  been adjusted -- DOCUMENTED value description: the note for ``PAID``
-  describes a card charge that cleared while the gratuity is still
-  unadjusted.
-* ``PAID -> CLOSED`` when that tip is adjusted (``PATCH .../payments/{guid}``
-  with ``tipAmount``) -- the value descriptions imply it; JUDGMENT that the
-  tip PATCH is the adjusting act.
-* ``OPEN -> VOIDED``, ``PAID -> VOIDED`` and ``CLOSED -> VOIDED`` through
-  ``POST /orders/{guid}/void``, documented as voiding "the order and its
-  payments" -- the void walkthrough voids a check an OTHER payment had closed.
-  "Once an order has been voided, it can not be updated", so ``VOIDED`` is
-  terminal.
-
-Order ``guestOrderStatus`` -- PARTIAL
--------------------------------------
-DOCUMENTED: the ``guest_order_status`` webhook page lists the transitions
-``RECEIVED -> IN_PREPARATION | READY_FOR_PICKUP | CLOSED | VOIDED``
-(https://doc.toasttab.com/doc/devguide/devOrdersWebhookRef.html, the
-guestOrderStatusUpdated section). The field is absent from the Order schema and
-present in the void example (``"guestOrderStatus": "VOIDED"``).
-
-JUDGMENT: the edges *from* ``IN_PREPARATION`` and ``READY_FOR_PICKUP`` are this
-project's reading of a kitchen flow -- forward only, never back to
-``RECEIVED`` -- and ``CLOSED``/``VOIDED`` are terminal. An API order starts
-``RECEIVED``; only the void route moves it (to ``VOIDED``); every other edge is
-the control plane's.
-
-``approvalStatus`` is deliberately not a machine: an order created through the
-API is ``APPROVED`` and stays so (JUDGMENT -- the documented values
-``NEEDS_APPROVAL | APPROVED | FUTURE | NOT_APPROVED`` belong to POS approval
-flows this package does not model).
+DOCUMENTED (https://doc.toasttab.com/doc/devguide/devOrdersWebhookRef.html,
+guestOrderStatusUpdated): order
+``guestOrderStatus`` starts ``RECEIVED`` with documented edges to every other
+state. JUDGMENT: edges onward from ``IN_PREPARATION``/``READY_FOR_PICKUP``
+are forward only; ``approvalStatus`` is deliberately not a machine, since an
+API-created order is ``APPROVED`` and stays so.
 """
 
 from __future__ import annotations
@@ -97,7 +55,6 @@ class GuestOrderStatus(StrEnum):
 
 CHECK_MACHINE_NAME = "check"
 GUEST_ORDER_MACHINE_NAME = "order"
-"""The keys the two machines are registered under in ``VendorDefinition.machines``."""
 
 CHECK_MACHINE = MachineDef(
     field="paymentStatus",

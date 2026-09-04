@@ -1,36 +1,19 @@
 """The arithmetic behind ``/prices`` and every order write. Pure, and in cents.
 
-DOCUMENTED (https://doc.toasttab.com/doc/devguide/apiOrderPrices.html): a
-selection of one 8.99 item at a 0.0625 PERCENT tax rate carries
-``preDiscountPrice`` 8.99, ``price`` 8.99, ``tax`` 0.56 and one
-``appliedTaxes`` entry with ``rate`` 0.0625 and ``taxAmount`` 0.56; the check
-carries ``amount`` 8.99, ``taxAmount`` 0.56, ``totalAmount`` 9.55. Tax rates
-come from ``/config/v2/taxRates`` with a ``roundingType`` of ``HALF_UP``,
-``HALF_EVEN``, ``ALWAYS_UP`` or ``ALWAYS_DOWN`` (toast-config-api.yaml), and
-an item names its rates in ``taxInfo`` (toast-menus-api-v3.yaml).
-:func:`tax_on` reproduces the example: 899 x 0.0625 = 56.1875 -> 56 half-up.
+DOCUMENTED (https://doc.toasttab.com/doc/devguide/apiOrderPrices.html): the
+guide's worked example (899 x 0.0625 tax) fixes a selection's
+``preDiscountPrice``/``price``/``tax``/``appliedTaxes`` and a check's
+``amount``/``taxAmount``/``totalAmount``; :func:`tax_on` reproduces it exactly,
+half-up to the cent. Tax rates come from ``/config/v2/taxRates`` with a
+documented ``roundingType`` (toast-config-api.yaml).
 
-JUDGMENT, each labelled here because Toast documents the fields and not the
-rules:
-
-* **quantity** multiplies the unit price and the result rounds half-up to the
-  cent (``quantity`` is a double; a fractional one is weight or volume);
-* **a modifier is a selection of its own** with its own ``price``, ``tax`` and
-  ``appliedTaxes``, and inherits its parent's tax rates (the V3
-  ``modifierOptionTaxInfo`` is not modelled); its price is the option's price
-  times its own quantity times the parent's;
-* **a pre-modifier** on a modifier scales the option price by
-  ``multiplicationFactor`` (``NO`` is 0, ``EXTRA`` is 2 in the seed), or
-  replaces it with ``fixedPrice`` when that is set;
-* **check amount** is the sum of every selection's and modifier's ``price``
-  (post item-level discount) minus check-level discounts; **taxAmount** is the
-  sum of every selection's ``tax``, computed on the discounted selection price
-  and unaffected by check-level discounts; **totalAmount** is the sum;
-* a **PERCENT** discount takes ``percentage`` percent of the target, a
-  **FIXED** one takes ``amount``; both are capped at the target so a price
-  never goes negative;
-* rates typed anything but ``PERCENT`` contribute no tax (``FIXED``, ``TABLE``
-  and ``EXTERNAL`` rates have no documented arithmetic here).
+JUDGMENT (Toast documents the fields, not the rules): quantity multiplies unit
+price, rounding half-up; a modifier is its own selection inheriting the
+parent's tax rates, priced by option price times its own quantity times the
+parent's; a pre-modifier scales by ``multiplicationFactor`` or replaces the
+price with ``fixedPrice``; check totals sum the selections' post-discount
+prices and taxes; PERCENT/FIXED discounts are capped at the target; a
+non-PERCENT rate contributes no tax.
 """
 
 from __future__ import annotations
@@ -78,15 +61,9 @@ class TaxRate:
 
 
 def _round(value: Decimal, rounding: str, *, field: str | None = None) -> int:
-    """``value`` to whole cents, or the documented 400 when it cannot be.
-
-    ``quantize`` raises ``InvalidOperation`` for any amount needing more than
-    the context's 28 significant digits -- ten billion times the world economy
-    in cents -- and for the infinities a float product overflows into. Every
-    such value entered as caller input somewhere upstream, so the answer is
-    the 400 the route documents, naming the field when the caller gave one,
-    never a 500 carrying the exception's own text (konyklabs/roadmap#41).
-    """
+    """``value`` to whole cents, or the documented 400 when it overflows
+    Decimal's context -- naming ``field`` when given, never a 500
+    (konyklabs/roadmap#41)."""
     try:
         return int(value.quantize(Decimal(1), rounding=_ROUNDING.get(rounding, ROUND_HALF_UP)))
     except InvalidOperation:
@@ -114,20 +91,17 @@ def tax_on(cents: int, rate: TaxRate) -> int:
 
 
 APPLIED_TAX_NAMESPACE = uuid.UUID("7c0b6d1e-3a5f-4d2b-9e8c-2f1a0b9c8d7e")
-"""JUDGMENT -- an ``AppliedTaxRate`` is a ToastReference, so the specification
-requires its own ``guid``. Toast assigns one; this unit derives one from the
-selection and the rate (uuid5), so it is stable across runs and never draws
-on the id stream. Found by the fidelity validator (konyklabs/roadmap#56)."""
+"""JUDGMENT: an ``AppliedTaxRate`` needs its own ``guid``; this unit derives
+one via uuid5 from the selection and rate, stable and off the id stream
+(konyklabs/roadmap#56)."""
 
 
 def taxes_on(cents: int, rates: Sequence[TaxRate], *, owner: str = "") -> list[dict[str, Any]]:
-    """The ``appliedTaxes`` entries (cents) for ``cents`` under ``rates``, in
-    the documented shape: ``{guid, entityType, taxRate{guid, entityType}, name,
-    rate, taxAmount, type}``. ``owner`` is the selection the tax applies to."""
+    """The documented ``appliedTaxes`` entries for ``cents`` under ``rates``;
+    ``owner`` is the selection the tax applies to."""
     return [
         {
-            # Unsaved (``/prices``): no owner, no guid -- the documented priced
-            # order carries null for every guid, this one included.
+            # Unsaved (``/prices``): no owner means no guid, per the documented priced order.
             "guid": str(uuid.uuid5(APPLIED_TAX_NAMESPACE, f"{owner}:{rate.guid}")) if owner else None,
             "entityType": "AppliedTaxRate",
             "taxRate": {"guid": rate.guid, "entityType": "TaxRate"},

@@ -1,15 +1,8 @@
 """A webhook endpoint on a real socket, recording exactly what arrived.
-
-FOR: the half of a webhook test the fake cannot provide. A consumer's handler
-verifies a signature over the bytes it received, so the fixture that stands in
-for it must keep the bytes -- ``received`` holds ``(headers, raw_body)`` pairs
-and never a parsed object, because a re-serialisation would verify a different
-payload from the one delivered.
-
-The response status is a function of the arrival index, so "reject the first
-delivery, accept the retry" is one assignment, and the retry then really
-crosses the wire.
-"""
+``received`` holds ``(headers, raw_body)`` pairs and never a parsed object, a
+signature being verified over the bytes delivered. The response status is a
+function of the arrival index, so "reject the first, accept the retry" is one
+assignment and the retry really crosses the wire."""
 
 from __future__ import annotations
 
@@ -36,19 +29,10 @@ class Delivery:
 
 @dataclass
 class WebhookReceiver:
-    """Started by :func:`webhook_receiver`; ``url`` is what to subscribe.
-
-    Only ``path`` is served; any other path answers 404 and records nothing.
-
-    ``host`` is the loopback bind, so with an in-process or subprocess unit
-    ``receiver.url`` is the whole story. A unit in a **container** cannot
-    reach the host's loopback: bind ``host="0.0.0.0"`` and subscribe the
-    address the container sees on ``port`` -- Docker Desktop and colima
-    publish the host as ``http://host.docker.internal:{port}{path}``, and
-    testcontainers as ``host.testcontainers.internal`` after
-    ``exposeHostPorts``. ``url`` refuses to guess a routable address for a
-    wildcard bind.
-    """
+    """Started by :func:`webhook_receiver`; ``url`` is what to subscribe, and any
+    other path answers 404 and records nothing. A unit in a container cannot reach
+    the host's loopback: bind ``host="0.0.0.0"`` and subscribe the address the
+    container sees on ``port``, ``url`` refusing to guess one for a wildcard."""
 
     path: str = "/webhooks"
     host: str = "127.0.0.1"
@@ -66,9 +50,7 @@ class WebhookReceiver:
 
     @property
     def url(self) -> str:
-        """The receiver as this machine reaches it. For a wildcard bind the
-        routable name depends on who is asking (see the class docstring), so
-        build that URL from :attr:`port` yourself."""
+        """The receiver as this machine reaches it; a wildcard bind needs its own."""
         host = "127.0.0.1" if self.host == "0.0.0.0" else self.host  # nosec B104  # a comparison, not a bind
         return f"http://{host}:{self.port}{self.path}"
 
@@ -82,10 +64,7 @@ class WebhookReceiver:
                 length = int(self.headers.get("content-length", "0"))
                 body = self.rfile.read(length)
                 if self.path != receiver.path:
-                    # A delivery to the wrong path is recorded nowhere and
-                    # answered 404, as a real receiver would: a consumer who
-                    # mounted their handler on one path and subscribed another
-                    # must see it fail, not a green test.
+                    # Recorded nowhere and answered 404, as a real receiver would.
                     self.send_response(404)
                     self.send_header("content-length", "0")
                     self.end_headers()
@@ -113,15 +92,9 @@ class WebhookReceiver:
             self._thread.join(timeout=5)
 
     def wait_for(self, count: int, *, timeout_s: float = 10.0) -> list[Delivery]:
-        """Block until at least ``count`` deliveries arrived, or fail loudly.
-
-        Deliveries are made from the unit's worker thread, so a test that
-        asserts on ``received`` right after the request that caused them is
-        racing that thread. ``drain()`` on the unit's driver is the other way
-        to wait; this one is for the unit you cannot drain in-line -- one
-        behind :func:`~vendorfake.testing.served`, or in a container (bound
-        as the class docstring describes).
-        """
+        """Block until at least ``count`` deliveries arrived, else raise. Deliveries
+        come from the unit's worker thread; ``drain()`` on a driver is the other
+        way to wait, and this one is for a unit you cannot drain in-line."""
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             with self._lock:
@@ -137,11 +110,9 @@ class WebhookReceiver:
 
 @contextmanager
 def webhook_receiver(path: str = "/webhooks", *, host: str = "127.0.0.1") -> Iterator[WebhookReceiver]:
-    """A receiver on a free port, stopped however the block ends.
-
-    Loopback by default; ``host="0.0.0.0"`` only when a container must reach
-    it (see :class:`WebhookReceiver` for the address to subscribe then).
-    """
+    """A receiver on a free port, stopped however the block ends. Loopback by
+    default; ``host="0.0.0.0"`` only when a container must reach it, and see
+    :class:`WebhookReceiver` for the address to subscribe then."""
     receiver = WebhookReceiver(path=path, host=host)
     receiver.start()
     try:

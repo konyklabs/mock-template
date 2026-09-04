@@ -1,40 +1,19 @@
 """``vendorfake`` -- the command line, and the one place that reads ``os.environ``.
 
-FOR: turning a shell invocation into a running unit, a description of one, or a
-report about one, without any other module in the distribution needing to know
-that a process environment exists.
+Invariant: this is the only module that resolves a unit's config from
+``os.environ``. ``create_unit``'s ``env`` defaults to an empty mapping, so a
+variable set by one test cannot change the profile a unit built by another
+resolves to. ``vendorfake.testing.served()`` is the one documented exception,
+spawning this module's ``serve`` subcommand as a child that inherits the real
+environment by construction.
 
-INVARIANT: **this is the only module that resolves a unit's config from
-``os.environ``.** ``create_unit``'s ``env`` parameter defaults to an empty
-mapping, deliberately, so that a variable set by one test cannot change the
-profile a unit built by another test resolves to -- a whole class of
-order-dependent flake that simply cannot occur when the environment is passed
-in rather than read. The privilege of reading the real environment to resolve
-a unit belongs to the process boundary, and this is it.
+Invariant: ``vendorfake --help`` imports no web framework. Every first-party
+import happens inside a subcommand body, and ``serve`` is the only one that
+reaches :mod:`vendorfake.asgi` -- the single named exception in
+``tools/boundary.toml``. Module level here is standard library only.
 
-``vendorfake.testing.served()`` reads ``os.environ`` too, and is the one
-documented exception: it spawns this module's own ``serve`` subcommand as a
-child, which inherits the real environment by construction (that is what
-running a subprocess means, not a choice this project made), so it reads
-``os.environ``'s ``VENDORFAKE_VENDOR_*`` entries in the parent as well, to
-keep the seed it hands back in step with what that child resolves. See its
-docstring in ``vendorfake/testing/__init__.py``. Nothing about that exception
-lets a unit built *in this process* -- by ``create_unit``, or by ``unit()``,
-which calls it -- see a variable its caller did not pass explicitly.
-
-SECOND INVARIANT: **``vendorfake --help`` imports no web framework.** Every
-first-party import below happens inside a subcommand body, and the ``serve``
-subcommand is the only one that reaches :mod:`vendorfake.asgi`. That import is
-the single named exception in ``tools/boundary.toml``, and it is named there
-rather than waived because the point of the exception is that a reviewer sees
-it. Module level here is standard library only.
-
-Precedence, applied the same way by every subcommand: an explicit flag beats a
-``VENDORFAKE_*`` environment variable, which beats what the profile document
-says, which beats the built-in default. Flags win because a flag is the most
-specific thing a caller can say, and the environment wins over the profile
-because that is the layer an operator has when the profile is baked into an
-image.
+Precedence, in every subcommand: an explicit flag beats a ``VENDORFAKE_*``
+variable, which beats the profile document, which beats the built-in default.
 """
 
 from __future__ import annotations
@@ -53,19 +32,13 @@ __all__ = ["main"]
 PROG = "vendorfake"
 
 
-# ---------------------------------------------------------------------------
-# Shared argument wiring.
-# ---------------------------------------------------------------------------
+# -- shared argument wiring --
 
 
 def _add_unit_flags(parser: argparse.ArgumentParser) -> None:
-    """The two flags every subcommand needs to name a unit.
-
-    Both default to ``None`` rather than to a value, so that "not given" stays
-    distinguishable from "given the default" all the way down to the profile
-    loader, which is the only thing that knows what the environment and the
-    profile document have to say about it.
-    """
+    """The two flags every subcommand needs to name a unit. Both default to
+    ``None``, so "not given" stays distinguishable from "given the default" all
+    the way down to the profile loader."""
     parser.add_argument(
         "--vendor",
         default=None,
@@ -82,31 +55,15 @@ def _add_unit_flags(parser: argparse.ArgumentParser) -> None:
 
 
 def _json_flag_parent() -> argparse.ArgumentParser:
-    """A parent parser carrying only ``--json``, added to both the top-level
-    parser and every subcommand that describes something and returns rather
-    than serving or forwarding to another CLI -- so the flag reads naturally
-    on either side of the subcommand name: ``vendorfake --json profiles`` and
+    """A parent parser carrying only ``--json``, added to the top-level parser and
+    to every describing subcommand, so ``vendorfake --json profiles`` and
     ``vendorfake profiles --json`` are the same request.
 
-    The default is ``argparse.SUPPRESS`` rather than ``False``, at *both*
-    parsers, and every reader takes ``getattr(args, "json", False)`` rather
-    than ``args.json``. Subparser dispatch (``_SubParsersAction.__call__``)
-    parses the remainder into a fresh namespace and then copies every
-    attribute that namespace holds onto the top-level one -- defaults
-    included. A subcommand copy defaulting to plain ``False`` would silently
-    stomp a ``--json`` given *before* the subcommand name back to ``False``
-    whenever the subcommand's own flag was not repeated; ``SUPPRESS`` means
-    "not given" sets nothing, so whichever side actually named the flag is
-    the one that decides it, and naming it at neither leaves the attribute
-    absent rather than falsely ``False`` on a parser that never declared it
-    (``serve``, ``conformance``) -- which is what ``getattr(..., False)``
-    is for.
-
-    ``serve`` and ``conformance`` do not carry it: a running server has no
-    single document to print, and ``conformance`` forwards its arguments
-    verbatim to a runner with its own reporting format (``--strict`` and a
-    text or JSON report of its own) -- a second ``--json`` at this level
-    would be a second, disagreeing answer to what that flag means.
+    The default is ``argparse.SUPPRESS`` at both parsers, and every reader uses
+    ``getattr(args, "json", False)``: subparser dispatch copies a subcommand's
+    defaults onto the top-level namespace, so a plain ``False`` would stomp a
+    ``--json`` given before the subcommand name. ``serve`` and ``conformance``
+    do not carry the flag, having no single document to print.
     """
     parent = argparse.ArgumentParser(add_help=False)
     parent.add_argument(
@@ -119,8 +76,7 @@ def _json_flag_parent() -> argparse.ArgumentParser:
 
 
 def _wants_json(args: argparse.Namespace) -> bool:
-    """``args.json``, true only where a parser actually declared the flag and
-    it (or the top-level flag) was given. See :func:`_json_flag_parent`."""
+    """``args.json``, true only where a parser declared the flag and it was given."""
     return bool(getattr(args, "json", False))
 
 
@@ -272,11 +228,8 @@ def _env_str(env: Mapping[str, str], name: str) -> str | None:
 
 
 def _env_int(env: Mapping[str, str], name: str) -> int | None:
-    """An integer environment variable, or a refusal that says which one.
-
-    Silently falling back to the default on ``VENDORFAKE_PORT=eighty`` would
-    bind a port the operator did not ask for and report success.
-    """
+    """An integer environment variable, or a refusal naming it: falling back on
+    ``VENDORFAKE_PORT=eighty`` would bind a port nobody asked for."""
     raw = _env_str(env, name)
     if raw is None:
         return None
@@ -287,11 +240,8 @@ def _env_int(env: Mapping[str, str], name: str) -> int | None:
 
 
 def _resolve_vendor_name(args: argparse.Namespace, env: Mapping[str, str]) -> str:
-    """``--vendor``, then ``$VENDORFAKE_VENDOR``, then the sole installed
-    vendor when there is exactly one -- the same precedence ``create_unit``
-    resolves through its own vendor argument, reached here for a subcommand
-    that only needs a name and never builds a unit at all.
-    """
+    """``--vendor``, then ``$VENDORFAKE_VENDOR``, then the sole installed vendor:
+    ``create_unit``'s own precedence, for a subcommand that builds no unit."""
     from vendorfake.registry import VENDOR_ENV_VAR, available_vendors
 
     name = args.vendor or _env_str(env, VENDOR_ENV_VAR)
@@ -322,26 +272,10 @@ def _table(rows: Sequence[Mapping[str, object]], columns: Sequence[str]) -> str:
 def _make_unit(args: argparse.Namespace, env: Mapping[str, str]) -> Unit:
     """Resolve the vendor and build the unit, turning a bad name into a refusal.
 
-    ``resolve_vendor`` raises ``ValueError`` naming every available vendor,
-    because it runs before a unit exists and therefore before there is a vendor
-    to shape an error with. At this boundary that becomes a message and a
-    non-zero exit, which is what a typo in a container's environment should
-    look like -- not a server that starts and 404s everything.
-
-    ``UnitError`` is caught for the same reason, and it was not before: a bad
-    ``--vendor`` was a one-line refusal while a bad ``--profile`` -- the
-    adjacent flag, the same kind of typo -- was a raw traceback out of the
-    profile loader. Both now read the same way. The loader's message already
-    names every profile the vendor ships, so nothing is reformatted here; what
-    changes is only that a startup failure stops presenting as a crash. Any
-    other ``UnitError`` raised while a unit is being built is a startup
-    failure too -- a profile that fails validation, a vendor declaring
-    ``webhooks`` with an empty retry schedule -- and each is a thing the
-    caller can fix from the message.
-
-    The import is inside the function because module level here is standard
-    library only (see this module's second invariant); ``UnitError`` lives in
-    the kernel, which ``create_unit`` is about to import anyway.
+    ``ValueError`` from ``resolve_vendor`` and any ``UnitError`` raised while the
+    unit is built both become a message and a non-zero exit, so a typo in a
+    container's environment reads the same whichever flag carried it, rather than
+    a traceback or a server that starts and 404s everything.
     """
     from vendorfake.core.kernel.types import UnitError
     from vendorfake.registry import create_unit
@@ -362,13 +296,9 @@ def _make_unit(args: argparse.Namespace, env: Mapping[str, str]) -> Unit:
 
 
 def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
-    """Build a unit, put the ASGI adapter in front of it, and listen.
-
-    The import is inside the function body on purpose: it is the only reach
-    into :mod:`vendorfake.asgi`, and therefore the only import of a web
-    framework anywhere outside that package. ``vendorfake --help`` must not pay
-    for it, and no other subcommand should be able to.
-    """
+    """Build a unit, put the ASGI adapter in front of it, and listen. The import is
+    inside the body because it is the only reach into :mod:`vendorfake.asgi`, and
+    ``vendorfake --help`` must not pay for it."""
     from vendorfake.asgi import DEFAULT_HOST, DEFAULT_PORT, create_app, run_server
 
     unit = _make_unit(args, env)
@@ -383,9 +313,8 @@ def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int
     app = create_app(unit)
 
     def announce(bound_host: str, bound_port: int) -> None:
-        # One line, flushed, before a single request can arrive. `--port 0` is
-        # only usable if the number reaches the parent process while it is
-        # still reading, rather than after the server begins answering.
+        # One line, flushed, before a single request can arrive, so `--port 0`
+        # reaches the parent while it is still reading.
         print(f"{PROG}: listening on http://{bound_host}:{bound_port} (vendor={unit.name})", file=out, flush=True)
 
     try:
@@ -398,13 +327,9 @@ def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int
 
 
 def _info(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
-    """Print ``GET /__unit/info`` without a server.
-
-    The same bytes the control plane serves, produced by driving the unit
-    through the in-process binding. Going through the binding rather than
-    reaching into the unit is the point: what this prints is exactly what a
-    consumer would read over HTTP, so the two can never drift.
-    """
+    """Print ``GET /__unit/info`` without a server: the same bytes the control
+    plane serves, produced through the in-process binding so the two cannot
+    drift."""
     from vendorfake.core.transport.inprocess import in_process
 
     unit = _make_unit(args, env)
@@ -417,12 +342,9 @@ def _info(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
 
 
 def _openapi(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
-    """Print the OpenAPI 3.1 document generated from the unit's route table.
-
-    No server, and no web framework: the generator lives in the core precisely
-    so this subcommand can exist. It is the same document the adapter serves at
-    ``/__unit/openapi.json``, from the same function and the same route rows.
-    """
+    """Print the OpenAPI 3.1 document generated from the unit's route table. No
+    server and no web framework: the generator lives in the core, and this is the
+    same document the adapter serves at ``/__unit/openapi.json``."""
     from vendorfake.core.control.openapi import document_for_unit
     from vendorfake.core.util.json import dump_json
 
@@ -436,12 +358,8 @@ def _openapi(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> i
 
 
 def _vendors(args: argparse.Namespace, out: TextIO) -> int:
-    """List what would actually resolve, not what is declared.
-
-    ``available_vendors`` filters through an importability check, so a name
-    printed here is a name that will start. A list that advertised a vendor
-    which then failed to import would be worse than no list.
-    """
+    """List what would actually resolve, not what is declared: ``available_vendors``
+    filters through an importability check, so a name printed here will start."""
     from vendorfake.core.util.json import dump_json
     from vendorfake.registry import available_vendors
 
@@ -458,15 +376,10 @@ def _vendors(args: argparse.Namespace, out: TextIO) -> int:
 
 
 def _profiles(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
-    """List the profiles a vendor ships: ``vendorfake.registry.available_profiles``,
-    over the command line, so a consumer never has to list a package's
-    ``profiles/`` directory in a scratch clone to find a name.
-
+    """``vendorfake.registry.available_profiles`` over the command line.
     ``UnitError`` is caught alongside ``ValueError`` for the reason
-    :func:`_make_unit` gives: reading a vendor's profiles can fail on a
-    profile document rather than on the vendor's name, and a caller who
-    mistyped one flag should not get a refusal for the other and a traceback
-    for this."""
+    :func:`_make_unit` gives: reading profiles can fail on a document rather than
+    on the vendor's name."""
     from vendorfake.core.kernel.types import UnitError
     from vendorfake.core.util.json import dump_json
     from vendorfake.registry import available_profiles
@@ -500,15 +413,9 @@ def _profiles(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> 
 
 
 def _routes_cmd(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
-    """List a vendor's route table: ``vendorfake.registry.routes``, over the
-    command line. Internal (``/__unit/*``) routes are omitted unless
-    ``--internal`` is given -- this describes the vendor surface by default.
-
-    ``UnitError`` is caught alongside ``ValueError`` for the reason
-    :func:`_make_unit` gives: this subcommand takes ``--profile``, so a
-    nonexistent profile reaches it just as often as a nonexistent vendor
-    does, and the loader's refusal already names every profile the vendor
-    ships."""
+    """``vendorfake.registry.routes`` over the command line; internal routes are
+    omitted unless ``--internal`` is given. ``UnitError`` is caught alongside
+    ``ValueError`` for the reason :func:`_make_unit` gives."""
     from vendorfake.core.kernel.types import UnitError
     from vendorfake.core.util.json import dump_json
     from vendorfake.registry import routes as list_routes
@@ -554,17 +461,9 @@ def _routes_cmd(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -
 
 
 def _faults(args: argparse.Namespace, out: TextIO) -> int:
-    """List the built-in fault catalogue: name, provenance, phase, parameters,
-    one-line description.
-
-    Read from ``FAULT_PARAM_KEYS``, ``FAULT_PROVENANCE`` and
-    ``FAULT_DESCRIPTIONS`` in ``core/chaos/faults.py`` -- the same mappings
-    ``GET /__unit/chaos`` and ``GET /__unit/info`` publish each rule against,
-    so this can never name a fault the unit itself has never heard of, or
-    disagree with those two about which faults are ``provenance: "transport"``
-    (E-transport-faults.md's definition of done item 5: provenance appears in
-    the chaos listings *and in the ``faults`` CLI output*).
-    """
+    """The built-in fault catalogue: name, provenance, phase, parameters and a
+    one-line description, read from the same mappings ``GET /__unit/chaos``
+    publishes each rule against, so the two cannot disagree."""
     from vendorfake.core.chaos.faults import FAULT_DESCRIPTIONS, FAULT_PARAM_KEYS, FAULT_PHASE, FAULT_PROVENANCE
     from vendorfake.core.util.json import dump_json
 
@@ -602,22 +501,10 @@ def _faults(args: argparse.Namespace, out: TextIO) -> int:
 
 
 def _explain(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
-    """Look up one route, fault, profile, error kind or header, and print it.
-
-    Every lookup lives in :mod:`vendorfake.agent.explain`; this only picks
-    which one ``args.explain_kind`` named, resolves the vendor/profile flags
-    the same way every other describing subcommand does, and chooses text or
-    ``--json``.
-
-    ``UnitError`` is caught alongside ``ValueError`` for the same reason
-    ``_make_unit``/``_profiles``/``_routes_cmd`` do: ``route`` and ``error``
-    build a unit (:func:`~vendorfake.agent.explain.explain_route`,
-    :func:`~vendorfake.agent.explain.explain_error`), and
-    :func:`~vendorfake.agent.explain.explain_profile` scans the same profile
-    directory ``vendorfake profiles`` does -- either can raise it for a
-    malformed profile document, and this subcommand was the one place that
-    still turned that into a traceback (konyklabs/roadmap#74).
-    """
+    """Look up one route, fault, profile, error kind or header, and print it. Every
+    lookup lives in :mod:`vendorfake.agent.explain`; this picks which one, resolves
+    the vendor and profile flags, and chooses text or ``--json``. ``UnitError`` is
+    caught alongside ``ValueError`` for the reason :func:`_make_unit` gives."""
     from vendorfake.agent import explain as explainer
     from vendorfake.core.kernel.types import UnitError
     from vendorfake.core.util.json import dump_json
@@ -660,12 +547,9 @@ def _explain(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> i
 
 
 def _conformance(args: argparse.Namespace) -> int:
-    """Hand off to the conformance runner, which owns its own arguments.
-
-    Forwarded rather than re-declared: the suite is the specification, and a
-    second copy of its flags here would be a second thing to keep in step with
-    it. ``vendorfake-conformance`` is the same entry point under its own name.
-    """
+    """Hand off to the conformance runner, which owns its own arguments. Forwarded
+    rather than re-declared, a second copy of its flags being a second thing to
+    keep in step; ``vendorfake-conformance`` is the same entry point."""
     from vendorfake.conformance.__main__ import main as conformance_main
 
     rest: list[str] = [arg for arg in args.rest if arg != "--"]
@@ -678,13 +562,9 @@ def _conformance(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Parse, dispatch, and return an exit code.
-
-    ``os.environ`` is read here and nowhere else, and it is copied into a plain
-    ``dict`` before it goes any further: everything downstream takes a
-    ``Mapping[str, str]``, so nothing can mutate the process environment by
-    accident and a test can substitute one without monkeypatching a global.
-    """
+    """Parse, dispatch, and return an exit code. ``os.environ`` is read here and
+    nowhere else, copied into a plain ``dict`` so nothing downstream can mutate
+    the process environment and a test can substitute one."""
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     env: Mapping[str, str] = dict(os.environ)
@@ -719,9 +599,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "conformance":
         return _conformance(args)
 
-    # argparse rejects an unknown subcommand before this is reachable; the
-    # branch exists so that adding a parser without adding a dispatch arm is a
-    # loud failure rather than a silent exit 0.
+    # Unreachable via argparse; a parser added without a dispatch arm fails loud.
     raise SystemExit(f"{PROG}: no handler for subcommand {args.command!r}")
 
 

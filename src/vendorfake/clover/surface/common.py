@@ -1,32 +1,10 @@
 """What every Clover surface is handed, and the time helpers they share.
 
-FOR: naming the dependency a surface has on its vendor -- the resolved
-configuration and the unit's id stream -- as a protocol, so a surface module
-never imports :mod:`vendorfake.clover.vendor` and the vendor is free to import
-the surfaces.
-
-INVARIANT: **a surface reads its configuration through the vendor, live.**
-Both members of :class:`CloverDeps` are properties on the vendor object, not
-values copied at route construction: a profile's ``vendor`` block resolves in
-``hydrate``, which runs *after* the routes are built and again on every
-``POST /__unit/state/reset``. A surface that captured ``config.client_id``
-when its routes were made would authenticate against the default secret
-forever. The same holds harder for ``ids``: there is exactly one id stream per
-unit, re-seeded at hydrate.
-
-The two time helpers are the only place this package converts between its
-units. Entities store epoch **milliseconds** (the core clock's unit, and
-Clover's own for ``createdTime``/``modifiedTime``); the documented OAuth wire
-carries Unix **seconds** (``"access_token_expiration": 1677875430``,
-https://docs.clover.com/dev/docs/generate-oauth-expiring-access-and-refresh-token).
-:func:`wire_seconds` is that conversion, spelled once, floor division so a
-value never rounds up into a second that has not arrived.
-
-:func:`is_past_ms` answers "has this stored instant passed?" for both the auth
-adapter and the OAuth surface, with the same boundary the Square package
-settled on: **at or before** is expired, so a consumer that advances a virtual
-clock by exactly the TTL sees the token gone rather than landing on the one
-millisecond where it still works.
+``CloverDeps`` is a protocol read live off the vendor rather than copied at
+route construction, so a re-``hydrate``d config takes effect immediately.
+Entities store epoch milliseconds; the OAuth wire carries Unix seconds
+(https://docs.clover.com/dev/docs/generate-oauth-expiring-access-and-refresh-token) --
+:func:`wire_seconds` and :func:`is_past_ms` are that conversion.
 """
 
 from __future__ import annotations
@@ -56,8 +34,8 @@ __all__ = [
 
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 1000
-""""limit" default 100 and maximum 1000, with "offset" -- documented for both
-the orders and the items lists (https://docs.clover.com/dev/docs/ordergetorders,
+"""DOCUMENTED: "limit" default 100, maximum 1000, with "offset"
+(https://docs.clover.com/dev/docs/ordergetorders,
 https://docs.clover.com/dev/docs/inventorygetitems)."""
 
 
@@ -67,40 +45,28 @@ class CloverDeps(Protocol):
 
     @property
     def config(self) -> CloverConfig:
-        """The resolved configuration, re-read on every access."""
+        """Re-read on every access, not cached at route construction."""
         ...
 
     @property
-    def ids(self) -> CloverIds:
-        """This unit's one id stream."""
-        ...
+    def ids(self) -> CloverIds: ...
 
 
 def is_past_ms(instant_ms: int, clock: Clock) -> bool:
-    """Whether the epoch-ms ``instant_ms`` is at or before the unit clock."""
     return instant_ms <= clock.now()
 
 
 def wire_seconds(instant_ms: int) -> int:
-    """An epoch-ms instant as the Unix-seconds integer the OAuth wire carries.
-
-    Floor division, deliberately: truncating matches the Square package's
-    iso-seconds convention (never round up into a second that has not
-    happened) and keeps ``wire_seconds(is_past_ms boundary)`` on the safe
-    side.
-    """
+    """An epoch-ms instant as Unix seconds, floored so it never rounds up
+    into a second that has not happened."""
     return instant_ms // 1000
 
 
 def require_merchant(args: HandlerArgs) -> str:
     """The ``{mId}`` of the request, checked against the bearer's merchant.
 
-    JUDGMENT -- a token presented against another merchant's path, or an
-    unknown one, answers **401**: Clover documents no error for the mismatch,
-    and the conflation rule (https://docs.clover.com/dev/docs/401-unauthorized)
-    makes "this token is not good for this" a 401 whatever the reason. No
-    detail, so the wire body is the same ``401 Unauthorized`` every other
-    authorization failure sends; the sidecar says ``merchant_mismatch``.
+    JUDGMENT: a mismatched or unknown merchant answers 401, like any other
+    authorization failure (https://docs.clover.com/dev/docs/401-unauthorized).
     """
     merchant_id = args.params["mId"]
     principal = args.auth.principal_id if args.auth is not None else None
@@ -114,15 +80,8 @@ def require_merchant(args: HandlerArgs) -> str:
 
 def merchant_row(ctx: UnitContext, collection: str, row_id: str, merchant_id: str) -> dict[str, Any] | None:
     """A reference row (employee, order type, customer) of *this* merchant,
-    or ``None``.
-
-    JUDGMENT, consistent with :func:`require_merchant`: a row stamped with
-    another merchant's ``merchant_id`` is as absent as no row at all, so a
-    reference to it fails the way a dangling one does and never leaks that
-    the other merchant's record exists. ``merchant_id`` is this unit's own
-    scoping field on those rows, stamped at hydration and on create, and
-    stripped from every projection.
-    """
+    or ``None`` -- JUDGMENT: another merchant's row is treated as absent
+    rather than leaking that it exists."""
     row = ctx.store.collection(collection).get(row_id)
     if row is None or row.get("merchant_id") != merchant_id:
         return None
@@ -130,24 +89,16 @@ def merchant_row(ctx: UnitContext, collection: str, row_id: str, merchant_id: st
 
 
 def owned_by(merchant_id: str) -> Callable[[Mapping[str, Any]], bool]:
-    """The list predicate for the same scoping rule as :func:`merchant_row`."""
+    """The scoping predicate matching :func:`merchant_row`."""
     return lambda row: row.get("merchant_id") == merchant_id
 
 
 _INTEGER = re.compile(r"^-?\d+$")
-"""One optional minus, then digits. ``--5``, ``+5``, ``5x`` and ``1e3`` are
-all refused: ``str.isdigit`` after ``lstrip("-")`` let ``--5`` through to
-``int()`` and a 500."""
+"""Refuses ``+5``, ``5x`` and ``1e3``."""
 
 
 def int_param(raw: str, field: str, *, minimum: int | None = None) -> int:
-    """``raw`` as an integer, or a 400 naming ``field``.
-
-    The one integer parser for query strings and filter values, so every
-    surface refuses the same spellings the same way. Refused rather than
-    ignored: ``limit=abc`` silently becoming the default is how a consumer
-    who mistyped a page size never learns.
-    """
+    """``raw`` as an integer, or a 400 naming ``field``."""
     stripped = raw.strip()
     if not _INTEGER.match(stripped):
         raise UnitError(
@@ -175,37 +126,27 @@ def _query_int(args: HandlerArgs, name: str, default: int, *, minimum: int) -> i
 
 
 def page_window(args: HandlerArgs) -> tuple[int, int]:
-    """``(limit, offset)`` from the query: limit default 100, clamped to the
-    documented maximum of 1000 (JUDGMENT on clamping rather than refusing an
-    over-large limit -- the docs state the maximum, not the response to
-    exceeding it, and clamping is what the core's own paginator does);
-    offset default 0."""
+    """``(limit, offset)`` from the query: limit default 100, clamped
+    (JUDGMENT) to the documented maximum of 1000; offset default 0."""
     limit = min(_query_int(args, "limit", DEFAULT_LIMIT, minimum=1), MAX_LIMIT)
     offset = _query_int(args, "offset", 0, minimum=0)
     return limit, offset
 
 
 MAX_EXPANSIONS = 3
-""""maximum of three fields per API call" (https://docs.clover.com/dev/docs/expanding-fields)."""
+"""DOCUMENTED: "maximum of three fields per API call"
+(https://docs.clover.com/dev/docs/expanding-fields)."""
 
 
 def expansions(args: HandlerArgs, allowed: frozenset[str]) -> frozenset[str]:
-    """``expand=a,b,c``: known names only, at most three."""
+    """``expand=a,b,c``: known names only, at most three. JUDGMENT: a dotted
+    expansion implies its parent, which does not count against the cap."""
     raw = args.query("expand")
     if raw is None or not raw.strip():
         return frozenset()
     wanted = [part.strip() for part in raw.split(",") if part.strip()]
-    # JUDGMENT: a dotted expansion implies its parent -- `lineItems.discounts`
-    # alone shows the line items with their discounts. Clover documents the
-    # dotted syntax ("one nesting level") and nothing about the parent being
-    # absent; implying it is the only reading under which the syntax is
-    # usable inside the three-expansion cap, and the implied parent does not
-    # count against that cap.
     implied = [name.split(".", 1)[0] for name in wanted if "." in name]
     unknown = [name for name in wanted if name not in allowed]
-    # An implied parent is bound by the same set as a named one: a dotted
-    # name whose parent is not expandable is unknown, and the refusal names
-    # the expansion as supplied so the caller sees what was rejected.
     unknown += [name for name in wanted if "." in name and name.split(".", 1)[0] not in allowed and name in allowed]
     if unknown:
         raise UnitError(
@@ -225,13 +166,7 @@ def expansions(args: HandlerArgs, allowed: frozenset[str]) -> frozenset[str]:
 
 
 def elements(items: Sequence[dict[str, Any]], hrefs: Sequence[str]) -> dict[str, Any]:
-    """Clover's list envelope: ``{"elements": [{"href": ..., ...}, ...]}``.
-
-    The envelope and the per-element ``href`` are documented verbatim
+    """DOCUMENTED list envelope ``{"elements": [{"href": ..., ...}, ...]}``
     (https://docs.clover.com/dev/docs/paginating-elements). JUDGMENT that an
-    element is the *whole* object plus its href: the example abbreviates
-    elements to ``href`` and ``id``, and a list that returned only ids would
-    make every consumer fetch each element separately. ``elements`` is always
-    present, empty when nothing matched: it is the answer to the request.
-    """
+    element is the whole object plus its href, not just ``href``/``id``."""
     return {"elements": [{"href": href, **item} for href, item in zip(hrefs, items, strict=True)]}

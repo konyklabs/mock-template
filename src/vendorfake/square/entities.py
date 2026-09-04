@@ -1,43 +1,17 @@
 """The shapes this vendor stores, and the collections it stores them in.
 
-FOR: giving the surfaces one typed reading of every stored entity, so that the
-name of a stored field is written down once instead of being spelled as a
-dictionary key in each handler that touches it.
+Each surface gets one typed reading of every stored entity, so a stored
+field's name is written once instead of re-spelled as a dict key everywhere
+it's touched. The stored model is this unit's own; the projections in
+:mod:`.model` translate it to Square's wire JSON, so a field Square renames
+is a one-line change in a projector, not a rename across the state engine.
 
-INVARIANT: **absence is absence.** A field a merchant never set is *missing*
-from the entity dict; it is never present with the value ``None``. JavaScript
-gets this free -- ``JSON.stringify`` and ``structuredClone`` both drop
-``undefined`` -- and Python does not, so it is a rule instead: every
-:meth:`to_entity` drops its unset optionals through the core's ``compact()``,
-and a field is cleared with ``pop`` and never with ``= None``. Three things
-depend on it: the entity digest (which hashes stored fields), the journal's
-``changed`` list (which compares present against absent), and the wire
-projection (where Square omits the key rather than sending a null).
+INVARIANT: absence is absence -- a field never set is *missing*, never ``None``. ``to_entity()`` drops
+unset optionals via ``compact()``; the digest, the journal, and the wire projection all depend on it.
 
-The stored model is this unit's own, and the projections in :mod:`.model`
-translate it to Square's wire JSON. Keeping the two apart means a field Square
-renames is a one-line change in a projector rather than a rename across the
-state engine.
-
-Two departures from the reference worth naming:
-
-**Reads are typed views, writes are dicts.** The reference declares
-``interface OrderEntity extends Entity`` and relies on TypeScript to check
-every dictionary access. The store here holds ``dict[str, Any]`` -- entities are
-produced internally, deep-copied on every read and write, and never parsed from
-an external document -- so structure comes from a frozen dataclass with a
-``from_entity`` reader, exactly as the core's own ``Subscription`` does it.
-Handlers that mutate keep mutating the draft dict the store hands them; handlers
-that read get a typed object.
-
-**Collection names are snake_case.** The reference spells two of its six in
-camelCase (``catalogObjects``, ``authorizationCodes``) because its whole entity
-model is camelCase. This build snake_cases entity keys everywhere -- the core
-itself ships ``notification_url`` and ``event_types``, and the control plane
-publishes snake_case throughout -- so a camelCase collection name would be the
-only camelCase identifier at ``GET /__unit/state``. The vocabulary is
-unchanged; four of the six names are byte-identical. Recorded as
-``provenance: judgment``.
+JUDGMENT: collection names are snake_case throughout, including the two this
+project's model would otherwise camelCase, for consistency with the rest of
+this build's vocabulary.
 """
 
 from __future__ import annotations
@@ -109,9 +83,8 @@ COL = SquareCollections()
 
 
 # ---------------------------------------------------------------------------
-# Readers. Tolerant on type, strict on presence: a stored entity is produced by
-# this package, so a wrong type is a defect here rather than bad input, and
-# coercing it quietly beats raising from inside a projection.
+# Readers: tolerant on type, strict on presence -- a wrong type here is a
+# defect in this package, not bad input.
 # ---------------------------------------------------------------------------
 
 
@@ -146,9 +119,7 @@ def _mapping(value: Any) -> dict[str, str] | None:
 @dataclass(frozen=True, slots=True)
 class Money:
     """Square's ``Money``: minor units plus a currency code.
-
-    https://developer.squareup.com/reference/square/objects/Money
-    """
+    https://developer.squareup.com/reference/square/objects/Money"""
 
     amount: int
     currency: str
@@ -257,10 +228,8 @@ class LocationEntity:
 
 @dataclass(frozen=True, slots=True)
 class CatalogObjectEntity:
-    """An ITEM or an ITEM_VARIATION. One collection holds both, as Square does.
-
-    https://developer.squareup.com/reference/square/objects/CatalogObject
-    """
+    """An ITEM or an ITEM_VARIATION; one collection holds both, as Square does.
+    https://developer.squareup.com/reference/square/objects/CatalogObject"""
 
     id: str
     object_type: Literal["ITEM", "ITEM_VARIATION"]
@@ -320,13 +289,9 @@ class CatalogObjectEntity:
 
 @dataclass(frozen=True, slots=True)
 class OrderLineItem:
-    """One line of an order. Nested inside the order entity, not a collection.
-
-    ``quantity`` is a **string**, as Square sends it
-    (https://developer.squareup.com/reference/square/objects/OrderLineItem), so
-    a consumer may legitimately send ``"2"`` or illegitimately send anything
-    else. The projection is where that is handled.
-    """
+    """One line of an order, nested inside the order entity, not a
+    collection. ``quantity`` is a **string**, as Square sends it
+    (https://developer.squareup.com/reference/square/objects/OrderLineItem)."""
 
     uid: str
     quantity: str
@@ -365,20 +330,11 @@ class OrderLineItem:
 
 @dataclass(frozen=True, slots=True)
 class Tender:
-    """One payment against an order.
+    """One payment against an order. https://developer.squareup.com/reference/square/objects/Tender
 
-    https://developer.squareup.com/reference/square/objects/Tender
-
-    JUDGMENT -- ``type`` defaults to ``CARD``. It is a real ``TenderType``
-    value (https://developer.squareup.com/reference/square/enums/TenderType)
-    and it is what the PayOrder example response shows
-    (https://developer.squareup.com/reference/square/orders-api/pay-order), but
-    Square derives it from the *payment*, and this unit has no Payments API to
-    derive it from -- see the SHRINK in
-    :mod:`vendorfake.square.surface.orders`. So the value is this unit's
-    choice, not a documented consequence of anything the caller sent, and a
-    consumer must not test that a particular payment produced a particular
-    tender type here. A scenario can state a different one on a seeded tender.
+    JUDGMENT: ``type`` defaults to ``CARD`` (a real ``TenderType``,
+    https://developer.squareup.com/reference/square/enums/TenderType, matching Square's PayOrder example,
+    https://developer.squareup.com/reference/square/orders-api/pay-order) since this unit has no Payments API.
     """
 
     id: str
@@ -428,34 +384,13 @@ class Tender:
 
 @dataclass(frozen=True, slots=True)
 class Fulfillment:
-    """One fulfillment of an order: how the buyer receives it.
+    """One fulfillment of an order: how the buyer receives it -- ``uid``, ``type``
+    (PICKUP/SHIPMENT/DELIVERY), ``state``, and one details object named for the type.
+    https://developer.squareup.com/reference/square/objects/Fulfillment https://developer.squareup.com/reference/square/enums/FulfillmentState
 
-    https://developer.squareup.com/reference/square/objects/Fulfillment --
-    ``uid``, ``type`` (``PICKUP``, ``SHIPMENT``, ``DELIVERY``), ``state``
-    (https://developer.squareup.com/reference/square/enums/FulfillmentState),
-    ``line_item_application`` (``ALL`` when the fulfillment covers the whole
-    order) and one details object named for the type.
-
-    The details are stored as the mapping the request models produced --
-    documented field names only, absent keys absent -- because each of the
-    three details objects has twenty-odd optional fields and a typed view of
-    every one would be a page of readers nothing else consults. The request
-    models in :mod:`vendorfake.square.model.order` are where the field lists
-    live.
-
-    ``supplied_stamps`` is the one field that is **stored and digested but
-    never on the wire**. The details stamps (``placed_at``, ``picked_up_at``,
-    ...) are volatile to the state digest because this unit sets them from
-    its clock, and two units driven alike on different clocks must digest
-    alike. A caller may send the same stamps, though, and a value the caller
-    sent is state -- two orders whose consumers sent different ``picked_up_at``
-    values are different orders. So every caller-supplied value for a name
-    the digest treats as volatile is mirrored here, where the digest sees it;
-    the wire projection (``project_fulfillment``) never reads it. It is a
-    sequence of ``(name, value)`` pairs and not a mapping on purpose: the
-    digest scrubs a volatile *name* at any depth, so a mirror keyed
-    ``placed_at`` would be scrubbed along with the stamp it mirrors. See
-    ``surface/orders.py``, "Stamps and the digest".
+    ``supplied_stamps`` is stored and digested but never on the wire -- a ``(name, value)``
+    pair sequence, not a mapping, since the digest must scrub a volatile stamp name at any
+    depth (see ``surface/orders.py``, "Stamps and the digest").
     """
 
     uid: str
@@ -510,13 +445,8 @@ def _pairs(value: Any) -> tuple[tuple[str, Any], ...] | None:
 
 @dataclass(frozen=True, slots=True)
 class OrderEntity:
-    """An order, as stored.
-
-    ``version``, ``created_at`` and ``updated_at`` are the store's, not this
-    vendor's: the store bumps the version on every committed write and Square
-    documents ``version`` as read-only, "incremented each time an update is
-    committed to the order"
-    (https://developer.squareup.com/reference/square/objects/Order).
+    """An order, as stored. ``version``, ``created_at`` and ``updated_at`` are the store's,
+    matching Square's documented read-only field. https://developer.squareup.com/reference/square/objects/Order
     """
 
     id: str
@@ -581,12 +511,9 @@ class OrderEntity:
         )
 
     def to_entity(self) -> Entity:
-        """The dict the store holds.
-
-        ``created_at`` and ``updated_at`` are omitted when empty so that
+        """``created_at``/``updated_at`` are omitted when empty so
         ``Collection.insert`` fills them from the clock; a seeded order that
-        states them keeps its own.
-        """
+        states them keeps its own."""
         return compact(
             {
                 "id": self.id,
@@ -612,15 +539,8 @@ class OrderEntity:
 
 @dataclass(frozen=True, slots=True)
 class PaymentEntity:
-    """A payment, as stored.
-
-    https://developer.squareup.com/reference/square/objects/Payment. Only the
-    ``EXTERNAL`` source is modelled -- see the SHRINK in
-    :mod:`vendorfake.square.surface.payments` -- so ``external_details`` is
-    the one source-specific block and ``source_type`` is always ``EXTERNAL``
-    on anything this unit mints. ``version``, ``created_at`` and
-    ``updated_at`` are the store's, as on an order; ``version_token`` on the
-    wire is derived from the store version.
+    """A payment, as stored. https://developer.squareup.com/reference/square/objects/Payment --
+    only the ``EXTERNAL`` source is modelled, so ``source_type`` is always ``EXTERNAL`` here.
     """
 
     id: str
@@ -696,13 +616,9 @@ class PaymentEntity:
 @dataclass(frozen=True, slots=True)
 class LoyaltyProgramEntity:
     """The seller's loyalty program. One per unit, in practice.
-
     https://developer.squareup.com/reference/square/objects/LoyaltyProgram.
-    A single SPEND accrual rule is modelled -- "buyers earn ``points`` for
-    every ``spend_amount`` spent" -- because it is the rule an ordering
-    integration accumulates against; the rule's shape on the wire is
-    ``LoyaltyProgramAccrualRule`` with ``spend_data``. Reward tiers are stored
-    as the documents the seed gave, projected as they are.
+    A single SPEND accrual rule is modelled; reward tiers are stored as the
+    documents the seed gave, projected as they are.
     """
 
     id: str
@@ -754,11 +670,9 @@ class LoyaltyProgramEntity:
 
 @dataclass(frozen=True, slots=True)
 class LoyaltyAccountEntity:
-    """A buyer's account in the program, keyed to a phone number.
-
-    https://developer.squareup.com/reference/square/objects/LoyaltyAccount.
-    ``enrolled_at`` is "The timestamp when the buyer joined the loyalty
-    program"; ``mapping_created_at`` is the mapping's own ``created_at``.
+    """A buyer's account, keyed to a phone number.
+    https://developer.squareup.com/reference/square/objects/LoyaltyAccount --
+    ``mapping_created_at`` is the phone-mapping's own timestamp, distinct from ``enrolled_at``.
     """
 
     id: str
@@ -846,14 +760,8 @@ class LoyaltyEventEntity:
 @dataclass(frozen=True, slots=True)
 class InventoryCountEntity:
     """The IN_STOCK quantity of one variation at one location.
-
-    https://developer.squareup.com/reference/square/objects/InventoryCount.
-    Keyed by ``catalog_object_id`` and ``location_id`` -- the entity id is the
-    two joined -- because Square's count has no id of its own: "The current
-    calculated stock count for a given CatalogObject at a given set of
-    Locations". ``quantity`` is a **decimal string**, as Square sends it.
-    ``calculated_at`` is stated by a seeded count and stamped from the clock
-    on a change.
+    https://developer.squareup.com/reference/square/objects/InventoryCount --
+    keyed by ``catalog_object_id`` + ``location_id``; ``quantity`` is a decimal string.
     """
 
     catalog_object_id: str
@@ -900,12 +808,9 @@ def inventory_count_id(catalog_object_id: str, location_id: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class AuthorizationCodeEntity:
-    """An issued authorization code. ``id`` is the opaque code value itself.
-
-    "The authorization code expires 5 minutes after the Square authorization
-    page generates the code", and it is single-use
-    (https://developer.squareup.com/docs/oauth-api/overview), which is what
-    ``used_at`` records.
+    """An issued authorization code; ``id`` is the opaque code value. Expires 5 minutes after
+    issue and is single-use (https://developer.squareup.com/docs/oauth-api/overview);
+    ``used_at`` records that.
     """
 
     id: str
@@ -949,18 +854,9 @@ class AuthorizationCodeEntity:
 class TokenEntity:
     """One issued access token and the refresh token that minted it.
 
-    ``superseded_at`` has no counterpart in the reference and exists because of
-    a documented behaviour the reference got wrong: "A refresh token obtained
-    using the code flow can be used to get multiple active access tokens"
-    (https://developer.squareup.com/docs/oauth-api/overview), so a code-flow
-    refresh must **not** revoke the previous access token. Code flow also
-    returns the *same* refresh-token string
-    (https://developer.squareup.com/docs/oauth-api/refresh-revoke-limit-scope),
-    which leaves two live records sharing one refresh token and a lookup that
-    would find the stale one. Marking the older record superseded -- a silent
-    update, so no version bump, no journal entry and no webhook -- keeps the
-    refresh lookup single-valued while the older *access* token stays valid
-    until its own expiry, which is what Square documents.
+    ``superseded_at`` marks an older token when a code-flow refresh reuses the same
+    refresh-token string (https://developer.squareup.com/docs/oauth-api/overview) --
+    silently, so the older access token stays valid until its own expiry.
     """
 
     id: str
@@ -971,29 +867,12 @@ class TokenEntity:
     #: RFC 3339, seconds precision -- matching Square's ``expires_at``.
     expires_at: str
     scopes: tuple[str, ...] = ()
-    #: What the SELLER APPROVED at authorize time, carried forward unchanged by
-    #: every refresh. Distinct from ``scopes``, which is what this particular
-    #: token carries after any narrowing.
-    #:
-    #: Square narrows "from the ones granted when the seller approved"
-    #: (https://developer.squareup.com/docs/oauth-api/refresh-revoke-limit-scope),
-    #: so a refresh intersects against the approval and not against whatever the
-    #: last refresh happened to ask for. Intersecting against the current
-    #: token's scopes makes every narrowing permanent: take a narrow token for
-    #: one subtask and the grant can never produce a full one again.
-    #:
-    #: ``None`` means "not recorded" -- a seeded token that never came from a
-    #: grant -- and readers fall back to ``scopes``. An EMPTY tuple means "the
-    #: approval was recorded and contains nothing", which must not fall back:
-    #: the fallback would silently re-grant whatever the token happens to
-    #: hold. The two states used to collapse into one because the empty tuple
-    #: serialised as an absent key (konyklabs/roadmap#28); ``()`` is currently
-    #: unreachable from the surface (an empty intersection is refused with a
-    #: 400 before minting), so the distinction is load-bearing armour, not a
-    #: live branch.
+    #: What the seller approved at authorize time; distinct from ``scopes``, which narrows over
+    #: time (https://developer.squareup.com/docs/oauth-api/refresh-revoke-limit-scope). ``None``
+    #: means "not recorded" (falls back to ``scopes``); an empty tuple means "recorded as
+    #: nothing" and must NOT fall back (konyklabs/roadmap#28).
     authorized_scopes: tuple[str, ...] | None = None
-    #: PKCE only: "Refresh tokens obtained using the PKCE flow ... expire after
-    #: 90 days." Code-flow refresh tokens do not expire, so the key is absent.
+    #: PKCE only; code-flow refresh tokens never expire, so the key is absent.
     refresh_token_expires_at: str | None = None
     short_lived: bool = False
     revoked_at: str | None = None
@@ -1002,8 +881,8 @@ class TokenEntity:
 
     @property
     def active(self) -> bool:
-        """Neither revoked nor superseded. Expiry is a clock question, so it is
-        not answered here -- the auth adapter compares against the unit clock."""
+        """Neither revoked nor superseded; expiry is checked by the auth
+        adapter against the unit clock."""
         return self.revoked_at is None and self.superseded_at is None
 
     @classmethod
@@ -1017,9 +896,8 @@ class TokenEntity:
             merchant_id=_str(entity.get("merchant_id")),
             expires_at=_str(entity.get("expires_at")),
             scopes=_str_tuple(entity.get("scopes")),
-            # `.get` distinguishes deliberately: an absent key is "not
-            # recorded" (None), a present list -- empty included -- is the
-            # approval as recorded (konyklabs/roadmap#28).
+            # .get distinguishes: an absent key is None ("not recorded"); a
+            # present list, even empty, is the recorded approval (konyklabs/roadmap#28).
             authorized_scopes=(
                 None if entity.get("authorized_scopes") is None else _str_tuple(entity.get("authorized_scopes"))
             ),
@@ -1040,10 +918,8 @@ class TokenEntity:
                 "merchant_id": self.merchant_id,
                 "expires_at": self.expires_at,
                 "scopes": list(self.scopes),
-                # NOT `or None`: an empty approval must survive the round trip
-                # as `[]`, or it comes back as "not recorded" and the reader's
-                # fallback re-grants the token's own scopes
-                # (konyklabs/roadmap#28). compact() drops only the None.
+                # NOT `or None`: an empty approval must survive as `[]`, or
+                # the reader's fallback re-grants the token's scopes (konyklabs/roadmap#28).
                 "authorized_scopes": None if self.authorized_scopes is None else list(self.authorized_scopes),
                 "refresh_token_expires_at": self.refresh_token_expires_at,
                 "short_lived": self.short_lived,

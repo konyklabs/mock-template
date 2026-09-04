@@ -1,4 +1,4 @@
-"""Measure prose (docstring + comment lines) against code lines under src/.
+"""Measure prose (docstring + comment lines) as a share of all lines under src/.
 
 Usage: python tools/prose_ratio.py [--max-file PCT] [--max-total PCT] [--top N] [PATH]
 Exit 1 when a threshold is exceeded.
@@ -52,15 +52,14 @@ def main() -> int:
     rows = []
     for p in sorted(Path(args.path).rglob("*.py")):
         code, doc, com = measure(p)
-        rows.append((p, code, doc, com))
+        rows.append((p, code, doc, com, p.read_text(encoding="utf-8").count("\n")))
     tcode = sum(r[1] for r in rows)
     tprose = sum(r[2] + r[3] for r in rows)
-    total = tcode + tprose
+    total = sum(r[4] for r in rows)
     pct = 100.0 * tprose / total if total else 0.0
     failed = False
     over = []
-    for p, code, doc, com in rows:
-        n = code + doc + com
+    for p, code, doc, com, n in rows:
         fpct = 100.0 * (doc + com) / n if n else 0.0
         if args.max_file is not None and n >= 40 and fpct > args.max_file:
             over.append((fpct, p, code, doc + com))
@@ -69,10 +68,9 @@ def main() -> int:
     if over:
         failed = True
     if args.max_file is None:
-        ranked = sorted(rows, key=lambda r: -(r[2] + r[3]) / max(r[1] + r[2] + r[3], 1))
-        for p, code, doc, com in ranked[: args.top]:
-            n = code + doc + com
-            print(f"{100.0 * (doc + com) / max(n, 1):5.1f}%  {p}  code={code} doc={doc} comment={com}")
+        ranked = sorted(rows, key=lambda r: -(r[2] + r[3]) / max(r[4], 1))
+        for p, code, doc, com, n in ranked[: args.top]:
+            print(f"{100.0 * (doc + com) / max(n, 1):5.1f}%  {p}  lines={n} code={code} doc={doc} comment={com}")
     print(f"TOTAL lines={total} code={tcode} prose={tprose} prose%={pct:.1f}")
     if args.max_total is not None and pct > args.max_total:
         print(f"FAIL prose {pct:.1f}% > {args.max_total}%")

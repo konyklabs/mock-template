@@ -1,39 +1,7 @@
-"""Clover's own settings, with the documented value beside each citation.
-
-FOR: turning a profile's ``vendor`` block -- arbitrary JSON as far as the core
-is concerned -- into a typed object whose every default carries the Clover
-documentation URL it came from, or a JUDGMENT label where Clover publishes
-nothing.
-
-INVARIANT: **a setting is either documented or labelled.** The one TTL Clover
-states numerically is quoted verbatim below; the other two are this project's
-reading of examples and are labelled as such. The credentials are obviously
-fake values, and the two switches (``error_sidecar``, ``retry_after_header``)
-govern deliberate deviations from Clover's wire format, so both can be turned
-off by a consumer who wants only what Clover really sends.
-
-Permissions, not scopes
------------------------
-Clover grants an app a fixed permission set, configured in the developer
-dashboard rather than requested per token: "All REST API endpoints require an
-OAuth-generated access_token with specific permissions"
-(https://docs.clover.com/dev/docs/oauth-flows-in-clover). There is no
-``scope`` parameter anywhere in the documented authorize or token exchange.
-The model here: the app carries a permission set from this config, every
-minted token inherits it, and routes declare the permissions they require.
-
-JUDGMENT -- **the permission names themselves are this project's.** Clover's
-docs describe permissions in dashboard prose ("read orders", "write
-inventory") and publish no machine vocabulary for them. The
-``ORDERS_R``-style names below are modelled on the dashboard's read/write
-toggles and are not Clover strings; a consumer must not pattern-match on them
-against the real API.
-
-Like ``SquareConfig``, ``extra="forbid"``: an unknown key in a profile's
-``vendor`` block is a startup failure naming the key, never a default
-silently left in place. TTLs stay ``_ms`` integers on the wire so a profile
-document remains diff-comparable, and are read in code through the
-``timedelta`` properties.
+"""Clover's own settings, with the documented value beside each citation, or
+a JUDGMENT label. Permissions are app-level and fixed at the dashboard, not
+per-token scopes (https://docs.clover.com/dev/docs/oauth-flows-in-clover).
+``extra="forbid"``: an unknown key is a startup failure.
 """
 
 from __future__ import annotations
@@ -66,13 +34,10 @@ DEFAULT_PERMISSIONS: tuple[str, ...] = (
     "CUSTOMERS_W",
     "PAYMENTS_W",
 )
-"""The permission set the modelled surface needs.
-
-JUDGMENT -- names are this project's, modelled on the Clover dashboard's
-per-API read/write toggles (https://docs.clover.com/dev/docs/permissions);
-Clover publishes no string vocabulary for permissions. See the module
-docstring.
-"""
+"""The permission set the modelled surface needs. JUDGMENT: modelled on the
+Clover dashboard's per-API read/write toggles
+(https://docs.clover.com/dev/docs/permissions); Clover publishes no string
+vocabulary for permissions."""
 
 
 class CloverConfig(BaseModel):
@@ -80,80 +45,39 @@ class CloverConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    #: Obviously fake, and exactly 13 uppercase characters because every app id
-    #: in Clover's own examples is (``DRKVJT2ZRRRSC`` on
-    #: https://docs.clover.com/dev/docs/webhooks) -- so it passes a consumer's
-    #: shape assertions while never being mistaken for a real credential.
+    #: Obviously fake: Clover's own example app-id shape.
     client_id: str = "UNITCLOVERAPP"
-    #: JUDGMENT -- real Clover app secrets in legacy examples are UUID-shaped,
-    #: but an obviously fake readable value is chosen deliberately, matching
-    #: the Square package's ``sandbox-...-unit-square-secret`` convention: a
-    #: consumer who leaks one into a log can see at a glance it is not real.
+    #: JUDGMENT -- an obviously fake readable value, not a real UUID shape.
     client_secret: str = "unit-clover-app-secret"
     redirect_uri: str = "https://example.test/oauth/callback"
 
-    #: The origin every list element's ``href`` self-URL is built on. Clover's
-    #: documented sandbox API host
-    #: (https://docs.clover.com/dev/docs/oauth-flows-in-clover names
-    #: ``apisandbox.dev.clover.com``), so an href from this unit is shaped
-    #: like one from the real sandbox. JUDGMENT on emitting it at all: the
-    #: docs show absolute hrefs and this fake cannot know where it is being
-    #: served from, so a consumer following one must rewrite the origin --
-    #: or set this to their own base in the profile's ``vendor`` block.
+    #: Clover's documented sandbox host. JUDGMENT on emitting it at all.
     base_url: str = "https://apisandbox.dev.clover.com"
 
-    #: The permission set the app was "installed" with; every minted token
-    #: inherits it. See the module docstring for why this is a fixed set
-    #: rather than a per-token scope request.
+    #: The permission set every minted token inherits.
     permissions: tuple[str, ...] = DEFAULT_PERMISSIONS
 
-    #: Emit the namespaced ``unit_error`` sidecar beside Clover's envelope.
-    #: A deliberate deviation from Clover's wire format; see errors.py.
+    #: Emit the namespaced ``unit_error`` sidecar; see errors.py.
     error_sidecar: bool = True
 
-    #: Emit ``retry-after`` on a 429. Clover documents the header only on
-    #: concurrent-rate-limit trips ("429 responses for concurrent rate limits
-    #: also include a retry-after header",
-    #: https://docs.clover.com/dev/docs/api-usage-rate-limits); this unit's
-    #: 429s are chaos-injected and carry no concurrency accounting, so sending
-    #: it on all of them is a convenience, switchable because the fidelity
-    #: argument is real. JUDGMENT.
+    #: Emit ``retry-after`` on every 429, not only documented trips. JUDGMENT. https://docs.clover.com/dev/docs/api-usage-rate-limits
     retry_after_header: bool = True
 
     #: "OAuth access_tokens expire in 30 minutes."
     #: https://docs.clover.com/dev/docs/oauth-and-tokens-faqs
     access_token_ttl_ms: int = Field(default=30 * _MINUTE_MS, gt=0)
 
-    #: JUDGMENT -- Clover states no refresh-token lifetime numerically. The
-    #: documented example response has ``access_token_expiration: 1677875430``
-    #: and ``refresh_token_expiration: 1709497830``
-    #: (https://docs.clover.com/dev/docs/generate-oauth-expiring-access-and-refresh-token),
-    #: which are 366 days apart; 365 days is this project's reading of that
-    #: example, not a documented rule.
+    #: JUDGMENT -- no numeric refresh-token lifetime is documented. https://docs.clover.com/dev/docs/generate-oauth-expiring-access-and-refresh-token
     refresh_token_ttl_ms: int = Field(default=365 * _DAY_MS, gt=0)
 
-    #: Accept ``http://`` callback URLs at the webhook dashboard stand-in.
-    #: Clover documents "only HTTPS-enabled callbacks"
-    #: (https://docs.clover.com/dev/docs/webhooks) and the stand-in refuses
-    #: anything else by default. JUDGMENT -- a fake-only affordance: a
-    #: consumer running a receiver on ``http://localhost`` against this unit
-    #: has no certificate to offer, and refusing them would make the
-    #: handshake unrehearsable in exactly the setting it exists for. Leaving
-    #: it off is what keeps the documented rule visible.
+    #: Accept ``http://`` callbacks though Clover documents HTTPS-only. JUDGMENT. https://docs.clover.com/dev/docs/webhooks
     allow_insecure_callbacks: bool = False
 
-    #: JUDGMENT -- Clover documents no authorization-code expiry at all
-    #: (https://docs.clover.com/dev/docs/high-trust-app-auth-flow shows the
-    #: redirect carrying ``code`` and says nothing about its lifetime).
-    #: Ten minutes is a common industry default (RFC 6749 s4.1.2 recommends a
-    #: maximum of ten minutes) and is chosen so that an expired-code path is
-    #: testable at all.
+    #: JUDGMENT -- Clover documents no authorization-code expiry. https://docs.clover.com/dev/docs/high-trust-app-auth-flow
     authorization_code_ttl_ms: int = Field(default=10 * _MINUTE_MS, gt=0)
 
     def merged_with(self, block: Mapping[str, Any]) -> CloverConfig:
-        """This config with ``block`` laid over it: the profile wins, an
-        unknown key is still refused. The idiom is the core's
-        :func:`~vendorfake.core.config.models.merged_over`."""
+        """This config with ``block`` laid over it."""
         return merged_over(self, block)
 
     @property
@@ -170,9 +94,5 @@ class CloverConfig(BaseModel):
 
 
 def resolve_clover_config(raw: dict[str, Any] | None = None) -> CloverConfig:
-    """Build the config from a profile's ``vendor`` block.
-
-    A thin function rather than a bare constructor call so that the one place
-    that knows an empty block is legal is not every caller.
-    """
+    """Build the config from a profile's ``vendor`` block."""
     return CloverConfig.model_validate(raw or {})

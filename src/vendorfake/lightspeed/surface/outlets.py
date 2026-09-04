@@ -1,26 +1,13 @@
-"""The Outlets tag: the version-cursor list, and one outlet by id.
+"""Outlets tag: the version-cursor list, and one outlet by id.
 
-DOCUMENTED (two operations, both ``🔒 Requires: `outlets:read` scope``):
+DOCUMENTED (scope ``outlets:read`` on both): ``ListOutlets`` takes ``after``,
+``before``, ``page_size`` and ``deleted``, answering ``OutletCollection``
+ascending by version; ``GetOutletByID`` answers ``{"data": {...}}``. The tag is
+read-only -- no create/update/delete for an outlet anywhere in the specification.
 
-* ``GET /outlets`` (``ListOutlets``) takes ``after``, ``before``,
-  ``page_size`` and ``deleted`` and answers ``OutletCollection`` --
-  ``{"data": [...], "version": {"max": ..., "min": ...}}``, ascending by
-  version;
-* ``GET /outlets/{outlet_id}`` (``GetOutletByID``) answers
-  ``OutletResponse`` -- ``{"data": {...}}``.
-
-The tag is read-only in this specification version: there is no create, update
-or delete for an outlet anywhere in the 135 paths, which is why nothing here
-mutates.
-
-THE PAGINATION DECLARATION on the list route is what lets a language-independent
-conformance check walk it. It is declared ``style="cursor"`` because that is
-the shape the core's :class:`~vendorfake.core.kernel.types.PaginationSpec`
-offers that matches how a caller actually pages here -- read the next cursor
-off the response and send it back -- even though the "cursor" is a plain
-integer version rather than an opaque token: ``cursor_param="after"``,
-``next_cursor_path="version.max"``, ``limit_param="page_size"``. The walk ends
-on an empty page, where ``version.max`` is ``null`` and the check stops.
+The list's pagination is ``style="cursor"``, walked via ``cursor_param="after"``
+and ``next_cursor_path="version.max"`` -- a plain integer version, not an
+opaque token, ending when ``version.max`` is ``null``.
 """
 
 from __future__ import annotations
@@ -54,9 +41,7 @@ VERSION_CURSOR_PAGINATION = PaginationSpec(
     next_cursor_path="version.max",
     id_path="id",
 )
-"""The one pagination shape every version-cursor list in this package
-declares. Shared from here rather than repeated per surface, so the four
-parameter names are written once."""
+"""The one pagination shape every version-cursor list in this package declares."""
 
 
 class LightspeedOutletsSurface:

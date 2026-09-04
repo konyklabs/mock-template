@@ -1,27 +1,10 @@
-"""Turning a validated scenario into store state.
+"""Turning a validated scenario into store state: what ``SquareVendor.hydrate`` calls, deciding a
+unit's world at start and again after ``POST /__unit/state/reset``.
 
-FOR: the one function ``SquareVendor.hydrate`` calls -- and therefore the one
-place that decides what a unit's world looks like at start and again after
-``POST /__unit/state/reset``.
-
-INVARIANT: **a seeded mutation is marked as one.** Every insert below carries
-``{"seed": True}`` in its journal meta, which is what stops the dispatcher
-pushing an ``order.created`` for an order that has existed since before the
-process started. Without it, subscribing to a fresh unit would deliver a
-backlog of events for history, and a consumer counting webhooks would be
-counting the scenario.
-
-SECOND INVARIANT: **a reference that does not resolve is a startup failure.** An
-order naming a location that is not in the document, or a line item naming a
-catalog variation that is not, raises rather than inserting a half-formed
-entity. The reference does the same, and the reason is worth stating: the
-alternative is a scenario that loads and then produces an order whose totals
-are silently zero.
-
-Entities are built through the frozen dataclasses in
-:mod:`vendorfake.square.entities` and inserted as ``to_entity()`` dicts, so
-"absence is absence" is mechanical here rather than remembered -- ``compact()``
-runs inside every one of them.
+INVARIANT -- a seeded mutation is marked as one: every insert below carries ``{"seed": True}`` in its
+journal meta, stopping the dispatcher pushing an ``order.created`` for an order predating the process.
+INVARIANT -- a reference that does not resolve is a startup failure: an order or line item naming an
+unknown location or catalog variation raises rather than inserting a half-formed entity.
 """
 
 from __future__ import annotations
@@ -60,12 +43,8 @@ SEED_META = {"seed": True, "operation_id": "SeedScenario"}
 
 
 def hydrate_square(ctx: UnitContext, seed: object, config: SquareConfig) -> SeedDocument:
-    """Load ``seed`` into ``ctx.store``. Returns the document that was loaded.
-
-    The document is returned rather than discarded so that a caller -- a test,
-    or a future control route reporting what the unit was seeded with -- can
-    ask what was loaded without re-reading the file.
-    """
+    """Load ``seed`` into ``ctx.store``. Returns the document loaded, so a caller can report what
+    the unit was seeded with without re-reading the file."""
     doc = parse_seed_document(seed)
     _insert_merchant(ctx, doc)
     _insert_locations(ctx, doc)
@@ -118,9 +97,7 @@ def _insert_locations(ctx: UnitContext, doc: SeedDocument) -> None:
             phone_number=location.phone_number,
         ).to_entity()
         if location.created_at is not None:
-            # Stated rather than defaulted: a scenario is entitled to say this
-            # location opened in 2016, and `Collection.insert` fills the key
-            # from the clock only when it is absent.
+            # Stated, not defaulted; `Collection.insert` fills this only when absent.
             entity["created_at"] = location.created_at
         locations.insert(entity, SEED_META)
 
@@ -189,13 +166,8 @@ def _insert_orders(ctx: UnitContext, doc: SeedDocument) -> None:
 
 
 def _resolve_tender(order: SeedOrder, tender: SeedTender) -> Tender:
-    """A seeded payment, with the fields PayOrder would have filled in.
-
-    ``location_id`` and ``transaction_id`` default to the order's, and
-    ``created_at`` to the moment the order was last touched, so a scenario
-    states the amount and the id and nothing that can contradict the order it
-    belongs to.
-    """
+    """A seeded payment, with the fields PayOrder would have filled in: ``location_id`` and
+    ``transaction_id`` default to the order's, ``created_at`` to when it was last touched."""
     return Tender(
         id=tender.id,
         location_id=tender.location_id or order.location_id,
@@ -208,13 +180,9 @@ def _resolve_tender(order: SeedOrder, tender: SeedTender) -> Tender:
 
 
 def _resolve_line_item(catalog: Collection, order: SeedOrder, line: SeedLineItem) -> OrderLineItem:
-    """Fill a seeded line's price and names from the catalog variation it names.
-
-    A line that names no ``catalog_object_id`` must carry its own
-    ``base_price_money``; a line that names one inherits price, variation name
-    and item name from it. Either way a line with no price is a scenario
-    defect, not a zero-priced order.
-    """
+    """Fill a seeded line's price and names from the catalog variation it names. A line naming no
+    ``catalog_object_id`` must carry its own ``base_price_money``; either way, no price is a
+    scenario defect, not a zero-priced order."""
     price = (
         None
         if line.base_price_money is None
@@ -256,12 +224,8 @@ def _resolve_line_item(catalog: Collection, order: SeedOrder, line: SeedLineItem
 
 
 def _insert_loyalty(ctx: UnitContext, doc: SeedDocument) -> None:
-    """The program, then the accounts that belong to it.
-
-    An account with no program is a scenario defect: Square accounts exist
-    only inside a program, and a unit that loaded them anyway would answer
-    the search and then fail every accumulation.
-    """
+    """The program, then the accounts that belong to it. An account with no program is a scenario
+    defect: Square accounts exist only inside a program."""
     program = doc.loyalty_program
     if program is None:
         if doc.loyalty_accounts:
@@ -378,13 +342,9 @@ def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: SquareConfig) ->
 
 
 def _insert_subscriptions(ctx: UnitContext, doc: SeedDocument, config: SquareConfig) -> None:
-    """Subscribers declared by the scenario rather than by the profile.
-
-    Built as a plain dict rather than through a dataclass because the
-    subscription entity belongs to the core -- the dispatcher reads it through
-    ``Subscription.from_entity`` -- and a vendor-side mirror of its field names
-    would be a second place to keep them.
-    """
+    """Subscribers declared by the scenario rather than the profile. Built as a plain dict, not a
+    dataclass, since the subscription entity belongs to the core and a vendor-side mirror of its
+    field names would be a second place to keep them."""
     subscriptions = ctx.store.collection(SUBSCRIPTION_COLLECTION)
     for subscription in doc.webhook_subscriptions:
         subscriptions.insert(

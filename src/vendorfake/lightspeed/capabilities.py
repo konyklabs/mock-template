@@ -1,24 +1,10 @@
 """What this vendor can be asked to do, and what it deliberately does not model.
 
-FOR: declaring the capability set once, so that the route table, the control
-plane's capability index and the core's own gating all read the same list --
-and recording, with reasons, every documented Lightspeed behaviour this fake
-chooses not to implement.
-
-INVARIANT: **every capability the core gates on is accounted for.** The core
-fails at construction when one of its gated capabilities (``chaos``,
-``webhooks``, ``webhooks.chaos``) is neither declared here nor excused in
+INVARIANT: every capability the core gates on (``chaos``, ``webhooks``,
+``webhooks.chaos``) is declared here or excused in
 ``VendorDefinition.not_supported`` with a reason.
 
-SCOPE. Three slices of konyklabs/roadmap#94 have landed: the chassis (the
-token endpoint and the authorize stand-in, the retailer, outlets, registers,
-payment types and webhooks), products/inventory/customers, and sales. That is
-the whole of the issue's scoped surface, so nothing is pending here; the
-documented behaviour this fake has decided AGAINST is what
-:data:`LIGHTSPEED_NOT_MODELED` below is for.
-
-``not_supported`` may not name anything the core does not gate on, so the
-documented Lightspeed features this fake omits live in
+The documented Lightspeed behaviour this fake omits lives in
 :data:`LIGHTSPEED_NOT_MODELED`, an informational map the surfaces cite.
 """
 

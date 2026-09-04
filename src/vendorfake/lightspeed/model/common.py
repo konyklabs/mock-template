@@ -1,18 +1,9 @@
 """Turning a Pydantic validation failure into the error this vendor publishes.
-
-FOR: letting a surface state its request shape as a model and still answer
-with the vendor's own error vocabulary, so that "clientId is required" is a
-``missing_field`` naming ``clientId`` rather than a Pydantic report.
-
-INVARIANT: **an absent field and an empty field are the same failure.** Every
-required string in a request model is spelled ``min_length=1`` and this module
-maps Pydantic's ``missing`` and ``string_too_short`` onto the one
-``missing_field`` kind. Everything else is ``invalid_value``.
-
-CHASSIS: this module is byte-for-byte the Clover and Toast packages'
-``model/common.py``. The cross-vendor extraction into ``core`` is
-konyklabs/roadmap#35; when it lands, this file goes and the import moves.
-"""
+Invariant: an absent field and an empty field are the same failure -- every
+required string is spelled ``min_length=1``, and Pydantic's ``missing`` and
+``string_too_short`` both map to ``missing_field``; everything else is
+``invalid_value``. Byte-for-byte identical to the Clover and Toast packages'
+``model/common.py`` (cross-vendor extraction tracked at konyklabs/roadmap#35)."""
 
 from __future__ import annotations
 
@@ -69,12 +60,7 @@ def validate_body(model: type[_M], body: Any) -> _M:
 
 
 def validate_items(model: type[_M], body: Any, *, what: str) -> list[_M]:
-    """Validate a non-empty JSON array of ``model``; a failure names ``[i].field``.
-
-    ``PUT /registers/{id}/actions/close`` takes an array of per-payment-type
-    totals, and later slices' sale bodies take arrays of line items. The index
-    prefix is what lets a consumer see which element was refused.
-    """
+    """Validate a non-empty JSON array of ``model``; a failure names ``[i].field``."""
     if not isinstance(body, list) or not body:
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,

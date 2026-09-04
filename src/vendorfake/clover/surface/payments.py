@@ -1,37 +1,16 @@
 """The payments surface: an external-tender payment record on an order.
 
-``POST /v3/merchants/{mId}/orders/{orderId}/payments`` --
-https://docs.clover.com/dev/reference/ordercreatepaymentfororder:
-"Payment must include a `positive amount` and a valid `tender ID`. Note:
-This endpoint references external tenders and logs them for bookkeeping
-purposes. This is not for Clover credits/debit tenders."
+DOCUMENTED (https://docs.clover.com/dev/reference/ordercreatepaymentfororder):
+"Payment must include a positive amount and a valid tender ID ... not for
+Clover credit/debit tenders." Payment object fields per
+https://docs.clover.com/dev/docs/get-all-payments.
 
-The record answered is the documented payment object -- ``id``,
-``order{id}``, ``tender{href, id}``, ``amount`` ("Total amount paid"),
-``tipAmount``, ``taxAmount`` ("Tax amount paid"), ``cashbackAmount``,
-``employee{id}``, ``createdTime``, ``clientCreatedTime``, ``modifiedTime``,
-``offline`` (default false), ``result`` (enum SUCCESS|FAIL|INITIATED|VOIDED|
-VOIDING|VOID_FAILED|AUTH|AUTH_COMPLETED|DISCOUNT|OFFLINE_RETRYING|PENDING),
-``note`` -- in the shape the get-all-payments guide shows verbatim
-(https://docs.clover.com/dev/docs/get-all-payments). A bookkeeping record
-always succeeds, so ``result`` is ``SUCCESS``.
-
-What paying does to the order, and its provenance:
-
-* the order is **locked** -- "locked is automatically set by Clover" when a
-  payment is taken (https://docs.clover.com/dev/docs/creating-custom-orders),
-  and it moves there through the order machine, so an order that cannot be
-  locked cannot be paid;
-* ``paymentState`` becomes ``PAID`` when the payments on the order cover its
-  ``total``, ``PARTIALLY_PAID`` otherwise -- JUDGMENT: the values are
-  documented, the rule that picks one is not;
-* the payment is recorded on the order as a ``payments[]`` reference and in
-  the payments collection, both journalled as ``CreatePayment`` -- one
-  request, one operation, two writes.
-
-JUDGMENT: an unknown ``tender.id`` or ``employee.id`` is a 400 naming the
-field; a non-positive ``amount`` is a 400 quoting the documented sentence.
-Every refusal precedes both writes.
+Paying an order locks it via the order machine
+(https://docs.clover.com/dev/docs/creating-custom-orders); ``paymentState``
+is ``PAID`` once payments cover ``total``, else ``PARTIALLY_PAID`` (JUDGMENT:
+the rule that picks one is undocumented). JUDGMENT: an unknown
+``tender.id``/``employee.id`` or non-positive ``amount`` is a 400; every
+refusal precedes both writes.
 """
 
 from __future__ import annotations
@@ -96,11 +75,7 @@ class CloverPaymentsSurface:
                 field="amount",
             )
         if order.paymentState == "PAID":
-            # JUDGMENT: an order already paid in full takes no further payment.
-            # Clover documents nothing about paying a PAID order; a consumer's
-            # flow pays exactly `total`, and a second full payment silently
-            # accepted is the worse surprise. Over-tendering within ONE payment
-            # of an unpaid order is allowed (cash with change is real).
+            # JUDGMENT: no further payment once paid in full; over-tendering an unpaid order is allowed.
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail=f"Order {order.id} is already PAID; it takes no further payment.",
@@ -118,8 +93,7 @@ class CloverPaymentsSurface:
                 detail=f"Employee {request.employee.id} was not found.",
                 field="employee.id",
             )
-        # The move to locked is the machine's to allow; an order already
-        # locked (a second payment) stays there.
+        # An order already locked (a second payment) stays there.
         current_state = OrderState.OPEN.value if order.state is None else order.state.lower()
         if current_state != OrderState.LOCKED.value:
             _MACHINE.assert_transition(current_state, OrderState.LOCKED.value, f"Order {order.id}")

@@ -1,28 +1,17 @@
-"""Turning a validated scenario into store state.
+"""Turning a validated scenario into store state, called by
+``LightspeedVendor.hydrate`` at start and on ``POST /__unit/state/reset``.
 
-FOR: the one function ``LightspeedVendor.hydrate`` calls -- at start and again
-on ``POST /__unit/state/reset``.
+Invariant: a seeded mutation is marked as one -- every insert carries
+``{"seed": True}`` in its journal meta, so the webhook dispatcher never fires
+for a record that predates the process. Seeded ids come from the document
+itself; only the Lightspeed ``version`` numbers (the retailer's counter, in
+document order) and token expiries (the unit's clock) are computed here.
 
-INVARIANT: **a seeded mutation is marked as one.** Every insert carries
-``{"seed": True}`` in its journal meta, which is what stops the webhook
-dispatcher pushing an event for a record that existed before the process
-started.
-
-SECOND INVARIANT: **seeded ids come from the document, never from the id
-stream.** The only values this function computes are the Lightspeed
-``version`` numbers -- drawn from the retailer's counter in document order, so
-two units stamp the same sequence -- and the token expiries, which come from
-the unit's clock.
-
-THE ORDER IS THE VERSION ORDER. Entities are inserted retailer, outlets,
-registers, payment types, products, inventory, customer groups, customers,
-adjustment reasons, stock adjustments, sales -- so the version numbers ascend
-in that order and a consumer paging ``/outlets`` sees them in the order the
-document lists them. Changing the order here renumbers every entity, which is
-why it is stated rather than incidental, and why each slice of
-konyklabs/roadmap#94 APPENDED its collections rather than slotting them in
-beside the ones already there. Sales come last of all, because a sale refers to
-everything before it.
+Entities insert retailer, outlets, registers, payment types, products,
+inventory, customer groups, customers, adjustment reasons, stock
+adjustments, then sales last (a sale can refer to everything before it) --
+so version numbers ascend in that order and a consumer paging a collection
+sees them the way the document lists them.
 """
 
 from __future__ import annotations
@@ -312,20 +301,11 @@ def _insert_adjustments(ctx: UnitContext, doc: SeedDocument, versions: Lightspee
 
 
 def _insert_sales(ctx: UnitContext, doc: SeedDocument, versions: LightspeedVersions) -> None:
-    """Seeded sales, through the same stored shape a request produces.
-
-    The money conversion is ``model/money.py``'s, the same call the surface
-    makes, so a seeded sale and a posted one are indistinguishable in the store
-    -- which is what lets a test drive the seeded closed sale through the
-    return action.
-
-    ``outlet_id`` and ``invoice_number`` are DERIVED here exactly as
-    ``surface/sales.py`` derives them: the register's outlet, and the
-    register's ``invoice_prefix``/``invoice_sequence``/``invoice_suffix`` with
-    the sequence advanced by the number of sales already seeded on that
-    register. A scenario may state its own ``invoice_number`` and then that
-    wins.
-    """
+    """Seeded sales, through the same stored shape a request produces, so a
+    seeded closed sale can be driven through the return action like a posted
+    one. ``outlet_id``/``invoice_number`` are derived exactly as
+    ``surface/sales.py`` derives them, unless the scenario states its own
+    ``invoice_number``."""
     registers = {register.id: register for register in doc.registers}
     taken: dict[str, int] = {}
     sales = ctx.store.collection(COL.sales)
@@ -416,13 +396,9 @@ def _optional(value: str | None, field: str) -> str | None:
 
 
 def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: LightspeedConfig) -> None:
-    """The three kinds of credential a scenario can pre-issue.
-
-    A token draws no version: credentials are not a versioned resource in this
-    API -- ``VersionsData``'s key list names ``users`` and thirty-two other
-    resource types and no token of any sort -- so nothing here bumps the
-    counter.
-    """
+    """The three kinds of credential a scenario can pre-issue. A token draws
+    no version: credentials aren't a versioned resource in this API, so
+    nothing here bumps the counter."""
     now = int(ctx.clock.now())
     tokens = ctx.store.collection(COL.tokens)
     for token in doc.tokens:
@@ -447,8 +423,7 @@ def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: LightspeedConfig
                 client_id=config.client_id,
                 scopes=tuple(personal.scopes),
                 kind=KIND_PERSONAL,
-                # No expiry: an admin creates a personal token in the web
-                # application and the docs state no lifetime for one.
+                # No expiry: the docs state no lifetime for a personal token.
                 expires_at_ms=None,
                 created_at_ms=now,
             ).to_entity(),
@@ -482,13 +457,9 @@ def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: LightspeedConfig
 
 
 def _insert_webhooks(ctx: UnitContext, doc: SeedDocument, config: LightspeedConfig) -> None:
-    """Subscriptions declared by the scenario, as plain dicts: the subscription
-    entity belongs to the core.
-
-    ``signature_key`` is the application's ``client_secret`` on every one,
-    because that is what Lightspeed signs with -- ``WebhookRequest`` carries no
-    per-hook secret. See ``signer.py``.
-    """
+    """Subscriptions declared by the scenario, as plain dicts. ``signature_key``
+    is the application's ``client_secret`` on every one -- what Lightspeed
+    signs with; see ``signer.py``."""
     subscriptions = ctx.store.collection(COL.webhooks)
     for webhook in doc.webhooks:
         subscriptions.insert(

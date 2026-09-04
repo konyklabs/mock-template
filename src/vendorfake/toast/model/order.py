@@ -1,26 +1,20 @@
 """The order wire vocabulary: what the orders surface parses, and how a stored
 order, check, selection, payment and applied discount are projected.
 
-FOR: stating once what a Toast order document carries -- field names, units,
-enums -- so the surfaces parse and project through one vocabulary and tests
-can pin it without a unit.
+Field sets are the orders specification's (toast-orders-api.yaml v2.9.5).
+Units on the wire: money is decimal dollars (``model/money.py``), instants
+are ``...+0000`` strings (``model/dates.py``), ``businessDate`` is an integer
+``yyyyMMdd``, ``quantity`` is a double; the store keeps cents, epoch ms, and
+the same integer and double.
 
-Field sets are the orders specification's (toast-orders-api.yaml v2.9.5); see
-the audit for the full listing. Units on the wire: money is decimal dollars
-(``model/money.py``), instants are ``...+0000`` strings (``model/dates.py``),
-``businessDate`` is an integer ``yyyyMMdd``, ``quantity`` is a double. In the
-store: cents, epoch ms, the same integer, the same double.
+Projection emits the read-only fields with the documented nulls
+(``"externalId": null``) and drops what the scenario never set, so a
+consumer's ``if "table" in order`` sees what the sparse real document would
+give.
 
-Projection emits the read-only fields the specification lists with the
-documented nulls where the documented Order example shows them
-(``"externalId": null``) and drops what the scenario never set; a consumer
-writing ``if "table" in order`` takes the branch the sparse real document
-would give.
-
-Requests are ``extra="ignore"``: a documented Order carries far more than an
-ordering integration sends, and a body copied back from a GET must not 400 on
-a read-only field. Money in a request is ``int | float | str`` and converted
-by the surface so the 400 names the field path.
+Requests are ``extra="ignore"``, since a documented Order carries far more
+than an integration sends; money in a request is ``int | float | str``,
+converted by the surface so a 400 names the field path.
 """
 
 from __future__ import annotations
@@ -95,15 +89,10 @@ class DeliveryInfoRequest(BaseModel):
 class AppliedServiceChargeRequest(BaseModel):
     """A service charge a caller puts on a check.
 
-    ``extra="forbid"``, alone among the request models, and deliberately: the
-    stored check echoes these back through every GET and every webhook, so a
-    lax model here would be the one place a client injects free JSON into a
-    projected document (konyklabs/roadmap#39 review, finding 7). The field
-    set is JUDGMENT, assembled from the config API's ServiceCharge vocabulary
-    -- the orders specification lists ``appliedServiceCharges`` and no shape.
-    ``serviceCharge.guid`` must resolve like every other reference;
-    ``chargeAmount`` is caller-stated and never computed
-    (``TOAST_NOT_MODELED``).
+    ``extra="forbid"``, alone among the request models, since the stored check
+    echoes these back through every GET and webhook (konyklabs/roadmap#39).
+    The field set is JUDGMENT, assembled from the config API's ServiceCharge
+    vocabulary; the orders specification lists the field and no shape.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -254,10 +243,8 @@ def _external_ref(guid: Any, entity_type: str, external_id: Any) -> dict[str, An
 
 def project_applied_discount(stored: Mapping[str, Any]) -> dict[str, Any]:
     """The documented AppliedDiscount, key order from apiDiscountingOrders.html."""
-    # ``approver``, ``processingState`` and ``loyaltyDetails`` are omitted
-    # rather than answered null: the schema types them as objects/enums with
-    # no nullable, and the discounting walkthrough's example does not carry
-    # them (JUDGMENT: omission; found by the fidelity validator, roadmap#56).
+    # JUDGMENT: ``approver``/``processingState``/``loyaltyDetails`` are omitted, not
+    # null -- non-nullable in the schema and absent from the example (konyklabs/roadmap#56).
     document = {
         "guid": stored.get("guid"),
         "entityType": "AppliedCustomDiscount",

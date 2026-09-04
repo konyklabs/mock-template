@@ -1,25 +1,14 @@
-"""The inventory wire vocabulary: what a batch change accepts, and the counts
-and changes that go back out.
+"""The inventory wire vocabulary: what a batch change accepts, and the counts and changes that go back out.
+https://developer.squareup.com/reference/square/objects/InventoryChange https://developer.squareup.com/reference/square/objects/InventoryPhysicalCount
+https://developer.squareup.com/reference/square/objects/InventoryAdjustment https://developer.squareup.com/reference/square/objects/InventoryCount
 
-Shapes from
-https://developer.squareup.com/reference/square/objects/InventoryChange,
-https://developer.squareup.com/reference/square/objects/InventoryPhysicalCount,
-https://developer.squareup.com/reference/square/objects/InventoryAdjustment and
-https://developer.squareup.com/reference/square/objects/InventoryCount.
+INVARIANT: quantity is a decimal string in and out -- "up to 5 digits after the decimal point"; a JSON
+number is refused (strict validation), and a non-decimal or over-precise string is ``invalid_value``.
+Stored quantities are normalised (``"25"``, ``"1.5"``, never ``"1.50"``).
 
-INVARIANT: **quantity is a decimal string, on the way in and on the way out.**
-"The number of items affected ... as a decimal string. The number can support
-up to 5 digits after the decimal point." A JSON number is refused (strict
-validation), and a string that is not a decimal, or has more than five
-fractional digits, is ``invalid_value`` naming the field. Stored quantities
-are normalised -- ``"25"``, ``"1.5"``, never ``"1.50"`` or ``"25.0"`` -- so a
-count reads back the same however it was written.
-
-SHRINK (prototype): ``TRANSFER`` changes, ``measurement_unit``,
-``total_price_money``, ``reference_id``, the employee / team-member fields and
-every ``InventoryState`` other than ``IN_STOCK`` as a *tracked* count are not
-modelled; see :mod:`vendorfake.square.surface.inventory` for what an
-adjustment into or out of ``IN_STOCK`` does.
+SHRINK (prototype): ``TRANSFER`` changes, ``measurement_unit``, ``total_price_money``, ``reference_id``,
+employee fields and every ``InventoryState`` other than ``IN_STOCK`` as a tracked count are not modelled;
+see :mod:`vendorfake.square.surface.inventory`.
 """
 
 from __future__ import annotations
@@ -143,11 +132,9 @@ def _opt_str(value: Any) -> str | None:
 
 
 class PhysicalCountRequest(BaseModel):
-    """``physical_count``: "Represents the quantity of an item variation that
-    is physically present at a specific location, verified by a seller or a
-    seller's employee." ``state`` is the state counted; this unit tracks
-    ``IN_STOCK``. ``occurred_at`` is "A client-generated RFC 3339-formatted
-    timestamp that indicates when the physical count was examined".
+    """``physical_count``: a quantity verified by a seller/employee at a
+    location; ``state`` is the state counted (this unit tracks ``IN_STOCK``);
+    ``occurred_at`` is when the count was examined.
     """
 
     model_config = _REQUEST
@@ -161,9 +148,8 @@ class PhysicalCountRequest(BaseModel):
 
 
 class AdjustmentRequest(BaseModel):
-    """``adjustment``: "Represents a change in state or quantity of product
-    inventory at a particular time and location." A quantity moves
-    ``from_state`` to ``to_state``.
+    """``adjustment``: a quantity moving from ``from_state`` to ``to_state``
+    at a particular time and location.
     """
 
     model_config = _REQUEST
@@ -190,11 +176,8 @@ class InventoryChangeRequest(BaseModel):
 class BatchChangeInventoryRequest(BaseModel):
     """``POST /v2/inventory/changes/batch-create``.
     https://developer.squareup.com/reference/square/inventory-api/batch-change-inventory
-
-    ``idempotency_key`` is required ("Min Length 1, Max Length 128") and read
-    by the kernel. ``ignore_unchanged_counts``: "Indicates whether the current
-    physical count should be ignored if the quantity is unchanged since the
-    last physical count. Default: `true`."
+    ``idempotency_key`` is required and read by the kernel;
+    ``ignore_unchanged_counts`` defaults to true.
     """
 
     model_config = _REQUEST
@@ -207,11 +190,8 @@ class BatchChangeInventoryRequest(BaseModel):
 class BatchRetrieveInventoryCountsRequest(BaseModel):
     """``POST /v2/inventory/counts/batch-retrieve``.
     https://developer.squareup.com/reference/square/inventory-api/batch-retrieve-inventory-counts
-
-    Every filter optional: "catalog_object_ids: The filter to return results
-    by CatalogObject ID. The filter is applicable only when set." Likewise
-    ``location_ids`` and ``states``; ``updated_after`` "Return results whose
-    `calculated_at` value is after the given time". ``limit``: "Min 1".
+    Every filter (``catalog_object_ids``, ``location_ids``, ``states``,
+    ``updated_after``) is optional and applied only when set.
     """
 
     model_config = _REQUEST

@@ -1,23 +1,10 @@
 """Hand-written path constants for Toast, one per route with an operation_id.
 
-FOR: a consumer who wants ``paths.LOGIN`` instead of a route path typed into
-every test -- and a route path that CANNOT drift from what the router
-actually serves, because ``tests/unit/test_paths_drift.py`` builds a real
-Toast vendor, reads its route table and asserts these constants against it:
-one constant per non-internal route carrying an ``operation_id``, values
-equal, and no constant naming a route that does not exist.
-
 Constants are ``UPPER_SNAKE`` of the route's ``operation_id`` -- the same
 identifier :func:`vendorfake.registry.routes` and ``GET /__unit/routes``
-publish, including the ``Config<Type>sGet``/``Config<Type>Get`` pairs the
-configuration surface generates one per resource
-(``vendorfake.toast.model.config.CONFIG_RESOURCES``). Toast's own
-``toast/surface/auth.py`` exported ``LOGIN_PATH`` before this module existed;
-it is kept as a deprecated alias of :data:`LOGIN` rather than removed, because
-v0.1.0 consumers may already import it.
-
-Do not hand-edit a value without also fixing the route it names, or the drift
-test fails naming exactly which constant disagrees with the router.
+publish. ``tests/unit/test_paths_drift.py`` builds a real Toast vendor and
+asserts every constant here against its route table, so a hand-edited value
+that disagrees with the router fails that test by name.
 """
 
 from __future__ import annotations

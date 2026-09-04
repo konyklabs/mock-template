@@ -1,24 +1,19 @@
 """The shapes this vendor stores, and the collections it stores them in.
 
-FOR: giving the surfaces one typed reading of every stored entity the surfaces
-*mutate*, so the name of a stored field is written down once. Reference data
-(the config lists, the menu, the connected-restaurant rows) is stored as the
-plain documents the reference pages list and projected as stored.
+One typed reading of every stored entity the surfaces mutate, so a stored
+field's name is written down once. Reference data (config lists, the menu,
+connected-restaurant rows) is stored as the plain documents the reference
+pages list.
 
-INVARIANT: **absence is absence.** A field never set is missing from the
-entity dict, never present as ``None``; every ``to_entity`` drops unset
-optionals through the core's ``compact()``.
+INVARIANT: absence is absence -- a field never set is missing from the entity
+dict, never present as ``None``; every ``to_entity`` drops unset optionals
+through the core's ``compact()``.
 
-Time, in this package's entities
---------------------------------
-Every stored instant is **epoch milliseconds** under the Toast field name it
-projects to (``openedDate``, ``modifiedDate``, ...); the projection formats it
-as the documented ``...+0000`` string (``model/dates.py``). Internal bookkeeping
-fields keep this project's snake_case with a ``_ms`` suffix
-(``expires_at_ms``).
-
-Ids: the store needs ``id``; Toast's field is ``guid``. Every entity carries
-its guid as ``id`` and the projections spell it ``guid``.
+Every stored instant is epoch milliseconds under the Toast field name it
+projects to (``openedDate``, ...); the projection formats it as the
+documented ``...+0000`` string (``model/dates.py``). The store needs ``id``;
+Toast's field is ``guid`` -- every entity carries its guid as ``id`` and the
+projections spell it ``guid``.
 """
 
 from __future__ import annotations
@@ -115,12 +110,10 @@ def _mapping(value: Any) -> dict[str, Any]:
 @dataclass(frozen=True, slots=True)
 class RestaurantEntity:
     """One restaurant, stored in the documented restaurants-API shape
-    (https://doc.toasttab.com/toast-api-specifications/toast-restaurants-api.yaml):
-    ``general{name, locationName, locationCode, description, timeZone,
-    closeoutHour, managementGroupGuid, currencyCode}`` and ``location{...}``;
-    the other documented blocks (``urls``, ``schedules``, ``delivery``,
-    ``onlineOrdering``, ``prepTimes``) are stored as the seed supplied them --
-    their sub-shapes are not enumerated anywhere (audit gap 11)."""
+    (https://doc.toasttab.com/toast-api-specifications/toast-restaurants-api.yaml): ``general``, ``location`` and other blocks
+    (``urls``, ``schedules``, ``delivery``, ``onlineOrdering``, ``prepTimes``)
+    stored as the seed supplied them, since their sub-shapes are not
+    enumerated anywhere (audit gap 11)."""
 
     id: str
     general: dict[str, Any]
@@ -193,11 +186,8 @@ class RestaurantEntity:
 
 @dataclass(frozen=True, slots=True)
 class TokenEntity:
-    """One issued access token. ``id`` is the JWT's ``jti``.
-
-    No refresh token: Toast documents none a client may use. ``expires_at_ms``
-    is the instant the token stops working -- at or before is expired.
-    """
+    """One issued access token. ``id`` is the JWT's ``jti``; no refresh token,
+    since Toast documents none a client may use."""
 
     id: str
     access_token: str

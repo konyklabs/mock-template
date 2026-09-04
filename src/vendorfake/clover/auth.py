@@ -1,35 +1,14 @@
-"""Who a presented credential is, in Clover's one documented scheme.
+"""Who a presented credential is: Clover's one documented scheme, bearer
+tokens only (https://docs.clover.com/dev/docs/401-unauthorized).
 
-FOR: turning an ``Authorization`` header into an
-:class:`~vendorfake.core.kernel.types.AuthResult` the kernel can check
-required permissions against. One scheme only: "API requests must be
-authenticated using the Authorization Bearer header"
-(https://docs.clover.com/dev/docs/401-unauthorized).
-
-THE DOCUMENTED CONFLATION, and how this adapter implements it: "The API does
-not distinguish between an unauthorized error (401 - expired/invalid token)
-and a permissions error (403 - token has insufficient permissions) and
-returns a 401 Unauthorized in either case."
-https://docs.clover.com/dev/docs/401-unauthorized
-
-Every refusal below raises its core kind **without a detail**, so the error
-table's message -- the same ``"401 Unauthorized"`` on every one of those rows
--- is what goes on the wire. A missing header, an unknown token, an expired
-token and (via the kernel's own permission check raising ``forbidden_scope``)
-an under-permitted token are therefore *indistinguishable on Clover's wire*,
-exactly as documented; the ``unit_error`` sidecar carries the distinction for
-whoever is debugging this fake. There is no 403 anywhere in this vendor.
-
-Permissions come from the token record, which inherited the app's fixed set
-at mint (Clover permissions are app-level, set in the dashboard, not
-requested per token -- see ``config.py``). The kernel checks
-``Route.scopes`` against them; this adapter only reports them.
-
-A rotated refresh token does not end an access token: ``refresh_used_at_ms``
-is deliberately not consulted here. Clover documents rotation as invalidating
-the *refresh* token only, and says nothing about access tokens minted
-earlier (JUDGMENT, labelled in ``surface/oauth.py``). Only the clock ends a
-token -- there is no revoke endpoint in Clover's v2 OAuth at all.
+DOCUMENTED CONFLATION: Clover returns 401 for both an invalid/expired token
+and an under-permitted one, never 403; every refusal here raises without a
+detail so the wire stays a bare 401, while ``unit_error`` carries the real
+reason for debugging. Permissions come from the token record, inherited from
+the app's fixed set at mint (``config.py``). JUDGMENT: rotating a refresh
+token does not end its access token (Clover documents rotation as
+invalidating only the refresh token, see ``surface/oauth.py``); there is no
+revoke endpoint, so only the clock ends a token.
 """
 
 from __future__ import annotations
@@ -54,18 +33,13 @@ BEARER_SCHEME = "Bearer"
 
 
 def _split_scheme(header: str) -> tuple[str, str]:
-    """``"Bearer abc def"`` -> ``("Bearer", "abc def")``. The credential keeps
-    its inner spaces: a token is opaque."""
+    """``"Bearer abc def"`` -> ``("Bearer", "abc def")``."""
     scheme, separator, credential = header.partition(" ")
     return (scheme, credential if separator else "")
 
 
 class CloverAuth:
-    """Clover's authentication. Satisfies ``AuthAdapter``.
-
-    Holds the vendor rather than a copy of its configuration, because the
-    permission vocabulary resolves again on every hydrate.
-    """
+    """Clover's authentication. Satisfies ``AuthAdapter``."""
 
     __slots__ = ("_deps",)
 
@@ -84,14 +58,7 @@ class CloverAuth:
         }
 
     def credentials(self, ctx: UnitContext) -> Sequence[AuthCredential]:
-        """Every credential this unit would currently accept.
-
-        Read out of the store rather than out of any seed, so a token minted
-        by an OAuth flow a moment ago is offered and one the clock has ended
-        is not. Rotated-refresh records still appear when their access token
-        is alive, because that access token still authenticates -- offering it
-        is the honest answer.
-        """
+        """Every currently valid credential, read live so an ended token drops out."""
         offered: list[AuthCredential] = []
         for entity in ctx.store.collection(COL.tokens).all():
             token = TokenEntity.from_entity(entity)
@@ -109,9 +76,7 @@ class CloverAuth:
         return tuple(offered)
 
     def resolve(self, args: HandlerArgs, mode: AuthMode) -> AuthResult:
-        """Resolve the bearer, or raise a kind whose wire body is the one
-        documented ``401 Unauthorized``. No detail on purpose -- see the
-        module docstring."""
+        """Resolve the bearer, or raise with no detail (wire stays a bare 401)."""
         header = args.header("authorization")
         if not header:
             raise UnitError(UnitErrorKind.UNAUTHORIZED, info={"reason": "no_authorization_header"})

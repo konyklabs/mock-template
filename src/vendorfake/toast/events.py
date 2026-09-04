@@ -1,48 +1,24 @@
 """Committed state mutation -> Toast webhook envelope.
 
-FOR: deriving every webhook this unit sends from the journal, so an event
-exists exactly when a mutation committed. **No handler emits**; the store's
-journal decides, and this mapper keys on the journal's collection.
+Derives every webhook from the journal, keyed on collection; no handler emits.
 
-THE THREE CATEGORIES, all documented (``model/webhooks.py``):
+DOCUMENTED (``model/webhooks.py``): an ``orders``/``payments`` write is one
+``order_updated`` carrying the full Order as ``GET /orders/{guid}`` answers it
+("a new order is also considered an update", devOrdersWebhookRef.html); a
+``stock`` write is ``in_stock``/``out_of_stock``/``low_quantity`` per the
+documented status mapping and threshold (apiStockWebhook.html); a ``menus``
+write is ``menus_updated`` with ``{restaurantGuid, publishedDate}``.
 
-* an ``orders`` write, or a ``payments`` write, is one ``order_updated`` for
-  the order concerned, with ``details.order`` the full Order exactly as
-  ``GET /orders/{guid}`` answers it ("A new order is also considered an
-  update", devOrdersWebhookRef.html);
-* a ``stock`` write is ``in_stock``, ``out_of_stock`` or ``low_quantity``
-  with the documented details (apiStockWebhook.html): ``OUT_OF_STOCK`` ->
-  ``out_of_stock``; ``IN_STOCK`` -> ``in_stock``; ``QUANTITY`` ->
-  ``low_quantity`` when the quantity is at or under the configured threshold
-  ("5 or less (currently 5)") and ``in_stock`` (with ``status: QUANTITY`` and
-  the ``quantity``) otherwise;
-* a ``menus`` write is ``menus_updated`` with ``{restaurantGuid,
-  publishedDate}``; ``publishedDate`` takes the webhook ``...Z`` spelling,
-  like every date this package writes INTO an envelope (the audit's rule:
-  REST dates ``+0000``, webhook dates ``...Z``).
+Envelope dates use the webhook ``...Z`` spelling except ``details.order``,
+which keeps the REST ``+0000`` spelling since that document is "the full
+Order as GET returns it".
 
-The envelope's ``timestamp`` is the dispatcher's ``created_at`` -- the core
-clock's RFC 3339 millisecond spelling, which is the documented webhook form
-(``...Z``) -- and its ``guid`` is the dispatcher's event id, stable across
-retries, which is what a consumer deduplicates on. JUDGMENT on that guid's
-shape: it is UUID-grouped lowercase hex but deliberately NOT a version-4
-value (the dispatcher derives it from a digest and claims no version nibble),
-so it satisfies the documented "lowercase UUID" format loosely; a consumer
-must treat it as opaque. Every other date inside a delivery takes the webhook
-``...Z`` spelling too (``publishedDate``) -- EXCEPT the dates inside
-``details.order``, which keep the REST ``+0000`` spelling because that
-document is defined as "the full Order as GET returns it". ``details.order`` carries
-the guest's ``customer`` and the ``deliveryInfo``: the subscription is the
-partner's, and the scoping of those two blocks is documented on the REST GET,
-not on the webhook (JUDGMENT).
-
-The payments-collection write is mapped as an order update because a payment
-is only ever observable through its order on Toast's wire; the orders surface
-also bumps the order on every payment write, so the same request produces two
-journal entries and two envelopes for one order. JUDGMENT: both are sent --
-Toast documents "updates ... more than once" and no coalescing rule -- and a
-consumer written for the documented at-least-once contract is correct either
-way.
+JUDGMENT: the envelope ``guid`` is the dispatcher's event id (stable across
+retries, for dedup) -- UUID-shaped but not version-4, so a consumer must
+treat it as opaque. A payment write is mapped as an order update, since a
+payment is only observable through its order; the orders surface also bumps
+the order on every payment write, so one request can produce two envelopes,
+both sent, since Toast documents no coalescing rule.
 """
 
 from __future__ import annotations

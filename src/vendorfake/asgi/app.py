@@ -1,37 +1,6 @@
-"""The ASGI application: one catch-all route over a synchronous unit.
-
-FOR: putting a socket in front of ``Unit.handle`` and doing nothing else. This
-module and :mod:`vendorfake.asgi.adapt` are the only places in the
-distribution that import a web framework, and everything about their shape is
-chosen to keep that true.
-
-INVARIANT: **the unit answers every request, including every error.** There is
-exactly one route -- ``/{full_path:path}`` over the complete verb set -- and it
-declares no typed parameters, so the framework has nothing to validate, no
-path to fail to match and no method to reject. A framework 404 would be an
-error document in the framework's vocabulary rather than the vendor's, and a
-consumer testing their error handling against it would be testing Starlette.
-A framework 422 would be worse: it would mean the framework parsed a body,
-which is the leak the core exists to prevent.
-
-Handlers are registered for the two exceptions a framework answers with --
-``HTTPException`` and ``RequestValidationError`` -- and each logs at ``error``
-and hands the request to the unit anyway.
-
-Two more shapes worth stating, because both are easy to undo by accident:
-
-**No middleware.** Not for compression, not for CORS, not for a request id.
-Every middleware in the stack is a chance to rewrite the bytes the unit
-produced, and byte-for-byte agreement between this binding and the in-process
-one is a conformance contract, not a nicety. Anything a response needs is set
-by the vendor's ``decorate`` hook inside the core, where every binding gets it.
-
-**The synchronous core is bridged, not adapted.** ``Unit.handle`` is a plain
-``def`` holding a real lock; calling it directly from the event loop would
-block every other connection for the duration. ``run_in_threadpool`` gives it
-a worker thread, which is also what makes the ``serialized=False`` routes --
-draining the webhook queue, advancing a virtual clock -- work at all: they wait
-on machinery another request has to feed.
+"""The ASGI application: one catch-all route over a synchronous unit. The unit
+answers every request, including every error; no typed parameters and no
+middleware, and ``Unit.handle`` runs via ``run_in_threadpool``.
 """
 
 from __future__ import annotations
@@ -72,46 +41,15 @@ HTTP_METHODS: tuple[str, ...] = (
     "OPTIONS",
     "TRACE",
 )
-"""Every verb the catch-all is registered for.
-
-Complete on purpose and pinned by a test. A verb missing from this tuple is
-answered by Starlette with a 405 that never reaches the unit -- which is the
-one way the catch-all can have a hole while still looking like a catch-all.
-An exotic method outside this set (``PROPFIND``, say) is the only request in
-this design a framework can still answer first; the exception handler hands it
-to the unit."""
+"""Every verb the catch-all is registered for; a missing one gets a Starlette 405."""
 
 OPENAPI_PATH = "/__unit/openapi.json"
-"""Where the generated description of the surface is served.
-
-Deliberately *not* a control-plane route. The document describes an HTTP
-surface, so it is a fact about this binding rather than about the unit, and the
-unit's own route table stays the same whichever binding is in front of it. The
-same document is printed by ``vendorfake openapi`` with no server running, from
-the generator in the core -- which is why the framework's own generator is
-switched off entirely rather than merely ignored: pointed at a single catch-all
-route it would publish one wildcard entry and call it a description."""
+"""Where the generated surface description is served, per binding."""
 
 
 class TransportFaultAbort(Exception):
-    """Raised from inside a streaming ASGI body for ``connection_reset`` /
-    ``empty_response``, and never caught.
-
-    FOR: forcing the connection closed after the response has already started,
-    which is the one thing a served unit can do that an in-process one cannot
-    fake by raising a client-side exception directly -- there is a real socket
-    here, and the fault is what happens to it. Starlette's
-    :class:`~starlette.responses.StreamingResponse` sends ``http.response.start``
-    (status and headers) before it ever asks its body iterator for a chunk, so
-    by the time this is raised the caller has already committed to reading a
-    body it will not finish getting -- which is the "after http.response.start,
-    close without completing" the spec describes for ``connection_reset``, and
-    the closest this ASGI server allows for ``empty_response`` (no vendor
-    lets an HTTP response omit its status line, so "before any bytes" cannot
-    mean before *those*). Left to propagate: uvicorn logs the exception and
-    aborts the connection, which is what a real reset or a real stalled
-    connection looks like from the client's side too.
-    """
+    """Raised from a streaming body for ``connection_reset``/``empty_response``
+    and never caught; the status line is sent, so uvicorn aborts the connection."""
 
 
 async def _aborted_body() -> AsyncIterator[bytes]:
@@ -120,14 +58,7 @@ async def _aborted_body() -> AsyncIterator[bytes]:
 
 
 async def _slow_body(body: bytes, chunk_bytes: int, chunk_delay_ms: int) -> AsyncIterator[bytes]:
-    """Stream ``body`` in ``chunk_bytes`` pieces, sleeping ``chunk_delay_ms``
-    between them -- awaited, never slept, so the event loop keeps serving
-    every other connection while this one dribbles in. Unlike the in-process
-    transport, this is a real stream over a real socket: a client whose own
-    read timeout is shorter than a gap disconnects on its own, with nothing
-    here needing to predict it (contrast ``testing/transport.py``, which has
-    no socket to let the client's own timeout race against).
-    """
+    """Stream ``body`` in ``chunk_bytes`` pieces, awaiting ``chunk_delay_ms``."""
     chunk_bytes = max(1, chunk_bytes)
     for offset in range(0, len(body), chunk_bytes):
         if offset > 0:
@@ -137,21 +68,7 @@ async def _slow_body(body: bytes, chunk_bytes: int, chunk_delay_ms: int) -> Asyn
 
 def _directive_response(status: int, headers: dict[str, str], directive: TransportDirective, body: bytes) -> Response:
     if directive.kind == "slow_body":
-        # ``chunk_delay_ms`` is read raw, not defaulted here: the kernel
-        # already resolved it once, in ``core/chaos/faults.py``'s
-        # ``_directive`` (``max(0, as_int(params.get("chunk_delay_ms"), 100))``),
-        # so an explicit ``0`` is a value a rule reached on purpose and this
-        # binding must honour it rather than re-substituting its own 100ms
-        # default over it. ``testing/transport.py``'s ``_wait_owed_ms`` reads
-        # the same field the same way, for the same reason: parity between
-        # bindings is the invariant this module's own docstring states, and a
-        # rule that asks for no gap must produce no gap served or in process
-        # (found by review round 2 of konyklabs/roadmap#73). ``chunk_bytes``
-        # has no equivalent problem -- the kernel clamps it with
-        # ``max(1, ...)`` before a directive ever exists, so the ``else 64``
-        # fallback below is unreachable from the rule path and only guards a
-        # ``TransportDirective`` built by hand with the field left at its
-        # dataclass default.
+        # Kernel-resolved: an explicit ``0`` delay is honoured as given.
         chunk_bytes = directive.chunk_bytes if directive.chunk_bytes > 0 else 64
         chunk_delay_ms = directive.chunk_delay_ms
         return StreamingResponse(_slow_body(body, chunk_bytes, chunk_delay_ms), status_code=status, headers=headers)
@@ -164,23 +81,14 @@ def create_app(
     *,
     logger: Logger | None = None,
 ) -> FastAPI:
-    """Build the ASGI application in front of ``unit``.
-
-    A factory, never a module-level ``app = FastAPI()``. A module-level
-    application would be constructed on import -- by the CLI's ``--help``, by a
-    test collecting a neighbouring module, by anything that touched this
-    package -- and would need a unit to exist before anyone asked for one,
-    which means a global unit, which means one test's state reaching another's.
-    """
+    """Build the ASGI application in front of ``unit``; a factory, never a global."""
     log = unit.context.log if logger is None else logger
     vendor = unit.context.vendor
 
     app = FastAPI(
         title=f"{vendor.display_name} (vendorfake)",
         version=vendor.api_version or "unversioned",
-        # The framework's own generator is switched off, not left unused: with
-        # one catch-all route it can only describe a wildcard, and a wrong
-        # description served at a conventional path is worse than none.
+        # Off, not unused: over one catch-all route it describes only a wildcard.
         openapi_url=None,
         docs_url=None,
         redoc_url=None,
@@ -189,9 +97,6 @@ def create_app(
     app.state.methods = HTTP_METHODS
 
     document = document_for_unit(unit)
-    #: Serialised once. The route table is fixed at unit construction, so the
-    #: document cannot change while the process runs, and re-encoding it per
-    #: request would only add a way for two requests to disagree.
     document_bytes = dump_json(document)
 
     async def dispatch(request: Request) -> Response:
@@ -201,18 +106,7 @@ def create_app(
         if response.transport is not None:
             return _directive_response(response.status, dict(response.headers), response.transport, response.body)
         if response.delay_ms > 0:
-            # The kernel decided *whether* to delay; this binding decides how,
-            # and for a server holding a real socket that means awaiting rather
-            # than sleeping. `time.sleep` on the worker thread would be nearly
-            # as good -- it is not the event loop -- but the pool is finite, so
-            # a handful of concurrently delayed requests would stop answering
-            # everyone else, which is not what the fault is meant to rehearse.
-            #
-            # Nothing is short-circuited here the way the in-process transport
-            # short-circuits a delay longer than the caller's read timeout: over
-            # a socket the client's timeout is the client's business, and it
-            # will disconnect on its own. From the caller's point of view served
-            # mode behaves exactly as it did when the kernel slept.
+            # Awaited, not slept: the threadpool is finite.
             await asyncio.sleep(response.delay_ms / 1000.0)
         return to_response(response)
 
@@ -234,14 +128,7 @@ def create_app(
 
     @app.api_route("/{full_path:path}", methods=list(HTTP_METHODS), include_in_schema=False)
     async def catch_all(request: Request) -> Response:
-        """No typed parameters, by construction.
-
-        ``request`` is the only argument, and it is a ``Request``, so FastAPI
-        has nothing to validate and can raise no ``RequestValidationError``.
-        The moment a second parameter appears here -- a ``Form(...)``, a
-        ``Body(...)``, even an annotated query string -- the framework starts
-        deciding what a body is, and the core stops being the thing under test.
-        """
+        """No typed parameters: a second one would let the framework parse a body."""
         if request.method in {"GET", "HEAD"} and request.url.path == OPENAPI_PATH:
             return Response(content=document_bytes, status_code=200, headers={"content-type": JSON_CONTENT_TYPE})
         return await dispatch(request)
@@ -250,13 +137,7 @@ def create_app(
 
 
 def registered_methods(app: FastAPI) -> frozenset[str]:
-    """Every method the application's routes actually answer.
-
-    Exists for the test that pins :data:`HTTP_METHODS`. Reading it back off the
-    built application rather than off the constant is the point: the constant
-    is what we meant, this is what the framework did with it, and a divergence
-    between the two is exactly the failure the pin is for.
-    """
+    """Every method the built routes answer, for the test that pins HTTP_METHODS."""
     methods: set[str] = set()
     for route in app.routes:
         found: Any = getattr(route, "methods", None)

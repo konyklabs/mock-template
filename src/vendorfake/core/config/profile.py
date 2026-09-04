@@ -1,53 +1,12 @@
-"""Loading a profile: defaults, then the document, then the environment.
-
-FOR: producing one :class:`~vendorfake.core.config.models.ResolvedConfig` from
-a JSON profile on disk, a caller-supplied defaults document, and an explicit
-environment mapping -- and for being the only place any of those three are
-read.
-
-INVARIANT: **precedence is exactly built-in defaults < caller defaults <
-profile document < environment**, ported unchanged from
-``packages/core/src/config/profile.ts``. Everything else about that function is
-rebuilt -- the unvalidated ``JSON.parse``, the hand-rolled merge and the ``??``
-chains are all Pydantic's job now -- but the order in which four layers beat
-each other is behaviour a consumer depends on, so it is preserved literally and
-pinned by test.
-
-``env`` defaults to ``{}``, never to the process environment
--------------------------------------------------------------
-The reference defaults to ``process.env`` and the harness spreads it into every
-unit it builds. That makes a stray variable in a shell -- or one test's
-``setenv`` leaking into the next -- change the behaviour of code that never
-mentioned it, which is a whole class of order-dependent flake for free. Here
-the environment is a parameter with an empty default: only the CLI passes the
-real one. A test that wants an environment states it.
-
-The names are ``VENDORFAKE_*``; there is no ``UNIT_*`` alias
--------------------------------------------------------------
-Environment variables are namespaced by *product* and URL paths by *concept*,
-which is why ``/__unit/`` stays and ``UNIT_*`` goes: ``UNIT_PORT`` and
-``UNIT_SEED`` are plausible collisions in a shared CI environment, and nothing
-is published yet, so there is no consumer to break. :data:`ENV_TABLE` carries
-the reference name each variable replaces so the rename is checkable rather
-than remembered, and a test asserts the table against the reference's list.
-
-Two divergences from the reference, both deliberate
-----------------------------------------------------
-``webhooks.retry`` merges field by field, where the reference replaces it
-    The reference's one-level merge means a profile that sets
-    ``webhooks: {retry: {time_scale: ...}}`` *replaces* the defaults' whole
-    retry object, and it survived that because its ``DEFAULT_RETRY`` carried a
-    vendor's schedule as a built-in. Here the schedule arrives through the
-    caller's defaults -- it is a vendor fact and does not belong in the core --
-    so a replace at that level would silently drop it, and the shipped profiles
-    that set only ``time_scale`` and ``timeout_ms`` would all end up with an
-    empty schedule. Merging one level deeper keeps the stated precedence and
-    makes the vendor default reachable.
-
-Malformed environment values are errors, not ``NaN``
-    ``Number(env.UNIT_PORT)`` yields ``NaN`` for a typo and the unit starts on
-    a nonsense port. Every numeric and enumerated variable here is parsed with
-    a check that raises ``invalid_value`` naming the variable.
+"""Loading a profile: defaults, then the document, then the environment --
+the only place a profile file, caller defaults or the environment are read.
+INVARIANT: precedence is exactly built-in defaults < caller defaults <
+profile document < environment, pinned by test. ``env`` defaults to ``{}``,
+never the process environment, so a stray shell variable cannot change the
+behaviour of code that never mentioned it. ``webhooks.retry`` merges field by
+field rather than replacing whole, so a profile setting only ``time_scale``
+does not drop the vendor's schedule; malformed environment values are
+``invalid_value`` errors naming the variable, never a silently wrong default.
 """
 
 from __future__ import annotations
@@ -91,13 +50,8 @@ __all__ = [
 ENV_PREFIX = "VENDORFAKE_"
 ENV_VENDOR_PREFIX = "VENDORFAKE_VENDOR_"
 ENV_SEED = "VENDORFAKE_SEED"
-"""The variable that replaces the profile's own seed document.
-
-Named as a constant because two modules have to agree on it: this one reads
-it into :attr:`ResolvedConfig.seed_path`, and ``vendorfake.testing.served()``
-has to include it in the mapping it validates a seed overlay against, or its
-parent-side check merges over a different document than the child does.
-"""
+"""The variable that replaces the profile's own seed document. A constant
+since ``vendorfake.testing.served()`` must agree on the name too."""
 
 DEFAULT_PROFILE_NAME = "full"
 ENV_SUBSCRIBER_ID = "wbhk_env"
@@ -186,10 +140,8 @@ ENV_TABLE: tuple[EnvVar, ...] = (
     ),
 )
 """Every environment variable this loader reads; one entry is a prefix.
-
-``VENDORFAKE_VENDOR`` (no trailing underscore) is deliberately absent: it
-selects which vendor module to load, which happens before a profile exists, and
-it belongs to the package registry rather than here."""
+``VENDORFAKE_VENDOR`` is absent -- it selects the vendor module, before a
+profile exists, and belongs to the package registry instead."""
 
 
 def env_names() -> tuple[str, ...]:
@@ -215,13 +167,9 @@ class LoadedProfile:
 
 
 def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
-    """Merge ``over`` onto ``base``: mappings recurse, everything else replaces.
-
-    Sequences replace rather than concatenate. A profile that lists two
-    subscribers means two, not two plus whatever the layer below had -- the
-    reference's spread behaves the same way and a consumer reading a profile
-    expects the list they can see.
-    """
+    """Merge ``over`` onto ``base``: mappings recurse, everything else
+    replaces -- a profile listing two subscribers means two, not two plus
+    whatever the layer below had."""
     merged = dict(base)
     for key, value in over.items():
         previous = merged.get(key)
@@ -233,13 +181,9 @@ def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
 
 
 def merge_documents(base: ProfileDocument, over: ProfileDocument) -> ProfileDocument:
-    """Layer ``over`` on top of ``base``, field by field.
-
-    Only the fields each document actually *set* participate, which is what
-    ``model_dump(exclude_unset=True)`` reports. That is the piece the reference
-    approximated with object spreads: a field left out of a profile falls
-    through to the layer beneath rather than overwriting it with the model's
-    default.
+    """Layer ``over`` on top of ``base``, field by field. Only the fields each
+    document actually *set* participate (``model_dump(exclude_unset=True)``),
+    so an omitted field falls through rather than overwriting with a default.
     """
     return ProfileDocument.model_validate(
         _deep_merge(base.model_dump(exclude_unset=True), over.model_dump(exclude_unset=True))
@@ -287,20 +231,13 @@ def _env_float(env: Mapping[str, str], name: str) -> float | None:
 
 
 def _env_unmatched(env: Mapping[str, str]) -> UnmatchedPolicy | None:
-    """``VENDORFAKE_UNMATCHED``, checked against the two policies.
-
-    A typo here is the worst possible silent failure: ``VENDORFAKE_UNMATCHED=err``
-    would fall back to the binding's default, and a CI run configured to fail
-    loudly on a mis-targeted request would go on answering 404s. So it is an
-    ``invalid_value`` that names the variable and lists what it accepts,
-    exactly as ``VENDORFAKE_CLOCK`` is.
-    """
+    """``VENDORFAKE_UNMATCHED``, checked against the two policies -- a typo
+    is refused loudly rather than silently falling back to the binding's
+    default."""
     raw = env.get("VENDORFAKE_UNMATCHED")
     if not raw:
         return None
     for policy in UNMATCHED_POLICIES:
-        # Compared one at a time rather than with `in`, so the value that comes
-        # back is the *literal* and no cast is needed to say so.
         if raw == policy:
             return policy
     raise UnitError(
@@ -324,25 +261,10 @@ def _env_clock_mode(env: Mapping[str, str]) -> str | None:
 
 
 def _env_clock_start(env: Mapping[str, str]) -> str | None:
-    """``VENDORFAKE_CLOCK_START``, validated as an RFC 3339 instant.
-
-    Before this the virtual clock's *mode* was env-overridable but its *start*
-    instant was not, so an expiry assertion was deterministic within a run and
-    irreproducible across two (konyklabs/roadmap#71). Malformed input is a
-    loud startup failure naming the expected format, matching every other
-    variable this module parses -- not the bare ``ValueError``
-    ``Clock.__init__`` itself raises for a profile document's own malformed
-    ``clock.start``, which this loader does not otherwise touch.
-
-    A naive value is refused, not merely parsed: ``datetime.fromisoformat``
-    happily accepts ``"2026-01-01T00:00:00"`` and even a bare
-    ``"2026-01-01"``, neither of which names an instant, and this loader's
-    error message says "RFC 3339 instant" -- an ``UnitError`` naming that
-    format while silently accepting a string outside it would be worse than
-    no check at all. This mirrors the sibling check on the ``datetime`` this
-    module's own callers may pass instead of a string
-    (``vendorfake.testing._clock_start_env_value``), which raises for the
-    identical reason: a naive value has no defined instant across machines.
+    """``VENDORFAKE_CLOCK_START``, validated as an RFC 3339 instant
+    (konyklabs/roadmap#71). A naive value is refused, not merely parsed --
+    ``datetime.fromisoformat`` accepts a bare date with no timezone, which
+    names no instant at all.
     """
     raw = env.get("VENDORFAKE_CLOCK_START")
     if not raw:
@@ -383,12 +305,8 @@ def resolve_config(
     name: str,
     env: Mapping[str, str] | None = None,
 ) -> ResolvedConfig:
-    """Apply the environment layer to a merged document. Touches no filesystem.
-
-    Separated from :func:`load_profile` so a test -- and any caller building a
-    unit from an in-memory document -- can exercise precedence without writing
-    a file.
-    """
+    """Apply the environment layer to a merged document. Touches no
+    filesystem, so a test can exercise precedence without writing a file."""
     environ: Mapping[str, str] = {} if env is None else env
 
     capabilities = list(document.capabilities)
@@ -424,8 +342,6 @@ def resolve_config(
     vendor_config: dict[str, Any] = dict(document.vendor)
     for key, value in environ.items():
         if key.startswith(ENV_VENDOR_PREFIX) and len(key) > len(ENV_VENDOR_PREFIX):
-            # snake_case, not the reference's camelCase: the vendor's own
-            # config model has snake_case fields, so the mapping is identity.
             vendor_config[key[len(ENV_VENDOR_PREFIX) :].lower()] = value
 
     chaos_seed = _env_int(environ, "VENDORFAKE_CHAOS_SEED")
@@ -460,11 +376,8 @@ def resolve_config(
         profile=document.name or name,
         capabilities=tuple(capabilities),
         seed_path=environ.get(ENV_SEED) or document.seed,
-        # A locator, not a document: `load_profile` reads it, because reading
-        # is a filesystem act and this function is documented to touch none.
-        # There is no profile-document key for it on purpose -- an overlay is
-        # a *caller's* delta over the scenario a profile ships, and a profile
-        # that wanted a different scenario would name a different seed.
+        # A locator, not a document -- `load_profile` reads it, since this
+        # function touches no filesystem.
         seed_overlay=environ.get("VENDORFAKE_SEED_OVERLAY") or None,
         vendor_config=vendor_config,
         webhooks=ResolvedWebhooks(
@@ -522,12 +435,9 @@ def _read_json(path: Path, *, what: str, field: str) -> object:
 
 
 def profile_path(profile_dir: Path, name: str) -> Path:
-    """Where ``name`` resolves to.
-
-    An absolute path or a name ending in ``.json`` is taken as a path; anything
-    else names a file in ``profile_dir``. Ported from the reference, including
-    the ``.json`` heuristic, because it is the difference between
-    ``--profile full`` and ``--profile ./my-profile.json`` and both are useful.
+    """Where ``name`` resolves to: an absolute path or one ending in ``.json``
+    is taken as a path; anything else names a file in ``profile_dir`` --
+    the difference between ``--profile full`` and ``--profile ./my.json``.
     """
     candidate = Path(name)
     if candidate.is_absolute() or name.endswith(".json"):
@@ -544,10 +454,8 @@ def load_profile(
     defaults: ProfileDocument | None = None,
 ) -> LoadedProfile:
     """Read a profile, layer defaults under it and the environment over it.
-
-    ``defaults`` is where a vendor's own document goes -- its retry schedule
-    above all -- so the profile document beats it and the environment beats
-    both.
+    ``defaults`` is where a vendor's own document (its retry schedule above
+    all) goes, so the profile document beats it and the environment beats both.
     """
     environ: Mapping[str, str] = {} if env is None else env
     resolved_name = name or environ.get("VENDORFAKE_PROFILE") or DEFAULT_PROFILE_NAME
@@ -591,20 +499,10 @@ def load_profile(
 
 
 def _read_overlay(locator: str) -> Mapping[str, Any]:
-    """``VENDORFAKE_SEED_OVERLAY`` as a document: inline JSON, or a file.
-
-    A value whose first non-whitespace character is ``{`` is the document
-    itself; anything else is a path. The discriminator is the character and
-    not the presence of a file, deliberately: "if it parses as JSON use it,
-    otherwise open it" would turn a *typo in a path* into a JSON parse error
-    about a filename, and "if the file exists open it" would make the meaning
-    of a value depend on the working directory.
-
-    A path is taken relative to the process's working directory, NOT to the
-    profile or the vendor package the way ``seed_path`` is. The two are
-    different kinds of thing: ``seed`` names a document the vendor ships
-    beside its profiles, and an overlay is a file the *caller* wrote, so the
-    directory a caller is standing in is the only root that could be meant.
+    """``VENDORFAKE_SEED_OVERLAY`` as a document: inline JSON, or a file. A
+    value starting with ``{`` is the document itself; anything else is a path,
+    relative to the process's working directory -- NOT to the profile, since
+    an overlay is a file the caller wrote, unlike ``seed_path``.
     """
     text = locator.lstrip()
     if text.startswith("{"):

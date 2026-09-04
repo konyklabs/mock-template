@@ -1,17 +1,10 @@
 """The Menus API V3 surface: the published menu and its metadata.
 
 DOCUMENTED (toast-menus-api-v3.yaml v3.4.1, apiMenusV3.html):
-
-=========  =====================================================
-GetMenus   ``GET /menus/v3/menus`` -- the whole document
-GetMeta    ``GET /menus/v3/metadata`` -- ``{restaurantGuid, lastUpdated}``
-=========  =====================================================
-
-Both take no query parameters, both require ``Toast-Restaurant-External-ID``,
-and both 404 with the message this module exposes as ``NO_PUBLISHED_DATA``
-when nothing is published. Ordering integrations are steered toward this V3
-surface; V2 is deliberately not served (``TOAST_NOT_MODELED``). The documented
-per-location throttle -- capped at once a second -- is not accounted.
+``GET /menus/v3/menus`` (the whole document) and
+``GET /menus/v3/metadata`` (``{restaurantGuid, lastUpdated}``); both require
+``Toast-Restaurant-External-ID`` and 404 (``NO_PUBLISHED_DATA``) when nothing
+is published. V2 is deliberately not served (``TOAST_NOT_MODELED``).
 """
 
 from __future__ import annotations

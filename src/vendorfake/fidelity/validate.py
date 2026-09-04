@@ -1,30 +1,10 @@
-"""Every response a unit gives, checked against the vendor's schema for it.
+"""Every response a unit gives, checked against the vendor's schema for it, so the vendor's own test suite enforces "the fake answers what the vendor documents" for free: wrapping the in-process client once turns each existing call into a schema check, and a body that drifts from the published shape fails the test that produced it, naming the JSON pointer that is wrong.
 
-FOR: turning "the fake answers what the vendor documents" from a claim into a
-property the existing test suite enforces for free. The vendor's own tests
-already drive every route thousands of times; wrapping the in-process client
-once makes each of those calls a schema check against the scoped extract, so a
-body that drifts from the published shape fails the test that produced it, at
-the line that produced it, naming the JSON pointer that is wrong.
+The wrapper observes; it never interprets. ``call()`` returns the very :class:`InProcessResponse` the plain client would have returned, and the only way it can change a test is by raising -- read after the unit has answered, so nothing here can affect what the unit does.
 
-INVARIANT: **the wrapper observes; it never interprets.** ``call()`` returns
-the very :class:`InProcessResponse` the plain client would have returned --
-same object, same bytes, same headers -- and the only way it can change a test
-is by raising. It reads the response *after* the unit has answered, so nothing
-here can affect what the unit does, and a test that passed without the wrapper
-either still passes or fails with a :class:`FidelityViolation` that says why.
+Three things are deliberately not validated, and each is counted rather than dropped: a route the declaration excuses, a control-plane route, and a request nothing routed. A route that is none of those and not in the extract is undeclared, and undeclared raises.
 
-Three things are deliberately *not* validated, and each is counted rather than
-dropped so the report can show the gap: a route the declaration excuses, a
-control-plane route, and a request nothing routed (the unit's own 404/405). A
-route that is none of those and not in the extract is undeclared, and
-undeclared raises -- ``types.py`` explains why that kind has no reason field.
-
-Validation is ``openapi_schema_validator``'s OAS 3.0 dialect (``nullable``,
-draft-04 ``required``) with a ``referencing`` registry that holds the extract
-document under one URI, so every ``#/components/schemas/...`` reference inside
-a response schema resolves against the extract and nothing else. Validators
-are built once per operation and status and reused for the life of the client.
+Validation is ``openapi_schema_validator``'s OAS 3.0 dialect with a ``referencing`` registry that holds the extract document under one URI, so every ``#/components/schemas/...`` reference resolves against the extract and nothing else. Validators are built once per operation and status and reused for the life of the client.
 """
 
 from __future__ import annotations
@@ -57,12 +37,10 @@ __all__ = [
 ]
 
 EXTRACT_URI = "urn:vendorfake:extract"
-"""The one URI the extract document is registered under. Never fetched; a
-``$ref`` to it is a pointer into the document the client was built with."""
+"""The one URI the extract document is registered under. Never fetched; a ``$ref`` to it is a pointer into the document the client was built with."""
 
 BODY_EXCERPT_CHARS = 400
-"""How much of an offending body a violation quotes. Enough to see the shape,
-not enough to drown the pointer list under a paginated listing."""
+"""How much of an offending body a violation quotes -- enough to see the shape, not enough to drown the pointer list."""
 
 Counter = Literal[
     "validated", "deviated", "excused", "internal", "undeclared", "undeclared_status", "unmatched", "skipped_non_json"
@@ -77,23 +55,11 @@ COUNTERS: tuple[Counter, ...] = (
     "unmatched",
     "skipped_non_json",
 )
-"""Every outcome one call can have, in the order the report prints them.
-
-``validated`` is a JSON body checked against a schema and found conforming;
-``skipped_non_json`` is an operation route whose body had no JSON to check
-(empty, or another content type); ``unmatched`` is a request the router
-answered with its own 404 or 405, so there is no route to classify."""
+"""Every outcome one call can have, in the order the report prints them. ``skipped_non_json`` is an operation route whose body had no JSON to check; ``unmatched`` is a request the router answered with its own 404 or 405, so there is no route to classify."""
 
 
 class FidelityViolation(AssertionError):
-    """A response that does not match the vendor's schema for it.
-
-    An ``AssertionError`` so that pytest renders it as a failed assertion of
-    the test that made the call, rather than as an error in fixture code. The
-    fields are what the report and a reader need: which route answered, which
-    operation the schema belongs to (they differ for an alias), the status, one
-    line per error as ``"<json-pointer>: <message>"``, and the head of the body.
-    """
+    """A response that does not match the vendor's schema for it. An ``AssertionError`` so pytest renders it as a failed assertion of the test that made the call, rather than an error in fixture code."""
 
     def __init__(
         self,
@@ -124,12 +90,7 @@ class FidelityViolation(AssertionError):
 
 
 class UndeclaredRoute(FidelityViolation):
-    """A vendor route that is neither in the extract nor excused.
-
-    Raised on the first call to such a route, not when the client is built,
-    so that the failing test is the one that exercises the route -- which is
-    also the test whose author is best placed to add the alias or the excuse.
-    """
+    """A vendor route that is neither in the extract nor excused. Raised on the first call to such a route, not when the client is built, so the failing test is the one that exercises it."""
 
     REASON = "route is not in the extract and the declaration does not excuse it"
 
@@ -157,9 +118,7 @@ class LedgerRow:
     excused: int = 0
     internal: int = 0
     undeclared: int = 0
-    #: A 4xx/5xx the document does not declare for the route, validated against
-    #: the vendor's error document by the declaration's ``error_schema``. The
-    #: shape was checked; that the status exists there is the unit's judgment.
+    #: A 4xx/5xx the document does not declare for the route, validated against the declaration's ``error_schema``.
     undeclared_status: int = 0
     unmatched: int = 0
     skipped_non_json: int = 0
@@ -170,13 +129,7 @@ class LedgerRow:
 
 
 class Ledger:
-    """What happened to every call, per route key.
-
-    Shared between clients on purpose: a test session builds one ledger, hands
-    it to every :class:`ValidatingClient` it constructs, and prints the summary
-    once at the end -- so the number of validated calls is a number about the
-    *session*, not about whichever fixture happened to be last.
-    """
+    """What happened to every call, per route key. Shared between clients on purpose, so the count is a number about the whole session, not whichever fixture happened to be last."""
 
     __slots__ = ("_absorbed", "_rows")
 
@@ -217,12 +170,7 @@ class Ledger:
 
 
 class ValidatingClient(InProcessClient):
-    """The in-process client, with every answer checked against the surface.
-
-    ``strict_undeclared`` is the switch between the two uses: a vendor's own
-    test suite wants an undeclared route to fail the build, and the fidelity
-    report wants to count it and print it in capitals instead.
-    """
+    """The in-process client, with every answer checked against the surface. ``strict_undeclared`` is the switch between the two uses: a vendor's own test suite wants an undeclared route to fail the build, and the fidelity report wants to count it instead."""
 
     __slots__ = (
         "_built",
@@ -248,25 +196,16 @@ class ValidatingClient(InProcessClient):
         self._surface = surface
         self._ledger = ledger if ledger is not None else Ledger()
         self._strict_undeclared = strict_undeclared
-        # The unit's own table, control plane included, so a call is matched
-        # exactly as the unit matched it -- same order, same 404/405 split.
+        # The unit's own table, control plane included, so a call is matched exactly as the unit matched it.
         self._router = Router(unit.routes)
-        # Draft-04 is the dialect OAS 3.0 schemas are written in, and the one
-        # ``OAS30ReadValidator`` resolves under; registering the extract as such
-        # keeps the two in agreement about what a subschema's ``id`` would mean.
+        # Draft-04 is the dialect OAS 3.0 schemas are written in and OAS30ReadValidator resolves under.
         resource = DRAFT4.create_resource(surface.extract.document)
         self._registry: Registry[Any] = Registry().with_resource(EXTRACT_URI, resource)
-        # ``None`` is cached too: an operation with no schema for a status is
-        # a violation every time, and should cost a lookup, not a search.
-        #: Keyed by the UNIT route and status, not the spec operation: an alias
-        #: maps two unit routes onto one operation and an override is per route.
+        #: Keyed by the UNIT route and status, not the spec operation: an alias maps two unit routes onto one operation.
         self._validators: dict[tuple[str, int], Any] = {}
-        #: Whether the schema for (operation, status) came through the envelope
-        #: fallback rather than a declared status -- the case the error member
-        #: check exists for.
+        #: Whether the schema for (operation, status) came through the envelope fallback rather than a declared status.
         self._via_envelope: dict[tuple[str, int], bool] = {}
-        #: (route, status) pairs the document never declares, answered through
-        #: ``error_schema``: counted, listed by the report, never silent.
+        #: (route, status) pairs the document never declares, answered through ``error_schema``.
         self._undeclared_status: set[tuple[str, int]] = set()
         self._built = 0
 
@@ -311,15 +250,12 @@ class ValidatingClient(InProcessClient):
     # -- classification -----------------------------------------------------
 
     def _check(self, method: str, path: str, response: InProcessResponse) -> None:
-        # The kernel splits a query string off the path before routing
-        # (``make_request``); match what it matched, not what the caller typed.
+        # The kernel splits a query string off the path before routing; match what it matched.
         bare = path.partition("?")[0]
         outcome = self._router.match(method, bare)
         if not isinstance(outcome, Match):
             if 200 <= response.status < 300:
-                # Nothing routed it and yet the unit answered success: the
-                # wrapper and the kernel disagree about routing, which is a
-                # defect here, never a fact about the vendor.
+                # Nothing routed it and yet the unit answered success: a defect here, never a fact about the vendor.
                 raise RuntimeError(
                     f"{route_key(method, bare)} answered {response.status} but matched no route in the validator"
                 )
@@ -336,8 +272,7 @@ class ValidatingClient(InProcessClient):
                 raise UndeclaredRoute(key, status=response.status, body_excerpt=_excerpt(response))
             self._ledger.record(key, "undeclared")
         elif classified.operation is None:
-            # ``Surface.classify`` pairs the kind with the operation; reaching
-            # here means the shared types changed under this module.
+            # Reaching here means the shared types changed under this module.
             raise RuntimeError(f"{key} classified as an operation without one")
         else:
             self._validate(key, classified.operation, response)
@@ -371,10 +306,7 @@ class ValidatingClient(InProcessClient):
         absorbed: list[str] = []
         declaration = self._surface.declaration
         for raw_error in validator.iter_errors(instance):
-            # A nullable reference is cut as ``anyOf: [ref, enum: [null]]``
-            # (see extract.py); the anyOf's own message says only "not valid
-            # under any of the given schemas", so report the branch that came
-            # closest, which is the reference's own error.
+            # A nullable reference is cut as anyOf [ref, enum: [null]]; report the branch that came closest.
             error = best_match(raw_error.context) if raw_error.context else raw_error
             pointer = _instance_pointer(error.absolute_path)
             excused_by = next(
@@ -432,9 +364,7 @@ class ValidatingClient(InProcessClient):
         error_schema = self._surface.declaration.error_schema
         pointer: str | None = None
         if override is not None:
-            # The vendor's guide documents a shape its spec does not declare
-            # for this one route and status; validate against the named
-            # component instead. The report lists every override.
+            # The vendor's guide documents a shape its spec does not declare here; validate against the named component instead.
             if override.schema not in self._surface.extract.schemas:
                 raise RuntimeError(f"override for {key}: schema {override.schema!r} is not in the extract")
             pointer = f"/components/schemas/{override.schema}"
@@ -443,9 +373,7 @@ class ValidatingClient(InProcessClient):
             declared = operation.raw.get("responses", {})
             if not any(k in declared for k in (str(status), f"{status // 100}XX")):
                 self._undeclared_status.add(cache_key)
-            # The document declares the status without a body (or not at
-            # all) and the declaration names the vendor's error document:
-            # validate against that. Kept as a root of the extract for this.
+            # The document declares no body for the status; validate against the declaration's error document instead.
             if error_schema not in self._surface.extract.schemas:
                 raise RuntimeError(f"error_schema {error_schema!r} is not in the extract's components.schemas")
             pointer = f"/components/schemas/{error_schema}"
@@ -455,9 +383,7 @@ class ValidatingClient(InProcessClient):
             if pointer is None:
                 raise RuntimeError(f"{operation.key}: the schema for status {status} is not in the extract document")
         if pointer is not None:
-            # The root schema is a reference *into* the registered document,
-            # so the resolver is rebased onto the extract before it reads the
-            # first keyword and every nested ``#/components/...`` resolves there.
+            # The root schema is a reference into the registered document, so every nested #/components/... resolves there.
             validator = OAS30ReadValidator(
                 {"$ref": f"{EXTRACT_URI}#{pointer}"}, registry=self._registry, format_checker=oas30_format_checker
             )
@@ -486,20 +412,13 @@ def _escape(segment: str) -> str:
 
 
 def _instance_pointer(path: Iterable[str | int]) -> str:
-    """RFC 6901 pointer to the failing value: ``/order/line_items/0/quantity``;
-    ``(root)`` when the whole body is what is wrong."""
+    """RFC 6901 pointer to the failing value; ``(root)`` when the whole body is what is wrong."""
     parts = [_escape(str(part)) for part in path]
     return "/" + "/".join(parts) if parts else "(root)"
 
 
 def _schema_pointer(document: Mapping[str, Any], operation: Operation, schema: Mapping[str, Any]) -> str | None:
-    """Where ``schema`` sits in ``document``, as a URI-fragment pointer.
-
-    Found by identity rather than by re-deriving the status precedence, so this
-    cannot disagree with :meth:`Operation.response_schema` about which response
-    was chosen. Segments are percent-encoded because the pointer travels as a
-    URI fragment and the resolver decodes it on the way in.
-    """
+    """Where ``schema`` sits in ``document``, as a URI-fragment pointer. Found by identity rather than by re-deriving the status precedence, so this cannot disagree with :meth:`Operation.response_schema`."""
     paths = document.get("paths")
     item = paths.get(operation.spec_path) if isinstance(paths, Mapping) else None
     if not isinstance(item, Mapping):

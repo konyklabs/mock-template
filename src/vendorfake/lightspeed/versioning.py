@@ -1,48 +1,17 @@
-"""The retailer-global version counter, and the list envelope built on it.
+"""The retailer-global version counter and the list envelope built on it.
 
-FOR: the one cross-cutting mechanic every Lightspeed list and every Lightspeed
-entity depends on.
+DOCUMENTED (https://x-series-api.lightspeedhq.com/docs/pagination and the ``Version``
+schema): one monotonically increasing integer per retailer, bumped on every mutation;
+lists answer ``{"data": [...], "version": {"max", "min"}}`` ascending by version via
+``after``/``before``/``page_size``/``deleted``.
 
-DOCUMENTED (https://x-series-api.lightspeedhq.com/docs/pagination and the
-specification's ``Version`` schema):
+NOT MODELLED: the specification also declares a ``PaginationMetadata`` schema
+(``page``/``pageSize``/``results``); no in-scope list endpoint declares it, so it is
+unimplemented here rather than silently ignored.
 
-* "The ``version`` attribute is simply a monotonically increasing integer" --
-  ONE sequence per retailer, across every resource type, bumped on every
-  mutation of anything. It is not a timestamp and not a page token.
-* Every entity carries its ``version``; list responses answer
-  ``{"data": [...], "version": {"max": int|null, "min": int|null}}``, with
-  both members ``null`` "when the result set is empty".
-* Rows come back ascending by version.
-* ``after`` is the lower limit and "By default, the value of the ``after``
-  parameter will be assumed as equal 0", so the first page of a full sync
-  needs no parameter; ``before`` is the upper limit; ``page_size`` caps the
-  rows returned; ``deleted`` includes deleted items.
-* A caller pages forward with ``after=<the previous response's version.max>``
-  and stops when ``data`` comes back empty.
-
-WHY THIS IS IN THE VENDOR PACKAGE. The core has no seam for either half. Its
-store keeps a per-entity ``version`` starting at 1 and bumped by one per
-update -- optimistic concurrency, a different thing (see ``entities.py``) --
-and its :meth:`~vendorfake.core.state.store.Collection.paginate` is an opaque,
-fingerprinted, expiring cursor, which is the right model for Square's
-``cursor`` and the wrong one for a caller who is expected to read the next
-``after`` off the rows themselves. Nothing in ``core/`` was extended for this,
-and nothing here reaches into ``core/``'s cursor.
-
-NOT MODELLED, and recorded rather than guessed at: the specification also
-defines a ``PaginationMetadata`` schema (``page``/``pageSize``/``results``, a
-conventional offset shape). No in-scope list endpoint declares it -- the four
-this slice serves declare ``after``/``before``/``page_size``/``deleted`` and
-the ``data``+``version`` envelope, checked one by one against the document --
-so nothing here implements it. A later slice that models an endpoint declaring
-``PaginationMetadata`` adds that shape beside this one; it does not replace it.
-
-DETERMINISM. The counter starts at :data:`FIRST_VERSION` and is re-seeded at
-every hydrate, so two units built the same way stamp the same numbers and
-``POST /__unit/state/reset`` reproduces them. The starting value is this
-project's (JUDGMENT): the real numbers are large and account-historical
-(``59780745``, ``1690497245``), and copying one of those would suggest a
-provenance the fake does not have.
+JUDGMENT: lives in the vendor package because the core's own cursor is opaque and
+Square-shaped; the counter starts at :data:`FIRST_VERSION`, re-seeded at every hydrate
+rather than copying the real vendor's large, account-historical values.
 """
 
 from __future__ import annotations
@@ -69,15 +38,12 @@ __all__ = [
 ]
 
 FIRST_VERSION = 1_000_000
-"""The first number the counter hands out. JUDGMENT -- see the module
-docstring. Large enough to look like the sequence it imitates, fixed so that
-two units agree."""
+"""JUDGMENT (see module docstring): large enough to look like the sequence it imitates,
+fixed so two units agree."""
 
 MAX_PAGE_SIZE = 1000
-"""JUDGMENT. The vendor documents ``page_size`` as "The maximum number of
-items to be returned in the response" and publishes no ceiling; a request for
-more than this is clamped, never refused, which is how the core's own
-pagination treats an over-large limit."""
+"""JUDGMENT: the vendor publishes no ceiling on ``page_size``; an over-large request is
+clamped, never refused, matching the core's own pagination."""
 
 AFTER_PARAM = "after"
 BEFORE_PARAM = "before"
@@ -86,14 +52,8 @@ DELETED_PARAM = "deleted"
 
 
 class LightspeedVersions:
-    """The retailer's one monotonically increasing version sequence.
-
-    Held on the vendor rather than in the store: it is a counter, not an
-    entity, and putting it in the store would make it a row every state digest
-    and every journal reader had to know to ignore. :meth:`reset` is called
-    from ``hydrate`` alongside the id streams' ``reseed``, which is what makes
-    a re-seeded unit stamp the same numbers again.
-    """
+    """The retailer's one monotonically increasing version sequence; held on the vendor,
+    not the store, since it's a counter, not an entity."""
 
     __slots__ = ("_next",)
 
@@ -101,14 +61,12 @@ class LightspeedVersions:
         self._next = FIRST_VERSION
 
     def reset(self) -> None:
-        """Restart the sequence. Called at hydrate, for the same reason
-        :meth:`~vendorfake.core.rand.ids.IdStream.reseed` is."""
+        """Restart the sequence; called at hydrate alongside the id streams' reseed."""
         self._next = FIRST_VERSION
 
     @property
     def current(self) -> int:
-        """The last number handed out, or :data:`FIRST_VERSION` - 1 before the
-        first draw. Read by tests and by nothing on the wire."""
+        """The last number handed out, or :data:`FIRST_VERSION` - 1 before the first draw."""
         return self._next - 1
 
     def bump(self) -> int:
@@ -125,12 +83,8 @@ def version_of(entity: Mapping[str, Any]) -> int:
 
 
 class ListQuery:
-    """``after``/``before``/``page_size``/``deleted``, parsed and validated.
-
-    A non-integer ``after`` is a 422 naming the field rather than a silently
-    ignored parameter: the specification types all three as integers, and a
-    consumer who sends ``after=abc`` has a bug this fake should show them.
-    """
+    """``after``/``before``/``page_size``/``deleted``, parsed and validated; a non-integer
+    ``after`` is a 422 naming the field."""
 
     __slots__ = ("after", "before", "deleted", "page_size")
 
@@ -164,13 +118,8 @@ def _bool_query(args: HandlerArgs, name: str) -> bool:
 
 
 def read_list_query(args: HandlerArgs) -> ListQuery:
-    """The four documented list parameters off one request.
-
-    ``after`` defaults to 0, which the pagination page states outright. A
-    ``page_size`` at or below zero is refused -- the parameter means "the
-    maximum number of items", and zero would name a page nobody asked for --
-    and one above :data:`MAX_PAGE_SIZE` is clamped.
-    """
+    """The four documented list parameters off one request; ``after`` defaults to 0,
+    ``page_size`` <= 0 is refused, above :data:`MAX_PAGE_SIZE` is clamped."""
     page_size = _int_query(args, PAGE_SIZE_PARAM)
     if page_size is not None:
         if page_size < 1:
@@ -190,17 +139,8 @@ def read_list_query(args: HandlerArgs) -> ListQuery:
 
 
 def select(rows: Iterable[Mapping[str, Any]], query: ListQuery) -> list[dict[str, Any]]:
-    """The stored rows this query asks for: filtered, ascending by version, capped.
-
-    ``after`` is exclusive and ``before`` inclusive -- "the lower limit" and
-    "the upper limit" for the versions "to be included", read against the
-    documented forward-sync pattern, where the next request passes the previous
-    response's ``version.max`` as ``after`` and must not receive that row
-    again. Making ``after`` inclusive would serve the boundary row twice on
-    every page; making ``before`` exclusive would make ``after=x&before=x``
-    unable to name a single row. JUDGMENT on both, stated because the docs page
-    explicitly does not cover how ``before`` interacts with the walk.
-    """
+    """Filtered, ascending-by-version, capped rows. JUDGMENT: ``after`` is exclusive and
+    ``before`` inclusive, matching the documented forward-sync walk."""
     chosen = [
         dict(row)
         for row in rows
@@ -215,13 +155,8 @@ def select(rows: Iterable[Mapping[str, Any]], query: ListQuery) -> list[dict[str
 
 
 def envelope(projected: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """``{"data": [...], "version": {"max": ..., "min": ...}}``.
-
-    Both members are ``null`` on an empty page, which is what ends a caller's
-    walk, and are read off the PROJECTED rows -- the ``version`` a consumer can
-    actually see -- rather than off the stored entities, so the envelope and
-    the rows can never disagree.
-    """
+    """``{"data": [...], "version": {"max", "min"}}``, both null when empty; read off the
+    projected rows so the envelope and rows never disagree."""
     versions = [int(row["version"]) for row in projected if isinstance(row.get("version"), int)]
     return {
         "data": [dict(row) for row in projected],
@@ -230,8 +165,6 @@ def envelope(projected: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def single(projected: Mapping[str, Any]) -> dict[str, Any]:
-    """``{"data": {...}}`` -- the single-record envelope every ``Get*`` and
-    every register action answers with (``RetailerResponse``,
-    ``OutletResponse``, ``RegisterResponse``,
-    ``RegisterPaymentsSummaryResponse``)."""
+    """``{"data": {...}}`` -- the single-record envelope every ``Get*`` and register
+    action answers with."""
     return {"data": dict(projected)}

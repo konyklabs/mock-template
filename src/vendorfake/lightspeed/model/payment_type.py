@@ -1,36 +1,13 @@
 """The payment-type wire shape, and the register payments summary built on it.
-
 DOCUMENTED (``PaymentType``): ``id``, ``name``, ``type_id``, ``version``,
-``disabled`` and ``internal`` are required; ``config`` is a nullable free-form
-object ("Shape varies by payment type"); ``gateway``,
-``name_changed_by_user``, ``outlet_ids``, ``created_at``, ``deleted_at``,
-``is_editable`` and the embedded ``payment_type`` (a ``GlobalPaymentType``) are
-optional. The documented example prints only ``id``, ``name``, ``type_id``,
-``version`` and, where there is one, ``config`` -- so the projection emits the
-required six plus whatever else the entity actually carries, and drops the
-rest.
-
-``type_id`` is "The ID of the global payment type. It shouldn't be used to
-identify the payment type - there may be multiple payment types with the same
-``type_id``". The scenario seeds two types sharing no ``type_id``, but the
-warning is the reason nothing here keys on it.
-
-THE SCOPE'S OWN WORDING is what makes ``internal`` load-bearing:
-``payment_types:read`` is "Read payment types, **excluding internal payment
-types**" (https://x-series-api.lightspeedhq.com/docs/scopes). So the list route
-filters them out. JUDGMENT on the mechanism -- the scope page states the
-exclusion, no page states how the API expresses it -- and it is stated at the
-route.
-
-THE PAYMENTS SUMMARY (``RegisterPaymentsSummaryResponse``) is where the schema
-and the example disagree, and the example wins. The ``RegisterPaymentsSummary``
-schema declares only ``payments``; the documented example prints
-``payments``, ``register_closure_id``, ``register_closure_sequence_number`` and
-``register_open_time``. An OpenAPI object permits additional properties unless
-it forbids them and this one does not, so emitting the example's four members
-satisfies both -- and emitting only the schema's one would answer less than the
-vendor's own example shows.
-"""
+``disabled`` and ``internal`` are required; ``type_id`` is documented as not
+unique, so nothing here keys on it. DOCUMENTED: ``payment_types:read``
+excludes internal payment types
+(https://x-series-api.lightspeedhq.com/docs/scopes), so the list route
+filters them out (JUDGMENT on the mechanism). JUDGMENT: the payments summary
+also emits ``register_closure_id``, ``register_closure_sequence_number`` and
+``register_open_time`` beyond its declared schema, since OpenAPI permits
+additional properties unless forbidden."""
 
 from __future__ import annotations
 

@@ -1,66 +1,29 @@
 """Toast error shaping -- the entire vendor-side error story, in one table.
 
-FOR: turning each of the core's twenty vendor-neutral error kinds into an HTTP
-status and Toast's ``ErrorMessage`` body, so that adding this vendor is a
-lookup table rather than error handling scattered through handlers.
+Turns each of the core's twenty vendor-neutral error kinds into an HTTP status
+and Toast's ``ErrorMessage`` body. INVARIANT: the table is exhaustive, checked
+at import and again on ``describe()``'s answer.
 
-INVARIANT: **the table is exhaustive, and every row says where its status came
-from.** Exhaustiveness is checked at import and again at unit construction on
-``describe()``'s answer. Provenance is a real field because the ``unit_error``
-sidecar publishes it and :meth:`ToastErrorShaper.describe` renders the whole
-table for ``GET /__unit/errors``. The sidecar, the ``retry-after`` and
-``x-unit-capability`` mechanism headers and the exhaustiveness check are the
-core's (``core/kernel/shaping.py``); this module is Toast's table, envelope
-and the documented rate-limit headers.
+DOCUMENTED (https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html):
+the envelope is emitted in full including nulls, e.g. ``{"status": 400,
+"code": 10025, "message": "...", "messageKey": null, "fieldName": null,
+"link": null, "requestId": "...", "developerMessage": null, "errors": [],
+"canRetry": null}``. The field an error is about travels in the
+``unit_error`` sidecar instead of ``fieldName``.
 
-The envelope -- DOCUMENTED
---------------------------
-https://doc.toasttab.com/doc/devguide/apiResponsesAndErrors.html shows the
-body verbatim::
+JUDGMENT: Toast publishes no ``code`` catalogue except ``10025`` ("Payment
+amount cannot be empty"); every other code is assigned in kind order from
+10001. A handler with a documented code overrides the table's via
+``info["toast_code"]``.
 
-    {"status": 400, "code": 10025, "message": "Payment amount cannot be empty",
-     "messageKey": null, "fieldName": null, "link": null,
-     "requestId": "2ea769e2-...", "developerMessage": null, "errors": [],
-     "canRetry": null}
+DOCUMENTED statuses (apiResponsesAndErrors.html) include ``forbidden_scope``
+as 403 "missing scope" (``POST /prices``) and ``rate_limited`` as 429 with
+the ``X-Toast-RateLimit-*``/``Retry-After`` headers (apiRateLimiting.html) --
+names documented, values JUDGMENT since a chaos-injected 429 trips no limit.
 
-Every key is emitted on every error, nulls included: this is the one shape in
-the package that is *not* compacted, because the page shows the nulls.
-``messageKey``, ``fieldName`` and ``canRetry`` are "reserved for future use"
-and stay null; ``errors`` is "a nested ErrorMessage list" and stays empty
-because nothing here produces a nested failure. The field an error is about
-travels in the ``unit_error`` sidecar, not in ``fieldName``.
-
-The ``code`` -- JUDGMENT, with one documented value
----------------------------------------------------
-Toast publishes no catalogue of ``code`` values (audit gap 5); ``10025`` for
-"Payment amount cannot be empty" is the only one seen. Every row below carries
-a code in the same five-digit range, assigned by this project in kind order
-from 10001 and never colliding with 10025; a handler that knows the documented
-code for its refusal passes it as ``info["toast_code"]`` and the table's is
-overridden. A consumer must not build against any code but 10025.
-
-Statuses -- DOCUMENTED where the page lists them
-------------------------------------------------
-The same page lists 200, 204, 400, 401 (token invalid/expired), 403, 404, 409,
-422, 429, 499, 500, 502, 504. ``forbidden_scope`` is **403** -- documented on
-``POST /prices`` as "missing scope" -- and distinct from the 401 an invalid
-token gets, so a Clover-habituated consumer learns the difference here.
-``not_found`` is the documented 404 ("The specified order was not found");
-``rate_limited`` is the documented 429 with ``X-Toast-RateLimit-By``,
-``X-Toast-RateLimit-Remaining``, ``X-Toast-RateLimit-Reset`` (Unix epoch) and
-``Retry-After`` (seconds) from apiRateLimiting.html -- header names documented,
-values JUDGMENT because a chaos-injected 429 tripped no real limit.
-
-The ``requestId`` comes from the vendor's request-id stream (``ids.py``),
-seeded and salted apart from the entity ids, so a refused request never
-renumbers a scenario's guids and two units answer the same sequence.
-
-The ``unit_error`` sidecar is a deliberate, namespaced deviation from Toast's
-wire format, off with ``"error_sidecar": false`` in a profile's ``vendor``
-block. Since konyklabs/roadmap#71 it defaults to riding as headers rather than
-as a body key -- ``errors.sidecar`` in a profile, or ``VENDORFAKE_ERROR_SIDECAR``
--- so this ``ErrorMessage`` document is, by default, exactly the documented
-shape above, no thirteenth key.
+The ``unit_error`` sidecar is a namespaced deviation from Toast's wire
+format, off with ``error_sidecar: false``; since konyklabs/roadmap#71 it
+rides as headers by default, so the documented shape carries no extra key.
 """
 
 from __future__ import annotations
@@ -110,33 +73,15 @@ TOAST_CODE_INFO_KEY = "toast_code"
 """``UnitError.info`` key a handler sets to put a specific ``code`` on the wire."""
 
 CATALOGUE_REQUEST_ID = "2ea769e2-0000-4000-8000-000000000000"
-"""The ``requestId`` on a *described* error, never on a real one.
-
-``GET /__unit/errors`` renders all twenty kinds plus the no-route body as a
-description of this table. Drawing a real id for each would have three costs,
-and did: a read-only GET would advance the request-id stream and renumber
-every id in the caller's remaining scenario; two identical GETs would disagree;
-and conformance C10, which compares the HTTP and in-process bindings byte for
-byte on exactly this route, could never pass.
-
-The prefix is the one the vendor's own example body shows
-(apiResponsesAndErrors.html, ``"requestId": "2ea769e2-..."``); the rest is
-zeroed to a nil-UUID tail so that nothing mistakes it for a drawn id. A real
-refusal still calls :meth:`ToastRequestIds.request_id` -- that stream is
-salted apart from the entity guids precisely so a refusal never renumbers a
-scenario, and this constant is the same promise for a description.
-"""
+"""The ``requestId`` on a *described* error (``GET /__unit/errors``), never a
+real one -- a real draw there would advance the request-id stream and break
+conformance check C10's byte-for-byte comparison. The prefix is the vendor's
+own example (apiResponsesAndErrors.html); the tail is zeroed."""
 
 CATALOGUE_RATE_LIMIT_RESET = "0"
-"""``X-Toast-RateLimit-Reset`` on a *described* 429.
-
-The live header is ``floor(now/1000) + retry_after``, so the catalogue also
-moved whenever a GET crossed a wall-clock second -- the same byte-identity
-break as the request id, on the same route, just rarer and therefore worse to
-debug. Zero is not a plausible reset epoch, which is the point: a description
-says the header exists and what shape it has, not when a window that never
-opened would close.
-"""
+"""``X-Toast-RateLimit-Reset`` on a *described* 429: fixed at zero so the
+catalogue is stable, unlike the live header (``floor(now/1000) +
+retry_after``), which would drift the description across a wall-clock second."""
 
 RATE_LIMIT_BY_HEADER = "X-Toast-RateLimit-By"
 RATE_LIMIT_REMAINING_HEADER = "X-Toast-RateLimit-Remaining"
@@ -234,18 +179,15 @@ TOAST_ERROR_TABLE: dict[UnitErrorKind, ToastErrorMapping] = {
     UnitErrorKind.UNAVAILABLE: ToastErrorMapping(503, "documented", 10019, "Service unavailable."),
     UnitErrorKind.INTERNAL: ToastErrorMapping(500, "documented", 10020, "Internal server error."),
 }
-"""Twenty rows, one per core error kind. Statuses documented where the
-responses page lists them; the messages are this project's except where a
-handler supplies a documented phrase as its detail."""
+"""Twenty rows, one per core error kind; messages are this project's except
+where a handler supplies a documented phrase as its detail."""
 
 
 class ToastErrorShaper:
     """Turns a :class:`UnitError` into Toast's ErrorMessage. Satisfies ``ErrorShaper``.
 
-    Frozen configuration rather than a live read of the profile, because the
-    vendor rebuilds the shaper when its configuration resolves. The request-id
-    stream is handed in so the vendor can reseed it at hydrate alongside the
-    entity stream.
+    Frozen configuration, rebuilt when the vendor's config resolves; the
+    request-id stream is handed in so hydrate can reseed it alongside entities.
     """
 
     __slots__ = ("_request_ids", "_retry_after_header", "_sidecar")
@@ -264,14 +206,9 @@ class ToastErrorShaper:
     def shape(self, err: UnitError, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
         """One core error, as this unit's Toast would send it.
 
-        ``message`` follows the error's own wording when it has one and the
-        table's otherwise -- there is no conflation to protect here, and a
-        handler quoting a documented phrase ("The GUID was malformed") is
-        exactly what should reach the wire.
-
-        ``describing`` marks a row of ``GET /__unit/errors``: this is the one
-        vendor here whose envelope carries per-request values, so it is the
-        one that has to substitute them. See the two catalogue constants.
+        ``message`` uses the error's own wording when set, else the table's.
+        ``describing`` marks a ``GET /__unit/errors`` row, substituting the
+        catalogue constants for per-request values.
         """
         mapping = TOAST_ERROR_TABLE[err.kind]
         info = dict(err.info or {})
@@ -285,8 +222,7 @@ class ToastErrorShaper:
         ).wire()
         headers = mechanism_headers(err, retry_after_header=self._retry_after_header)
         if self._sidecar:
-            # WHERE it rides is `ctx.config.errors.sidecar`, not this
-            # constructor -- see core/kernel/shaping.py (konyklabs/roadmap#71).
+            # Rides per `ctx.config.errors.sidecar`, not this constructor (roadmap#71).
             sidecar = unit_error_sidecar(err, mapping.provenance, field=err.field or None)
             mode = ctx.config.errors.sidecar
             if mode != "headers":
@@ -306,14 +242,10 @@ class ToastErrorShaper:
         return ShapedError(status=mapping.status, body=body, headers=headers)
 
     def not_found(self, req: UnitRequest, ctx: UnitContext, *, describing: bool = False) -> ShapedError:
-        """The body for a path that matched no route at all; it names the
-        control route that lists the surface.
+        """The body for a path matching no route; names the surface-listing route.
 
-        ``describing`` is the catalogue's, and only the catalogue's: this row
-        is the one body in ``GET /__unit/errors`` that does not come from the
-        table, so without the flag it would keep drawing a real request id
-        while the other twenty stopped. It is handed straight to
-        :meth:`shape`; it never enters ``info``, which is published.
+        ``describing`` behaves as in :meth:`shape` -- this is the one
+        ``GET /__unit/errors`` body that does not come from the table.
         """
         return self.shape(
             UnitError(
@@ -333,8 +265,7 @@ class ToastErrorShaper:
         return {kind.value: mapping.as_json() for kind, mapping in TOAST_ERROR_TABLE.items()}
 
 
-# Exhaustiveness, at import, as a raise and never as an `assert` -- see
-# core/kernel/shaping.py for why.
+# Exhaustiveness check at import, as a raise (never `assert`); see core/kernel/shaping.py.
 assert_error_table_total(TOAST_ERROR_TABLE, name="TOAST_ERROR_TABLE")
 
 if CODE_PAYMENT_AMOUNT_EMPTY in {mapping.code for mapping in TOAST_ERROR_TABLE.values()}:

@@ -1,46 +1,11 @@
-"""The Clover vendor definition -- everything the core needs to become a Clover
-unit, and nothing else.
+"""The Clover vendor definition: assembles one object satisfying
+:class:`~vendorfake.core.kernel.types.VendorDefinition`.
 
-FOR: assembling one object that satisfies
-:class:`~vendorfake.core.kernel.types.VendorDefinition`. This is the second
-vendor in the distribution, and it plugs into the same core the Square vendor
-does with zero core changes -- which is the authoring-economics claim this
-project makes.
-
-INVARIANT: **one vendor instance per unit.** :data:`VENDOR` (in
-``__init__.py``) is minted fresh on every attribute access. A vendor owns a
-*stateful* id stream, and the whole point of that stream is that two runs of
-the same scenario produce the same ids so a transcript can be diffed. A single
-shared instance would have two units in one process -- exactly what the
-conformance suite builds, a fresh unit per check -- drawing from one stream
-and interleaving, so neither run would reproduce.
-
-Configuration resolves in two phases, exactly as Square's does: defaults at
-construction, then :meth:`CloverVendor.hydrate` re-resolves from
-``ctx.config.vendor_config`` -- at start and again on
-``POST /__unit/state/reset`` -- rebuilds what depends on it (the error
-shaper), and re-seeds the id stream from the unit's seed.
-
-PR-C+D shape: **OAuth, orders, payments, inventory, merchant, customers and
-the webhook seams are all live** -- the static-header signer, the
-journal-driven event mapper and the dashboard stand-in surface, with
-``webhooks`` and ``webhooks.chaos`` declared (see ``capabilities.py``). The
-machines, retry defaults, error table, id stream and configuration are
-final-shape.
-
-The webhook seams, and why they are two
---------------------------------------
-``signer`` and ``events`` are separate properties because they answer separate
-questions: what a mutation *means* on the wire, and how a delivery is proven to
-have come from here. The dispatcher requires both before it will deliver
-anything. Both hold *this vendor* rather than a copy of its configuration, so
-the ``appId`` in a payload is the profile's ``client_id`` and not the built-in
-default's.
-
-``api_version`` is ``None``, and that is a statement about Clover rather than
-an omission: Clover documents no version request or response header -- the
-version lives in the path (``/v3/``, ``/oauth/v2/``) -- so there is nothing
-for :meth:`decorate` to stamp beyond the core's own ``x-unit-vendor``.
+INVARIANT: one vendor instance per unit -- it owns a stateful id stream, and
+a shared instance would interleave two units' streams so neither run would
+reproduce. Configuration resolves in two phases: defaults at construction,
+then :meth:`CloverVendor.hydrate` re-resolves from
+``ctx.config.vendor_config`` and re-seeds the id stream.
 """
 
 from __future__ import annotations
@@ -90,14 +55,10 @@ CLOVER_MAGIC = MagicTriggerSpec(
     body_paths=("note", "title", "externalReferenceId"),
     query_params=("state",),
 )
-"""In-band fault triggering, in fields a consumer can set through a real
-Clover client: an order's ``note``, ``title`` and ``externalReferenceId`` are
-all ordinary writable order fields
-(https://docs.clover.com/dev/docs/creating-custom-orders). Prior art for the
-convention is Square's sandbox magic values
-(https://developer.squareup.com/docs/devtools/sandbox/testing); Clover
-publishes no equivalent, so the mechanism is this project's, flagged by the
-``chaos:`` prefix no real value would carry."""
+"""In-band fault triggering via order fields a real Clover client can set
+(``note``, ``title``, ``externalReferenceId``;
+https://docs.clover.com/dev/docs/creating-custom-orders). JUDGMENT: Clover
+publishes no such mechanism; the ``chaos:`` prefix is this project's own."""
 
 CLOVER_ROLES: Mapping[str, str] = {
     "auth": "oauth",
@@ -105,8 +66,7 @@ CLOVER_ROLES: Mapping[str, str] = {
     "webhooks": "webhooks",
     "chaos": "chaos",
 }
-"""The neutral role vocabulary, mapped to Clover's own capability names. See
-``VendorDefinition.roles``."""
+"""The neutral role vocabulary, mapped to Clover's capability names."""
 
 _VOLATILE_FIELDS: tuple[str, ...] = (
     "access_token_expiration_ms",
@@ -119,13 +79,8 @@ _VOLATILE_FIELDS: tuple[str, ...] = (
     "clientCreatedTime",
     "deletedTime",
 )
-"""Entity fields excluded from the state digest because they carry wall-clock
-time. Two units seeded identically a second apart must still agree. The core
-already excludes ``created_at``/``updated_at``, but every stored instant in
-this package is a camelCase Clover field or a ``_ms``-suffixed internal one
-(see ``entities.py``), so each is listed explicitly. The OAuth expirations
-appear under their stored ``_ms`` names: the digest hashes entities, and the
-Unix-seconds spellings exist only on the wire."""
+"""Fields excluded from the state digest because they carry wall-clock time
+-- two units seeded identically a second apart must still agree."""
 
 
 class CloverVendor:
@@ -149,10 +104,8 @@ class CloverVendor:
         self._seed = seed
         self._ids = CloverIds(seed)
         self._errors = self._build_errors()
-        # Holds *this vendor*, not a copy of its configuration, so a profile
-        # resolved in `hydrate` -- which runs after construction -- is in
-        # force on the next request. Same rule as the surfaces; see
-        # `surface/common.py`.
+        # Holds *this vendor*, not a copy of its config, so a profile resolved
+        # in `hydrate` (after construction) is in force on the next request.
         self._auth = CloverAuth(self)
         self._signer = CloverWebhookSigner()
         self._events = CloverEventMapper(self)
@@ -176,17 +129,15 @@ class CloverVendor:
 
     @property
     def api_version(self) -> str | None:
-        """``None``: Clover has no version header to report. See the module
-        docstring."""
+        """``None``: Clover has no version header to report."""
         return None
 
     # -- what this vendor is made of ---------------------------------------
 
     @property
     def config(self) -> CloverConfig:
-        """The resolved configuration. Not part of the protocol; the surfaces
-        read it, and a test asserting that a profile's ``vendor`` block took
-        effect reads it too."""
+        """The resolved configuration. Not part of the protocol; surfaces
+        read it directly."""
         return self._config
 
     @property
@@ -208,14 +159,9 @@ class CloverVendor:
 
     @property
     def routes(self) -> Sequence[Route]:
-        """The vendor surface, built once and cached.
-
-        Cached because ``Route`` handlers are bound methods of a surface
-        object and rebuilding them on every access would make two reads of
-        this property produce routes that compare unequal. The webhook
-        stand-in is last so the literal ``/oauth`` and ``/v3`` surfaces match
-        first, and so conformance probes that take "the first mutating route"
-        find a real Clover endpoint.
+        """The vendor surface, built once and cached (``Route`` handlers are
+        bound methods; rebuilding them would make two reads compare unequal).
+        Webhooks are last so ``/oauth`` and ``/v3`` match first.
         """
         if self._routes is None:
             self._routes = (
@@ -239,13 +185,13 @@ class CloverVendor:
 
     @property
     def signer(self) -> Signer | None:
-        """The static ``X-Clover-Auth`` scheme and every delivery header.
-        See :mod:`.signer`."""
+        """The static ``X-Clover-Auth`` scheme. See :mod:`.signer`."""
         return self._signer
 
     @property
     def events(self) -> EventMapper | None:
-        """Journal entry to the documented aggregate payload. See :mod:`.events`."""
+        """Journal entry to the documented aggregate payload. See
+        :mod:`.events`."""
         return self._events
 
     @property
@@ -267,10 +213,7 @@ class CloverVendor:
 
     @property
     def opaque_fields(self) -> Sequence[str]:
-        """Empty: this surface stores no caller free-form documents. Every
-        stored dict (``address``, ``orderType``, ``taxRates`` elements, ...)
-        carries Clover's own documented keys, none of which shares a name in
-        ``_VOLATILE_FIELDS``."""
+        """Empty: this surface stores no caller free-form documents."""
         return ()
 
     @property
@@ -279,8 +222,7 @@ class CloverVendor:
 
     @property
     def base_dir(self) -> Path:
-        """What a profile's relative ``seed`` path resolves against: the
-        package root, one level above the profiles."""
+        """What a profile's relative ``seed`` path resolves against."""
         return _PACKAGE_DIR
 
     # -- lifecycle ---------------------------------------------------------
@@ -288,21 +230,17 @@ class CloverVendor:
     def hydrate(self, ctx: UnitContext, seed: object) -> None:
         """Phase two of configuration, then load the seed scenario.
 
-        The configuration step happens first and unconditionally, so that a
-        profile's ``vendor`` block is in force even when hydration fails --
-        and so that the tokens the scenario seeds are stamped with the expiry
-        the *profile's* TTL implies rather than the built-in default's.
+        Config resolves first and unconditionally, so seeded tokens are
+        stamped with the profile's TTL rather than the built-in default's.
         """
         self._resolve_config(ctx)
         hydrate_clover(ctx, seed, self._config)
 
     def _resolve_config(self, ctx: UnitContext) -> None:
-        """Re-resolve from the profile, then rebuild what depends on it.
+        """Re-resolve from the profile and rebuild what depends on it.
 
-        The id stream is re-seeded rather than continued: a unit that
-        re-hydrates must mint the same ids it minted the first time, which is
-        what makes ``POST /__unit/state/reset`` reproduce a scenario instead
-        of merely repeating it.
+        The id stream is re-seeded, not continued, so
+        ``POST /__unit/state/reset`` reproduces a scenario's ids.
         """
         block = dict(ctx.config.vendor_config)
         self._config = self._base_config if not block else self._base_config.merged_with(block)
@@ -310,8 +248,7 @@ class CloverVendor:
         self._ids.reseed(ctx.config.chaos.seed)
 
     def decorate(self, headers: dict[str, str], ctx: UnitContext, req: UnitRequest) -> None:
-        """Stamp only ``x-unit-vendor``: Clover has no version header. See the
-        module docstring."""
+        """Stamp only ``x-unit-vendor``: Clover has no version header."""
         headers["x-unit-vendor"] = ctx.vendor.name
 
 
@@ -320,15 +257,9 @@ def create_clover_vendor(
     vendor_config: dict[str, Any] | None = None,
     seed: int = 1,
 ) -> VendorDefinition:
-    """Build a Clover vendor.
-
-    ``vendor_config`` is the base a profile's ``vendor`` block is merged over,
-    and ``seed`` seeds the id stream until :meth:`CloverVendor.hydrate`
-    re-seeds it from the unit. Both exist for tests and for a caller
-    assembling a unit by hand; ``create_unit(vendor="clover")`` needs neither.
-
-    The return annotation is the protocol, so ``mypy --strict`` checks the
-    structural conformance of :class:`CloverVendor` here, at one call site,
-    rather than wherever a unit happens to be built.
+    """Build a Clover vendor. ``vendor_config`` is the base a profile's
+    ``vendor`` block merges over; ``seed`` seeds the id stream until
+    :meth:`CloverVendor.hydrate` re-seeds it. Both exist for tests and manual
+    assembly -- ``create_unit(vendor="clover")`` needs neither.
     """
     return CloverVendor(config=resolve_clover_config(vendor_config), seed=seed)

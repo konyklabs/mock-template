@@ -1,37 +1,8 @@
-"""The payment wire vocabulary: what CreatePayment accepts, and the ``Payment``
-that goes back out.
-
-FOR: emitting the document Square's CreatePayment example shows, restricted
-to the one source this unit takes, and stating the request shapes as models
-for the reasons :mod:`vendorfake.square.model.order` gives -- strict types, an
-absent field distinguishable from a null one, and unknown fields ignored
-rather than refused.
-
-Shapes from https://developer.squareup.com/reference/square/objects/Payment
-and the CreatePayment page
-(https://developer.squareup.com/reference/square/payments-api/create-payment).
-``external_details`` is
-https://developer.squareup.com/reference/square/objects/ExternalPaymentDetails.
-
-INVARIANT: **an absent optional emits no key**, through ``compact()``, as
-everywhere in this package. A payment with no ``order_id`` has no ``order_id``
-key; a consumer branching on ``"order_id" in payment`` takes the right branch.
-
-What is emitted, and what is not
---------------------------------
-``receipt_number`` and ``receipt_url`` appear only on a COMPLETED payment:
-"receipt_url: The URL for the payment's receipt ... The field is only
-populated for COMPLETED payments." ``approved_money`` is the amount on every
-status but CANCELED, where nothing was approved -- JUDGMENT, from the field's
-"The amount of money approved for this payment". ``version_token`` is "an
-opaque token" derived from the store version, so a CompletePayment carrying a
-stale one is the documented VERSION_MISMATCH.
-
-SHRINK (prototype): ``delay_duration`` / ``delay_action`` / ``delayed_until``
-(card-hold expiry), ``processing_fee``, ``refunded_money``, ``card_details``,
-``cash_details``, ``risk_evaluation``, ``buyer_email_address``, the billing
-and shipping addresses and ``capabilities`` are not emitted. None of them
-applies to an external payment or changes a state this unit models.
+"""The payment wire vocabulary: what CreatePayment accepts, and the ``Payment`` JSON that goes back
+out. https://developer.squareup.com/reference/square/objects/Payment
+``receipt_number``/``receipt_url`` appear only on a COMPLETED payment; ``approved_money`` is zero on
+CANCELED, JUDGMENT from "The amount of money approved for this payment". Card-hold, fee, refund and
+address fields are not modeled -- SHRINK (prototype).
 """
 
 from __future__ import annotations
@@ -59,9 +30,7 @@ __all__ = [
 ]
 
 EXTERNAL_SOURCE_ID = "EXTERNAL"
-"""``source_id`` for a payment the seller took outside Square: "For an
-external payment, `source_id` should be `EXTERNAL`" -- and the only source
-this unit accepts."""
+"""``source_id`` for a payment taken outside Square; the only source this unit accepts."""
 
 EXTERNAL_PAYMENT_TYPES: tuple[str, ...] = (
     "CHECK",
@@ -77,14 +46,12 @@ EXTERNAL_PAYMENT_TYPES: tuple[str, ...] = (
     "FOOD_VOUCHER",
     "OTHER",
 )
-"""``ExternalPaymentDetails.type``: "The type of external payment the seller
-received", with these documented values.
-https://developer.squareup.com/reference/square/objects/ExternalPaymentDetails
-"""
+"""``ExternalPaymentDetails.type``'s documented values.
+https://developer.squareup.com/reference/square/objects/ExternalPaymentDetails"""
 
 SQUARE_PRODUCT = "ECOMMERCE_API"
-"""``application_details.square_product`` for a payment taken through the
-API. https://developer.squareup.com/reference/square/enums/ApplicationDetailsExternalSquareProduct"""
+"""``application_details.square_product`` for a payment taken through the API.
+https://developer.squareup.com/reference/square/enums/ApplicationDetailsExternalSquareProduct"""
 
 _WIRE = ConfigDict(extra="forbid", frozen=True, strict=True)
 _REQUEST = ConfigDict(extra="ignore", frozen=True, strict=True)
@@ -142,12 +109,8 @@ class PaymentWire(BaseModel):
 
 
 def version_token_of(payment: PaymentEntity) -> str:
-    """The opaque token for one version of one payment.
-
-    A digest rather than the bare version number so that a consumer cannot
-    read a counter out of it and start fabricating tokens; 43 characters,
-    the length of the documented example.
-    """
+    """Opaque per-version token: a digest, not the bare version number, so a consumer can't
+    fabricate one; 43 characters, the documented example's length."""
     return digest_of([payment.id, payment.version])[:43]
 
 
@@ -181,9 +144,6 @@ def project_payment(payment: PaymentEntity, application_id: str) -> dict[str, An
         customer_id=payment.customer_id,
         note=payment.note,
         external_details=external,
-        # "receipt_number: The payment's receipt number. The field is missing
-        # if a payment is canceled." -- the first four characters of the id,
-        # as the documented example shows (`R2B3` for `R2B3Z8WMVt3E...`).
         receipt_number=payment.id[:4] if completed else None,
         receipt_url=f"https://squareup.com/receipt/preview/{payment.id}" if completed else None,
         application_details={"square_product": SQUARE_PRODUCT, "application_id": application_id},
@@ -197,13 +157,8 @@ def project_payment(payment: PaymentEntity, application_id: str) -> dict[str, An
 
 
 class ExternalDetailsRequest(BaseModel):
-    """``external_details``: "Additional details required for external
-    payments". ``type`` and ``source`` are both required on Square's object;
-    ``source`` is "A description of the external payment source. For example,
-    'Food Delivery Service'" (max 255), ``source_id`` an optional reference
-    into that source.
-    https://developer.squareup.com/reference/square/objects/ExternalPaymentDetails
-    """
+    """``external_details``: ``type`` and ``source`` are both required; ``source`` is a free-text
+    description (max 255) of the payment source, ``source_id`` an optional reference into it."""
 
     model_config = _REQUEST
 
@@ -216,12 +171,8 @@ class CreatePaymentRequest(BaseModel):
     """``POST /v2/payments``.
     https://developer.squareup.com/reference/square/payments-api/create-payment
 
-    ``idempotency_key`` is required ("Min Length 1, Max Length 45") and read
-    by the kernel through the route's spec. ``autocomplete`` defaults to true:
-    "If set to `true`, this payment will be completed when possible. If set
-    to `false`, this payment will be held in an approved state until either
-    explicitly completed (captured) or canceled (voided)."
-    """
+    ``idempotency_key`` is read by the kernel through the route spec.
+    ``autocomplete`` defaults true; false holds the payment APPROVED until a separate call."""
 
     model_config = _REQUEST
 
@@ -239,12 +190,8 @@ class CreatePaymentRequest(BaseModel):
 
 
 class CompletePaymentRequest(BaseModel):
-    """``POST /v2/payments/{payment_id}/complete``.
-
-    ``version_token`` is "Used for optimistic concurrency. This opaque token
-    identifies the current `Payment` version that the caller expects. If the
-    server has a different version of the Payment, the update fails and a
-    response with a VERSION_MISMATCH error is returned."
+    """``POST /v2/payments/{payment_id}/complete``. A stale ``version_token`` fails with the
+    documented VERSION_MISMATCH.
     https://developer.squareup.com/reference/square/payments-api/complete-payment
     """
 
@@ -254,8 +201,7 @@ class CompletePaymentRequest(BaseModel):
 
 
 class CancelPaymentRequest(BaseModel):
-    """``POST /v2/payments/{payment_id}/cancel``. Square documents no body
-    fields; an empty object is the request.
+    """``POST /v2/payments/{payment_id}/cancel``; Square documents no body fields.
     https://developer.squareup.com/reference/square/payments-api/cancel-payment
     """
 

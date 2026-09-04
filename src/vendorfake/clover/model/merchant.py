@@ -1,18 +1,10 @@
-"""The merchant wire vocabulary.
+"""The merchant wire vocabulary: what ``GET /v3/merchants/{mId}`` returns.
 
-FOR: what ``GET /v3/merchants/{mId}`` returns, as far as this build models it.
-
-DOCUMENTED, thinly: the merchant reference
-(https://docs.clover.com/dev/docs/merchantgetmerchant) lists ``id``, ``name``,
-``reseller_id``, ``owner{...}`` and ``address{...}`` among a long expandable
-field set, but shows **no example JSON anywhere** -- the one entity in this
-package whose reference publishes no response body at all.
-
-JUDGMENT -- the nested shapes. ``owner`` and ``address`` are documented as
-objects with undocumented contents on that page, so the minimal fields below
-(an owner with an id and a name, a US-style address block) are this project's
-reading of what a consumer needs to render a merchant, not Clover's schema. A
-consumer must not assert the real API returns exactly these keys.
+DOCUMENTED, thinly (https://docs.clover.com/dev/docs/merchantgetmerchant):
+``id``, ``name``, ``reseller_id``, ``owner{...}``, ``address{...}``, no
+example JSON. JUDGMENT: ``owner``/``address`` are objects with undocumented
+contents, so the minimal fields below are this project's reading, not
+Clover's schema.
 """
 
 from __future__ import annotations
@@ -26,9 +18,8 @@ from vendorfake.core.util.json import compact
 __all__ = ["AddressWire", "MerchantWire", "OwnerWire"]
 
 _RESPONSE = ConfigDict(extra="forbid", frozen=True, strict=True)
-"""Projection-only: nothing parses an inbound merchant document (the surface
-is a read-only GET), so these stay strict -- a wrong type here is this unit's
-own bug, not a consumer's body. Contrast ``model/order.py``'s ``_REQUEST``."""
+"""Projection-only: this read-only GET never parses an inbound body, so a
+wrong type here is this unit's own bug, not a consumer's."""
 
 
 class OwnerWire(BaseModel):

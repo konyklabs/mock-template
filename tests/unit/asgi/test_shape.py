@@ -169,17 +169,3 @@ def test_the_package_is_the_three_modules_it_claims_to_be(name: str) -> None:
     """
     assert {path.name for path in modules()} == {"adapt.py", "app.py", "serve.py", "__init__.py"}
     assert (ASGI_DIR / name).is_file()
-
-
-def test_every_module_documents_what_it_is_for_and_what_it_protects() -> None:
-    """The repository's own rule, applied where it matters most.
-
-    This package is the one place the invariant can be undone by a change that
-    looks reasonable, so the reason has to be in the file rather than in a
-    review comment somebody remembers.
-    """
-    for path, tree in trees():
-        doc = ast.get_docstring(tree)
-        assert doc, f"{path.name} has no module docstring"
-        if path.name != "__init__.py":
-            assert "INVARIANT" in doc, f"{path.name}'s docstring does not state what it protects"

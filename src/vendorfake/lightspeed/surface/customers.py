@@ -1,41 +1,22 @@
-"""The Customers tag: the version-cursor list, one customer, and the three writes.
+"""Customers tag: the version-cursor list, one customer, and the three writes.
 
-DOCUMENTED, all five of the tag's operations, and the status codes are NOT the
-ones the Products tag uses -- which is the point worth reading twice:
+DOCUMENTED, all five operations. Status codes differ from the Products tag's: create is
+201 (the only one on this vendor's resource surface) and delete is 204 (also the only
+one) -- unlike Products' 200-with-ids create and empty-200 delete; neither is normalised
+toward the other.
 
-=============================================  =======================  ===================  =====
-``GET /customers``                             ``ListCustomers``        ``customers:read``   200
-``GET /customers/{customer_id}``               ``GetCustomerByID``      ``customers:read``   200
-``POST /customers``                            ``CreateCustomer``       ``customers:write``  201
-``PUT /customers/{customer_id}``               ``UpdateCustomerByID``   ``customers:write``  200
-``DELETE /customers/{customer_id}``            ``DeleteCustomerByID``   ``customers:write``  204
-=============================================  =======================  ===================  =====
+Every write fires ``customer.update`` -- the webhooks page
+(https://x-series-api.lightspeedhq.com/docs/webhooks) covers "create/delete/modify,
+including balance changes" under that one event. Delete is soft (``deleted_at`` set, row
+kept, dropped from the list unless ``deleted=true``), so it fires the event too.
 
-``POST /customers`` is the only 201 on this vendor's resource surface and
-``DELETE /customers/{id}`` the only 204; ``POST /products`` answers 200 with an
-array of ids and ``DELETE /products/{id}`` answers an empty 200. All four are
-what the specification declares, and none of them is normalised toward the
-others.
+JUDGMENT: ``PUT`` is a replace, not a merge -- the schema declares the same
+``CustomerBase`` body as create with no partial-update variant, so an absent ``email``
+is cleared, not left alone.
 
-**Every write fires ``customer.update``**, which the webhooks page states
-outright: the event covers "create/delete/modify, including balance changes"
-(https://x-series-api.lightspeedhq.com/docs/webhooks). A delete fires it
-because the delete is soft -- ``deleted_at`` is set, the row stays, and the
-list drops it unless ``deleted=true``, which is what that documented list
-parameter is for.
-
-THE UPDATE IS A REPLACE, not a merge, and that is the schema's doing:
-``PUT /customers/{customer_id}`` declares the same ``CustomerBase`` body as the
-create, with the same two required members and no partial-update variant
-anywhere in the document. So a ``PUT`` that omits ``email`` clears it. JUDGMENT
-on the *consequence*, stated here because it is the kind of thing that costs a
-consumer a support ticket: the body shape is documented, what an absent member
-means is not.
-
-CUSTOMER GROUPS. The scenario seeds the retailer's one default group; a body
-that names no ``customer_group_id`` joins it, and a body that names a group
-that does not exist is a 422 rather than a dangling reference. There are no
-group routes -- the Customer Groups tag is deferred; see ``capabilities.py``.
+Customer groups: the scenario seeds one default group; an unnamed ``customer_group_id``
+joins it, an unknown one is a 422. No group routes here -- Customer Groups is deferred;
+see ``capabilities.py``.
 """
 
 from __future__ import annotations
@@ -165,9 +146,7 @@ class LightspeedCustomersSurface:
         created = args.ctx.store.collection(COL.customers).insert(
             customer.to_entity(), {"operation_id": "CreateCustomer"}
         )
-        # DOCUMENTED 201, and the whole record rather than an id: the
-        # operation's own 200-level response is `CustomerResponse` and its
-        # example prints the created customer.
+        # DOCUMENTED 201 with the whole record (CustomerResponse's example prints it).
         return json_(single(project_customer(created)), 201)
 
     def update_customer(self, args: HandlerArgs) -> ReplyInit:
@@ -198,8 +177,7 @@ class LightspeedCustomersSurface:
         return json_(single(project_customer(updated)))
 
     def delete_customer(self, args: HandlerArgs) -> ReplyInit:
-        # `_require_live`, so a REPEAT delete is a 404 rather than a second
-        # 204 that re-stamps `deleted_at` and fires another `customer.update`.
+        # `_require_live`: a repeat delete is a 404, not a second 204 re-firing customer.update.
         stored = self._require_live(args)
         customer = CustomerEntity.from_entity(stored)
         deleted_at = wire_time(args.ctx.clock)
@@ -218,8 +196,7 @@ class LightspeedCustomersSurface:
     # -- helpers ------------------------------------------------------------
 
     def _resolve_group(self, ctx: UnitContext, supplied: str | None, *, fallback: str | None = None) -> str:
-        """The group this customer belongs to: the one named, the one it
-        already had, or the retailer's default."""
+        """The group this customer belongs to: named, existing, or the retailer's default."""
         groups = ctx.store.collection(COL.customer_groups)
         if supplied is not None:
             if groups.get(supplied) is None:
@@ -254,15 +231,9 @@ class LightspeedCustomersSurface:
     def _require_live(self, args: HandlerArgs) -> dict[str, Any]:
         """The row a WRITE addresses: present, and not already deleted.
 
-        JUDGMENT: a soft delete leaves the row addressable -- ``GET`` still
-        answers it and ``?deleted=true`` still lists it, which is what the
-        ``deleted`` list parameter is for -- but it stops being writable. The
-        alternative this replaces answered 200 to a ``PUT`` on a deleted
-        customer and fired another ``customer.update``, leaving the caller's
-        own state saying the customer exists and is current while every
-        default list omits it. A retry or a race on a cleanup path is exactly
-        how a consumer meets that, and no response distinguished it from a
-        successful update of a live customer.
+        JUDGMENT: a soft-deleted row stays readable (``GET``, ``?deleted=true``) but not
+        writable -- otherwise a ``PUT`` on it would report success while every default
+        list omits it.
         """
         stored = self._require(args)
         if stored.get("deleted_at") is not None:

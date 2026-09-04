@@ -1,73 +1,28 @@
 """The orders surface: prices, create, read, list, selections, void, discounts, delivery.
 
-FOR: reproducing what a restaurant-ordering integration drives against
-``/orders/v2`` with the documented shapes and the documented refusals -- above
-all the prices contract: ``POST /prices`` and ``POST /orders`` compute the
-same amounts from the same body, because they share ``model/build.py``.
+Reproduces what a restaurant-ordering integration drives against
+``/orders/v2``; ``POST /prices`` and ``POST /orders`` share
+``model/build.py`` so they price identically.
 
-====================  =====================================================
-Prices                ``POST  /orders/v2/prices`` -- computes, persists nothing
-CreateOrder           ``POST  /orders/v2/orders``
-GetOrders (deprecated)``GET   /orders/v2/orders`` -- an array of order guids
-OrdersBulk            ``GET   /orders/v2/ordersBulk`` -- full orders, paged
-GetOrder              ``GET   /orders/v2/orders/{guid}``
-VoidOrder             ``POST  /orders/v2/orders/{guid}/void``
-AddSelections         ``POST  /orders/v2/orders/{o}/checks/{c}/selections``
-ApplyCheckDiscount    ``POST  /orders/v2/orders/{o}/checks/{c}/appliedDiscounts``
-ApplySelectionDiscount``POST  /orders/v2/orders/{o}/checks/{c}/selections/{s}/appliedDiscounts``
-ApplicableDiscounts   ``POST  /orders/v2/applicableDiscounts``
-UpdateDeliveryInfo    ``PATCH /orders/v2/orders/{o}/deliveryInfo``
-====================  =====================================================
-(toast-orders-api.yaml; apiCreatingOrders.html; apiOrderPrices.html;
-apiVoidOrder.html; apiDiscountingOrders.html; apiOrdersGetDetailedInfoAboutOneOrder.html)
+DOCUMENTED (toast-orders-api.yaml, apiCreatingOrders.html, apiOrderPrices.html,
+apiVoidOrder.html, apiDiscountingOrders.html,
+apiOrdersGetDetailedInfoAboutOneOrder.html): the minimal create body and its
+guid assignment; ``externalId`` uniqueness across orders, checks and
+selections; ``/prices``' unsaved null-guid answer; ``GET /orders/{guid}``'s
+client-scoping and scope-gated ``customer``/``deliveryInfo`` fields;
+``/ordersBulk``'s date-range-or-businessDate paging; the void body and its
+resulting state; and the discount shapes, all reproduced field for field.
 
-Documented behaviour reproduced here
-------------------------------------
-* the minimal create body is ``{diningOption{guid}, checks[{selections[{item{guid},
-  quantity}]}]}``; Toast assigns every guid; ``externalId`` values must be
-  unique across orders, checks and selections;
-* ``/prices`` answers the same document with ``"guid": null`` and journals
-  nothing;
-* ``GET /orders/{guid}``: 400 "The GUID was malformed", 404 "The specified
-  order was not found"; ``customer`` only with ``guest.pi:read`` and
-  ``deliveryInfo`` only with ``delivery_info.address:read``; an ordering
-  integration "can only retrieve orders ... if your integration submitted
-  them" -- orders are scoped to the client that created them;
-* ``GET /ordersBulk``: ``startDate``+``endDate`` (on ``modifiedDate``,
-  inclusive/exclusive, after 2015-12-01) OR ``businessDate``; ``pageSize`` at
-  most 100; full Order documents;
-* void: ``{"selections":{"voidAll":true},"payments":{"voidAll":true}}``,
-  "Each voidAll value must be set to true"; the same client that created the
-  order; "Only OTHER payments may be voided"; the result is ``voided: true``,
-  ``paymentStatus: "VOIDED"``, ``guestOrderStatus: "VOIDED"``, every
-  selection voided, ``voidDate`` and ``voidBusinessDate``; "Once an order has
-  been voided, it can not be updated";
-* discounts: the AppliedDiscount shape and the ``/applicableDiscounts`` answer
-  are the documented ones, field for field.
+JUDGMENT, each labelled at its site: statuses the documentation names without
+a code (duplicate externalId, void by another client, voiding twice, ``page``
+counting from 0, a conflicting date query); the deprecated ``GET /orders``
+paging nothing, since none is documented; the undocumented, unenforced 413/415
+limits; refusing a selection appended to a PAID check; how check- and
+selection-level discounts recompute; ``displayNumber`` as the order's position
+in history.
 
-JUDGMENT, each labelled at its site
------------------------------------
-* **statuses the documentation names without a code**: a duplicate
-  ``externalId`` is 400; a void by another client is 404 (the order is not
-  visible to that client at all); voiding twice is 400 (``invalid_transition``);
-  ``page`` counts from 0 (audit gap 7); supplying both a date range and a
-  business date is 400;
-* **the deprecated ``GET /orders``** answers every matching guid with no
-  paging of any kind: none is documented (audit gap 12), so none is invented;
-* **the 413 check-count limit** is undocumented and not enforced; **415** on
-  a non-JSON content type is not enforced, because the core's body reader is
-  deliberately content-type general;
-* **a selection appended to a PAID check** is refused (400): the check's
-  amounts would no longer match its payments and Toast documents no answer;
-* **check-level discounts** take ``CHECK``-type discounts and selection-level
-  ones ``ITEM``-type, each recomputed from the current amounts; a discount
-  with promo codes needs a matching ``appliedPromoCode``;
-* **``displayNumber``** is the order's position in the restaurant's history,
-  as a string.
-
-THE ORDERING INVARIANT: **no 4xx leaves a journal entry or draws an id.**
-Every refusal is computed before the first write; ``/prices`` draws nothing
-at all.
+INVARIANT: no 4xx leaves a journal entry or draws an id; ``/prices`` draws
+nothing at all.
 """
 
 from __future__ import annotations
@@ -149,8 +104,7 @@ EXAMPLE_ORDER: dict[str, Any] = {
     ],
 }
 """The documented minimal create body, aimed at the seeded take-out option and
-the 8.99 soup. Published as ``example_body`` so the conformance suite can
-commit a mutation without knowing this vendor."""
+the 8.99 soup; published as ``example_body`` for the conformance suite."""
 
 
 class ToastOrdersSurface:
@@ -489,11 +443,7 @@ class ToastOrdersSurface:
         check = _check_of(order, args.params["checkGuid"])
         _CHECK_MACHINE.assert_mutable(str(check["paymentStatus"]), f"Check {check['guid']}")
         if check["paymentStatus"] in (CheckPaymentStatus.PAID.value, CheckPaymentStatus.CLOSED.value):
-            # A settled check takes no more selections: PAID (a CREDIT tip
-            # pending) or CLOSED (nothing due). CLOSED is reachable through
-            # the API since an OTHER cover closes the check (roadmap#56), so
-            # the guard names it too -- the history lens caught the PAID-only
-            # check the machine change had silently widened.
+            # A settled check (PAID or CLOSED) takes no more selections (konyklabs/roadmap#56).
             raise UnitError(
                 UnitErrorKind.INVALID_VALUE,
                 detail=f"Check {check['guid']} is {check['paymentStatus']}; a selection cannot be added to a settled check.",
@@ -602,11 +552,8 @@ class ToastOrdersSurface:
             draft_check["modifiedDate"] = now
             retotal_check(draft_check, index)
 
-        # THE INVARIANT (vendorfake#30 gate, finding 1, superseding the B2
-        # PAID-only guard): a discount may not reduce totalAmount below what
-        # the check's payments already cover -- which subsumes PAID (fully
-        # covered) and a PARTIAL payment alike. Judged on a preview, before an
-        # id is drawn or anything is written, so the refusal leaves no trace.
+        # INVARIANT: a discount may not reduce totalAmount below what the check's
+        # payments already cover. Judged on a preview, before anything is written.
         covered = covered_cents(ctx, check)
         preview = copy.deepcopy(check)
         apply_to(preview, built(None))
@@ -712,10 +659,8 @@ def _client_id(args: HandlerArgs) -> str:
 
 def _complete_delivery_info(info: Any) -> dict[str, Any] | None:
     """DOCUMENTED: ``DeliveryInfo`` requires ``address1``, ``city``, ``state``
-    and ``zipCode`` (the orders specification's ``required`` list). An order
-    created with a partial address is refused, field by field, so that the
-    stored document is one the specification describes. Found by the fidelity
-    validator (konyklabs/roadmap#56)."""
+    and ``zipCode`` (the orders specification); a partial address is refused
+    field by field (konyklabs/roadmap#56)."""
     document = dict(info.model_dump(exclude_none=True))
     if not document:
         return None
