@@ -16,7 +16,14 @@ import a framework *for*.
 """
 
 from vendorfake.asgi.adapt import TRANSPORT, to_response, to_unit_request
-from vendorfake.asgi.app import HTTP_METHODS, OPENAPI_PATH, FrameworkTripwire, create_app, registered_methods
+from vendorfake.asgi.app import (
+    HTTP_METHODS,
+    OPENAPI_PATH,
+    FrameworkTripwire,
+    TransportFaultAbort,
+    create_app,
+    registered_methods,
+)
 from vendorfake.asgi.serve import DEFAULT_HOST, DEFAULT_PORT, bind, bound_port, run_server, serve_in_thread
 
 __all__ = [
@@ -26,6 +33,7 @@ __all__ = [
     "OPENAPI_PATH",
     "TRANSPORT",
     "FrameworkTripwire",
+    "TransportFaultAbort",
     "bind",
     "bound_port",
     "create_app",

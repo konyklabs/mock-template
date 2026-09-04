@@ -1096,7 +1096,7 @@ def test_a_refused_scope_intersection_leaves_the_code_spendable(h: Harness) -> N
     assert refused.status == 400, refused.text
 
     accepted = h.token(client_secret=APPLICATION_SECRET, grant_type="authorization_code", code=code)
-    assert accepted.status == 200, "the refused request spent the code it refused"
+    assert accepted.status == 200, accepted.text  # the refused request must not have spent the code
     assert accepted.json()["access_token"]
 
 
@@ -1181,3 +1181,36 @@ def test_a_recorded_empty_approval_refuses_a_refresh_rather_than_regranting(h: H
         f"expected the empty intersection refused, got {refreshed.status} {refreshed.text[:200]}"
     )
     assert "None of the requested scopes were authorized" in refreshed.text, refreshed.text[:300]
+
+
+# ---------------------------------------------------------------------------
+# VENDORFAKE_CLOCK_START (konyklabs/roadmap#71, D1)
+# ---------------------------------------------------------------------------
+
+
+def test_clock_start_makes_a_refresh_s_documented_access_token_lifetime_reproducible_across_units() -> None:
+    """DOCUMENTED: "otherwise 30 days" -- the module docstring's citation for
+    the default (non-short-lived) access-token lifetime,
+    https://developer.squareup.com/docs/oauth-api/overview. On a virtual clock
+    frozen at `clock_start`, a code-flow refresh's `expires_at` is exactly
+    `start + 30 days` -- truncated to seconds, Square's own format -- and two
+    independently built units on the same `clock_start` agree on it to the
+    second, which a wall-clock start instant cannot promise run to run.
+    """
+    start = "2026-01-01T00:00:00Z"
+    expected = "2026-01-31T00:00:00Z"  # start + 30 days, no time elapsed on a frozen virtual clock
+    env = {"VENDORFAKE_CLOCK": "virtual", "VENDORFAKE_CLOCK_START": start}
+
+    seen: list[str] = []
+    for _ in range(2):  # two independently built units
+        for h in build_harness("oauth-only", env=env):
+            first = h.token(client_secret=APPLICATION_SECRET, grant_type="authorization_code", code=h.code()).json()
+            refreshed = h.token(
+                client_secret=APPLICATION_SECRET,
+                grant_type="refresh_token",
+                refresh_token=first["refresh_token"],
+            )
+            assert refreshed.status == 200, refreshed.text
+            seen.append(refreshed.json()["expires_at"])
+
+    assert seen == [expected, expected]

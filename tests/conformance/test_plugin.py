@@ -33,7 +33,15 @@ HARNESS = "tests.conformance.harness"
 
 
 def _pytest_pyargs(*extra: str) -> subprocess.CompletedProcess[str]:
-    """``pytest --pyargs vendorfake.conformance`` as a downstream vendor runs it."""
+    """``pytest --pyargs vendorfake.conformance`` as a downstream vendor runs it.
+
+    ``-p vendorfake.conformance.plugin`` loads it explicitly: since
+    konyklabs/roadmap#71 (D3) the conformance plugin is no longer a
+    ``pytest11`` entry point that installing the wheel auto-loads into every
+    consumer suite -- only ``vendorfake.pytest`` (the ``vendorfake`` marker
+    and fixtures) is. This is the form the README's "running the conformance
+    suite" section now documents.
+    """
     # `-m pytest` and not the console script: it puts the repository root on
     # sys.path, which is how the subprocess reaches the harness target. The
     # environment variable is cleared so that a shell which has exported a
@@ -50,6 +58,8 @@ def _pytest_pyargs(*extra: str) -> subprocess.CompletedProcess[str]:
             "-q",
             "-p",
             "no:cacheprovider",
+            "-p",
+            "vendorfake.conformance.plugin",
             *extra,
         ],
         cwd=REPO_ROOT,
