@@ -24,6 +24,9 @@ from vendorfake.lightspeed.seed.constants import (
 )
 
 REDIRECT = "https://consumer.example/cb"
+CONFIGURED_REDIRECT = "https://consumer.example/callback"
+"""``LightspeedConfig.redirect_uri``'s default -- the effective URL an
+authorize request that names none is bound to."""
 RESPONSE_FIELDS = {
     "access_token",
     "token_type",
@@ -255,3 +258,68 @@ def test_the_published_credentials_drop_a_revoked_token(h: Harness) -> None:
     assert h.refresh().status == 200
     after = {row["headers"]["authorization"] for row in h.api.get("/__unit/auth").json()["credentials"]}
     assert f"Bearer {SEED_ACCESS_TOKEN}" not in after
+
+
+# -- the guards nothing used to hold in place --------------------------------
+
+
+def test_a_code_expires_after_the_configured_ttl(virtual: Harness) -> None:
+    """UNPROTECTED UNTIL NOW: deleting the expiry branch left all 419 tests in
+    this suite green, so a refactor of the exchange path could drop the only
+    thing that makes a ten-minute code stop working and nothing would say so.
+    Both sibling vendors pin this; this is the same test for
+    ``LightspeedConfig.authorization_code_ttl_ms`` (600000ms, labelled
+    JUDGMENT at its site -- the spike figure is unconfirmed)."""
+    code = _code(virtual)
+    virtual.unit.context.clock.advance(600_001)
+    answered = virtual.exchange(code, redirect_uri=REDIRECT)
+    assert answered.status == 401
+    assert answered.json()["unit_error"]["field"] == "code"
+    assert "expired" in answered.json()["message"]
+
+
+def test_a_code_still_inside_the_ttl_is_exchanged(virtual: Harness) -> None:
+    """The other side of the boundary, so the test above is failing for the
+    expiry and not for the clock."""
+    code = _code(virtual)
+    virtual.unit.context.clock.advance(599_000)
+    assert virtual.exchange(code, redirect_uri=REDIRECT).status == 200
+
+
+def test_an_authorize_with_no_redirect_uri_still_binds_the_effective_one(h: Harness) -> None:
+    """THE UNGUARDED BRANCH. ``redirect_uri`` is optional on the authorize
+    request and falls back to the unit's configured default; the code used to
+    record the ABSENCE, and the exchange only compared when it had recorded
+    something -- so a code minted this way was redeemable with any
+    redirect_uri at all, teaching a consumer a rule Lightspeed does not have.
+    """
+    answered = h.api.get("/connect", query={"response_type": "code", "client_id": SEED_CLIENT_ID, "state": "s"})
+    assert answered.status == 302
+    location = urlsplit(answered.headers["location"])
+    assert f"{location.scheme}://{location.netloc}{location.path}" == CONFIGURED_REDIRECT
+    code = dict(parse_qsl(location.query))["code"]
+
+    stolen = h.exchange(code, redirect_uri="https://attacker.example/steal")
+    assert stolen.status == 401
+    assert stolen.json()["unit_error"]["field"] == "redirect_uri"
+    # And the effective URL is the one that works.
+    assert h.exchange(code, redirect_uri=CONFIGURED_REDIRECT).status == 200
+
+
+def test_a_wrong_client_id_is_refused_on_the_authorization_code_grant(h: Harness) -> None:
+    """UNPROTECTED UNTIL NOW: with the branch deleted the whole suite stayed
+    green, leaving ``_check_secret`` as the token endpoint's only credential
+    check -- so a caller presenting the wrong client_id with the right secret
+    was issued a token. A typo'd or stale application id is an ordinary
+    misconfiguration, and it must fail here the way it fails in production."""
+    answered = h.exchange(_code(h), client_id="not-this-application", redirect_uri=REDIRECT)
+    assert answered.status == 401
+    assert answered.json()["unit_error"]["field"] == "client_id"
+
+
+def test_a_wrong_client_id_is_refused_on_the_refresh_grant(h: Harness) -> None:
+    """The same guard, reached through the other grant: it sits above the
+    branch on ``grant_type``, and a test on one grant alone would not say so."""
+    answered = h.refresh(client_id="not-this-application")
+    assert answered.status == 401
+    assert answered.json()["unit_error"]["field"] == "client_id"

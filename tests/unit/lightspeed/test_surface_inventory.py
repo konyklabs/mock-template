@@ -145,6 +145,37 @@ def test_the_level_report_is_a_different_shape_from_the_record(h: Harness) -> No
     assert row["total_cost"] == 144
 
 
+def test_a_negative_level_is_readable_on_both_level_routes(h: Harness) -> None:
+    """A shrinkage write-down below zero is a state BOTH documented write paths
+    permit -- ``POST /stock_adjustments`` with a negative quantity, and closing
+    a sale for more units than the outlet holds -- so the read has to be able
+    to report it.
+
+    ``total_cost`` is ``average_cost x current_inventory_level``, which goes
+    negative with the level. Refusing it there made one negative row take down
+    ``GET /inventory_levels/{product_id}`` AND the retailer-wide
+    ``POST /inventory_levels``, so a consumer's stocktake job met a failure
+    mode the real API does not have. The write path and the read path now
+    agree about what a legal level is.
+    """
+    assert _adjust(h, _damage(quantity="-9999")).status == 201
+
+    one = h.get(h.path(f"{LEVELS}/{c.SEED_PRODUCT_TRAIL_MIX_ID}"))
+    assert one.status == 200, one.text
+    row = next(item for item in one.json() if item["location_id"] == c.SEED_OUTLET_MAIN_ID)
+    assert row["current_inventory_level"] == 24 - 9999
+    # average_cost 6 x the negative level.
+    assert row["total_cost"] == 6 * (24 - 9999)
+
+    every = h.post(h.path(LEVELS), "{}")
+    assert every.status == 200, every.text
+    negative = [item for item in every.json() if item["total_cost"] < 0]
+    assert [item["location_id"] for item in negative] == [c.SEED_OUTLET_MAIN_ID]
+    # And every OTHER product is still readable, which is the half that broke:
+    # one negative row used to refuse the whole retailer's report.
+    assert len(every.json()) > len(negative)
+
+
 def test_a_variant_reports_its_parent_as_the_root(h: Harness) -> None:
     row = h.get(h.path(f"{LEVELS}/{c.SEED_PRODUCT_TEE_SMALL_ID}")).json()[0]
     assert row["product_id"] == c.SEED_PRODUCT_TEE_SMALL_ID

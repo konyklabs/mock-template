@@ -43,15 +43,24 @@ JUDGMENT, at their sites:
   it is a view of ONE till session rather than an all-time total.
 
 WHAT A CLOSURE'S TOTALS ARE MADE OF, since slice L2b of konyklabs/roadmap#94
-put real sales behind them: the payments the register actually took while it
-was open, summed per payment type, PLUS whatever totals the close request
-itself declared. Both halves are needed. The taken payments are the money the
-API can see; the declared ones are the cash count a closing cashier types in,
-which is the only thing ``RegisterCloseRequest`` carries and therefore the only
-thing the vendor documents as an input to this action. Summing them means a
-close with an empty body reports what the till rang up, and a close that
-declares a float reports both -- and the response schema is unchanged either
-way.
+put real sales behind them: the payments the register actually TOOK while it
+was open, summed per payment type. The close request's own declared totals are
+validated -- a total naming a payment type this retailer does not have is a
+422 -- and then they are NOT added.
+
+JUDGMENT, and it replaces an earlier reading that summed the two. A cashier's
+counted cash and the rung-up cash are the SAME money, so adding them reports
+a till twice over: ring up one $10.00 cash sale, close declaring the counted
+$10.00, and the summed reading answers $20.00, which is neither the declared
+total nor the observed one. The specification decides it: the input's
+``RegisterClosePaymentType`` and the output's
+``RegisterPaymentSummaryPaymentType`` each carry ONE ``total``, described
+identically ("The Total amount for this Payment Type"), with no
+expected/counted pair anywhere to map the two halves onto. One number out
+means one reading, and the observed one is the one this API can actually see:
+a fake reporting the caller's own declaration back would assert nothing about
+the sales it holds. A consumer that wants the variance has both numbers -- it
+sent one of them.
 """
 
 from __future__ import annotations
@@ -68,6 +77,7 @@ from vendorfake.lightspeed.config import (
     SCOPE_REGISTERS_READ,
 )
 from vendorfake.lightspeed.entities import COL, PaymentTypeEntity, RegisterClosureEntity, RegisterEntity, SaleEntity
+from vendorfake.lightspeed.machine import SaleState
 from vendorfake.lightspeed.model.common import validate_body
 from vendorfake.lightspeed.model.money import to_minor
 from vendorfake.lightspeed.model.payment_type import project_payments_summary
@@ -217,13 +227,11 @@ class LightspeedRegistersSurface:
                 info={"is_open": False},
             )
         closed_at = wire_time(args.ctx.clock)
-        payments = aggregate_payments_by_type(
-            [
-                *self._declared_amounts(args.ctx, request),
-                *self._amounts_taken(args.ctx, register, closed_at),
-            ],
-            names=self._payment_type_names(args.ctx),
-        )
+        # Validated, not summed: see the module docstring on what a closure's
+        # totals are made of.
+        self._check_declared(args.ctx, request)
+        taken = self._amounts_taken(args.ctx, register, closed_at)
+        payments = aggregate_payments_by_type(taken, names=self._payment_type_names(args.ctx))
         deps = self._deps
 
         def mutate(draft: dict[str, Any]) -> None:
@@ -247,6 +255,9 @@ class LightspeedRegistersSurface:
             register_open_time=register.register_open_time,
             register_close_time=closed_at,
             payments=payments,
+            # The ids this closure consumed, so the next one on this register
+            # cannot count them again. See `_amounts_taken`.
+            counted_payment_ids=[str(payment["id"]) for payment in taken if payment.get("id")],
             object_version=self._deps.versions.bump(),
         )
         closures.insert(closure.to_entity(), {"operation_id": "CloseRegister"})
@@ -296,45 +307,39 @@ class LightspeedRegistersSurface:
     def _payment_type_names(self, ctx: UnitContext) -> dict[str, str]:
         return {str(row["id"]): str(row.get("name", "")) for row in ctx.store.collection(COL.payment_types).all()}
 
-    def _declared_amounts(self, ctx: UnitContext, request: RegisterCloseRequest) -> list[dict[str, Any]]:
-        """The close request's own declared totals, in the internal
-        minor-unit shape the aggregator sums.
+    def _check_declared(self, ctx: UnitContext, request: RegisterCloseRequest) -> None:
+        """Read the close request's declared totals for their refusals.
 
-        A total naming a payment type this retailer does not have is a 422:
-        the summary reports the type's *name*, so an unresolvable id would
-        produce a row nobody could read.
+        The totals themselves are not reported -- the module docstring records
+        why -- but they are still VALIDATED, because a body this action
+        accepts silently is a body a consumer cannot learn anything from. A
+        total naming a payment type this retailer does not have is a 422: the
+        summary reports the type's *name*, so an unresolvable id names a row
+        nobody could read. An amount that is not a decimal is
+        ``to_minor``'s own 422 on ``payments[n].total``.
         """
         payment_types = {
             row["id"]: PaymentTypeEntity.from_entity(row) for row in ctx.store.collection(COL.payment_types).all()
         }
-        amounts: list[dict[str, Any]] = []
         for index, declared in enumerate(request.payments):
-            found = payment_types.get(declared.payment_type_id)
-            if found is None:
+            if payment_types.get(declared.payment_type_id) is None:
                 raise UnitError(
                     UnitErrorKind.INVALID_VALUE,
                     detail=f"payments[{index}].payment_type_id {declared.payment_type_id!r} is not a payment type.",
                     field=f"payments[{index}].payment_type_id",
                 )
-            amounts.append(
-                {
-                    "payment_type_id": found.id,
-                    "amount_minor": to_minor(declared.total, field=f"payments[{index}].total", allow_negative=True),
-                }
-            )
-        return amounts
+            to_minor(declared.total, field=f"payments[{index}].total", allow_negative=True)
 
     def _amounts_taken(self, ctx: UnitContext, register: RegisterEntity, closed_at: str) -> list[dict[str, Any]]:
         """Every payment this register actually took while it was open.
 
         THE WINDOW is the register's own: from ``register_open_time`` (or from
         the beginning of the scenario, when the register carries none) to the
-        instant of this close. A payment stored against this register outside
-        that window belongs to an earlier closure and is not counted twice.
-        JUDGMENT on the boundary, because no page describes how the summary and
-        a closure relate -- but the endpoint's documented example prints a
-        ``register_closure_id`` and a ``register_open_time`` beside the totals,
-        which is a view of ONE till session and is the reading taken here.
+        instant of this close. JUDGMENT on the boundary, because no page
+        describes how the summary and a closure relate -- but the endpoint's
+        documented example prints a ``register_closure_id`` and a
+        ``register_open_time`` beside the totals, which is a view of ONE till
+        session and is the reading taken here.
 
         Instants compare as strings because ``surface/common.py``'s
         :func:`wire_time` spells every one of them the same way -- RFC 3339 to
@@ -342,18 +347,52 @@ class LightspeedRegistersSurface:
         Recorded rather than assumed: a scenario that seeds a sale payment with
         an offset spelling (``+00:00``) sorts differently, which is why the
         shipped seed spells them the vendor's ``Z`` way.
+
+        THE WINDOW IS NOT WHAT KEEPS A PAYMENT OUT OF TWO CLOSURES, and it
+        cannot be: those instants are spelled to the SECOND, so a close, a
+        reopen and a second close inside one wall-clock second -- the ordinary
+        case in a test that drives four requests in a few milliseconds -- gave
+        the second closure the window ``[T, T]`` and re-admitted the first
+        session's money. Every closure therefore records the payment ids it
+        consumed (``counted_payment_ids``) and a later closure on the same
+        register skips them. That is exact whatever the clock's resolution is,
+        which the boundary arithmetic was not.
+
+        A VOIDED SALE'S PAYMENTS ARE NOT MONEY THE TILL TOOK. JUDGMENT, beside
+        the window: the state machine allows ``parked -> voided`` and an update
+        rebuilds the whole document including ``payments``, so a cancelled sale
+        keeps its payment rows -- and counting them would tell a consumer's
+        cancel-a-sale test that the till holds cash for a sale that never
+        completed. Nothing else is filtered: a ``parked`` or ``pending`` sale
+        with a payment on it is a layby part-payment, which is real money in
+        the drawer.
         """
         opened = register.register_open_time
+        already_counted = self._counted_before(ctx, register)
         taken: list[dict[str, Any]] = []
         for row in ctx.store.collection(COL.sales).all():
-            for payment in SaleEntity.from_entity(row).payments:
+            sale = SaleEntity.from_entity(row)
+            if sale.state == SaleState.VOIDED.value:
+                continue
+            for payment in sale.payments:
                 if str(payment.get("register_id", "")) != register.id:
+                    continue
+                if str(payment.get("id", "")) in already_counted:
                     continue
                 when = str(payment.get("date", ""))
                 if (opened is not None and when < opened) or when > closed_at:
                     continue
                 taken.append(payment)
         return taken
+
+    def _counted_before(self, ctx: UnitContext, register: RegisterEntity) -> set[str]:
+        """Every payment id an earlier closure of this register consumed."""
+        counted: set[str] = set()
+        for row in ctx.store.collection(COL.register_closures).all():
+            if str(row.get("register_id", "")) != register.id:
+                continue
+            counted.update(str(payment_id) for payment_id in RegisterClosureEntity.from_entity(row).counted_payment_ids)
+        return counted
 
 
 def register_routes(deps: LightspeedDeps) -> tuple[Route, ...]:

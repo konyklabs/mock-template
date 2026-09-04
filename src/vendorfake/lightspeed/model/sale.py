@@ -81,7 +81,7 @@ JUDGMENT, each labelled at its site below:
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -295,6 +295,15 @@ def build_line_item(
     ``field`` is the dotted path this line item sits at in the request body
     (``line_items[0]``), so a bad amount is refused naming
     ``line_items[0].pricing.price`` rather than "a price".
+
+    THE LINE'S PRODUCTS ARE COMPUTED HERE AND THROWN AWAY, deliberately.
+    ``_scale`` refuses an amount whose product with the quantity overflows the
+    decimal context, and the only other place that product is taken is
+    ``project_sale`` -- which runs AFTER the insert. A refusal raised there
+    would answer the caller a correct 422 for a sale that is already in the
+    store and already in the journal, so the check is pulled forward to where
+    every other amount on this line is validated: before any id is minted and
+    before anything commits.
     """
     quantity = _quantity(request.quantity, field=f"{field}.quantity", allow_negative=is_return)
     metadata = request.metadata_
@@ -302,7 +311,7 @@ def build_line_item(
     # is "Order of the line item in the sale", and a caller that numbers its
     # lines is telling the receipt what order to print them in.
     ordinal = sequence if metadata is None or metadata.sequence is None else metadata.sequence
-    return compact(
+    line = compact(
         {
             "id": line_id,
             "product_id": request.product.id,
@@ -320,6 +329,10 @@ def build_line_item(
             "is_return": is_return or None,
         }
     )
+    _line_money(line, field=field)
+    if "cost_minor" in line:
+        _scale(_minor(line, "cost_minor"), quantity, field=f"{field}.pricing.cost")
+    return line
 
 
 def build_payment(
@@ -386,7 +399,7 @@ def _optional_minor(value: Any, *, field: str) -> int | None:
 # -- computing what a caller cannot send ------------------------------------
 
 
-def _line_money(line: Mapping[str, Any]) -> tuple[float, int, int, int, int]:
+def _line_money(line: Mapping[str, Any], *, field: str) -> tuple[float, int, int, int, int]:
     """``(quantity, price, discount, tax, loyalty)`` in minor units, rounded
     once per line.
 
@@ -394,6 +407,11 @@ def _line_money(line: Mapping[str, Any]) -> tuple[float, int, int, int, int]:
     and the sale's total is the sum of what the receipt printed. Summing
     unrounded products and rounding once would produce a sale total a
     consumer's own line-by-line arithmetic cannot reproduce.
+
+    ``field`` is the dotted path this line sits at in the request body
+    (``line_items[0]``), so an amount that cannot be scaled is refused naming
+    ``line_items[0].pricing.price`` rather than "a price" -- the same rule
+    ``build_line_item`` follows for the amounts themselves.
     """
     quantity = float(line.get("quantity", 0) or 0)
     price = _minor(line, "price_minor")
@@ -402,10 +420,10 @@ def _line_money(line: Mapping[str, Any]) -> tuple[float, int, int, int, int]:
     loyalty = _minor(line, "loyalty_minor")
     return (
         quantity,
-        _scale(price, quantity),
-        _scale(discount, quantity),
-        _scale(tax, quantity),
-        _scale(loyalty, quantity),
+        _scale(price, quantity, field=f"{field}.pricing.price"),
+        _scale(discount, quantity, field=f"{field}.pricing.discount"),
+        _scale(tax, quantity, field=f"{field}.tax.amount"),
+        _scale(loyalty, quantity, field=f"{field}.pricing.loyalty_amount"),
     )
 
 
@@ -414,13 +432,34 @@ def _minor(line: Mapping[str, Any], key: str) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
-def _scale(minor: int, quantity: float) -> int:
+def _scale(minor: int, quantity: float, *, field: str) -> int:
     """``minor x quantity`` back to whole minor units, half-up.
 
     ``quantity`` is ``format: double`` -- a weighed item is ``0.35`` kg -- so
     the product needs rounding. Half-up, matching ``model/money.py``.
+
+    THE GUARD IS THE ONE ``money.to_minor`` AND ``scalars.decimal_text``
+    CARRY, and it is here for the same reason: each operand passes its own
+    validator, but their PRODUCT can still need more than the decimal
+    context's 28 significant digits (a legal price times a legal quantity),
+    and an unguarded ``quantize`` then raises ``InvalidOperation`` out of the
+    handler. The kernel shapes that as a 500 carrying the exception's own
+    text, which konyklabs/roadmap#41 declared a defect class rather than an
+    acceptable outcome for caller-supplied extremes: they answer the
+    documented invalid-value refusal, naming the line item field that could
+    not be scaled.
     """
-    return int((Decimal(minor) * Decimal(str(quantity))).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    try:
+        return int((Decimal(minor) * Decimal(str(quantity))).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    except InvalidOperation:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                f"{field} multiplied by the line's quantity is larger than this API can express in whole minor units."
+            ),
+            field=field,
+            info={"quantity": quantity},
+        ) from None
 
 
 def compute_totals(line_items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -433,8 +472,8 @@ def compute_totals(line_items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     price = 0
     tax = 0
     loyalty = 0
-    for line in line_items:
-        _, line_price, line_discount, line_tax, line_loyalty = _line_money(line)
+    for index, line in enumerate(line_items):
+        _, line_price, line_discount, line_tax, line_loyalty = _line_money(line, field=f"line_items[{index}]")
         price += line_price - line_discount
         tax += line_tax
         loyalty += line_loyalty
@@ -456,11 +495,11 @@ def compute_taxes(line_items: Sequence[Mapping[str, Any]]) -> list[dict[str, Any
     lines the way a printed receipt does.
     """
     totals: dict[str, int] = {}
-    for line in line_items:
+    for index, line in enumerate(line_items):
         tax_id = str(line.get("tax_id", ""))
         if not tax_id:
             continue
-        _, _, _, line_tax, _ = _line_money(line)
+        _, _, _, line_tax, _ = _line_money(line, field=f"line_items[{index}]")
         totals[tax_id] = totals.get(tax_id, 0) + line_tax
     return [{"id": tax_id, "tax": to_number(minor)} for tax_id, minor in totals.items()]
 
@@ -503,17 +542,22 @@ def aggregate_payments_by_type(
 # -- the wire ----------------------------------------------------------------
 
 
-def project_line_item(line: Mapping[str, Any]) -> dict[str, Any]:
+def project_line_item(line: Mapping[str, Any], *, field: str = "line_items[]") -> dict[str, Any]:
     """``SaleResponseLineItem``: the request's nested shape plus the totals
-    ``LineItemResponsePricing`` and ``LineItemResponseTax`` add."""
-    quantity, price_total, discount_total, tax_total, loyalty_total = _line_money(line)
+    ``LineItemResponsePricing`` and ``LineItemResponseTax`` add.
+
+    ``field`` names this line's place in the body, for the refusal ``_scale``
+    raises; ``project_sale`` passes the index."""
+    quantity, price_total, discount_total, tax_total, loyalty_total = _line_money(line, field=field)
     cost = _minor(line, "cost_minor")
     pricing = compact(
         {
             "price": to_number(_minor(line, "price_minor")),
             "total": to_number(price_total - discount_total),
             "cost": to_number(cost) if "cost_minor" in line else None,
-            "cost_total": to_number(_scale(cost, quantity)) if "cost_minor" in line else None,
+            "cost_total": (
+                to_number(_scale(cost, quantity, field=f"{field}.pricing.cost")) if "cost_minor" in line else None
+            ),
             "discount": to_number(_minor(line, "discount_minor")) if "discount_minor" in line else None,
             "discount_total": to_number(discount_total) if "discount_minor" in line else None,
             "loyalty_amount": to_number(_minor(line, "loyalty_minor")) if "loyalty_minor" in line else None,
@@ -568,7 +612,7 @@ def project_sale(entity: Mapping[str, Any], *, names: Mapping[str, str] | None =
     """
     sale = SaleEntity.from_entity(entity)
     lookup = names or {}
-    line_items = [project_line_item(line) for line in sale.line_items]
+    line_items = [project_line_item(line, field=f"line_items[{index}]") for index, line in enumerate(sale.line_items)]
     source = compact(
         {
             "id": sale.source.get("id"),

@@ -598,3 +598,122 @@ def test_a_product_with_no_record_for_the_outlet_is_skipped_silently(h: Harness)
     assert answered.status == 200, answered.text
     assert h.deliveries() == []
     assert len(h.unit.context.store.collection(COL.inventory).all()) == len(rows)
+
+
+# -- caller extremes answer, they do not crash -------------------------------
+
+
+def test_a_price_times_a_quantity_too_large_to_scale_is_a_422(h: Harness) -> None:
+    """konyklabs/roadmap#41's lesson, carried to this vendor's third
+    conversion funnel: a caller-supplied extreme answers the documented
+    refusal, never a 500 carrying the exception's own text.
+
+    Each operand passes its own validator -- ``1e20`` is a finite quantity and
+    25 nines is inside the decimal context's 28 significant digits -- and
+    their PRODUCT is what overflows. ``to_minor`` and ``decimal_text`` already
+    guarded their own ``quantize``; the line-money funnel did not.
+    """
+    answered = h.post(
+        h.path(SALES),
+        body(line_items=[line(quantity=1e20, price="9999999999999999999999999.99")]),
+    )
+    assert answered.status == 422, answered.text
+    assert answered.json()["unit_error"]["field"] == "line_items[0].pricing.price"
+    assert answered.json()["unit_error"]["kind"] == "invalid_value"
+
+
+def test_an_extreme_line_does_not_reach_the_store(h: Harness) -> None:
+    """The refusal happens while the sale is being built, so nothing is
+    inserted and nothing is announced."""
+    before = {row["id"] for row in h.get(h.path(SALES)).json()["data"]}
+    assert h.post(h.path(SALES), body(line_items=[line(quantity=1e20, price="9" * 25)])).status == 422
+    assert {row["id"] for row in h.get(h.path(SALES)).json()["data"]} == before
+
+
+# -- a sale that closes must say which outlet its stock comes out of ---------
+
+
+def test_closing_a_sale_that_resolves_to_no_outlet_is_a_422(h: Harness) -> None:
+    """JUDGMENT. Neither ``SaleRequestSource`` nor ``SaleRequestBase`` makes an
+    outlet required, so this body is schema-legal -- and closing it used to
+    answer 200 while moving no stock and firing no ``inventory.update``. A
+    consumer's stock-decrement test then passed while exercising nothing,
+    which is a failure wearing the shape of a success.
+    """
+    answered = h.post(
+        h.path(SALES),
+        json.dumps(
+            {"state": "closed", "source": {"author_id": c.SEED_USER_ID}, "line_items": [line()]},
+        ),
+    )
+    assert answered.status == 422, answered.text
+    assert answered.json()["unit_error"]["field"] == "line_items[0].fulfilment_outlet_id"
+
+
+def test_a_parked_sale_needs_no_outlet(h: Harness) -> None:
+    """Only a CLOSE moves stock, so the refusal is aimed at the close alone: a
+    sale parked for later is legal with nothing but its author."""
+    answered = h.post(
+        h.path(SALES),
+        json.dumps({"state": "parked", "source": {"author_id": c.SEED_USER_ID}, "line_items": [line()]}),
+    )
+    assert answered.status == 200, answered.text
+    assert "outlet_id" not in answered.json()["data"]["source"]
+
+
+def test_a_sale_level_fulfillment_outlet_resolves_a_close_with_no_register(h: Harness) -> None:
+    """DOCUMENTED: ``fulfillment_outlet_id`` is "the default outlet that should
+    fulfill this sale when a line item does not specify its own
+    ``fulfilment_outlet_id``", so naming it is one of the three ways to
+    resolve the close -- and the stock really moves."""
+    before = h.get(h.path(f"/inventory/{c.SEED_PRODUCT_TRAIL_MIX_ID}")).json()
+    level = next(row for row in before if row["outlet_id"] == c.SEED_OUTLET_MAIN_ID)["current_inventory_level"]
+    answered = h.post(
+        h.path(SALES),
+        json.dumps(
+            {
+                "state": "closed",
+                "source": {"author_id": c.SEED_USER_ID},
+                "fulfillment_outlet_id": c.SEED_OUTLET_MAIN_ID,
+                "line_items": [line()],
+            }
+        ),
+    )
+    assert answered.status == 200, answered.text
+    assert answered.json()["data"]["source"]["outlet_id"] == c.SEED_OUTLET_MAIN_ID
+    after = h.get(h.path(f"/inventory/{c.SEED_PRODUCT_TRAIL_MIX_ID}")).json()
+    assert next(row for row in after if row["outlet_id"] == c.SEED_OUTLET_MAIN_ID)["current_inventory_level"] == (
+        level - 1
+    )
+
+
+def test_a_line_that_names_its_own_outlet_resolves_itself(h: Harness) -> None:
+    """The per-line spelling is the vendor's own (``fulfilment_outlet_id``,
+    one ``l``), and a line carrying it needs nothing from the sale."""
+    answered = h.post(
+        h.path(SALES),
+        json.dumps(
+            {
+                "state": "closed",
+                "source": {"author_id": c.SEED_USER_ID},
+                "line_items": [{**line(), "fulfilment_outlet_id": c.SEED_OUTLET_SECOND_ID}],
+            }
+        ),
+    )
+    assert answered.status == 200, answered.text
+
+
+def test_updating_a_parked_sale_to_closed_needs_the_outlet_too(h: Harness) -> None:
+    """The guard reads the REQUEST's state, so it covers the two-request POS
+    flow as well as the one-request one."""
+    parked = h.post(
+        h.path(SALES),
+        json.dumps({"state": "parked", "source": {"author_id": c.SEED_USER_ID}, "line_items": [line()]}),
+    )
+    assert parked.status == 200, parked.text
+    answered = h.put(
+        h.path(f"{SALES}/{parked.json()['data']['id']}"),
+        json.dumps({"state": "closed", "source": {"author_id": c.SEED_USER_ID}, "line_items": [line()]}),
+    )
+    assert answered.status == 422
+    assert answered.json()["unit_error"]["field"] == "line_items[0].fulfilment_outlet_id"
