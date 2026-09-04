@@ -32,7 +32,10 @@
     "C29": "chaos: every delivery-scope fault the unit publishes has its effect at the sink",
     "C30": "control plane: reading the control plane changes nothing a vendor answer can see",
     "C31": "control plane: the error catalogue reads the same twice",
-    "C32": "control plane: the error catalogue does not move when the clock does"
+    "C32": "control plane: the error catalogue does not move when the clock does",
+    "C33": "control plane: an unmatched request is named and recorded",
+    "C34": "discovery: every vendor maps all four capability roles to a declared capability",
+    "C35": "discovery: the profile-name contract holds for the profile this unit was built on"
   },
   "expected_skips": {
     "C07": [

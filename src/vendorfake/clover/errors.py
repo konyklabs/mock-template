@@ -78,7 +78,11 @@ The ``unit_error`` sidecar is a deliberate, namespaced deviation from Clover's
 wire format: a consumer that reads only ``message`` never sees it, and a
 consumer debugging this fake gets the machine-readable reason without parsing
 prose. It is off with ``"error_sidecar": false`` in a profile's ``vendor``
-block.
+block. Since konyklabs/roadmap#71 it defaults to riding as headers rather than
+as the ``unit_error`` body key -- ``errors.sidecar`` in a profile, or
+``VENDORFAKE_ERROR_SIDECAR`` -- so ``message``/``type`` is, by default, the
+whole body, matching the one documented example on the status-code page
+exactly.
 """
 
 from __future__ import annotations
@@ -90,6 +94,7 @@ from vendorfake.core.kernel.shaping import (
     Provenance,
     assert_error_table_total,
     mechanism_headers,
+    sidecar_headers,
     unit_error_sidecar,
 )
 from vendorfake.core.kernel.types import (
@@ -338,17 +343,24 @@ class CloverErrorShaper:
         conflated = err.kind in DETAIL_SUPPRESSED_KINDS
         message = mapping.message if conflated or not err.detail else err.detail
         body: dict[str, Any] = compact({"message": message, "type": mapping.type})
+        headers: dict[str, str] = {}
+        if err.kind is UnitErrorKind.RATE_LIMITED:
+            headers.update(_RATE_LIMIT_HEADERS)
+        headers.update(mechanism_headers(err, retry_after_header=self._retry_after_header))
         if self._sidecar:
-            body["unit_error"] = unit_error_sidecar(
+            # WHERE it rides is `ctx.config.errors.sidecar`, not this
+            # constructor -- see core/kernel/shaping.py (konyklabs/roadmap#71).
+            sidecar = unit_error_sidecar(
                 err,
                 mapping.provenance,
                 field=err.field or None,
                 detail=(err.detail or None) if conflated else None,
             )
-        headers: dict[str, str] = {}
-        if err.kind is UnitErrorKind.RATE_LIMITED:
-            headers.update(_RATE_LIMIT_HEADERS)
-        headers.update(mechanism_headers(err, retry_after_header=self._retry_after_header))
+            mode = ctx.config.errors.sidecar
+            if mode != "headers":
+                body["unit_error"] = sidecar
+            if mode != "body":
+                headers.update(sidecar_headers(sidecar))
         return ShapedError(status=mapping.status, body=body, headers=headers)
 
     def not_found(self, req: UnitRequest, ctx: UnitContext, *, describing: bool = False) -> ShapedError:

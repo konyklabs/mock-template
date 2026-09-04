@@ -92,21 +92,57 @@ def test_the_timeout_delay_is_reported_as_an_integer_not_a_float() -> None:
     assert caught.value.detail == "Injected timeout after 0ms."
 
 
-def test_a_real_clock_timeout_really_waits() -> None:
-    """The reference's own assertion -- elapsed >= 20ms for a 25ms delay -- runs
-    on a profile whose clock mode is real, so this is the branch it pins."""
+def test_a_real_clock_timeout_reports_the_delay_instead_of_sleeping_it() -> None:
+    """The reversal. This used to call ``time.sleep`` here and the reference's
+    own assertion -- elapsed >= 20ms for ``delay_ms: 25`` -- was written against
+    that. It bought nothing: in process there is no socket, so a consumer's
+    ``timeout=`` was consulted by nobody and the fault was merely slow. Now the
+    kernel says *how long* and the binding decides *how*, which is what lets an
+    in-process client raise ``ReadTimeout`` in a millisecond.
+    """
     clock = Clock("real")
     started = time.monotonic()
     with pytest.raises(UnitError) as caught:
         _apply("timeout", clock=clock, delay_ms=25)
-    assert (time.monotonic() - started) * 1000 >= 20
+    elapsed_ms = (time.monotonic() - started) * 1000
     assert caught.value.kind is UnitErrorKind.TIMEOUT
+    assert caught.value.delay_ms == 25
+    assert elapsed_ms < 20, f"the kernel slept for {elapsed_ms:.1f}ms; the binding owns the wait"
+
+
+@pytest.mark.parametrize(
+    ("delay_ms", "expected"),
+    [
+        # 0.4 and 0.5 are the cases plain ``round`` (banker's rounding to
+        # even) sent to zero -- review-A-1's major-adjacent minor finding.
+        # ``math.ceil`` is what actually keeps the module docstring's promise
+        # for every sub-millisecond delay, not only the one below that
+        # happened to round up anyway.
+        (0.4, 1),
+        (0.5, 1),
+        (0.6, 1),
+        (1.5, 2),
+        (2.5, 3),
+    ],
+)
+def test_a_sub_millisecond_delay_rounds_up_rather_than_vanishing(delay_ms: float, expected: int) -> None:
+    """``delay_ms`` on the response is an int. Truncating -- or rounding to
+    even -- would turn a delay just under a whole millisecond into no delay
+    at all, which reads as "the fault did not fire"."""
+    with pytest.raises(UnitError) as caught:
+        _apply("timeout", clock=Clock("real"), delay_ms=delay_ms)
+    assert caught.value.delay_ms == expected
 
 
 def test_a_virtual_clock_timeout_moves_time_and_returns_at_once() -> None:
     """A request that parked on a virtual timer would hold the pipeline while
     the only call that can fire that timer -- another request -- waits for the
-    same lock. So virtual mode advances inline and never waits."""
+    same lock. So virtual mode advances inline and never waits.
+
+    It also owes the binding nothing: the waiting already happened, in scenario
+    time, which is the only clock a virtual-mode test is measuring. A binding
+    that then slept for five real seconds would undo the point of the mode.
+    """
     clock = Clock("virtual", "2024-01-01T00:00:00.000Z")
     before = clock.now()
     started = time.monotonic()
@@ -115,6 +151,7 @@ def test_a_virtual_clock_timeout_moves_time_and_returns_at_once() -> None:
     elapsed_real_ms = (time.monotonic() - started) * 1000
     assert caught.value.kind is UnitErrorKind.TIMEOUT
     assert clock.now() - before == 5000
+    assert caught.value.delay_ms == 0
     assert elapsed_real_ms < 500
 
 

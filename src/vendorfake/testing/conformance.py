@@ -2,7 +2,7 @@
 
 FOR: a consumer who installed the wheel and wants to run the contracts::
 
-    pytest --pyargs vendorfake.conformance --conformance-target vendorfake.testing.conformance:square_target
+    pytest --pyargs vendorfake.conformance -p vendorfake.conformance.plugin --conformance-target vendorfake.testing.conformance:square_target
     python -m vendorfake.conformance --target vendorfake.testing.conformance:clover_target
 
 The suite itself never starts a server -- ``vendorfake.conformance`` may not

@@ -35,6 +35,7 @@ from typing import Any
 import pytest
 
 from tests.conformance.mutants import MUTANTS, NULL_MUTANT, Mutant, Provenance, mutant_target
+from tests.conformance.mutants import catalog as _catalog
 from tests.conformance.mutants.model import register
 from tests.conformance.mutants.seams import AuthAdapterOverlay, VendorOverlay
 from vendorfake.conformance import CHECKS, Outcome, expected_skips, format_report, run_conformance
@@ -44,6 +45,55 @@ from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 _CHECK_IDS = frozenset(spec.id for spec in CHECKS)
 _ALL = [NULL_MUTANT, *MUTANTS]
 _CONSTRUCTABLE = [mutant for mutant in MUTANTS if not mutant.fails_to_construct]
+
+#: The small vocabulary ``catalog.py``'s opening line has ever needed. Not a
+#: general English-number parser -- just enough to read "Thirty-four" back out
+#: of "Thirty-four units, each broken in exactly one way..." so the count in
+#: that sentence cannot silently drift from the registry the way it once did
+#: (found by review round 3 of konyklabs/roadmap#73: the docstring said
+#: "Thirty-two" with thirty-four mutants registered, and nothing noticed).
+_ONES = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+)
+_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
+
+
+def _number_word_to_int(word: str) -> int:
+    lowered = word.lower()
+    if lowered in _ONES:
+        return _ONES.index(lowered)
+    if "-" in lowered:
+        tens, ones = lowered.split("-", 1)
+        return _TENS[tens] + _ONES.index(ones)
+    return _TENS[lowered]
+
+
+def test_the_catalogue_docstring_names_the_true_registered_count() -> None:
+    """``catalog.py``'s opening line ("Thirty-four units, each broken...") is
+    prose, not code, so nothing enforced it against ``len(MUTANTS)`` -- the
+    exact way it drifted two mutants behind before this test existed."""
+    assert _catalog.__doc__ is not None
+    first_word = _catalog.__doc__.split()[0]
+    assert _number_word_to_int(first_word) == len(MUTANTS)
 
 
 def _run(mutant: Mutant) -> ConformanceReport:

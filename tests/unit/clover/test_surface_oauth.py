@@ -442,3 +442,29 @@ def test_stored_codes_carry_the_judgment_ttl(h: Harness) -> None:
     assert record.client_id == CLIENT_ID
     lifetime_ms = record.expires_at_ms - int(h.unit.context.clock.now())
     assert 0 < lifetime_ms <= 10 * 60 * 1000  # ten minutes, from config
+
+
+# ---------------------------------------------------------------------------
+# VENDORFAKE_CLOCK_START (konyklabs/roadmap#71, D1)
+# ---------------------------------------------------------------------------
+
+
+def test_clock_start_makes_the_documented_access_token_lifetime_reproducible_across_units() -> None:
+    """DOCUMENTED: "OAuth access_tokens expire in 30 minutes"
+    (https://docs.clover.com/dev/docs/generate-oauth-expiring-access-and-refresh-token).
+    On a virtual clock frozen at `clock_start`, `access_token_expiration` is
+    exactly `start + 30 minutes` in Unix seconds, and two independently built
+    units on the same `clock_start` agree on it -- a wall-clock start instant
+    cannot promise that run to run.
+    """
+    start = "2026-01-01T00:00:00Z"
+    expected = 1767227400  # start + 30 minutes, in Unix seconds
+    env = {"VENDORFAKE_CLOCK": "virtual", "VENDORFAKE_CLOCK_START": start}
+
+    seen: list[int] = []
+    for _ in range(2):  # two independently built units
+        for h in harness(env=env):
+            body = h.exchange()
+            seen.append(int(body["access_token_expiration"]))
+
+    assert seen == [expected, expected]

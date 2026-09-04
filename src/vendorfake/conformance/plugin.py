@@ -4,7 +4,7 @@ FOR: giving a vendor outside this distribution the contracts for free. It
 installs the wheel, publishes one
 :class:`~vendorfake.conformance.types.ConformanceTarget`, and runs::
 
-    pytest --pyargs vendorfake.conformance --conformance-target my_pkg.testing:target
+    pytest --pyargs vendorfake.conformance -p vendorfake.conformance.plugin --conformance-target my_pkg.testing:target
 
 Every registered contract is then applied to *its* unit on every profile *it*
 declares, and a red run names ``test_contract[C13-full-inprocess]`` rather than

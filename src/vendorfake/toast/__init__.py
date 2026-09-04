@@ -34,7 +34,7 @@ from vendorfake.toast.model.dates import business_date, parse_rest_date, rest_da
 from vendorfake.toast.model.money import to_cents, to_dollars
 from vendorfake.toast.retry import TOAST_RETRY_SCHEDULE_MS, TOAST_TIMEOUT_MS
 from vendorfake.toast.signer import SIGNATURE_HEADER, ToastWebhookSigner, toast_signature, verify_toast_signature
-from vendorfake.toast.vendor import TOAST_MAGIC, ToastVendor, create_toast_vendor
+from vendorfake.toast.vendor import TOAST_MAGIC, TOAST_ROLES, ToastVendor, create_toast_vendor
 
 __all__ = [
     "CHECK_MACHINE",
@@ -50,6 +50,7 @@ __all__ = [
     "TOAST_NOT_MODELED",
     "TOAST_NOT_SUPPORTED",
     "TOAST_RETRY_SCHEDULE_MS",
+    "TOAST_ROLES",
     "TOAST_TIMEOUT_MS",
     "VENDOR",
     "CheckPaymentStatus",

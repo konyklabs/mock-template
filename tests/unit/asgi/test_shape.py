@@ -29,10 +29,20 @@ import pytest
 
 ASGI_DIR = Path(__file__).resolve().parents[3] / "src" / "vendorfake" / "asgi"
 
-#: The one response class this package may construct. Named, not inferred:
-#: the rule is "the core's bytes go out untouched", and every other class in
+#: The response classes this package may construct. Named, not inferred: the
+#: rule is "the core's bytes go out untouched", and every other class in
 #: ``starlette.responses`` exists precisely to render something.
-ALLOWED_RESPONSE_CLASS = "Response"
+#:
+#: ``StreamingResponse`` joined ``Response`` for the three transport-fidelity
+#: faults (``connection_reset``, ``empty_response``, ``slow_body``): it is the
+#: one class in ``starlette.responses`` that can send the unit's own bytes
+#: across more than one ASGI ``send()`` call, with a real ``asyncio.sleep``
+#: between them, or raise mid-stream to abort the connection -- none of which
+#: ``Response`` can do, and none of which is rendering. Its body iterators
+#: (``_slow_body``, ``_aborted_body`` in ``app.py``) hand back slices of
+#: ``UnitResponse.body`` untouched, or nothing at all; the invariant this test
+#: states -- no re-serialisation -- holds for both classes equally.
+ALLOWED_RESPONSE_CLASSES = frozenset({"Response", "StreamingResponse"})
 
 #: Methods that make the *framework* decide what a body is.
 BANNED_REQUEST_METHODS = frozenset({"form", "stream"})
@@ -54,21 +64,24 @@ def calls(tree: ast.Module) -> list[ast.Call]:
     return [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
 
 
-def test_the_only_response_class_constructed_is_the_bare_one() -> None:
+def test_the_only_response_classes_constructed_are_the_bytes_preserving_ones() -> None:
     """``JSONResponse`` and friends re-serialise; that is what they are for.
 
     The core hands over bytes it already decided the exact form of, and a
     conformance check compares those bytes across bindings. Any class that
     renders would keep every assertion in this repository passing while
-    changing what a consumer is testing against.
+    changing what a consumer is testing against. See
+    :data:`ALLOWED_RESPONSE_CLASSES` on why ``StreamingResponse`` is the one
+    exception to "``Response`` alone" and why it is not actually an exception
+    to the invariant this test states.
     """
     offenders: list[str] = []
     for path, tree in trees():
         for call in calls(tree):
             name = call.func.id if isinstance(call.func, ast.Name) else getattr(call.func, "attr", None)
-            if isinstance(name, str) and name.endswith("Response") and name != ALLOWED_RESPONSE_CLASS:
+            if isinstance(name, str) and name.endswith("Response") and name not in ALLOWED_RESPONSE_CLASSES:
                 offenders.append(f"{path.name}:{call.lineno} {name}(")
-    assert offenders == [], f"only {ALLOWED_RESPONSE_CLASS}(...) may be constructed here: {offenders}"
+    assert offenders == [], f"only {sorted(ALLOWED_RESPONSE_CLASSES)} may be constructed here: {offenders}"
 
 
 def test_the_framework_never_parses_a_body() -> None:

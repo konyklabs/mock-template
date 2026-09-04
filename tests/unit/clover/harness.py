@@ -186,11 +186,21 @@ class Harness:
 
 def harness(profile: str = "full", **kwargs: Any) -> Iterator[Harness]:
     """Start a unit on ``profile``, yield it with the seeded bearer, stop it
-    however the test ends."""
+    however the test ends.
+
+    Defaults ``VENDORFAKE_ERROR_SIDECAR=both`` unless the caller's own ``env``
+    already names it: this suite reads `unit_error` out of the body to assert
+    on the *content* of a refusal (which field, which reason), a concern the
+    sidecar's wire placement (konyklabs/roadmap#71; default ``headers`` since)
+    does not change. A test of the placement itself builds its own unit --
+    with :func:`vendorfake.testing.unit` or ``create_unit`` directly -- rather
+    than through this harness.
+    """
     # An in-memory sink unless the test brings its own: the scenario ships a
     # pre-verified subscriber, and a real sink would try to deliver every
     # mutation to its `.test` callback and retry on the schedule.
     kwargs.setdefault("sink", MemorySink())
+    kwargs["env"] = {"VENDORFAKE_ERROR_SIDECAR": "both", **kwargs.pop("env", {})}
     unit = create_unit(vendor="clover", profile=profile, logger=Silent(), **kwargs)
     try:
         yield Harness(unit=unit, api=in_process(unit), auth={"authorization": f"Bearer {SEED_ACCESS_TOKEN}"})
